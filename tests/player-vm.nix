@@ -1,6 +1,6 @@
-# The player in a VM: every family of format, the pictures, two videos in
-# step, MPRIS, and the column that narrows the windows and not the footer —
-# at each of its sizes, on the workspace it belongs to.
+# The player in a VM: every family of format, the pictures, a set of lanes on
+# one clock, MPRIS, and the column that narrows the windows and not the footer
+# — at each of its sizes, on the workspace it belongs to.
 #
 # WHAT ONLY THIS PROVES
 # ---------------------
@@ -50,174 +50,12 @@ let
   };
   setenv = lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "--setenv=${n}=${v}") tools);
 
-  # THE ADPLUG SOURCE, for two tunes it carries as test data: an AdLib song
-  # and a MIDI file. The same tarball `nix/adplug.nix` builds from.
-  adplugSrc = pkgs.fetchurl {
-    url = "https://github.com/adplug/adplug/releases/download/adplug-2.4/adplug-2.4.tar.bz2";
-    hash = "sha256-3hhGO/fAy2OaMiitR+aet/eKWhl4AtMl86XtfhxW1X8=";
-  };
-
-  # ONE FILE PER FAMILY, made here: nobody's music, and every one of them
-  # something the decoder it names has to actually decode.
-  media =
-    pkgs.runCommand "player-media"
-      {
-        nativeBuildInputs = [
-          pkgs.ffmpeg-full
-          pkgs.python3
-        ];
-      }
-      ''
-        mkdir -p $out
-        ffmpeg -loglevel error -f lavfi -i testsrc2=size=640x360:rate=30:duration=30 \
-          -f lavfi -i sine=frequency=440:duration=30 -c:v libx264 -pix_fmt yuv420p -c:a aac \
-          -shortest $out/film.mp4
-        ffmpeg -loglevel error -f lavfi -i "mandelbrot=size=320x180:rate=30" -t 30 \
-          -c:v libx264 -pix_fmt yuv420p $out/other.mp4
-        ffmpeg -loglevel error -f lavfi -i sine=frequency=330:duration=30 \
-          -metadata artist=Nobody -metadata title=Tone $out/tone.flac
-        # A MATROSKA WITH A SUBTITLE TRACK, which is what the subtitle ring is
-        # for: a line of text over thirty seconds.
-        printf '1\n00:00:00,000 --> 00:00:30,000\nhello\n' > sub.srt
-        ffmpeg -loglevel error -f lavfi -i testsrc2=size=320x180:rate=25:duration=30 \
-          -f lavfi -i sine=frequency=550:duration=30 -i sub.srt \
-          -map 0 -map 1 -map 2 -c:v libx264 -pix_fmt yuv420p -c:a aac -c:s srt \
-          -shortest $out/subbed.mkv
-        tar xjf ${adplugSrc} --wildcards '*/test/testmus/ALLOYRUN.RAD' '*/test/testmus/GRABBAG.MID'
-        cp */test/testmus/ALLOYRUN.RAD $out/tune.rad
-        cp */test/testmus/GRABBAG.MID $out/song.mid
-        python3 - <<'PY'
-        import math, os, struct
-        out = os.environ["out"]
-        # A PSID whose init and play are RTS: silence, decoded for real.
-        h = b"PSID" + struct.pack(">HHHHHHHI", 2, 0x7C, 0x1000, 0x1000, 0x1003, 1, 1, 0)
-        h += b"tone".ljust(32, b"\0") + b"nobody".ljust(32, b"\0") + b"2026".ljust(32, b"\0")
-        h += struct.pack(">HBBBB", 0, 0, 0, 0, 0)
-        open(out + "/tune.sid", "wb").write(h + bytes([0x60, 0, 0, 0x60]))
-        # An SNDH whose three entries branch to one RTS.
-        tags = b"SNDH" + b"TITLtone\0" + b"COMMnobody\0\0" + b"##01" + b"TC50" + b"HDNS"
-        # THE CODE ON AN EVEN ADDRESS: a 68000 branch to an odd one is an
-        # address error, and sc68 then plays nothing at all.
-        if len(tags) % 2:
-            tags += b"\0"
-        end = 12 + len(tags)
-        bra = lambda at: b"\x60\x00" + struct.pack(">h", end - (at + 2))
-        open(out + "/tune.sndh", "wb").write(bra(0) + bra(4) + bra(8) + tags + b"\x4e\x75")
-        # An Amiga module under the name the Amiga gave its music — the
-        # format FIRST — which only uade claims, and which uade reads by content.
-        mod = b"tune".ljust(20, b"\0")
-        for _ in range(31):
-            mod += bytes(22) + bytes([0, 0, 0, 64, 0, 0, 0, 1])
-        mod += bytes([1, 127]) + bytes(128) + b"M.K." + bytes(1024)
-        open(out + "/mdat.tune", "wb").write(mod)
-        # AND THE SAME MODULE under the name everybody else gives it: that one
-        # is libopenmpt's, through ffmpeg, and not uade's.
-        open(out + "/tune.mod", "wb").write(mod)
-        # A VGM made by hand: one PSG tone held for thirty seconds. libgme
-        # reads it, and libmpv only when the demuxer is named — the score
-        # ffmpeg gives it is one below what libmpv accepts.
-        vgm = bytes([0x50, 0x8E, 0x50, 0x0F, 0x50, 0x90])
-        for _ in range(30):
-            vgm += bytes([0x61]) + struct.pack("<H", 44100)
-        vgm += bytes([0x66])
-        head = bytearray(0x40)
-        head[0:4] = b"Vgm "
-        struct.pack_into("<I", head, 0x04, 0x40 + len(vgm) - 4)
-        struct.pack_into("<I", head, 0x08, 0x150)
-        struct.pack_into("<I", head, 0x0C, 3579545)
-        struct.pack_into("<I", head, 0x18, 44100 * 30)
-        struct.pack_into("<I", head, 0x24, 60)
-        struct.pack_into("<H", head, 0x28, 0x0009)
-        head[0x2A] = 16
-        struct.pack_into("<I", head, 0x34, 0x40 - 0x34)
-        open(out + "/tune.vgm", "wb").write(bytes(head) + vgm)
-        # A ZX Spectrum chip stream zxtune reads: a tone held for a minute.
-        psg = b"PSG\x1a" + bytes(12) + bytes([7, 0x3E, 8, 15, 0, 100, 1, 0]) + bytes([0xFF]) * 3000
-        open(out + "/tune.psg", "wb").write(psg)
-        # A raw stream vgmstream reads through a TXTH beside it.
-        pcm = b"".join(struct.pack("<h", int(8000 * math.sin(i / 20))) for i in range(44100 * 30))
-        open(out + "/stream.vag", "wb").write(pcm)
-        open(out + "/.vag.txth", "w").write(
-            "codec = PCM16LE\nchannels = 1\nsample_rate = 44100\nnum_samples = data_size\n"
-        )
-        # AN XSPF, which libmpv does not read: the daemon opens it, and its
-        # two tracks — one relative, one written as a `file://` URL — are
-        # what the queue must hold.
-        open(out + "/list.xspf", "w").write(
-            '<playlist version="1" xmlns="http://xspf.org/ns/0/"><trackList>'
-            '<track><location>tone.flac</location></track>'
-            f'<track><location>file://{out}/tune.rad</location></track>'
-            "</trackList></playlist>"
-        )
-        PY
-      '';
-
-  client = pkgs.writeText "player-client.py" ''
-    import glob, json, os, socket, sys, time
-
-    def path():
-        found = glob.glob("/run/user/0/*player.sock")
-        if not found:
-            sys.exit("no player socket")
-        return found[0]
-
-    def ask(what):
-        s = socket.socket(socket.AF_UNIX)
-        s.connect(path())
-        s.sendall((json.dumps(what) + "\n").encode())
-        line = s.makefile().readline()
-        s.close()
-        return json.loads(line)
-
-    def frame(of, count=10):
-        s = socket.socket(socket.AF_UNIX)
-        # A PAUSED PICTURE SENDS ONE FRAME OR NONE: a deadline, so "none"
-        # fails the test instead of hanging it.
-        s.settimeout(10)
-        s.connect(path())
-        s.sendall((json.dumps({"ask": "preview", "width": 320, "height": 180, "of": of}) + "\n").encode())
-        data, fds, _, _ = socket.recv_fds(s, 512, 1)
-        head = json.loads(data.decode().strip())
-        assert head["say"] == "preview", head
-        w, h = head["width"], head["height"]
-        fd = fds[0]
-        slot = 0
-        for _ in range(count):
-            slot = s.recv(1)[0]
-        size = 16 + w * h * 4
-        px = os.pread(fd, w * h * 4, slot * size + 16)
-        s.close()
-        os.close(fd)
-        n = len(px) // 4
-        lit = sum(1 for i in range(0, n, 97) if px[4*i] + px[4*i+1] + px[4*i+2] > 60) / len(range(0, n, 97))
-        opaque = sum(1 for i in range(0, n, 97) if px[4*i+3] == 255) / len(range(0, n, 97))
-        return {"w": w, "h": h, "lit": lit, "opaque": opaque}
-
-    def twice(of):
-        # TWO VIEWS AT ONCE, the second opened while the first is held.
-        views = []
-        for _ in range(2):
-            s = socket.socket(socket.AF_UNIX)
-            s.settimeout(10)
-            s.connect(path())
-            s.sendall((json.dumps({"ask": "preview", "width": 320, "height": 180, "of": of}) + "\n").encode())
-            data, fds, _, _ = socket.recv_fds(s, 512, 1)
-            head = json.loads(data.decode().strip())
-            views.append((s, fds[0], head["width"], head["height"]))
-        frames = []
-        for s, fd, w, h in views:
-            slot = s.recv(1)[0]
-            frames.append(os.pread(fd, w * h * 4, slot * (16 + w * h * 4) + 16))
-        return "same" if frames[0] == frames[1] else "different"
-
-    what = sys.argv[1]
-    if what == "twice":
-        print(twice(json.loads(sys.argv[2])))
-    elif what == "frame":
-        print(json.dumps(frame(json.loads(sys.argv[2]), *map(int, sys.argv[3:4]))))
-    else:
-        print(json.dumps(ask(json.loads(what))))
-  '';
+  # THE MEDIA AND THE CLIENT, shared with the photo stage (`nix/shot.nix`):
+  # one file per family of format, generated (`tests/player-media.nix`), and
+  # the client that asks the socket and reads the memfd from outside
+  # (`tests/player-client.py`).
+  media = import ./player-media.nix { inherit pkgs; };
+  client = ./player-client.py;
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-player";
@@ -260,7 +98,7 @@ pkgs.testers.runNixOSTest {
         ))
 
     def plays(name):
-        said = player({"ask": "open", "items": [f"${media}/{name}"], "replace": True})
+        said = player({"ask": "put", "what": [f"${media}/{name}"], "replace": True})
         assert said["say"] == "done", f"{name}: {said}"
         machine.sleep(3)
         a = player({"ask": "look"})
@@ -283,22 +121,45 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             "systemd-run --unit=player --setenv=XDG_RUNTIME_DIR=/run/user/0 "
             "--setenv=HOME=/root --setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
-            "--setenv=RUST_LOG=ronoctua_player_engine=debug ${setenv} "
+            "--setenv=RUST_LOG=ronoctua_player=debug ${setenv} "
+            # THE TEST'S OWN AMBIENT SOUNDS: two tones of three seconds
+            # (`tests/player-media.nix`).
+            "--setenv=RONOCTUA_AMBIENCE=${media}/ambience "
             "${player}/bin/ronoctua-player"
         )
         machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
 
     with subtest("every family plays, and each through the decoder its table names"):
         film = plays("film.mp4")
-        assert film["video"] == [640, 360], film["video"]
+        # A FILE ALONE IS ITS LANES: its picture (with its size) and its sound.
+        assert [l["kind"] for l in film["lanes"]] == ["video", "audio"], film["lanes"]
+        pictures = [l for l in film["lane_states"] if l["picture"]]
+        assert pictures and pictures[0]["size"] == [640, 360], film["lane_states"]
         plays("tone.flac")
         for name in ["tune.sid", "song.mid", "stream.vag", "tune.sndh", "tune.rad", "tune.psg", "mdat.tune", "tune.mod", "tune.vgm"]:
             plays(name)
 
-    with subtest("an XSPF is opened into its tracks, and the first one plays"):
+    with subtest("an XSPF is ONE playlist of the queue, named, and its first track plays"):
         b = plays("list.xspf")
-        names = [item["location"] for item in b["queue"]]
+        # THE OUTLINE, asked apart from the state: the queue's shape is a
+        # message of its own, sent whole when it changes.
+        q = player({"ask": "queue"})
+        assert q["say"] == "queue" and q["revision"] == b["revision"], (q, b["revision"])
+        assert len(q["entries"]) == 1, q
+        node = q["entries"][0]
+        assert node["kind"] == "playlist" and node["name"] == {"titled": "list"}, node
+        names = [child["name"]["location"] for child in node["children"]]
         assert names == ["${media}/tone.flac", "${media}/tune.rad"], names
+        assert b["current"] == node["children"][0]["id"], (b["current"], node)
+        assert b["location"] == "${media}/tone.flac", b["location"]
+        # WHAT PLAYS NEXT is the queue's answer, and the state says it.
+        assert b["next"] == {"location": "${media}/tune.rad"}, b["next"]
+
+    with subtest("an ask the player does not know is answered, never dropped"):
+        said = player({"ask": "open", "items": ["${media}/tone.flac"], "replace": True})
+        assert said["say"] == "refused" and said["trouble"] == "not-understood", said
+        said = player({"ask": "jump", "id": 99999})
+        assert said == {"say": "refused", "trouble": "no-such-entry", "id": 99999}, said
 
     with subtest("a decoder's stream seeks, forward and back"):
         plays("tune.sid")
@@ -322,12 +183,71 @@ pkgs.testers.runNixOSTest {
 
     with subtest("a Matroska's subtitle track is offered, and taken"):
         s = plays("subbed.mkv")
-        subs = [t for t in s["tracks"] if t["kind"] == "sub"]
-        assert len(subs) == 1, s["tracks"]
-        player({"ask": "subtitle-track", "id": subs[0]["id"]})
+        subs = [t for t in s["sources"][0]["tracks"] if t["kind"] == "sub"]
+        assert len(subs) == 1, s["sources"]
+        # THE FILE'S SUBTITLES ARE A LANE of it, and choosing a track is
+        # asked of that lane.
+        lane = next(l for l in s["lanes"] if l["kind"] == "subtitle")
+        said = player({"ask": "track", "lane": lane["id"], "track": subs[0]["id"]})
+        assert said["say"] == "done", said
         machine.sleep(1)
-        now = [t for t in player({"ask": "look"})["tracks"] if t["kind"] == "sub"]
+        s = player({"ask": "look"})
+        now = [t for t in s["sources"][0]["tracks"] if t["kind"] == "sub"]
         assert now and now[0]["selected"], now
+        lane = next(l for l in s["lanes"] if l["kind"] == "subtitle")
+        assert lane["enabled"] and lane["track"] == subs[0]["id"], lane
+
+    with subtest("the film's own track and a file beside it are two lanes, each in its colour"):
+        s = plays("words.mkv")
+        own = next(l for l in s["lanes"] if l["kind"] == "subtitle")
+        subs = [t for t in s["sources"][0]["tracks"] if t["kind"] == "sub"]
+        # THE FILM'S OWN TRACK, taken: lane one, nearest the edge.
+        said = player({"ask": "track", "lane": own["id"], "track": subs[0]["id"]})
+        assert said["say"] == "done", said
+        said = player({"ask": "add-lane", "source": "${media}/words.en.srt", "kind": "subtitle"})
+        assert said["say"] == "done", said
+        # READ AND MERGED OFF THE ENGINE'S LOCK: `preparing` until the words
+        # of both are in one script, then both play.
+        words = []
+        for _ in range(30):
+            s = player({"ask": "look"})
+            words = [l for l in s["lane_states"] if l["lane"] in
+                     [x["id"] for x in s["lanes"] if x["kind"] == "subtitle"]]
+            if len(words) == 2 and all(w["status"]["status"] == "playing" for w in words):
+                break
+            machine.sleep(1)
+        assert len(words) == 2 and all(w["status"]["status"] == "playing" for w in words), words
+        # THE COLOURS THE SCRIPT WAS WRITTEN WITH, lane by lane — the tokens'
+        # (`engine::subtitles`, whose own test says so) — as `&H00BBGGRR`.
+        script = machine.succeed("cat /run/user/0/ronoctua-player-subs/*.ass")
+        styles = dict(re.findall(r"^Style: (Lane\d),[^,]*,\d+,&H00([0-9A-F]{6}),", script, re.M))
+        assert sorted(styles) == ["Lane1", "Lane2"], script
+        rgb = {lane: bgr[4:6] + bgr[2:4] + bgr[0:2] for lane, bgr in styles.items()}
+        assert rgb["Lane1"] != rgb["Lane2"], rgb
+        # AND BOTH ARE IN THE FRAME the daemon hands over, each on its own
+        # rows: lane one below lane two, both in the picture's lower half.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} dump null /tmp/words.ppm 1280 720"
+        )
+        seen = json.loads(machine.succeed(
+            f"python3 ${client} colours /tmp/words.ppm {rgb['Lane1']} {rgb['Lane2']}"
+        ))
+        print(seen)
+        one, two = seen["found"][rgb["Lane1"]], seen["found"][rgb["Lane2"]]
+        assert one["pixels"] > 100 and two["pixels"] > 100, seen
+        assert seen["h"] // 2 < two["rows"][1] < one["rows"][0], (
+            f"the lanes are not stacked in order at the foot: {seen}"
+        )
+
+    with subtest("six subtitle lanes over one picture, and a seventh is refused"):
+        # FOUR MORE of the same file: six lanes over the film.
+        for _ in range(4):
+            said = player({"ask": "add-lane", "source": "${media}/words.en.srt", "kind": "subtitle"})
+            assert said["say"] == "done", said
+        said = player({"ask": "add-lane", "source": "${media}/words.en.srt", "kind": "subtitle"})
+        assert said == {"say": "refused", "trouble": "too-many", "what": "subtitles", "most": 6}, said
+        s = player({"ask": "look"})
+        assert len([l for l in s["lanes"] if l["kind"] == "subtitle"]) == 6, s["lanes"]
 
     with subtest("two views of one picture are one decode: the same bytes"):
         # PAUSED, so both views get the frame on screen and nothing moves in
@@ -353,19 +273,54 @@ pkgs.testers.runNixOSTest {
         assert f["lit"] > 0.3, f"the paused picture never came: {f}"
         player({"ask": "play"})
 
-    with subtest("a second video is held to the first one's sound"):
-        said = player({"ask": "follow", "item": "${media}/other.mp4"})
+    with subtest("a second picture is a lane of a set, held to the film's sound"):
+        before = player({"ask": "queue"})["entries"][0]
+        said = player({"ask": "add-lane", "source": "${media}/other.mp4", "kind": "video"})
         assert said["say"] == "done", said
+        # THE SAME ENTRY, with its id: the file became a set of three lanes —
+        # its picture, its sound, and the other picture — and kept playing.
+        after = player({"ask": "queue"})["entries"][0]
+        assert after["id"] == before["id"] and after["kind"] == "set", (before, after)
+        assert after["lanes"] == 3, after
         machine.sleep(6)
         s = player({"ask": "look"})
-        drift = s["participants"][0]["drift_ms"]
-        print(f"drift {drift} ms")
-        assert abs(drift) < 60, f"the follower is {drift} ms away"
+        other = next(l for l in s["lane_states"] if l["lane"] == 3)
+        master = [l["lane"] for l in s["lane_states"] if l["master"]]
+        print(f"lane 3 is {other['drift_ms']} ms from the film's sound")
+        assert other["status"]["status"] == "playing", other
+        assert master == [2], f"the film's sound does not keep the time: {s['lane_states']}"
+        assert abs(other["drift_ms"]) < 60, f"lane 3 is {other['drift_ms']} ms away"
+        # ITS OWN PICTURE, asked by its lane.
         f = json.loads(machine.succeed(
-            "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} frame 0"
+            "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} frame 3"
         ))
-        assert f["lit"] > 0.3, f"the follower's picture is dark: {f}"
-        player({"ask": "unfollow", "index": 0})
+        assert f["lit"] > 0.3, f"lane 3's picture is dark: {f}"
+        said = player({"ask": "lane", "lane": 3, "change": {"what": "remove"}})
+        assert said["say"] == "done", said
+        assert player({"ask": "queue"})["entries"][0]["lanes"] == 2
+
+    with subtest("a sound that starts two seconds in waits, and then keeps the time"):
+        late = {"lanes": [
+            {"id": 1, "kind": "video", "source": "${media}/film.mp4"},
+            {"id": 2, "kind": "audio", "source": "${media}/tone.flac", "start_seconds": 2.0},
+        ]}
+        said = player({"ask": "put", "what": [{"set": late}], "replace": True})
+        assert said["say"] == "done", said
+        # THE SET'S CLOCK waits for its voices to load, so right after the put
+        # it is still before the sound's start, however slow this machine is.
+        s = player({"ask": "look"})
+        sound = next(l for l in s["lane_states"] if l["lane"] == 2)
+        assert s["position"] < 2 and sound["status"]["status"] == "pending", (s["position"], sound)
+        assert not sound["master"], "a sound that has not begun keeps the time"
+        for _ in range(30):
+            machine.sleep(1)
+            s = player({"ask": "look"})
+            sound = next(l for l in s["lane_states"] if l["lane"] == 2)
+            if sound["status"]["status"] == "playing":
+                break
+        print(f"at {s['position']} the late sound is {sound}")
+        assert s["position"] >= 2 and sound["status"]["status"] == "playing", (s["position"], sound)
+        assert sound["master"], s["lane_states"]
 
     with subtest("MPRIS answers, and a PlayPause over it is a pause"):
         bus = "--address=unix:path=/run/user/0/bus"
@@ -407,10 +362,13 @@ pkgs.testers.runNixOSTest {
         # A WILDCARD IS NOT A TYPE: every entry is named.
         types = prop("org.mpris.MediaPlayer2", "SupportedMimeTypes")
         assert types and not any("*" in t for t in types), types
-        player({"ask": "open", "items": ["${media}/tone.flac", "${media}/tune.rad"], "replace": True})
+        player({"ask": "put", "what": ["${media}/tone.flac", "${media}/tune.rad"], "replace": True})
         machine.sleep(3)
         tracks = prop("org.mpris.MediaPlayer2.TrackList", "Tracks")
         assert len(tracks) == 2, tracks
+        # A TRACK'S ID IS ITS ENTRY'S, the one the queue's outline names.
+        ids = [e["id"] for e in player({"ask": "queue"})["entries"]]
+        assert tracks == [f"/br/ronoctua/player/track/{i}" for i in ids], (tracks, ids)
         # ONE ITEM PLAYING AND ONE AFTER: there is a next, and no previous.
         assert prop("org.mpris.MediaPlayer2.Player", "CanGoNext") is True
         assert prop("org.mpris.MediaPlayer2.Player", "CanGoPrevious") is False
@@ -421,22 +379,26 @@ pkgs.testers.runNixOSTest {
             "file://${media}/film.mp4 /org/mpris/MediaPlayer2/TrackList/NoTrack false"
         )
         machine.sleep(2)
-        queue = [i["location"] for i in player({"ask": "look"})["queue"]]
-        assert queue[0].endswith("film.mp4") and len(queue) == 3, queue
+        entries = player({"ask": "queue"})["entries"]
+        assert len(entries) == 3 and entries[0]["name"]["location"].endswith("film.mp4"), entries
+        # THE IDS FROM THE LIST ITSELF, never a place written here: the one
+        # added first is named by its entry.
+        tracks = prop("org.mpris.MediaPlayer2.TrackList", "Tracks")
+        assert len(tracks) == 3 and tracks[0] == f"/br/ronoctua/player/track/{entries[0]['id']}", tracks
         # AND THE METADATA OF AN ITEM THAT IS NOT PLAYING names it.
         said = machine.succeed(
             f"{where} call {name} /org/mpris/MediaPlayer2 "
-            "org.mpris.MediaPlayer2.TrackList GetTracksMetadata ao 1 "
-            "/br/ronoctua/player/track/0"
+            f"org.mpris.MediaPlayer2.TrackList GetTracksMetadata ao 1 {tracks[0]}"
         )
         assert "film.mp4" in said, said
-        # REMOVED BY ITS ID, and the list is one shorter.
+        # REMOVED BY ITS ID, and the list is one shorter — the others keep
+        # the ids they had.
         machine.succeed(
             f"busctl {bus} call {name} /org/mpris/MediaPlayer2 "
-            "org.mpris.MediaPlayer2.TrackList RemoveTrack o /br/ronoctua/player/track/0"
+            f"org.mpris.MediaPlayer2.TrackList RemoveTrack o {tracks[0]}"
         )
         machine.sleep(2)
-        assert len(prop("org.mpris.MediaPlayer2.TrackList", "Tracks")) == 2
+        assert prop("org.mpris.MediaPlayer2.TrackList", "Tracks") == tracks[1:]
 
     with subtest("the column narrows the windows, and only them"):
         start_xvfb()
@@ -696,6 +658,195 @@ pkgs.testers.runNixOSTest {
         assert box == want, f"the small window is at {box}, not {want}"
         assert node.get("sticky"), "the small window does not follow the workspaces"
         machine.succeed("systemctl stop pip window compositor")
+
+    with subtest("an ambient sound goes round past its own length, and only its own asks reach it"):
+        bus = "--address=unix:path=/run/user/0/bus"
+        name = "org.mpris.MediaPlayer2.ronoctua"
+        a = player({"ask": "look"})["ambience"]
+        assert [x["id"] for x in a["sounds"]] == ["small-waterfall", "thunderstorm"], a
+        assert not any(x["on"] for x in a["sounds"]), f"a sound is on by itself: {a}"
+        said = player({"ask": "ambient", "id": "small-waterfall", "on": True})
+        assert said["say"] == "done", said
+        # ONE AT A TIME in this catalogue, and a sound nobody declared: both
+        # refused, each with its reason.
+        said = player({"ask": "ambient", "id": "thunderstorm", "on": True})
+        assert (said.get("trouble"), said.get("what"), said.get("most")) == ("too-many", "ambience", 1), said
+        said = player({"ask": "ambient", "id": "wind", "on": True})
+        assert said.get("trouble") == "no-such-sound", said
+        # MORE THAN TWICE ITS THREE SECONDS: it went round, and plays on.
+        machine.sleep(7)
+        tone = player({"ask": "look"})["ambience"]["sounds"][0]
+        assert tone["on"] and tone["rounds"] >= 2, f"the loop did not go round: {tone}"
+        # WHAT THE QUEUE IS TOLD never reaches it: a stop, and a PlayPause over
+        # MPRIS — the media keys.
+        player({"ask": "stop"})
+        machine.succeed(
+            f"busctl {bus} call {name} /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlayPause"
+        )
+        machine.sleep(4)
+        a = player({"ask": "look"})["ambience"]
+        assert a["sounds"][0]["on"] and not a["paused"], a
+        assert a["sounds"][0]["rounds"] > tone["rounds"], f"it stopped going round: {a}"
+        # ITS OWN TOGGLE holds it: the rounds stop where they were.
+        assert player({"ask": "ambient-toggle"})["say"] == "done"
+        machine.sleep(1)
+        held = player({"ask": "look"})["ambience"]
+        machine.sleep(4)
+        still = player({"ask": "look"})["ambience"]
+        assert held["paused"] and still["sounds"][0]["rounds"] == held["sounds"][0]["rounds"], (held, still)
+        # SILENCE turns every sound off, and each keeps its volume.
+        player({"ask": "ambient-volume", "id": "small-waterfall", "percent": 40})
+        assert player({"ask": "ambient-silence"})["say"] == "done"
+        a = player({"ask": "look"})["ambience"]
+        assert not any(x["on"] for x in a["sounds"]), a
+        assert a["sounds"][0]["volume_percent"] == 40 and not a["paused"], a
+        # AND ONE ON AGAIN, which closing the player has to end.
+        assert player({"ask": "ambient", "id": "thunderstorm", "on": True})["say"] == "done"
+
+    with subtest("a title written into a FLAC: the stamp moves, it reads back, and no draft is left"):
+        import time
+        # A COPY THE TEST OWNS: the store's is read-only, and a write goes
+        # into a draft beside the file that is renamed over it.
+        machine.succeed(
+            "rm -rf /root/tags && mkdir -p /root/tags "
+            "&& cp ${media}/tone.flac /root/tags/ && chmod u+w /root/tags/tone.flac"
+        )
+        flac = "/root/tags/tone.flac"
+
+        def field_of(sheet, name):
+            return next(f for f in sheet["fields"] if f["field"] == name)
+
+        def written():
+            for _ in range(150):
+                r = player({"ask": "look"})["retag"]
+                if r and r["location"] == flac and r["status"]["status"] != "writing" and r["waiting"] == 0:
+                    return r
+                time.sleep(0.2)
+            raise AssertionError(f"the write never ended: {r}")
+
+        sheet = player({"ask": "sheet", "location": flac})
+        assert sheet["say"] == "sheet", sheet
+        # EVERY READER THE UNIT NAMES answered: lofty, ffprobe, exiftool.
+        assert sheet["unread"] == [], sheet["unread"]
+        title = field_of(sheet, "title")
+        assert title["value"] == "Tone" and title["can"] == {"yes": "lofty"}, title
+        said = player({
+            "ask": "retag", "location": flac, "stamp": sheet["stamp"],
+            "edits": [{"edit": "set", "field": "title", "value": "Written here"}],
+        })
+        assert said["say"] == "done", said
+        r = written()
+        assert r["status"] == {"status": "written"}, r
+        again = player({"ask": "sheet", "location": flac})
+        assert again["stamp"] != sheet["stamp"], (sheet["stamp"], again["stamp"])
+        assert field_of(again, "title")["value"] == "Written here", again["fields"]
+        assert field_of(again, "artist")["value"] == "Nobody", again["fields"]
+        # NO DRAFT LEFT BESIDE IT (`.tone.flac.ronoctua-<pid>.part`), and the
+        # sound decodes whole.
+        left = machine.succeed("ls -A /root/tags").split()
+        assert left == ["tone.flac"], left
+        machine.succeed(f"${tools.RONOCTUA_FFMPEG} -v error -xerror -i {flac} -f null -")
+        # THE STAMP IT WAS READ WITH IS GONE: a write that names it is refused,
+        # and still nothing is left behind.
+        player({
+            "ask": "retag", "location": flac, "stamp": sheet["stamp"],
+            "edits": [{"edit": "set", "field": "title", "value": "Stale"}],
+        })
+        r = written()
+        assert r["status"].get("trouble") == "tags" and r["status"].get("why") == {"why": "changed-since"}, r
+        assert machine.succeed("ls -A /root/tags").split() == ["tone.flac"]
+        assert field_of(player({"ask": "sheet", "location": flac}), "title")["value"] == "Written here"
+
+    with subtest("nothing is looked up until somebody says so, and a host out of reach is said"):
+        import time
+        song = "${media}/tone.flac"
+        lyrics = {"ask": "find", "query": {"what": "lyrics", "location": song}}
+        # NOTHING LET: refused at once, naming the host — a search and a key.
+        said = player(lyrics)
+        assert said == {"say": "refused", "trouble": "off", "host": "lrclib.net"}, said
+        said = player({"ask": "key-check", "service": "tmdb"})
+        assert said == {"say": "refused", "trouble": "off", "host": "api.themoviedb.org"}, said
+        # THE PRESS ON A ROW THAT NAMES THE HOST is the consent: the door
+        # writes it, then asks — the daemon reads it at the moment of asking.
+        machine.succeed(
+            "mkdir -p /root/.config/ronoctua && "
+            "echo '{\"consented\":[\"lrclib\",\"tmdb\"]}' > /root/.config/ronoctua/player.json"
+        )
+        said = player({"ask": "key-check", "service": "tmdb"})
+        assert said == {"say": "refused", "trouble": "lookup", "service": "tmdb", "why": "no-key"}, said
+        assert player(lyrics)["say"] == "done"
+        # THE VM HAS NO NETWORK: the search ends, and its desk says why.
+        for _ in range(150):
+            desk = next(d for d in player({"ask": "look"})["desks"] if d["kind"] == "lyrics")
+            if not desk["busy"]:
+                break
+            time.sleep(0.2)
+        assert desk["trouble"] == {"trouble": "lookup", "service": "lrclib", "why": "unreachable"}, desk
+        page = player({"ask": "desk", "kind": "lyrics"})
+        assert page["say"] == "desk" and page["generation"] == desk["generation"], page
+        assert page["page"] == {"page": "nothing"} and page["query"]["location"] == song, page
+        # A CANDIDATE NO PAGE HAS is refused, never carried out.
+        said = player({"ask": "take", "desk": "lyrics", "candidate": 99})
+        assert said == {"say": "refused", "trouble": "no-such-candidate", "candidate": 99}, said
+        machine.succeed("rm /root/.config/ronoctua/player.json")
+
+    with subtest("nothing is asked of a directory until somebody says so, and one out of reach is said"):
+        import time
+        radio = {"ask": "find", "query": {"what": "radio", "list": "countries"}}
+        # NOTHING LET: each directory refused at once, naming its host.
+        for query, host in [
+            (radio["query"], "radio-browser.info"),
+            ({"what": "tv", "list": "countries"}, "iptv-org.github.io"),
+            ({"what": "archive", "category": "films"}, "archive.org"),
+            ({"what": "lives", "category": "news"}, "youtube.com"),
+        ]:
+            said = player({"ask": "find", "query": query})
+            assert said == {"say": "refused", "trouble": "off", "host": host}, said
+        # A STAR ON WHAT NO PAGE HAS is refused, and nothing is written.
+        uuid = "7ada8a81-5ae1-418c-8f18-51d2f38d86a4"
+        said = player({"ask": "favourite", "kind": "radio", "id": uuid, "on": True})
+        assert said == {"say": "refused", "trouble": "no-such-pick", "kind": "radio", "id": uuid}, said
+        machine.fail("test -e /root/.config/ronoctua/player-favourites.json")
+        # THE PRESS ON "ASK radio-browser.info" is the consent: the door
+        # writes it, then asks — and the VM has no network.
+        machine.succeed(
+            "mkdir -p /root/.config/ronoctua && "
+            "echo '{\"directories\":[\"radio\"]}' > /root/.config/ronoctua/player.json"
+        )
+        assert player(radio)["say"] == "done"
+        for _ in range(150):
+            desk = next(d for d in player({"ask": "look"})["desks"] if d["kind"] == "radio")
+            if not desk["busy"]:
+                break
+            time.sleep(0.2)
+        assert desk["trouble"] == {"trouble": "directory", "source": "radio", "why": "unreachable"}, desk
+        page = player({"ask": "desk", "kind": "radio"})
+        assert page["say"] == "desk" and page["generation"] == desk["generation"], page
+        assert page["page"] == {"page": "nothing"} and page["query"] == radio["query"], page
+        # EVERY DESK IS IN THE STATE, the directories' after the lookups'.
+        kinds = [d["kind"] for d in player({"ask": "look"})["desks"]]
+        assert kinds == [
+            "suggestions", "subtitles", "lyrics", "radio", "television", "channels", "archive", "lives",
+        ], kinds
+        machine.succeed("rm /root/.config/ronoctua/player.json")
+
+    with subtest("closed everywhere: the watcher hears farewell, and the player leaves with success"):
+        # A DOOR'S WATCH, from outside, and a quit that does not wait for its
+        # answer — as every door sends it (`client::tell_if_running`).
+        heard = json.loads(machine.succeed("XDG_RUNTIME_DIR=/run/user/0 python3 ${client} quit"))
+        print(heard)
+        assert heard["last"] == "farewell", heard
+        # THE SOCKET GOES FIRST, so nothing asks a player that is leaving.
+        machine.wait_until_fails("ls /run/user/0 | grep -q player.sock", timeout=10)
+        # AND THE PROCESS LEAVES WITH SUCCESS — by `_exit`, never through the C
+        # library's exit handlers with libmpv's threads alive: a crash there
+        # is a failed unit, and the installed one's `Restart=on-failure` would
+        # bring the player back showing the queue it had just closed.
+        machine.wait_until_succeeds(
+            "systemctl show -p ActiveState --value player | grep -qx inactive", timeout=15
+        )
+        result = machine.succeed("systemctl show -p Result --value player").strip()
+        assert result == "success", f"the player left with {result}"
 
     with subtest("nothing panicked"):
         journal = machine.succeed("journalctl -u player --no-pager")

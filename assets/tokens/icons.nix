@@ -754,8 +754,97 @@
   player-lyrics = "md-music_note";
   player-queue = "md-playlist_music";
   player-follow = "md-television_play";
+  # THE DOOR IT SWAPS TO (`player-swap`), drawn as where it goes: the column
+  # in a window, the window in the column and in the footer.
   player-column = "md-dock_right";
   player-window = "md-dock_window";
+  # THE VOLUME A STEP UP AND DOWN, on the column's bar: the speaker with a
+  # plus and with a minus, one drawing in two states — the mute between
+  # them is the same speaker.
+  player-louder = "md-volume_plus";
+  player-quieter = "md-volume_minus";
+  # THE MEDIA IN THE FILE (`player-tracks`): the sounds, pictures and
+  # subtitles one file carries, drawn as layers stacked in one — shown only
+  # while the file offers a choice among them.
+  player-tracks = "md-layers_outline";
+  # PLAY THIS ONE TOO (`player-also`), at the end of a row of the media in the
+  # file: the same layers with a plus — one more lane of the same file, beside
+  # the one in use.
+  player-also = "md-layers_plus";
+  # A GROUP OF THE QUEUE — a named playlist, a set — folded and open: the
+  # plain triangle every tree draws, pointing at what it holds. Not the
+  # drawer's chevrons (`expand`, `collapse`), which open a LINE downward.
+  player-folded = "md-menu_right";
+  player-unfolded = "md-menu_down";
+  # WHAT A LANE IS, first in its row: a film's picture, a sound. Subtitles
+  # are `player-subtitles`, the glyph the transport already draws them with.
+  player-lane-picture = "md-movie_outline";
+  player-lane-sound = "md-waveform";
+  # ONE OF THE PLAYER'S OWN FILES in its file browser: a set (`.rset`) —
+  # media played together, drawn as what overlaps — and a queue (`.rqueue`),
+  # which is `player-queue`.
+  player-set = "md-set_all";
+  # A SUBTITLE LANE on the Subtitles page, inside its colour chip: the filled
+  # caption box while it is shown over the picture, the outlined one while it
+  # is hidden — one drawing in two states, and the chip is the switch.
+  player-subtitle-shown = "md-subtitles";
+  player-subtitle-hidden = "md-subtitles_outline";
+  # THE FORMS the pictures of a set share a screen in, on the Layout page's
+  # ring: Material's own drawings of a screen's views — the mosaic that
+  # chooses for itself, one square, columns, rows, a grid, one large over a
+  # strip, and the picture in a corner of another.
+  player-form-auto = "md-view_compact";
+  player-form-single = "md-square_outline";
+  player-form-side = "md-view_column";
+  player-form-stacked = "md-view_agenda";
+  player-form-grid = "md-view_grid";
+  player-form-strip = "md-view_dashboard";
+  player-form-corner = "md-picture_in_picture_bottom_right";
+  # A PICTURE ONE PLACE EARLIER OR LATER, at the end of its row on the Layout
+  # page — the pointer's twin of the arrows: the plain triangles, pointing
+  # the way it moves.
+  player-layout-earlier = "md-menu_left";
+  player-layout-later = "md-menu_right";
+  # AN ENTRY OF THE QUEUE ONE PLACE EARLIER OR LATER, at the end of the
+  # cursor's row — the pointer's twin of the arrows there. Up and down, the
+  # way it moves in the list; never the triangles, which a group's row
+  # already carries at its head, meaning folded or open.
+  player-move-earlier = "md-arrow_up";
+  player-move-later = "md-arrow_down";
+  # WHERE A PICTURE GOES, on a lane's page: a monitor, the laptop's own
+  # screen, and a monitor that is not there.
+  player-screen = "md-monitor";
+  player-screen-built-in = "md-laptop";
+  player-screen-absent = "md-monitor_off";
+  # WHERE A SOUND GOES, on a lane's page, by the kind of output: the
+  # machine's default — whichever it picks — headphones, speakers, a
+  # Bluetooth device, and any other.
+  player-sink-default = "md-speaker_multiple";
+  player-sink-headphones = "md-headphones";
+  player-sink-speakers = "md-speaker";
+  player-sink-bluetooth = "md-bluetooth_audio";
+  player-sink-other = "md-volume_high";
+  # WHAT KIND OF SOUND an ambient recording is, first in its row on the
+  # ambient sounds' page — by its group in `assets/ambience.nix`: water that
+  # falls or runs, and a storm's rain and thunder. A group this door has no
+  # glyph for wears the plain sound wave (`player-lane-sound`'s drawing).
+  # A SUGGESTION'S FIELD, to be written or not (`player_suggest`): a box
+  # ticked or empty at the head of its row — the glyph a click turns.
+  player-import-on = "md-checkbox_marked_outline";
+  player-import-off = "md-checkbox_blank_outline";
+  # A SUBTITLE TIMED FOR THIS VERY FILE — found by its fingerprint, not by
+  # its name (`player_find`): a seal in front of its release's name.
+  player-hash-match = "md-check_decagram";
+  # A LANGUAGE taken out of a subtitle search, at the end of its row.
+  player-language-remove = "md-close";
+  # A STATION, A CHANNEL, A FILM KEPT AMONG THE FAVOURITES — or not — at the
+  # head of its row (`player_directory`): the star a click turns, filled when
+  # it is kept.
+  player-favourite = "md-star";
+  player-favourite-off = "md-star_outline";
+  ambience-water = "md-water";
+  ambience-storm = "md-weather_lightning_rainy";
+  ambience-sound = "md-waveform";
 
   # THE COLUMN'S SIZES (`crate::column`), on its control line: four boxes
   # from the widest to the narrowest, the way the edge moves. Material draws
@@ -767,6 +856,10 @@
   column-small = "md-size_s";
   column-bar = "md-size_xs";
   column-widen = "md-chevron_double_left";
+  # CLOSING THE COLUMN, left of the sizes and apart from them by a rule: a
+  # cross, the one every window has. Only the column goes; what plays in it
+  # goes on playing.
+  column-close = "md-close";
 
   # THE PERSON'S OWN PROGRAMS (`LEADER i`, `crate::software`).
   #

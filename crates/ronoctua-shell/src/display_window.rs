@@ -72,7 +72,7 @@ pub fn host_it() -> Result<()> {
         w.handle
             .insert_source(wanted_changed, |event, (), door: &mut Door<Display>| {
                 if let channel::Event::Msg(()) = event {
-                    door.content.screens_changed();
+                    door.content.look_again();
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the display.json watch: {e}"))?;
@@ -120,7 +120,7 @@ pub fn host_it() -> Result<()> {
                     // a window with no reader has nothing to report and
                     // should not replace whatever is on the message line with
                     // a complaint about an event the person did not cause.
-                    door.content.screens_changed();
+                    door.content.look_again();
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the compositor's channel: {e}"))?;
@@ -475,7 +475,7 @@ impl Display {
     ///
     /// SHALLOW, for the reason the footer gives: asking every monitor over
     /// DDC/CI on a hotplug is a fifth of a second per port.
-    fn screens_changed(&self) {
+    fn look_again(&self) {
         if let Some(h) = self.screens.as_ref() {
             h.send(ronoctua_display::Order::Look { deep: false });
         }
@@ -489,7 +489,7 @@ impl Content for Display {
     /// output, and a whole reading per batch would be several walks of
     /// `/sys/class/drm` per keypress.
     fn outputs_changed(&mut self, _: &mut Ui) {
-        self.screens_changed();
+        self.look_again();
     }
 
     type Hand = ();

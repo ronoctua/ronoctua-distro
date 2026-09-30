@@ -516,22 +516,42 @@ impl<C: Content> CompositorHandler for Door<C> {
         self.content.frame_done(&mut self.ui);
     }
 
+    /// THE SURFACE IS ON A SCREEN — this door's own surface, and not a drag's
+    /// icon: which screen a door is on is where its window is.
     fn surface_enter(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        if surface == &self.ui.surface && self.ui.screens.entered(output.clone()) {
+            self.content.screens_changed(&mut self.ui);
+        }
     }
 
     fn surface_leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        if surface == &self.ui.surface && self.ui.screens.left(output) {
+            self.content.screens_changed(&mut self.ui);
+        }
+    }
+}
+
+impl<C: Content> Door<C> {
+    /// A screen described, or described again: what the connection says of
+    /// it is kept (`Ui::screens`), and the window told when it moved.
+    fn described(&mut self, output: wl_output::WlOutput) {
+        let info = self.outputs.info(&output);
+        let (connector, description) = info.map_or((None, None), |i| (i.name, i.description));
+        if self.ui.screens.described(output, connector, description) {
+            self.content.screens_changed(&mut self.ui);
+        }
     }
 }
 
@@ -539,11 +559,29 @@ impl<C: Content> OutputHandler for Door<C> {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.outputs
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+    // THE SCREEN IS DESCRIBED FIRST, so a window that asks `ui.screens` in
+    // `outputs_changed` (the column, for the screen it waits for) finds it.
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        self.described(output);
         self.content.outputs_changed(&mut self.ui);
     }
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.described(output);
+    }
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        if self.ui.screens.gone(&output) {
+            self.content.screens_changed(&mut self.ui);
+        }
         self.content.outputs_changed(&mut self.ui);
     }
 }

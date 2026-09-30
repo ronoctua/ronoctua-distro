@@ -16,6 +16,46 @@ ronoctua-frames = { path = "../ronoctua-frames" }
 ronoctua-xdg = { path = "../ronoctua-xdg" }
 # The preferences file: atomic write, "read or fall back and say why".
 ronoctua-store = { path = "../ronoctua-store" }
+# Sets, lanes, streams and the `.rset`/`.rqueue` formats (`own`): the queue
+# and the session are made of them. The engine already linked it.
+ronoctua-playlist = { path = "../ronoctua-playlist" }
+# The one cell ruler, for a set's joined name cut to a width
+# (`queue::together`) — the same clusters and cells every door measures with.
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+# Subtitle files (`subtitles/`): TTML and YouTube's XML are read through
+# `ronoctua-xml`, the reader the playlist crate already links with the depth
+# guard in front of it; old code pages are guessed by chardetng (Firefox's
+# detector, the one new crate) and decoded by encoding_rs, which it is built
+# on.
+ronoctua-xml = { path = "../ronoctua-xml" }
+# Why yt-dlp could not list a playlist, as the closed set a door words
+# (`Trouble::Listing`): serde and nothing else, never a process.
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+# What a file says about itself (`Say::Sheet`), the changes a door asks for
+# (`Ask::Retag`) and why one is refused (`Trouble::Tags`): the tags crate's
+# SCHEMA only — serde and nothing else. Its engine (lofty, the programs) is
+# the daemon's; a door that links this never links it.
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+# The online lookups' words — which service, why it gave nothing, a found
+# subtitle, a suggested tag, a lyrics record — and the person's keys
+# (`Secret`, never printed): SCHEMA only, without `net`. The asking itself
+# (TLS, the hosts' pace) is the daemon's; a door that links this links no
+# network for it.
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+# The directories' words — a station, a channel's row, an archive item, a
+# country code that is one, why a directory gave nothing — the categories of
+# "channels by theme" and the favourites' kinds: SCHEMA and the generated
+# table only, without `net`. The listing itself (TLS, the cache, the index)
+# is the daemon's.
+ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false }
+encoding_rs = "0.8"
+chardetng = "0.1"
+# MPRIS `Quit`, the one way to close a player OLDER than the door that finds
+# it (`client::quit_by_mpris`): an old daemon may not know the socket's
+# `quit`, and every one of them answers the bus. The blocking API on the
+# caller's own thread; the shell already links zbus through its other
+# boundaries, so nothing new enters a binary.
+zbus.workspace = true
 
 [lints]
 workspace = true

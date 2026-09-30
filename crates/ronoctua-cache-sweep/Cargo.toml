@@ -11,12 +11,24 @@ publish.workspace = true
 name = "ronoctua-cache-sweep"
 path = "src/main.rs"
 
+# THE RELIEF: what the brain starts when the disk is short — the cargo trees
+# under the cache, then the store's garbage down to the goal. A second binary
+# of this crate and not of the brain's, because it deletes files, and what a
+# program that deletes may link is this crate's argument.
+[[bin]]
+name = "ronoctua-disk-relief"
+path = "src/relief.rs"
+
 # THE ROOTS, AND NOTHING ELSE. This binary deletes files for a living, so what
 # it is allowed to link is part of its argument: no D-Bus, no renderer, no
 # reader of `/proc`. Whether the machine is busy is the brain's question and is
 # answered before this is ever started — see `runner::judge`.
 [dependencies]
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# `statvfs`, and only for the relief: the ceiling and the goal are shares of a
+# filesystem, and those numbers come as numbers, never as a `df` to parse.
+# `rustix` and not `libc` for the reason the workspace gives: its API is safe.
+rustix = { workspace = true, features = [ "fs" ] }
 
 [lints]
 workspace = true

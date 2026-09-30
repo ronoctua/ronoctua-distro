@@ -10,6 +10,8 @@
   atRunTime,
   generated,
   iconSuperpack,
+  # Where cargo writes (nix/cargo-dirs.nix).
+  cargoDirs,
 }:
 
 let
@@ -119,8 +121,12 @@ pkgs.mkShell {
     # edit. With `target/` inside, that is 19 GB per edit; without it, 1.3 MB.
     #
     # Measured: 44 copies, 793 GB, 42% of the disk. See docs/ARCHITECTURE.md.
-    export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/target"
-    mkdir -p "$CARGO_TARGET_DIR"
+    #
+    # WHERE instead is `nix/cargo-dirs.nix`, and only there: both variables,
+    # under the cache, in a directory named after this shell's compiler. The
+    # path used to be spelled out here, in `.envrc` and in the loop — three
+    # copies kept in step by hand.
+    ${cargoDirs.exports}
 
     # Installed on entering the devshell, and not by an installer step: a hook
     # lives in `.git/hooks`, which git never clones. Whoever clones this

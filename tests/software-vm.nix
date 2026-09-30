@@ -229,9 +229,10 @@ let
     print(data.decode().strip())
   '';
 
-  # NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF: the reason is in
-  # `tests/compositor-xvfb.nix`.
-  brainPrefs = pkgs.writeText "brain.json" ''{"tasks":{"system-update":{"enabled":false}}}'';
+  # NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF, NOR MAKES ROOM ON ITS
+  # DISK: the reasons are in `tests/compositor-xvfb.nix` — and here the
+  # relief's collection would take `secondProbe`, registered and never rooted.
+  brainPrefs = pkgs.writeText "brain.json" ''{"tasks":{"system-update":{"enabled":false},"disk-space":{"enabled":false}}}'';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-software";

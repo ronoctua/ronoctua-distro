@@ -312,6 +312,22 @@ pub fn toggle(tenant: Tenant, here: Option<&str>) -> Asked {
     }
 }
 
+/// Whether the tenant's column is up HERE already — what the swap asks
+/// before it raises one, so asking twice is asking once and never the
+/// toggle's close. The toggle's own reading of "here" ([`toggled`]).
+#[must_use]
+pub fn is_here(tenant: Tenant, here: Option<&str>) -> bool {
+    toggled(holder(tenant).as_ref(), here).is_some()
+}
+
+/// Ends the tenant's column WHEREVER it is — on any workspace, parked or
+/// not; whether one went. What closing the player everywhere does to the
+/// column when no daemon is there to say farewell. Never this process: a
+/// column that closes itself quits.
+pub fn end(tenant: Tenant) -> bool {
+    holder(tenant).is_some_and(|h| end_one(h.pid))
+}
+
 /// The words after the program's name that raise this holder again, where
 /// it was and at the size it had.
 fn raised_as(h: &Holder) -> Vec<String> {
@@ -337,10 +353,15 @@ pub fn raise_again() {
         if !end_one(h.pid) {
             continue;
         }
-        let _ = std::process::Command::new(&program)
+        // WAITED FOR, aside (`foreign::waited`): a column the footer raises
+        // and then forgets would end as a zombie of the footer.
+        if let Ok(child) = std::process::Command::new(&program)
             .args(raised_as(&h))
             .stdin(std::process::Stdio::null())
-            .spawn();
+            .spawn()
+        {
+            let _ = crate::foreign::waited(child);
+        }
     }
 }
 

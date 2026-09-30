@@ -24,13 +24,22 @@
 //! corrects itself with the same rule a video in step on one machine follows
 //! (`sync::correct`).
 //!
-//! # The media travels as HTTP
+//! # The media travels as HTTP, lane by lane
 //!
-//! A file on the master is served on the same port, `GET /media/<index>` with
-//! the key as a bearer token and `Range` honoured — mpv seeks by asking for a
-//! range. An address (YouTube, a stream) is handed over as the address: the
-//! joining machine fetches it itself.
+//! What the master plays is lanes ([`Moment::lanes`]), and a file of one is
+//! served on the same port, `GET /media/<leaf>/<lane>` with the key as a
+//! bearer token and `Range` honoured — mpv seeks by asking for a range. Two
+//! lanes of one file share one path, so the joining machine opens the file
+//! once, as the master does. An address (YouTube, a stream) is handed over as
+//! the address: the joining machine fetches it itself.
+//!
+//! # The role picks the lanes
+//!
+//! A screen takes the pictures and their subtitles, a speaker the sounds,
+//! and both take everything ([`Role::plays`]). The joining machine's own
+//! outputs and screens are its own: the master's are not handed over.
 
+use ronoctua_playlist::own::{Lane, LaneId, LaneKind, Stack};
 use serde::{Deserialize, Serialize};
 
 /// The port both daemons use, unless the unit says another
@@ -78,6 +87,16 @@ impl Role {
             Self::Sound => Self::Both,
         }
     }
+
+    /// Whether a machine joining as this plays a lane of `kind`.
+    #[must_use]
+    pub const fn plays(self, kind: LaneKind) -> bool {
+        match self {
+            Self::Both => true,
+            Self::Screen => matches!(kind, LaneKind::Video | LaneKind::Subtitle),
+            Self::Sound => matches!(kind, LaneKind::Audio),
+        }
+    }
 }
 
 /// A knock on another daemon's door.
@@ -108,13 +127,11 @@ pub enum Knock {
 pub struct Moment {
     /// Its clock, in milliseconds since the epoch, when this was read.
     pub clock_ms: f64,
-    /// What to open: an address, or `None` for a file served as
-    /// `/media/<item>`.
-    pub address: Option<String>,
-    /// The item's index in the master's queue, which is also its name in the
-    /// media path; `None` with nothing loaded.
-    pub item: Option<usize>,
-    /// Where in it, in seconds.
+    /// The master's current leaf, by its entry id — which is also its name in
+    /// the media paths, and stays the same when the master's queue is
+    /// reordered under it; `None` with nothing loaded.
+    pub item: Option<u64>,
+    /// Where in it, in seconds of its own clock (a set's).
     pub position: f64,
     /// Whether it plays.
     pub playing: bool,
@@ -122,10 +139,164 @@ pub struct Moment {
     pub speed: f64,
     /// What it is called, to show.
     pub title: Option<String>,
-    /// The file's own name, when it is a file: its extension is what says
-    /// whether the following machine needs one of our decoders for it.
+    /// What it plays: its lanes, each with where to open it.
     #[serde(default)]
-    pub name: Option<String>,
+    pub lanes: Vec<RemoteLane>,
+}
+
+/// Where a joining machine opens one of the master's lanes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "from")]
+pub enum RemoteSource {
+    /// An address, opened as itself.
+    Address {
+        /// The address.
+        url: String,
+    },
+    /// One of the master's files, served at `path` on its port.
+    Media {
+        /// `/media/<leaf>/<lane>` ([`media_path`]).
+        path: String,
+        /// The file's own name: its extension says whether the joining
+        /// machine needs one of our decoders for it.
+        name: String,
+    },
+}
+
+/// One of the master's lanes, as a joining machine plays it: where to open
+/// it, and the stretch of the set's clock it plays — never the master's
+/// outputs or screens, which are that machine's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteLane {
+    /// Its name in the master's set.
+    pub id: LaneId,
+    /// What it contributes.
+    pub kind: LaneKind,
+    /// Where to open it.
+    pub source: RemoteSource,
+    /// Which of its source's tracks.
+    #[serde(default)]
+    pub track: Option<i64>,
+    /// Its title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Its language.
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// When it begins on the set's clock, seconds.
+    #[serde(default)]
+    pub start_seconds: f64,
+    /// Where in its source it begins, seconds.
+    #[serde(default)]
+    pub from_seconds: f64,
+    /// Where in its source it stops, seconds.
+    #[serde(default)]
+    pub until_seconds: Option<f64>,
+    /// It plays.
+    pub enabled: bool,
+    /// Its own volume, percent.
+    pub volume_percent: u8,
+    /// Its own mute.
+    #[serde(default)]
+    pub muted: bool,
+    /// For subtitles: the picture they go over.
+    #[serde(default)]
+    pub over: Option<LaneId>,
+    /// For subtitles: where the lines sit.
+    #[serde(default)]
+    pub stack: Stack,
+}
+
+/// Where the master serves the file of `lane` of its leaf `leaf`.
+#[must_use]
+pub fn media_path(leaf: u64, lane: LaneId) -> String {
+    format!("/media/{leaf}/{}", lane.0)
+}
+
+/// The leaf and the lane a request's path names ([`media_path`]); `None` for
+/// anything else — a path with more, or less, or not numbers.
+#[must_use]
+pub fn media_of(path: &str) -> Option<(u64, LaneId)> {
+    let rest = path.strip_prefix("/media/")?;
+    let (leaf, lane) = rest.split_once('/')?;
+    Some((leaf.parse().ok()?, LaneId(lane.parse().ok()?)))
+}
+
+/// The master's lanes, as it hands them over: an address as itself, a file
+/// at the path of the FIRST lane that plays it — so two lanes of one file are
+/// one download, and one player, on the joining machine too.
+#[must_use]
+pub fn lanes_of(leaf: u64, lanes: &[Lane]) -> Vec<RemoteLane> {
+    lanes
+        .iter()
+        .map(|lane| {
+            let source = if lane.source.contains("://") {
+                RemoteSource::Address {
+                    url: lane.source.clone(),
+                }
+            } else {
+                let first = lanes
+                    .iter()
+                    .find(|l| l.source == lane.source)
+                    .map_or(lane.id, |l| l.id);
+                RemoteSource::Media {
+                    path: media_path(leaf, first),
+                    name: crate::queue::file_name(&lane.source).to_owned(),
+                }
+            };
+            RemoteLane {
+                id: lane.id,
+                kind: lane.kind,
+                source,
+                track: lane.track,
+                title: lane.title.clone(),
+                lang: lane.lang.clone(),
+                start_seconds: lane.start_seconds,
+                from_seconds: lane.from_seconds,
+                until_seconds: lane.until_seconds,
+                enabled: lane.enabled,
+                volume_percent: lane.volume_percent,
+                muted: lane.muted,
+                over: lane.over,
+                stack: lane.stack,
+            }
+        })
+        .collect()
+}
+
+/// The lanes a machine joining as `role` plays, each opened where `open`
+/// says (the address itself, the master's path as a URL, or a copy fetched
+/// whole): with this machine's own default output and every screen.
+///
+/// A subtitle lane over a picture this machine does not play goes too — it
+/// is laid over the first picture that is left, and a speaker plays none.
+#[must_use]
+pub fn joined_lanes(
+    role: Role,
+    lanes: &[RemoteLane],
+    open: impl Fn(&RemoteSource) -> String,
+) -> Vec<Lane> {
+    let kept: Vec<&RemoteLane> = lanes.iter().filter(|l| role.plays(l.kind)).collect();
+    kept.iter()
+        .map(|remote| {
+            let mut lane = Lane::new(remote.id, remote.kind, open(&remote.source));
+            lane.track = remote.track;
+            lane.title.clone_from(&remote.title);
+            lane.lang.clone_from(&remote.lang);
+            lane.start_seconds = remote.start_seconds;
+            lane.from_seconds = remote.from_seconds;
+            lane.until_seconds = remote.until_seconds;
+            lane.enabled = remote.enabled;
+            lane.volume_percent = remote.volume_percent;
+            lane.muted = remote.muted;
+            lane.over = remote.over.filter(|over| {
+                kept.iter()
+                    .any(|k| k.id == *over && k.kind == LaneKind::Video)
+            });
+            lane.stack = remote.stack;
+            lane
+        })
+        .collect()
 }
 
 /// The answer to a knock.
@@ -277,19 +448,33 @@ pub fn peers() -> ronoctua_store::Store<Peers> {
     ronoctua_store::Store::at(ronoctua_store::state_dir(), PEERS_FILE)
 }
 
-/// Writes the peers and keeps the file private: every key in it lets a
+/// Writes the peers, private from the FIRST byte: every key in it lets a
 /// machine into this one's media.
+///
+/// It used to go through the store and be `chmod`ded after, which left the
+/// keys in a file anyone on the machine could read for as long as the two
+/// calls were apart — and a file somebody had left readable stayed readable
+/// until then. It is written the way the person's own keys are
+/// (`ronoctua_lookup::keys::write_private_file`): a draft created `0600`,
+/// then renamed over the file. Same JSON the store reads.
 ///
 /// # Errors
 ///
-/// The file could not be written or its mode set.
+/// The file could not be written.
 pub fn keep(p: &Peers) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let store = peers();
-    store.write(p)?;
-    if let Some(path) = store.path() {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    keep_at(peers().path().as_deref(), p)
+}
+
+/// [`keep`], into `path` (`None`: no home, nothing kept — as the store does).
+fn keep_at(path: Option<&std::path::Path>, p: &Peers) -> anyhow::Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
+    let bytes = serde_json::to_vec_pretty(p)?;
+    ronoctua_lookup::keys::write_private_file(path, &bytes)?;
     Ok(())
 }
 
@@ -297,6 +482,37 @@ pub fn keep(p: &Peers) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use std::net::IpAddr;
+
+    /// FAILS IF: the paired machines' keys are ever in a file anyone can
+    /// read — written and THEN made private (the defect this replaced), or
+    /// left readable because the file before them was.
+    #[test]
+    fn the_peers_are_private_from_their_first_byte() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = std::env::temp_dir().join(format!("ronoctua-peers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(PEERS_FILE);
+        std::fs::create_dir_all(&dir).expect("a folder");
+        std::fs::write(&path, "{}").expect("an old file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("readable");
+        let p = Peers {
+            hosts: vec![Peer {
+                name: "other".into(),
+                address: Some("100.64.0.2".into()),
+                key: "k".repeat(64),
+            }],
+            guests: Vec::new(),
+        };
+        keep_at(Some(&path), &p).expect("kept");
+        let mode = std::fs::metadata(&path).expect("there").mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let back: Peers =
+            serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("the store's JSON");
+        assert_eq!(back.hosts.len(), 1);
+        let left = std::fs::read_dir(&dir).expect("listed").count();
+        assert_eq!(left, 1, "no draft is left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_the_tailnets_ranges_are_let_in() {
@@ -364,6 +580,98 @@ mod tests {
             ..m
         };
         assert!((master_now(&stopped, 99_999.0, 0.0) - 30.0).abs() < 1e-9);
+    }
+
+    /// A lane of `kind` playing `source`.
+    fn lane(id: u32, kind: LaneKind, source: &str) -> Lane {
+        Lane::new(LaneId(id), kind, source)
+    }
+
+    /// FAILS IF: a lane's file is served at a path that does not name it, a
+    /// path is read as a lane it does not name, or two lanes of one file are
+    /// two downloads on the joining machine.
+    #[test]
+    fn a_lane_travels_by_its_leaf_and_its_file() {
+        assert_eq!(media_path(7, LaneId(3)), "/media/7/3");
+        assert_eq!(media_of("/media/7/3"), Some((7, LaneId(3))));
+        for no in [
+            "/media/7",
+            "/media/7/3/4",
+            "/media/x/3",
+            "/media/7/",
+            "/other/7/3",
+        ] {
+            assert_eq!(media_of(no), None, "{no}");
+        }
+        let lanes = vec![
+            lane(1, LaneKind::Video, "/m/film.mkv"),
+            lane(2, LaneKind::Audio, "/m/film.mkv"),
+            lane(4, LaneKind::Audio, "https://radio.example/live"),
+            lane(5, LaneKind::Subtitle, "/m/film.srt"),
+        ];
+        let remote = lanes_of(9, &lanes);
+        let path = |i: usize| match &remote[i].source {
+            RemoteSource::Media { path, .. } => path.clone(),
+            RemoteSource::Address { url } => url.clone(),
+        };
+        assert_eq!(path(0), "/media/9/1");
+        assert_eq!(path(1), "/media/9/1", "one file, one path");
+        assert_eq!(
+            path(2),
+            "https://radio.example/live",
+            "an address is itself"
+        );
+        assert_eq!(path(3), "/media/9/5");
+        assert_eq!(
+            remote[3].source,
+            RemoteSource::Media {
+                path: "/media/9/5".into(),
+                name: "film.srt".into()
+            }
+        );
+    }
+
+    /// FAILS IF: a machine joining as a screen plays a sound, a speaker a
+    /// picture, or the master's outputs travel with its lanes.
+    #[test]
+    fn the_role_picks_the_lanes_and_the_outputs_stay_home() {
+        let mut dub = lane(3, LaneKind::Audio, "/m/film.mkv");
+        dub.sink = Some("bluez_output.headphones".into());
+        let mut words = lane(4, LaneKind::Subtitle, "/m/film.srt");
+        words.over = Some(LaneId(1));
+        let lanes = vec![
+            lane(1, LaneKind::Video, "/m/film.mkv"),
+            lane(2, LaneKind::Audio, "/m/film.mkv"),
+            dub,
+            words,
+        ];
+        let remote = lanes_of(1, &lanes);
+        let open = |s: &RemoteSource| match s {
+            RemoteSource::Media { path, .. } => format!("http://host{path}"),
+            RemoteSource::Address { url } => url.clone(),
+        };
+        let kinds = |role| {
+            joined_lanes(role, &remote, open)
+                .iter()
+                .map(|l| (l.id.0, l.kind))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(Role::Screen),
+            vec![(1, LaneKind::Video), (4, LaneKind::Subtitle)]
+        );
+        assert_eq!(
+            kinds(Role::Sound),
+            vec![(2, LaneKind::Audio), (3, LaneKind::Audio)]
+        );
+        let both = joined_lanes(Role::Both, &remote, open);
+        assert_eq!(both.len(), 4);
+        assert_eq!(both[0].source, "http://host/media/1/1");
+        assert!(
+            both.iter().all(|l| l.sink.is_none()),
+            "the master's outputs travelled"
+        );
+        assert_eq!(both[3].over, Some(LaneId(1)));
     }
 
     #[test]

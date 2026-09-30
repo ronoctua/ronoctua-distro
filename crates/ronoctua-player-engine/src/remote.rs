@@ -8,9 +8,13 @@
 //!   tailnet every half minute (it can come up after the player does);
 //! - one thread per CONNECTION: a knock (JSON, one line) or a `GET` of a file;
 //! - PAIRING with another machine, from a person's order;
-//! - FOLLOWING a machine that was joined, four times a second.
+//! - FOLLOWING a machine that was joined, four times a second: its moment
+//!   read off the lock, and the lanes this machine's role plays handed to
+//!   the engine, which plays them in its voices on that machine's clock
+//!   (`engine/session.rs`). This machine's queue is never touched.
 
 use std::{
+    collections::HashMap,
     io::{BufRead as _, BufReader, Read as _, Seek as _, Write as _},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -18,30 +22,20 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_player::{
-    remote::{self, Answer, Knock, Moment, Peer, Role},
-    sync::{self, Correction},
+    queue::EntryId,
+    remote::{self, Answer, Knock, Peer, RemoteSource, Role},
+    sync,
 };
 
 use crate::engine::Shared;
 
 /// How long a knock waits for its answer.
 const PATIENCE: Duration = Duration::from_secs(5);
-
-/// How long after a load the follower SEEKS instead of nudging.
-///
-/// Loading over the tailnet takes a moment the start position cannot know —
-/// measured, 0.7 s on a local file — and a 5% nudge pays that back at 50 ms a
-/// second: fourteen seconds out of step. Right after a load, anything past
-/// [`SETTLE_MS`] is a seek; after that, the nudges of `sync::correct`.
-const SETTLING: Duration = Duration::from_secs(4);
-
-/// What counts as out of step while settling.
-const SETTLE_MS: i64 = 120;
 
 /// How often the tailnet is read again.
 const LOOK_EVERY: Duration = Duration::from_secs(30);
@@ -63,10 +57,13 @@ pub struct Following {
     pub host: String,
     /// What this machine plays of it.
     pub role: Role,
-    /// How far behind or ahead, in ms.
+    /// How far behind or ahead, in ms: the voice furthest from it.
     pub drift_ms: i64,
     /// Raised to stop the thread.
     pub stop: Arc<AtomicBool>,
+    /// Where this machine's own queue was — its leaf and the place in it —
+    /// to go back to when it leaves.
+    pub resume: (Option<EntryId>, f64),
 }
 
 /// The tailnet, when this machine is on one.
@@ -213,7 +210,8 @@ fn answer(knock: Knock, shared: &Shared) -> Answer {
     }
 }
 
-/// `GET /media/<n>`: a file of the queue, to a guest, with `Range`.
+/// `GET /media/<leaf>/<lane>`: a lane's file of the leaf that plays, to a
+/// guest, with `Range`.
 fn media(
     mut stream: TcpStream,
     first: &str,
@@ -249,22 +247,19 @@ fn media(
         refuse(&mut stream, "403 Forbidden");
         return Ok(());
     }
-    let index: Option<usize> = first
-        .split_whitespace()
-        .nth(1)
-        .and_then(|p| p.strip_prefix("/media/"))
-        .and_then(|n| n.split('/').next())
-        .and_then(|n| n.parse().ok());
+    // THE LEAF BY ITS ENTRY ID, which a reordered queue does not change under
+    // a guest that is reading it, and the lane by its id in the set.
+    let asked = first.split_whitespace().nth(1).and_then(remote::media_of);
     let location = {
         let (lock, _) = &**shared;
         let e = lock
             .lock()
             .map_err(|_| anyhow::anyhow!("the engine is gone"))?;
-        index.and_then(|i| e.location_of(i))
+        asked.and_then(|(leaf, lane)| e.media_location(leaf, lane))
     };
-    // A FILE OF THE QUEUE, and never an address: an address is handed over as
-    // itself, and this is not a proxy.
-    let Some(path) = location.filter(|l| !l.contains("://")) else {
+    // A FILE OF WHAT PLAYS, and never an address: an address is handed over
+    // as itself, and this is not a proxy.
+    let Some(path) = location else {
         refuse(&mut stream, "404 Not Found");
         return Ok(());
     };
@@ -375,7 +370,7 @@ pub fn follow(host: Peer, role: Role, shared: Shared) -> Arc<AtomicBool> {
                 tracing::warn!(host = %host.name, error = %e, "following ended");
                 let (lock, bell) = &*shared;
                 if let Ok(mut eng) = lock.lock() {
-                    eng.left(&format!("{e:#}"));
+                    eng.left(&halt, &format!("{e:#}"));
                     eng.broadcast();
                 }
                 bell.notify_all();
@@ -384,7 +379,7 @@ pub fn follow(host: Peer, role: Role, shared: Shared) -> Arc<AtomicBool> {
     stop
 }
 
-fn follow_loop(host: &Peer, role: Role, shared: &Shared, stop: &AtomicBool) -> Result<()> {
+fn follow_loop(host: &Peer, role: Role, shared: &Shared, stop: &Arc<AtomicBool>) -> Result<()> {
     let address: IpAddr = host
         .address
         .as_deref()
@@ -408,12 +403,20 @@ fn follow_loop(host: &Peer, role: Role, shared: &Shared, stop: &AtomicBool) -> R
     let offset = sync::offset(&samples).unwrap_or(0.0);
     tracing::info!(host = %host.name, offset_ms = offset, "the clocks are measured");
 
-    let mut loaded: Option<(Option<usize>, Option<String>)> = None;
-    let mut settling: Option<Instant> = None;
-    let mut fetched: Option<PathBuf> = None;
+    let host_part = match address {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) => format!("[{v6}]"),
+    };
+    let base = format!("http://{host_part}:{}", remote::port());
+    // THE KEY TRAVELS AS A HEADER, and only to the master's own files.
+    let header = format!("Authorization: Bearer {}", host.key);
+    // A FORMAT ONLY OUR DECODERS READ comes over whole, once per file of the
+    // leaf, and goes when the leaf changes.
+    let mut fetched: HashMap<String, PathBuf> = HashMap::new();
+    let mut leaf: Option<u64> = None;
     let outcome = (|| -> Result<()> {
         while !stop.load(Ordering::SeqCst) {
-            let started = Instant::now();
+            let started = std::time::Instant::now();
             let Answer::Now(m) = exchange(
                 address,
                 &Knock::Now {
@@ -423,41 +426,82 @@ fn follow_loop(host: &Peer, role: Role, shared: &Shared, stop: &AtomicBool) -> R
             else {
                 bail!("{} refused the key", host.name);
             };
-            // A FORMAT ONLY OUR DECODERS READ comes over whole, into the cache,
-            // BEFORE the engine's lock is taken: the decoders want a path, and
-            // a stream of bytes from another machine is not one.
-            let changed = loaded.as_ref() != Some(&(m.item, m.address.clone()));
-            if changed && let Some(f) = fetched.take() {
-                let _ = std::fs::remove_file(f);
+            if m.item != leaf {
+                for (_, f) in fetched.drain() {
+                    let _ = std::fs::remove_file(f);
+                }
+                leaf = m.item;
             }
-            if changed
-                && m.address.is_none()
-                && let (Some(item), Some(name)) = (m.item, m.name.as_deref())
-                && ronoctua_player::decoders::for_path(Path::new(name)).is_some()
-            {
-                fetched = Some(fetch(address, host, item, name)?);
+            // FETCHED BEFORE the engine's lock is taken: the decoders want
+            // a path, and a stream of bytes from another machine is not one.
+            for lane in m.lanes.iter().filter(|l| role.plays(l.kind)) {
+                // AND A SUBTITLE FILE, which is read here to be merged with
+                // the others over its picture — a few kilobytes, once.
+                let words = lane.kind == ronoctua_player::own::LaneKind::Subtitle
+                    && Path::new(name_of(&lane.source))
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(ronoctua_player::subtitles::claims);
+                if let RemoteSource::Media { path, name } = &lane.source
+                    && !fetched.contains_key(path)
+                    && (words || ronoctua_player::decoders::for_path(Path::new(name)).is_some())
+                {
+                    let n = fetched.len();
+                    fetched.insert(path.clone(), fetch(address, host, path, name, n)?);
+                }
             }
-            step(
-                &m,
-                role,
-                address,
-                (host, offset, fetched.as_deref()),
-                (&mut loaded, &mut settling),
-                shared,
-            )?;
+            let mut keyed = Vec::new();
+            let lanes = remote::joined_lanes(role, &m.lanes, |source| match source {
+                RemoteSource::Address { url } => url.clone(),
+                RemoteSource::Media { path, .. } => match fetched.get(path) {
+                    Some(copy) => crate::engine::loadable(&copy.to_string_lossy()),
+                    None => format!("{base}{path}"),
+                },
+            });
+            for lane in &m.lanes {
+                if let RemoteSource::Media { path, .. } = &lane.source
+                    && !fetched.contains_key(path)
+                {
+                    keyed.push(format!("{base}{path}"));
+                }
+            }
+            if m.item.is_some() {
+                let (lock, bell) = &**shared;
+                let mut e = lock
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("the engine is gone"))?;
+                if let Err(crate::engine::Refused(t)) =
+                    e.follow_step(stop, m, lanes, (offset, keyed, header.clone()))
+                {
+                    bail!("{t:?}");
+                }
+                e.broadcast();
+                drop(e);
+                bell.notify_all();
+            }
             std::thread::sleep(sync::TICK.saturating_sub(started.elapsed()));
         }
         Ok(())
     })();
-    if let Some(f) = fetched {
+    for (_, f) in fetched {
         let _ = std::fs::remove_file(f);
     }
     outcome
 }
 
-/// The master's file `item`, whole, into this machine's cache — named after
-/// the original so its extension picks the decoder.
-fn fetch(address: IpAddr, host: &Peer, item: usize, name: &str) -> Result<PathBuf> {
+/// The name of the file a lane of the other machine's comes from; nothing
+/// for an address, which is handed over as itself.
+fn name_of(source: &RemoteSource) -> &str {
+    match source {
+        RemoteSource::Media { name, .. } => name,
+        RemoteSource::Address { .. } => "",
+    }
+}
+
+/// The master's file at `path`, whole, into this machine's cache — named
+/// after the original so its extension picks the decoder; `n` tells two of
+/// one leaf apart.
+fn fetch(address: IpAddr, host: &Peer, path: &str, name: &str, n: usize) -> Result<PathBuf> {
     let dir = ronoctua_xdg::cache_dir().context("no cache directory")?;
     std::fs::create_dir_all(&dir)?;
     // THE NAME'S EXTENSION, and nothing else of it: a name from another
@@ -466,15 +510,14 @@ fn fetch(address: IpAddr, host: &Peer, item: usize, name: &str) -> Result<PathBu
         .extension()
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let to = dir.join(format!("player-remote-{}.{ext}", std::process::id()));
+    let to = dir.join(format!("player-remote-{}-{n}.{ext}", std::process::id()));
     let mut s = TcpStream::connect_timeout(&SocketAddr::new(address, remote::port()), PATIENCE)
         .with_context(|| format!("{address} did not answer"))?;
     s.set_read_timeout(Some(PATIENCE))?;
     let bearer = format!("Bearer {}", host.key);
-    let path = format!("/media/{item}");
     let host_name = address.to_string();
     let headers = [("Authorization", bearer.as_str())];
-    let call = ronoctua_http::Call::new("GET", &path, &host_name).with_headers(&headers);
+    let call = ronoctua_http::Call::new("GET", path, &host_name).with_headers(&headers);
     s.write_all(ronoctua_http::request_of(&call).as_bytes())?;
     let mut raw = Vec::new();
     s.read_to_end(&mut raw)?;
@@ -488,92 +531,6 @@ fn fetch(address: IpAddr, host: &Peer, item: usize, name: &str) -> Result<PathBu
     }
     std::fs::write(&to, &raw[split + 4..])?;
     Ok(to)
-}
-
-/// One tick: load what the master plays when it changed, else correct.
-#[allow(clippy::type_complexity)]
-fn step(
-    m: &Moment,
-    role: Role,
-    address: IpAddr,
-    (host, offset, fetched): (&Peer, f64, Option<&Path>),
-    (loaded, settling): (
-        &mut Option<(Option<usize>, Option<String>)>,
-        &mut Option<Instant>,
-    ),
-    shared: &Shared,
-) -> Result<()> {
-    let (lock, _) = &**shared;
-    let mut e = lock
-        .lock()
-        .map_err(|_| anyhow::anyhow!("the engine is gone"))?;
-    let mpv = e.main(shared)?;
-    let now = (m.item, m.address.clone());
-    if m.item.is_none() {
-        return Ok(());
-    }
-    if loaded.as_ref() != Some(&now) {
-        let url = fetched
-            .map(|p| crate::engine::loadable(&p.to_string_lossy()))
-            .or_else(|| m.address.clone())
-            .unwrap_or_else(|| {
-                let host_part = match address {
-                    IpAddr::V4(v4) => v4.to_string(),
-                    IpAddr::V6(v6) => format!("[{v6}]"),
-                };
-                format!(
-                    "http://{host_part}:{}/media/{}",
-                    remote::port(),
-                    m.item.unwrap_or(0)
-                )
-            });
-        // THE KEY TRAVELS AS A HEADER, and only to the master's own files.
-        let header = if m.address.is_none() && fetched.is_none() {
-            format!("Authorization: Bearer {}", host.key)
-        } else {
-            String::new()
-        };
-        let _ = mpv.set("http-header-fields", &header);
-        // THE ROLE: a screen drops the sound, a speaker drops the picture.
-        let _ = mpv.set("aid", if role == Role::Screen { "no" } else { "auto" });
-        let _ = mpv.set("vid", if role == Role::Sound { "no" } else { "auto" });
-        let at = remote::master_now(m, remote::clock_ms(), offset);
-        let _ = mpv.set("start", &format!("{at:.3}"));
-        crate::engine::load(&mpv, &url, "replace")?;
-        let _ = mpv.set("pause", if m.playing { "no" } else { "yes" });
-        *loaded = Some(now);
-        *settling = Some(Instant::now());
-        return Ok(());
-    }
-    let _ = mpv.set("pause", if m.playing { "no" } else { "yes" });
-    let Some(here) = mpv.float("time-pos") else {
-        return Ok(());
-    };
-    let there = remote::master_now(m, remote::clock_ms(), offset);
-    #[allow(clippy::cast_possible_truncation)]
-    let drift = ((here - there) * 1000.0).round() as i64;
-    e.drifted(drift);
-    if settling.is_some_and(|s| s.elapsed() < SETTLING) {
-        if drift.abs() > SETTLE_MS {
-            // AHEAD OF WHERE IT WILL BE: the seek itself takes a moment.
-            let to = there + f64::from(u16::try_from(SETTLE_MS / 2).unwrap_or(0)) / 1000.0;
-            let _ = mpv.command(&["seek", &format!("{to:.3}"), "absolute+exact"]);
-        }
-        return Ok(());
-    }
-    *settling = None;
-    match sync::correct(there, here, m.speed) {
-        Correction::Keep => {
-            let _ = mpv.set("speed", &m.speed.to_string());
-        }
-        Correction::Speed(s) => {
-            let _ = mpv.set("speed", &s.to_string());
-        }
-        Correction::Seek(to) => {
-            let _ = mpv.command(&["seek", &format!("{to:.3}"), "absolute+exact"]);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

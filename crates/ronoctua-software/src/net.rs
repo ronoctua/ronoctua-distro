@@ -4,14 +4,16 @@
 //! [`MOST_REDIRECTS`] hops, `https` to `https` only), every one with our own
 //! User-Agent and a ceiling the caller chooses.
 //!
-//! # Why the redirects are here and not in the framer
+//! # The redirect rule is the framer's `web`, and the ceiling is ours
 //!
-//! Because following one is a DECISION. A redirect from `https` to `http` is a
-//! downgrade somebody on the path can ask for, and the framer cannot tell the
-//! icon of a web app from the index of a package: the rule belongs to whoever
-//! knows what the bytes are for. So `ronoctua_http::tls` answers one request,
-//! and this module walks the chain — five hops, each one checked by
-//! [`next_hop`], a pure function a test reads without a socket.
+//! Following a redirect is a DECISION — a redirect from `https` to `http` is a
+//! downgrade somebody on the path can ask for — and it was taken here, for the
+//! person's programs, until the player's lookups needed the same walk. It
+//! moved to `ronoctua_http::web` so there is one rule: [`request`] is its walk
+//! with our User-Agent and our five hops, and [`download`] walks the same
+//! rule ([`next_hop`], a pure function a test reads without a socket) around
+//! a streaming transport that the web module does not have. What stays here
+//! is what is ours: which [`Refusal`] each of the web's kinds is.
 //!
 //! # Plain `http` is refused, and the refusal is the transport's
 //!
@@ -19,10 +21,14 @@
 //! `tls::download`). Its TCP call (`over_tcp`) is for the loopback: it takes an
 //! address and not a name, gives no ceiling on the body and hands the body
 //! back as TEXT, which is how a PNG loses every byte above 0x7F. So a fetch of
-//! an `http://` address is [`Refusal::UrlScheme`] before anything is sent.
+//! an `http://` address is [`Refusal::UrlScheme`] before anything is sent —
+//! except a FIRST address on one of `web::UPGRADED_HOSTS`, which [`request`]
+//! and [`download`] alike ask over `https` (`web::upgraded`): those hosts
+//! answer plain `http` only with a redirect to the same address over `https`.
+//! [`transport_of`] stays strict, because it JUDGES an address as written.
 //! The REDIRECT rule is still the whole rule ([`next_hop`] allows `http` to
 //! `https` and refuses the reverse), so the day the framer carries plain TCP
-//! only [`transport_of`] has to change. A web app may still OPEN an `http`
+//! only its `transport_of` has to change. A web app may still OPEN an `http`
 //! address in Chrome — that is `web::canonical_url`'s decision, not this one;
 //! only its icon is looked for over `https` (see `icons::from_site`).
 //!
@@ -43,7 +49,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use ronoctua_http::web;
 use url::Url;
+
+#[cfg(test)]
+use ronoctua_http::web::keeps_the_body;
+pub use ronoctua_http::web::{Target, redirect_of};
 
 use crate::progress::{Phase, Report};
 use crate::{Failure, Refusal};
@@ -214,53 +225,25 @@ pub fn answered(got: Got) -> Result<Got, Failure> {
 ///
 /// The address's refusal ([`transport_of`], [`next_hop`]), `Offline` when a
 /// host cannot be reached, `TooLarge` above the ceiling, `ToolFailed` for a
-/// header this module will not send or after [`MOST_REDIRECTS`] redirects.
+/// header this module will not send, after [`MOST_REDIRECTS`] redirects, or
+/// for a body in a content coding that is not read ([`refusal_of_kind`]).
 pub fn request(
     url: &str,
     post: Option<&str>,
     extra: &[(&str, &str)],
     most: u64,
 ) -> Result<Got, Failure> {
-    let mut at = transport_of(url)?;
-    let mut body = post;
-    for hop in 0..=MOST_REDIRECTS {
-        let target = Target::of(&at)?;
-        let accept = if body.is_some() {
-            "application/json"
-        } else {
-            "*/*"
-        };
-        let headers = headers_with(accept, extra)?;
-        let method = if body.is_some() { "POST" } else { "GET" };
-        let mut call = ronoctua_http::Call::new(method, &target.path, &target.host_header)
-            .with_headers(&headers)
-            .waiting(ronoctua_http::tls::PATIENCE);
-        if let Some(b) = body {
-            call = call.with_body(b);
-        }
-        let reply =
-            ronoctua_http::tls::fetch(&target.host, target.port, &call, most).map_err(|e| {
-                Failure {
-                    refusal: Some(refusal_of_error(&e)),
-                    trouble: format!("{at}: {e:#}"),
-                }
-            })?;
-        if let Some(location) = redirect_of(&reply) {
-            if hop == MOST_REDIRECTS {
-                break;
-            }
-            at = next_hop(&at, location)?;
-            body = body.filter(|_| keeps_the_body(reply.status));
-            continue;
-        }
-        return Ok(Got {
-            url: at.to_string(),
-            reply,
-        });
+    let mut ask = web::Ask::get(url, USER_AGENT)
+        .with_headers(extra)
+        .most(most)
+        .hops(MOST_REDIRECTS);
+    if let Some(body) = post {
+        ask = ask.posting(body);
     }
-    Err(Failure {
-        refusal: Some(Refusal::ToolFailed),
-        trouble: format!("more than {MOST_REDIRECTS} redirects from {url}"),
+    let got = web::request(&ask)?;
+    Ok(Got {
+        url: got.url,
+        reply: got.reply,
     })
 }
 
@@ -333,6 +316,14 @@ pub fn download(
     Ok((written, sha))
 }
 
+/// Where a download starts: the same first step as [`request`]'s walk
+/// (`web::request`), so an `http` address of one of `web::UPGRADED_HOSTS` is
+/// asked over `https` and every other `http` address is refused. One address
+/// is never accepted by one of the two and refused by the other. Pure.
+fn first_hop(url: &str) -> Result<Url, Failure> {
+    transport_of(&web::upgraded(url))
+}
+
 /// The walk of [`download`], writing into `part` (truncated per hop).
 fn download_into(
     url: &str,
@@ -340,7 +331,7 @@ fn download_into(
     most: u64,
     heard: &mut dyn FnMut(u64, Option<u64>) -> bool,
 ) -> Result<(u64, String), Failure> {
-    let mut at = transport_of(url)?;
+    let mut at = first_hop(url)?;
     for hop in 0..=MOST_REDIRECTS {
         let target = Target::of(&at)?;
         let headers = headers_with("*/*", &[])?;
@@ -431,50 +422,28 @@ pub fn beats<'a>(
     }
 }
 
-/// Names the framer writes itself, or that this module writes on every
-/// request: a caller's copy would be a second header of the same name.
-const OWN_HEADERS: [&str; 6] = [
-    "host",
-    "connection",
-    "content-type",
-    "content-length",
-    "user-agent",
-    "accept-encoding",
-];
-
-/// The headers of one request: ours, then the caller's.
+/// The headers of one request: ours (the User-Agent and
+/// `Accept-Encoding: identity`), then the caller's — [`web::headers`], with
+/// the web's refusal as ours.
 ///
-/// `Accept-Encoding: identity` on purpose: without the header a server may
-/// send ANY content coding (RFC 9110 §12.5.3), and nothing here inflates — a
-/// gzipped PNG would reach the decoder as a file that is not an image.
+/// `identity` on purpose: without the header a server may send ANY content
+/// coding (RFC 9110 §12.5.3), and a download is written as it arrives, where
+/// nothing inflates it.
 ///
 /// # Errors
 ///
 /// [`Refusal::ToolFailed`] for a name that is not a token, one of
-/// [`OWN_HEADERS`], or a value with a control character in it (a line break
-/// would start a header nobody wrote).
+/// [`web::OWN_HEADERS`], or a value with a control character in it.
 fn headers_with<'a>(
     accept: &'a str,
     extra: &[(&'a str, &'a str)],
 ) -> Result<Vec<(&'a str, &'a str)>, Failure> {
-    for (name, value) in extra {
-        let token =
-            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-        let own = OWN_HEADERS.iter().any(|o| o.eq_ignore_ascii_case(name));
-        if !token || own || value.chars().any(char::is_control) {
-            return Err(Failure {
-                refusal: Some(Refusal::ToolFailed),
-                trouble: format!("the header `{name}` is not sent"),
-            });
-        }
-    }
-    let replaced = extra.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept"));
-    let mut all = vec![("User-Agent", USER_AGENT), ("Accept-Encoding", "identity")];
-    if !replaced {
-        all.push(("Accept", accept));
-    }
-    all.extend_from_slice(extra);
-    Ok(all)
+    Ok(web::headers(
+        USER_AGENT,
+        accept,
+        web::Coding::Identity,
+        extra,
+    )?)
 }
 
 /// `<to>.part`, beside it.
@@ -490,7 +459,7 @@ fn part_of(to: &Path) -> Result<PathBuf, Failure> {
 
 /// An address parsed and checked against what this module can carry: `https`
 /// only (see the module's header for why `http` is refused here), a host, and
-/// no user name or password in it.
+/// no user name or password in it — [`web::transport_of`], refused as ours.
 ///
 /// # Errors
 ///
@@ -498,86 +467,47 @@ fn part_of(to: &Path) -> Result<PathBuf, Failure> {
 /// [`Refusal::UrlScheme`] for anything but `https`,
 /// [`Refusal::UrlCredentials`] for a user name or a password.
 pub fn transport_of(url: &str) -> Result<Url, Failure> {
-    let parsed = Url::parse(url.trim()).map_err(|e| Failure {
-        refusal: Some(Refusal::UrlInvalid),
-        trouble: format!("{url}: {e}"),
-    })?;
-    if parsed.scheme() != "https" {
-        return Err(Failure {
-            refusal: Some(Refusal::UrlScheme),
-            trouble: format!("{url}: only https is fetched"),
-        });
-    }
-    if parsed.host().is_none() {
-        return Err(Failure::refused(Refusal::UrlInvalid));
-    }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(Failure::refused(Refusal::UrlCredentials));
-    }
-    Ok(parsed)
+    Ok(web::transport_of(url)?)
 }
 
-/// Where a redirect from `from` to `location` goes, or why it may not.
-///
-/// `location` is resolved against `from` (`Url::join`, which is what a
-/// relative `Location: /x` needs). Allowed: `https` to `https`, and `http` to
-/// `https`. Refused with [`Refusal::UrlScheme`]: `https` to `http` (a
-/// downgrade anybody on the path can ask for), and every other scheme
-/// (`file:`, `data:`, `javascript:`); with [`Refusal::UrlCredentials`], a
-/// target that carries a user name or a password. Pure.
+/// Where a redirect from `from` to `location` goes, or why it may not —
+/// [`web::next_hop`], refused as ours. Pure.
 ///
 /// # Errors
 ///
 /// [`Refusal::UrlScheme`], [`Refusal::UrlCredentials`] or, for a `Location`
 /// that does not parse, [`Refusal::UrlInvalid`].
 pub fn next_hop(from: &Url, location: &str) -> Result<Url, Failure> {
-    let next = from.join(location.trim()).map_err(|e| Failure {
-        refusal: Some(Refusal::UrlInvalid),
-        trouble: format!("{from} redirected to `{location}`: {e}"),
-    })?;
-    let allowed = matches!(
-        (from.scheme(), next.scheme()),
-        ("https", "https") | ("http", "https" | "http")
-    );
-    if !allowed || next.host().is_none() {
-        return Err(Failure {
-            refusal: Some(Refusal::UrlScheme),
-            trouble: format!("{from} redirected to {next}, which is not followed"),
-        });
-    }
-    // The framer carries https only; an http→http hop is allowed by the rule
-    // and refused by the transport, the same way a first http address is.
-    if next.scheme() != "https" {
-        return Err(Failure {
-            refusal: Some(Refusal::UrlScheme),
-            trouble: format!("{from} redirected to {next}: only https is fetched"),
-        });
-    }
-    if !next.username().is_empty() || next.password().is_some() {
-        return Err(Failure {
-            refusal: Some(Refusal::UrlCredentials),
-            trouble: format!("{from} redirected to an address with credentials in it"),
-        });
-    }
-    Ok(next)
+    Ok(web::next_hop(from, location)?)
 }
 
-/// The `Location` of a redirect, when the reply is one. Pure.
+/// Which refusal each of the web's kinds is. Pure.
 #[must_use]
-pub fn redirect_of(reply: &ronoctua_http::Reply) -> Option<&str> {
-    matches!(reply.status, 301 | 302 | 303 | 307 | 308)
-        .then(|| reply.header("location"))
-        .flatten()
-        .filter(|l| !l.trim().is_empty())
+pub const fn refusal_of_kind(kind: web::Kind) -> Refusal {
+    match kind {
+        web::Kind::Invalid => Refusal::UrlInvalid,
+        web::Kind::Scheme => Refusal::UrlScheme,
+        web::Kind::Credentials => Refusal::UrlCredentials,
+        web::Kind::Offline => Refusal::Offline,
+        web::Kind::TooLarge => Refusal::TooLarge,
+        // A certificate that does not verify is not "no network"; a header we
+        // will not send, a loop, a coding we do not read and a stopped
+        // download are the tool failing.
+        web::Kind::Certificate
+        | web::Kind::Header
+        | web::Kind::Loop
+        | web::Kind::Coding
+        | web::Kind::Failed => Refusal::ToolFailed,
+    }
 }
 
-/// Whether a redirect with this status carries a POST's body on.
-///
-/// 307 and 308 say "the same request, elsewhere"; 301, 302 and 303 become a
-/// GET, which is what every browser does and what a server that answers a
-/// POST with 303 means.
-const fn keeps_the_body(status: u16) -> bool {
-    matches!(status, 307 | 308)
+impl From<web::Error> for Failure {
+    fn from(e: web::Error) -> Self {
+        Self {
+            refusal: Some(refusal_of_kind(e.kind)),
+            trouble: e.trouble,
+        }
+    }
 }
 
 /// Why a reply that is not a redirect is not an answer; `None` for a 2xx.
@@ -605,81 +535,13 @@ pub fn refusal_of_status(reply: &ronoctua_http::Reply) -> Option<Refusal> {
     })
 }
 
-/// Which refusal a transport error is.
-///
-/// The framer answers `anyhow`, so this reads the chain: an I/O error that is
-/// not `InvalidData` is the network not being there (a name that does not
-/// resolve, a refused or timed-out connect, a reset) and reads
-/// [`Refusal::Offline`]; `InvalidData` is TLS itself failing — a certificate
-/// that does not verify, which is not "no network" and says so as
-/// [`Refusal::ToolFailed`]. A body over the ceiling has no I/O error in it and
-/// the framer's own words (`more than … bytes`): [`Refusal::TooLarge`]. A
-/// download its `heard` stopped is the framer's `stopped`, which is none of
-/// those: [`Refusal::ToolFailed`]. Pure.
+/// Which refusal a transport error is: [`web::kind_of_error`] read as ours
+/// ([`refusal_of_kind`]) — `Offline` for the network not being there,
+/// `ToolFailed` for TLS itself failing (a certificate that does not verify is
+/// not "no network"), `TooLarge` over the ceiling. Pure.
 #[must_use]
 pub fn refusal_of_error(e: &anyhow::Error) -> Refusal {
-    let said = format!("{e:#}");
-    if let Some(io) = e.chain().find_map(|c| c.downcast_ref::<std::io::Error>()) {
-        return if io.kind() == std::io::ErrorKind::InvalidData {
-            Refusal::ToolFailed
-        } else {
-            Refusal::Offline
-        };
-    }
-    if said.contains(" more than ") {
-        Refusal::TooLarge
-    } else if said.contains("is not a server name") {
-        Refusal::UrlInvalid
-    } else if said.contains("resolved to nothing") || said.contains("could not reach") {
-        Refusal::Offline
-    } else {
-        Refusal::ToolFailed
-    }
-}
-
-/// What one request needs from an address: the name TLS checks, the port,
-/// the `Host` header and the path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Target {
-    /// The name the certificate must carry (an IPv6 address without brackets).
-    pub host: String,
-    /// The port, the scheme's default when the address names none.
-    pub port: u16,
-    /// The `Host` header: brackets around IPv6, the port only when it is not
-    /// the default (some servers refuse `example.org:443`).
-    pub host_header: String,
-    /// The path and the query; never the fragment, which is not sent.
-    pub path: String,
-}
-
-impl Target {
-    /// The target of an address. Pure.
-    ///
-    /// # Errors
-    ///
-    /// [`Refusal::UrlInvalid`] for an address with no host or no known port.
-    pub fn of(url: &Url) -> Result<Self, Failure> {
-        let host = match url.host() {
-            Some(url::Host::Domain(d)) => d.to_owned(),
-            Some(url::Host::Ipv4(a)) => a.to_string(),
-            Some(url::Host::Ipv6(a)) => a.to_string(),
-            None => return Err(Failure::refused(Refusal::UrlInvalid)),
-        };
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| Failure::refused(Refusal::UrlInvalid))?;
-        let shown = url.host_str().unwrap_or_default();
-        let host_header = url
-            .port()
-            .map_or_else(|| shown.to_owned(), |p| format!("{shown}:{p}"));
-        let path = url[url::Position::BeforePath..url::Position::AfterQuery].to_owned();
-        Ok(Self {
-            host,
-            port,
-            host_header,
-            path: if path.is_empty() { "/".into() } else { path },
-        })
-    }
+    refusal_of_kind(web::kind_of_error(e))
 }
 
 /// When a download says how far it got.
@@ -995,6 +857,42 @@ mod tests {
         assert_eq!(
             next_hop(&from, "http://github.com/x").unwrap_err().refusal,
             Some(Refusal::UrlScheme)
+        );
+    }
+
+    /// FAILS IF: a download and a request disagree about an `http` address —
+    /// one fetching over `https` what the other refuses.
+    #[test]
+    fn a_download_starts_where_a_request_starts() {
+        assert_eq!(
+            first_hop("http://commons.wikimedia.org/wiki/Special:FilePath/x.jpg")
+                .unwrap()
+                .as_str(),
+            "https://commons.wikimedia.org/wiki/Special:FilePath/x.jpg"
+        );
+        assert_eq!(
+            first_hop("http://coverartarchive.org/release/1/front")
+                .unwrap()
+                .scheme(),
+            "https"
+        );
+        assert_eq!(
+            first_hop("http://example.org/x").unwrap_err().refusal,
+            Some(Refusal::UrlScheme)
+        );
+        assert_eq!(
+            first_hop("http://commons.wikimedia.org:8080/x")
+                .unwrap_err()
+                .refusal,
+            Some(Refusal::UrlScheme),
+            "another port is another server"
+        );
+        assert_eq!(
+            web::upgraded("http://commons.wikimedia.org/x"),
+            first_hop("http://commons.wikimedia.org/x")
+                .unwrap()
+                .as_str(),
+            "the request's first step is this one"
         );
     }
 

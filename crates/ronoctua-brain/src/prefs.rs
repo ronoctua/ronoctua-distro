@@ -258,11 +258,14 @@ pub struct TaskPrefs {
     pub enabled: bool,
     /// Days between runs.
     ///
-    /// Seven. It is the cadence the machine already keeps for the two other
-    /// things it does to itself — `nix.gc` and the `tealdeer` cache — and one
-    /// generation a week is a rollback list a person can still read. Daily is
-    /// available and is one key away; it is not the default because nothing
-    /// here is urgent.
+    /// Seven. It is the cadence the machine already keeps for the `tealdeer`
+    /// cache, and one generation a week is a rollback list a person can still
+    /// read — the count of them the system keeps (`systemGenerations`, in
+    /// `assets/cache.nix`) is about a month. There is no weekly `nix.gc` any
+    /// more: the update's own collection is the weekly one, and Nix's floor
+    /// covers the days between (`nix/modules/store.nix`). Daily is available
+    /// and is one key away; it is not the default because nothing here is
+    /// urgent.
     pub interval_days: u16,
     /// Which part of the day it should prefer.
     pub part_of_day: PartOfDay,

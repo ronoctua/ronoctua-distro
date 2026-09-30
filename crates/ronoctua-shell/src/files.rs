@@ -583,21 +583,17 @@ const SEEK_STEP: f64 = 5.0;
 /// one wanted. The pointer is the coarse gesture and this is the fine one.
 const SPIN_STEP: f32 = 0.15;
 
-/// How far a key moves the globe, in pixels of the box.
-///
-/// A KEY HAS NO DISTANCE, so it borrows one: thirty pixels of the picture,
-/// which `Pose::panned` then divides by the zoom — so the step is a tenth of
-/// what is on screen whether the globe shows the world or one city.
-const GLOBE_STEP: f32 = 30.0;
+// How far a key moves the globe — the globe's own step, which every view
+// that embeds one shares.
+use crate::globe::GLOBE_STEP;
 
-/// How much one key moves a shape nearer or further.
-const ZOOM_STEP: f32 = 1.25;
+/// How much one key moves a shape nearer or further — the globe's own step,
+/// the two figures of one panel answering one key the same way.
+const ZOOM_STEP: f32 = crate::globe::KEY_ZOOM;
 
-/// How much one notch of the wheel does.
-///
-/// Smaller than the key's, because a wheel sends several notches for one flick
-/// of a finger and the same factor would cross the whole range in one gesture.
-const WHEEL_ZOOM: f32 = 1.12;
+// How much one notch of the wheel does — the globe's, which the shape
+// borrows so the two figures of one panel answer a wheel alike.
+use crate::globe::WHEEL_ZOOM;
 
 /// The most lines a panel may ASK the region for.
 ///
@@ -15537,7 +15533,7 @@ impl View {
             .looked
             .as_ref()
             .map_or(String::new(), |l| l.key.clone());
-        let portuguese = self.texts.language().starts_with("pt");
+        let portuguese = crate::globe::tongue(&self.texts) == ronoctua_atlas::Tongue::Portuguese;
         self.globe
             .borrow_mut()
             .looking_at(at, &key, size, from, theme, portuguese);

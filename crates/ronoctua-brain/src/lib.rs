@@ -107,7 +107,7 @@ pub use pulse::{Meter, Pulse};
 pub use registry::Registry;
 pub use runner::Runner;
 pub use task::{
-    Due, Hold, Kind, Notice, Outcome, OutcomeKind, Report, RunRecord, Sheet, Step, StepOutcome,
-    Task, Verdict, Watched,
+    Due, Hold, Kind, Notice, Outcome, OutcomeKind, Relieved, Report, RunRecord, Sheet, Step,
+    StepOutcome, Task, Verdict, Watched,
 };
 pub use wire::{Ask, Say};

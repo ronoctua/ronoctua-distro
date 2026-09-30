@@ -43,8 +43,11 @@ mod globe;
 mod lookup;
 
 pub use baked::Atlas;
-pub use globe::{Drawing, Ink, Pose, Shape, VERTEX_CEILING, project};
-pub use lookup::{address, country_at, lakes, place_near, region_at};
+pub use globe::{
+    Drawing, Ink, MARKS_CEILING, Mark, Marks, Placed, Pose, Shape, VERTEX_CEILING, framing, placed,
+    project, tier,
+};
+pub use lookup::{address, anchor_of, country_at, country_name, lakes, place_near, region_at};
 
 /// A coordinate, in signed decimal degrees.
 ///

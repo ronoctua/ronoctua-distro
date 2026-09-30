@@ -165,6 +165,21 @@ def build_icon_table(
         shapes[table[cp]].draw(pen)
         return None if pen.bounds is None else pen.bounds[3] - pen.bounds[1]
 
+    # THE INK ACROSS: where the drawing begins and ends, from the pen's origin,
+    # in EMS of the face that draws it — what a door needs to put something
+    # between two glyphs with the same air on both sides. The cells cannot
+    # say it: `md-close` inks its whole advance and `md-size_xl` starts a
+    # fifth of the way in, off its middle, so two glyphs three cells apart
+    # are not three cells of air apart (`crate::column`'s rule).
+    def across(cp: int, face: TTFont, where=None) -> list[float] | None:
+        table, shapes = (cmap, glyphs) if where is None else where
+        pen = BoundsPen(shapes)
+        shapes[table[cp]].draw(pen)
+        if pen.bounds is None:
+            return None
+        em = float(face["head"].unitsPerEm)
+        return [round(pen.bounds[0] / em, 4), round(pen.bounds[2] / em, 4)]
+
     # THE DIGIT IS ALWAYS THE PRIMARY FACE'S, for a mark as much as for an
     # icon: the ratio says how tall the drawing stands beside the TEXT it is
     # drawn next to, and the text is never in the marks face.
@@ -188,6 +203,7 @@ def build_icon_table(
                 "glyph": glyph,
                 "codepoint": cp,
                 "char": chr(cp),
+                "across": across(cp, marks_font, (ours_cmap, ours_glyphs)),
                 "ink": None if height is None or not digit else round(height / digit, 4),
                 "chrome": chrome_size(
                     None if height is None or not digit else round(height / digit, 4),
@@ -215,6 +231,8 @@ def build_icon_table(
             # from it — the ONE measurement `chrome-icons-match-the-text`
             # re-checks and `gen-tokens.py` hands to the shell.
             "ink": ratio,
+            # And where the ink begins and ends across, in ems.
+            "across": across(cp, font),
             "chrome": chrome_size(ratio, base, icon, tolerance),
         }
 

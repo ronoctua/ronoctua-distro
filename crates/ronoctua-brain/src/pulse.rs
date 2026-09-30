@@ -50,6 +50,20 @@ pub struct Pulse {
     /// desktop, a virtual machine — which is a different answer from "plugged
     /// in" and must not be confused with it.
     pub on_battery: Option<bool>,
+    /// How much of the disk is free, in per mille — the FULLER of the
+    /// filesystems holding `/nix/store` and the home, which on most machines
+    /// are one. `None` when neither could be measured.
+    ///
+    /// Read on the tick the runner already has: nothing tells a process that a
+    /// disk is filling — inotify reports files, not capacity — and a
+    /// `statvfs` is microseconds. It does not cross to the screen (`mind_wire`
+    /// lists what does).
+    pub disk_free_per_mille: Option<u16>,
+    /// Whether any of those filesystems is under its FLOOR — a share of it,
+    /// capped at a size (`tasks/space.rs`), so it is a question about bytes
+    /// and not the per mille above. `tasks/space.rs` starts a relief on it.
+    /// `None` when neither could be measured.
+    pub disk_short: Option<bool>,
 }
 
 /// Whoever can answer "how busy is this machine".
@@ -70,20 +84,95 @@ pub trait Meter: Send + Sync {
 #[derive(Debug, Default)]
 pub struct Machine {
     places: ronoctua_memory::Places,
+    /// The paths whose filesystems the disk reading measures — see [`disks`].
+    disks: Vec<std::path::PathBuf>,
 }
 
 impl Machine {
     /// The machine this process is running on.
     #[must_use]
     pub fn here() -> Self {
-        Self::default()
+        Self {
+            places: ronoctua_memory::Places::default(),
+            disks: disks(),
+        }
     }
 
-    /// A machine rooted somewhere else — a tree a test wrote.
+    /// A machine rooted somewhere else — a tree a test wrote. It measures no
+    /// disk unless told to ([`Machine::measuring`]).
     #[must_use]
     pub const fn at(places: ronoctua_memory::Places) -> Self {
-        Self { places }
+        Self {
+            places,
+            disks: Vec::new(),
+        }
     }
+
+    /// The same, measuring the filesystems holding these paths.
+    #[must_use]
+    pub fn measuring(mut self, disks: Vec<std::path::PathBuf>) -> Self {
+        self.disks = disks;
+        self
+    }
+}
+
+/// The paths whose filesystems a relief is about: the store's, and the home's.
+///
+/// The store because a rebuild that cannot write there cannot update the
+/// machine; the home because that is where the person's own work and the
+/// caches live. On the distro's layout they are one btrfs; on a machine with a
+/// separate `/home` the fuller of the two is the one that decides.
+#[must_use]
+pub fn disks() -> Vec<std::path::PathBuf> {
+    let mut out = vec![std::path::PathBuf::from("/nix/store")];
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        out.push(std::path::PathBuf::from(home));
+    }
+    out
+}
+
+/// One filesystem's size and what of it is free, in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Room {
+    /// How big it is.
+    pub total: u64,
+    /// How much of it this user may still write.
+    pub free: u64,
+}
+
+impl Room {
+    /// The free share, in per mille.
+    #[must_use]
+    pub fn free_per_mille(self) -> u16 {
+        if self.total == 0 {
+            return 0;
+        }
+        u16::try_from(u128::from(self.free.min(self.total)) * 1000 / u128::from(self.total))
+            .unwrap_or(1000)
+    }
+}
+
+/// The free share of the FULLEST of these filesystems, in per mille.
+///
+/// The fuller one decides: a relief is about the filesystem that runs out
+/// first. `None` when none was measured — never a zero, which would start a
+/// relief on a machine nobody measured.
+#[must_use]
+pub fn fullest(readings: &[Option<Room>]) -> Option<u16> {
+    readings.iter().flatten().map(|r| r.free_per_mille()).min()
+}
+
+/// The size and the free space of the filesystem holding each path — `None`
+/// for a path that could not be measured.
+#[must_use]
+pub fn rooms(paths: &[std::path::PathBuf]) -> Vec<Option<Room>> {
+    paths
+        .iter()
+        .map(|p| {
+            let (total, free) = ronoctua_memory::machine::filesystem(p.to_str()?)?;
+            (total > 0).then_some(Room { total, free })
+        })
+        .collect()
 }
 
 impl Meter for Machine {
@@ -91,6 +180,7 @@ impl Meter for Machine {
         use ronoctua_protocol::Gauge;
 
         let readings = ronoctua_memory::machine::readings(&self.places);
+        let rooms = rooms(&self.disks);
         let of = |g: Gauge| {
             readings
                 .iter()
@@ -115,6 +205,8 @@ impl Meter for Machine {
             memory_stall: Some(ronoctua_memory::machine::pressure(&self.places).some10),
             cpu_stall: ronoctua_memory::machine::cpu_pressure(&self.places).map(|p| p.some10),
             on_battery: ronoctua_memory::machine::on_battery(&self.places),
+            disk_free_per_mille: fullest(&rooms),
+            disk_short: crate::tasks::space::short_of(&rooms),
         }
     }
 }
@@ -154,5 +246,49 @@ mod tests {
         assert_eq!(p.ram_used_pct, None, "it invented a RAM reading");
         assert_eq!(p.cpu_stall, None, "it invented a CPU reading");
         assert_eq!(p.on_battery, None, "it invented a battery reading");
+        assert_eq!(p.disk_free_per_mille, None, "it invented a disk reading");
+        assert_eq!(p.disk_short, None, "it invented a disk verdict");
+    }
+
+    #[test]
+    fn the_disk_is_read_as_the_fuller_of_its_filesystems() {
+        // A PATH THAT IS NOT THERE says nothing, and does not hide the one
+        // that answers.
+        let nowhere = ronoctua_memory::Places {
+            procfs: std::path::PathBuf::from("/does-not-exist/proc"),
+            sysfs: std::path::PathBuf::from("/does-not-exist/sys"),
+            cgroup: std::path::PathBuf::from("/does-not-exist/cgroup"),
+            uid: 0,
+        };
+        let here = std::env::temp_dir();
+        let read = Machine::at(nowhere.clone())
+            .measuring(vec![
+                std::path::PathBuf::from("/does-not-exist"),
+                here.clone(),
+            ])
+            .read(1);
+        let alone = rooms(std::slice::from_ref(&here))[0].map(Room::free_per_mille);
+        assert!(alone.is_some(), "the temporary directory has no filesystem");
+        assert_eq!(read.disk_free_per_mille, alone);
+        assert!(read.disk_free_per_mille.is_some_and(|pm| pm <= 1000));
+        assert!(read.disk_short.is_some(), "a measured disk was not judged");
+        // AND NOTHING MEASURABLE IS NONE, never a zero that would start a
+        // relief on a machine nobody measured.
+        let none = Machine::at(nowhere)
+            .measuring(vec![std::path::PathBuf::from("/does-not-exist")])
+            .read(1);
+        assert_eq!(none.disk_free_per_mille, None);
+        assert_eq!(none.disk_short, None, "a disk nobody measured was judged");
+    }
+
+    #[test]
+    fn the_fullest_filesystem_decides() {
+        // A SEPARATE `/home` at 5% free beside a store at 60% is a machine
+        // short of disk — and the reading that says so is the smaller one.
+        let room = |free, total| Some(Room { total, free });
+        assert_eq!(fullest(&[room(600, 1000), room(50, 1000)]), Some(50));
+        assert_eq!(fullest(&[None, room(1, 20)]), Some(50));
+        assert_eq!(fullest(&[None, None]), None);
+        assert_eq!(fullest(&[]), None);
     }
 }

@@ -53,4 +53,6 @@ pub mod offscreen;
 pub mod quad;
 pub mod text;
 
-pub use text::{Atlas, EMBEDDED_FONT, MOST_SCALE, Size, Span, Text, rasterised_at};
+pub use text::{
+    Atlas, EMBEDDED_FONT, MOST_SCALE, Size, Span, Text, from_the_border, rasterised_at,
+};

@@ -30,6 +30,11 @@
 # whole screen) into the output, `crop`, `changed`, `pixels_of`, `has_colour`,
 # `lacks_colour`, `rows_with_ink` measure, `token_hex(<token>)` is a colour of
 # the default theme, and `LINE`, `LINE_EXACT`, `CELL`, `FOOTER` are the grid.
+# The player: `start_player()` raises the daemon, `player(<ask>)` asks its
+# socket, `look(<name>)` saves its whole state (a photograph's `--state`),
+# `frame_png(<lane>, <name>)` saves the frame it draws, and `MEDIA` is the
+# directory of files `tests/player-vm.nix` proves play (`film.mp4`,
+# `subbed.mkv`, `tone.flac`…).
 # Two things photographs taught: the compositor's cursor is WHITE and shows
 # up in every crop that contains it, so an assertion that "something is drawn
 # here" is better asked from outside the screen (a journal line, a `pgrep`);
@@ -67,6 +72,24 @@ let
   # THE TOKENS' VALUES, as the generator solved them, for the default theme —
   # a store path the driver opens when it runs.
   palette = "${themed}/${defaultTheme}.json";
+
+  # THE PLAYER'S STAGE: the media and the client `tests/player-vm.nix` uses,
+  # so a photograph shows the film that test proves plays; and the decoders'
+  # table its unit carries (`nix/modules/player.nix`), because this daemon is
+  # started by hand and inherits nothing.
+  #
+  # WHAT IT COSTS, measured with `nix path-info -S` on this driver: +198 MiB
+  # (5.2 -> 5.4 GiB, 33 paths). ~180 MiB of it is the decoders' table — zxtune
+  # and the Qt5 it pulls (~130 MiB), the soundfont (31 MiB), vgmstream, uade —
+  # which a scene that plays `film.mp4` or `subbed.mkv` never uses (mpv
+  # decodes both itself), and `player-tools.nix` evaluates nixpkgs a second
+  # time for its one unfree decoder. The rest: the media (9.9 MiB), the
+  # daemon (6.9 MiB) and ffmpeg's `bin` (1.2 MiB). The table stays so a scene
+  # can open every file of `MEDIA`; whether it is worth it is the owner's
+  # call (`docs/PENDING.md`, 0.0003).
+  media = import ../tests/player-media.nix { inherit pkgs; };
+  playerClient = ../tests/player-client.py;
+  playerTools = import ./player-tools.nix { inherit pkgs; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-shot";
@@ -112,6 +135,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     import json as _json
     import os as _os
+    import shlex as _shlex
 
     # The default theme's palette, `key -> 0xRRGGBBAA`.
     TOKENS = _json.load(open("${palette}"))
@@ -140,6 +164,8 @@ pkgs.testers.runNixOSTest {
     # of the rounded one.
     LINE_EXACT = ${toString (typography.size.base * typography.lineHeight)}
     CELL = ${toString cellPx}
+    # THE PLAYER'S FILES, one per family of format (`tests/player-media.nix`).
+    MEDIA = "${media}"
 
 
     def notify(summary, body="", level="normal", app="tests"):
@@ -179,6 +205,77 @@ pkgs.testers.runNixOSTest {
         )
         machine.copy_from_vm(f"/tmp/{name}.png", "")
         print(f"took {name}")
+
+
+    def start_player():
+        """Raises the player's daemon as its unit does in a session, and
+        waits for it to answer.
+
+        BEFORE THE FOOTER ASKS FOR IT: a footer that finds no socket starts
+        the daemon beside itself (`client::ensure`), without the decoders'
+        table, and a scene would then photograph a player that cannot open
+        half of `MEDIA`.
+        """
+        machine.succeed(
+            "systemd-run --unit=player "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
+            "--setenv=HOME=/root "
+            "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
+            "--setenv=RUST_LOG=ronoctua_player=debug,ronoctua_player_engine=debug "
+            "--setenv=RONOCTUA_SHELL=${ronoctua-shell}/bin/ronoctua-shell "
+            ${lib.concatMapStrings (line: ''"--setenv=${line} " '') (
+              lib.mapAttrsToList (name: value: "${name}=${value}") playerTools
+            )}
+            "${ronoctua-player}/bin/ronoctua-player"
+        )
+        # AN ANSWER, and not the socket's file: a socket whose server died
+        # stays on the disk, and `[ -S ]` does not prove anyone listens.
+        machine.wait_until_succeeds(
+            "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 ${playerClient} "
+            + _shlex.quote(_json.dumps({"ask": "look"})),
+            timeout=30,
+        )
+
+
+    def player(ask):
+        """One ask to the player's socket (`wire::Ask`, as a dict), and the
+        answer it gives, e.g. `player({"ask": "put", "what": [...],
+        "play": True})`; `player({"ask": "queue"})` is the queue's outline,
+        a photograph's `--queue`."""
+        return _json.loads(machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 ${playerClient} "
+            + _shlex.quote(_json.dumps(ask))
+        ))
+
+
+    def look(name="look"):
+        """The player's whole state, its answer to `{"ask": "look"}`, saved
+        as `<name>.json` beside the shots: the `--state` of a photograph of
+        a door (`nix run .#png -- --door …`), taken from a player that
+        really plays."""
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 ${playerClient} "
+            + _shlex.quote(_json.dumps({"ask": "look"}))
+            + f" > /tmp/{name}.json"
+        )
+        machine.copy_from_vm(f"/tmp/{name}.json", "")
+        print(f"took {name}.json, the player's state")
+
+
+    def frame_png(of, name, width=640, height=360):
+        """The frame the player draws for the lane `of` (`None` for the first
+        picture shown, a lane's id for its picture), read off the memfd and saved as
+        `<name>.png` beside the shots: the daemon's own pixels, before any
+        door has drawn them. (Whether libass's subtitles are among them is
+        not proven in this VM yet — `docs/PENDING.md`, 0.00031.)"""
+        said = _json.loads(machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 ${playerClient} dump "
+            f"{_shlex.quote(_json.dumps(of))} /tmp/{name}.ppm {width} {height}"
+        ))
+        machine.succeed(f"magick /tmp/{name}.ppm /tmp/{name}.png")
+        machine.copy_from_vm(f"/tmp/{name}.png", "")
+        print(f"took {name}, {said['w']}x{said['h']}, the player's own frame")
+        return said
 
 
     def crop(box, into="/tmp/measured.png"):
@@ -331,6 +428,13 @@ pkgs.testers.runNixOSTest {
         # draws a panel of plain facts — and the globe, which is the whole
         # subject of one scene here, could not be photographed at all.
         "--setenv=RONOCTUA_EXIFTOOL=${pkgs.exiftool}/bin/exiftool "
+        # AND FFMPEG, the same two `nix/modules/media.nix` puts on this unit:
+        # the file manager's preview reads a video's frame, a sound's waveform,
+        # a cover and every medium's facts through them. Without them each of
+        # those is refused (`Refusal::Missing`), and the miniplayer's timeline
+        # could never be photographed (`docs/PENDING.md`, 0.0003).
+        "--setenv=RONOCTUA_FFMPEG=${pkgs.ffmpeg-full}/bin/ffmpeg "
+        "--setenv=RONOCTUA_FFPROBE=${pkgs.ffmpeg-full}/bin/ffprobe "
         # The theme's floor and the generator's fragments, as the module
         # exports them — the chooser's shots copy a fragment and assert it.
         "--setenv=RONOCTUA_THEME=${defaultTheme} "

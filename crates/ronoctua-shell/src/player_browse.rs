@@ -1,24 +1,21 @@
 //! The player's own look at the filesystem: which folders and files it lists,
-//! and what a folder plays.
+//! and whether a folder has anything to play.
 //!
 //! # What "a file the player plays" means, in one place
 //!
-//! Three things ask it — the listing of the browser, a folder typed where a
-//! file was asked, and `ronoctua-shell play` handed a folder — and the answer
-//! has to be the same for all three, or a folder would play files its listing
-//! never showed. [`glyph_if_played`] is that answer: a media type under `audio/` or
-//! `video/` (which covers the types `assets/player-types.nix` invents for the
-//! decoders' families), the handful of media types that live under
-//! `application/`, a playlist, or a name one of the decoders claims.
+//! The browser's listing asks it, and whether a folder has anything to play
+//! before it is sent — [`glyph_if_played`] is that answer: a media type under
+//! `audio/` or `video/` (which covers the types `assets/player-types.nix`
+//! invents for the decoders' families), the handful of media types that live
+//! under `application/`, a playlist, or a name one of the decoders claims.
 //!
-//! # It is the SHELL that opens a folder, not the daemon
+//! # It is the DAEMON that opens a folder
 //!
-//! libmpv would take a directory itself, and would get two things wrong: it
-//! would queue every file in it — pictures and text included — and a file only
-//! a decoder of ours reads would reach it by its path instead of through the
-//! decoder's protocol, and refuse. The type database is on this side of the
-//! socket, so the folder is turned into the files it plays here and the daemon
-//! is handed a list, which it already knows how to take.
+//! A folder is handed to the player as ONE location, and the player makes it
+//! a playlist named after the folder (its `engine/resolve.rs`): the queue is a
+//! tree, and a folder flattened into its files here lost its name. What it
+//! plays of the folder is the player's walk, which leaves pictures, text and
+//! lists out, as this listing does.
 
 use std::path::{Path, PathBuf};
 
@@ -63,18 +60,90 @@ pub const FILE_CEILING: usize = ronoctua_inspect::playlist::ENTRY_CEILING;
 /// player reports. So it is asked once, when the folder is read.
 #[must_use]
 pub fn glyph_if_played(path: &Path) -> Option<char> {
+    played(path, true)
+}
+
+/// [`glyph_if_played`]'s answer, with the lists left out when `lists` is
+/// `false` — ONE lookup of the type either way.
+fn played(path: &Path, lists: bool) -> Option<char> {
     let name = path.file_name().and_then(|n| n.to_str())?;
     if let Some(mime) = ronoctua_files::mime::by_name(name) {
         let mime = ronoctua_files::mime::canonical(mime);
+        let list = ronoctua_inspect::playlist::is_a_playlist(mime);
+        if list && !lists {
+            return None;
+        }
         if mime.starts_with("audio/")
             || mime.starts_with("video/")
             || ALSO_MEDIA.contains(&mime)
-            || ronoctua_inspect::playlist::is_a_playlist(mime)
+            || list
         {
             return Some(ronoctua_files::mime::icon_of(mime));
         }
     }
     ronoctua_player::decoders::for_path(path).map(|_| ronoctua_tokens::icon::MUSIC)
+}
+
+/// What a page of the files lists, besides the folders — the purpose it was
+/// opened for (`player::Purpose`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wanted {
+    /// What the player plays, lists included: into the queue.
+    Media,
+    /// What plays TOGETHER with what plays — a lane: pictures, sounds and
+    /// subtitles, which play over a picture and never alone in the queue. A
+    /// list is no lane, and is left out.
+    Lanes,
+    /// The player's own files, a set (`.rset`) or a queue (`.rqueue`), to
+    /// open.
+    Saved,
+    /// A SUBTITLE to lay over the picture: every file a subtitle's name says
+    /// it is (`subtitles::claims`), and the ones whose name says nothing more
+    /// often than a subtitle (`subtitles::GENERIC_EXTENSIONS` — a `.txt` of
+    /// TMPlayer) — the person picking one is what makes it a subtitle.
+    Subtitles,
+    /// A PICTURE, for a cover: every file whose type is an image.
+    Images,
+}
+
+/// The glyph of a file a page of `wanted` lists, or `None` for one it leaves
+/// out.
+#[must_use]
+pub fn glyph_if_wanted(path: &Path, wanted: Wanted) -> Option<char> {
+    use ronoctua_player::own::{OwnKind, kind_by_name};
+    match wanted {
+        Wanted::Media => glyph_if_played(path),
+        Wanted::Images => {
+            let name = path.file_name().and_then(|n| n.to_str())?;
+            let mime = ronoctua_files::mime::canonical(ronoctua_files::mime::by_name(name)?);
+            mime.starts_with("image/")
+                .then(|| ronoctua_files::mime::icon_of(mime))
+        }
+        Wanted::Saved => kind_by_name(path).map(|kind| match kind {
+            OwnKind::Set => ronoctua_tokens::icon::PLAYER_SET,
+            OwnKind::Queue => ronoctua_tokens::icon::PLAYER_QUEUE,
+        }),
+        Wanted::Subtitles => {
+            let extension = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            (ronoctua_player::subtitles::claims(&extension)
+                || ronoctua_player::subtitles::GENERIC_EXTENSIONS.contains(&extension.as_str()))
+            .then_some(ronoctua_tokens::icon::PLAYER_SUBTITLES)
+        }
+        Wanted::Lanes => {
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ronoctua_player::subtitles::claims(extension) {
+                return Some(ronoctua_tokens::icon::PLAYER_SUBTITLES);
+            }
+            if kind_by_name(path).is_some() {
+                return None;
+            }
+            played(path, false)
+        }
+    }
 }
 
 /// One folder, read for the browser.
@@ -101,6 +170,13 @@ pub struct Listing {
 /// person asked for — and only the WALK in [`gather`] refuses to follow one.
 #[must_use]
 pub fn list(at: &Path) -> Listing {
+    list_for(at, Wanted::Media)
+}
+
+/// What is in a folder for a page of `wanted`: the folders under it and the
+/// files that page lists ([`glyph_if_wanted`]).
+#[must_use]
+pub fn list_for(at: &Path, wanted: Wanted) -> Listing {
     let mut out = Listing {
         at: at.to_path_buf(),
         ..Listing::default()
@@ -120,7 +196,7 @@ pub fn list(at: &Path) -> Listing {
         }
         if path.is_dir() {
             out.folders.push(path);
-        } else if let Some(glyph) = glyph_if_played(&path) {
+        } else if let Some(glyph) = glyph_if_wanted(&path, wanted) {
             files.push((path, glyph));
         }
     }
@@ -168,27 +244,29 @@ fn sort_key(p: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// What an order to play names, with a folder turned into its files.
-///
-/// An address and a file go through as they are; a folder becomes every file
-/// under it the player plays, and a folder with none becomes nothing — which
-/// the caller says, rather than handing the daemon an empty order.
+/// What kind of lane a file or an address becomes when it is played together
+/// with what plays, by its name: subtitles for one the player reads as
+/// subtitles, a sound for a sound, and a picture for anything else — a film,
+/// or an address that names no kind, which the player reads as one.
 #[must_use]
-pub fn items_of(said: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for item in said {
-        let path = Path::new(item);
-        if !item.contains("://") && path.is_dir() {
-            out.extend(
-                gather(path)
-                    .into_iter()
-                    .map(|p| p.to_string_lossy().into_owned()),
-            );
-        } else {
-            out.push(item.clone());
-        }
+pub fn lane_kind_of(location: &str) -> ronoctua_player::own::LaneKind {
+    use ronoctua_player::own::LaneKind;
+    let named = location.split(['?', '#']).next().unwrap_or(location);
+    let path = Path::new(named);
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ronoctua_player::subtitles::claims(extension) {
+        return LaneKind::Subtitle;
     }
-    out
+    let sound = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(ronoctua_files::mime::by_name)
+        .is_some_and(|m| ronoctua_files::mime::canonical(m).starts_with("audio/"));
+    if sound {
+        LaneKind::Audio
+    } else {
+        LaneKind::Video
+    }
 }
 
 /// The places the browser starts from: music, videos and music videos, the
@@ -201,17 +279,37 @@ pub fn items_of(said: &[String]) -> Vec<String> {
 #[must_use]
 pub fn places() -> [(&'static str, PathBuf); 3] {
     use ronoctua_i18n::key;
-    let music = ronoctua_xdg::user_dir("XDG_MUSIC_DIR", "Music");
+    let music = ronoctua_xdg::user_dir("XDG_MUSIC_DIR", MUSIC);
     [
         (key::PLAYER_PLACE_MUSIC, music.clone()),
         (
             key::PLAYER_PLACE_VIDEOS,
-            ronoctua_xdg::user_dir("XDG_VIDEOS_DIR", "Videos"),
+            ronoctua_xdg::user_dir("XDG_VIDEOS_DIR", VIDEOS),
         ),
         (
             key::PLAYER_PLACE_MUSIC_VIDEOS,
             ronoctua_xdg::user_dir_declared("XDG_MUSIC_VIDEO_DIR").unwrap_or(music),
         ),
+    ]
+}
+
+/// The music folder's name when a machine declares none.
+const MUSIC: &str = "Music";
+
+/// The videos folder's name when a machine declares none.
+const VIDEOS: &str = "Videos";
+
+/// The places of a home that DECLARES NOTHING — [`places`]' own answer
+/// there, music videos in the music folder — for `home` instead of this
+/// machine's: what a photograph browses (`crate::photograph`), the same
+/// tree on every machine.
+#[must_use]
+pub fn places_in(home: &std::path::Path) -> [(&'static str, PathBuf); 3] {
+    use ronoctua_i18n::key;
+    [
+        (key::PLAYER_PLACE_MUSIC, home.join(MUSIC)),
+        (key::PLAYER_PLACE_VIDEOS, home.join(VIDEOS)),
+        (key::PLAYER_PLACE_MUSIC_VIDEOS, home.join(MUSIC)),
     ]
 }
 
@@ -263,6 +361,48 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// FAILS IF: the page that picks something to play together leaves out
+    /// a subtitle file, or offers a list as a lane; or the page that opens a
+    /// set or a queue lists anything but the player's own two.
+    #[test]
+    fn each_page_of_the_files_lists_what_it_is_for() {
+        let root = tree();
+        for (name, bytes) in [
+            ("film.en.srt", &b""[..]),
+            ("list.m3u", b""),
+            ("night.rset", b"{}"),
+            ("week.RQUEUE", b"{}"),
+        ] {
+            std::fs::write(root.join(name), bytes).unwrap();
+        }
+        let names = |l: &Listing| -> Vec<String> {
+            l.files
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        let lanes = list_for(&root, Wanted::Lanes);
+        assert!(
+            names(&lanes).contains(&"film.en.srt".to_owned()),
+            "{:?}",
+            names(&lanes)
+        );
+        assert!(!names(&lanes).contains(&"list.m3u".to_owned()));
+        assert!(!names(&lanes).contains(&"night.rset".to_owned()));
+        assert!(names(&lanes).contains(&"a.mp3".to_owned()));
+        let saved = list_for(&root, Wanted::Saved);
+        assert_eq!(names(&saved), ["night.rset", "week.RQUEUE"]);
+        assert_eq!(
+            saved.glyphs,
+            [
+                ronoctua_tokens::icon::PLAYER_SET,
+                ronoctua_tokens::icon::PLAYER_QUEUE
+            ]
+        );
+        assert_eq!(saved.folders, lanes.folders, "the folders are every page's");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// FAILS IF: a folder played whole skips a level, or queues a picture.
     #[test]
     fn a_folder_plays_everything_under_it_its_own_files_first() {
@@ -290,20 +430,25 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// FAILS IF: a folder typed where a file was asked reaches the daemon as a
-    /// folder, or an address is taken for one.
+    /// FAILS IF: a file played together becomes a lane of another kind than
+    /// it is — a subtitle file a picture, a song a picture, a film a sound —
+    /// or an address is taken for a file of the kind its name ends in.
     #[test]
-    fn an_order_turns_a_folder_into_its_files_and_nothing_else() {
-        let root = tree();
-        let album = root.join("Album").to_string_lossy().into_owned();
-        let one = root.join("a.mp3").to_string_lossy().into_owned();
-        let got = items_of(&[album, one.clone(), "https://example.org/x".to_owned()]);
-        assert_eq!(got.len(), 5, "{got:?}");
-        assert!(got[0].ends_with("Album/01.ogg"));
-        assert_eq!(got[3], one);
-        assert_eq!(got[4], "https://example.org/x");
-        assert!(items_of(&[root.join("empty").to_string_lossy().into_owned()]).is_empty());
-        std::fs::remove_dir_all(&root).unwrap();
+    fn a_file_played_together_is_a_lane_of_its_kind() {
+        use ronoctua_player::own::LaneKind;
+        assert_eq!(lane_kind_of("/v/film.en.srt"), LaneKind::Subtitle);
+        assert_eq!(lane_kind_of("/v/film.ass"), LaneKind::Subtitle);
+        assert_eq!(lane_kind_of("/m/song.flac"), LaneKind::Audio);
+        assert_eq!(lane_kind_of("/v/film.mkv"), LaneKind::Video);
+        assert_eq!(
+            lane_kind_of("https://example.org/a.flac?x=1"),
+            LaneKind::Audio
+        );
+        assert_eq!(
+            lane_kind_of("https://example.org/watch?v=1"),
+            LaneKind::Video,
+            "an address that names no kind is read by the player as a picture"
+        );
     }
 
     /// FAILS IF: a folder that cannot be read looks like an empty one.

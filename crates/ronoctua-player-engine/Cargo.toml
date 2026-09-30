@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-player-engine"
-description = "The player's daemon: libmpv, the render threads, the decoders and the participants kept in step."
+description = "The player's daemon: libmpv, its voices and their render threads, the decoders, the clock a set keeps, the subtitle lanes, and the ambient sounds."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,15 +15,21 @@ anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `fs` also carries inotify, which watches the drafts (`engine/drafts.rs`).
 rustix = { workspace = true, features = [ "fs" ] }
 ronoctua-player = { path = "../ronoctua-player" }
 ronoctua-playlist = { path = "../ronoctua-playlist" }
 ronoctua-frames = { path = "../ronoctua-frames" }
 ronoctua-store = { path = "../ronoctua-store" }
 ronoctua-xdg = { path = "../ronoctua-xdg" }
-# HTTPS for the two hosts a person can switch on — lyrics and sponsored
-# segments — through the one TLS setup the workspace has.
+# The framer, for the media server another machine reads from, and HTTPS
+# with redirects (`web`) for a radio's list on a server (`engine/resolve.rs`).
 ronoctua-http = { path = "../ronoctua-http", features = [ "tls" ] }
+# EVERY lookup on the network — lyrics, sponsored segments, tags and covers,
+# films, subtitles — and the person's keys for them: the one crate that talks
+# to those hosts, with its one pace per host (`engine/desk.rs`,
+# `engine/lookups.rs`, `engine/fetch.rs`).
+ronoctua-lookup = { path = "../ronoctua-lookup" }
 # The tailnet's own addresses and machines — the listener binds those and
 # nothing else.
 ronoctua-tunnel = { path = "../ronoctua-tunnel" }
@@ -31,6 +37,28 @@ ronoctua-tunnel = { path = "../ronoctua-tunnel" }
 zbus.workspace = true
 # The PO token's flags, the transfer queue's own.
 ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+# The subtitle lanes' colours and sizes (`engine/subtitles.rs`): the daemon
+# draws them into the film with no door open, and resolves the tokens itself.
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+# The sound outputs a lane can be sent to: the one crate that talks to
+# PipeWire reads them, only while a door shows them or a lane is sent to one
+# (`engine/sinks.rs`). mpv is told the output by the name it gives.
+ronoctua-audio = { path = "../ronoctua-audio" }
+# A file's tags and covers, read and written (`engine/tags.rs`): the one
+# boundary with them — lofty in the process, ffprobe, exiftool and
+# Matroska's own tools by path — with its engine, which only the daemon links.
+ronoctua-tags = { path = "../ronoctua-tags" }
+# The directories — radio-browser, iptv-org, the Internet Archive — the one
+# crate that talks to them (`engine/directory.rs`), with `net`: the daemon is
+# the one process that asks them. And the player's cache: ONE directory under
+# `$XDG_CACHE_HOME/ronoctua`, one ceiling (`assets/cache.nix`), the file read
+# longest ago leaving first — the covers MPRIS is handed and the directories'
+# lists are kept there.
+ronoctua-broadcast = { path = "../ronoctua-broadcast" }
+# Where a country's name goes on a map, read from the table the doors draw
+# the globe with (`RONOCTUA_ATLAS`, at run time): a directory's page is
+# placed here, and a door only draws it.
+ronoctua-atlas = { path = "../ronoctua-atlas" }
 
 [dependencies.tracing-subscriber]
 workspace = true

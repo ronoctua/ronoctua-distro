@@ -47,7 +47,8 @@
 # the file manager's renewal), two reach a systemd unit's arguments, and one —
 # `freshDays` — has to stay smaller than another, which is a relationship that
 # cannot survive being written twice. `nix/cache.nix` refuses the build if it
-# does not hold.
+# does not hold. The disk's own numbers came later, at the end of this file,
+# for the same reason: Nix and Rust read them both, and they hold each other.
 {
   # HOW OLD A CACHED FILE MAY GET BEFORE IT IS SWEPT, in days.
   #
@@ -123,4 +124,118 @@
   # is removed as soon as it is eligible, so a longer cadence would only mean
   # things living up to twice as long as the number a person reads.
   trashEveryDays = 4;
+
+  # =======================================================================
+  # THE DISK LOOKS AFTER ITSELF
+  # =======================================================================
+  #
+  # The owner's words (2026-09-28): the distro handles the disk "sem precisar
+  # de intervenções minhas", and "a solução deve ser global (deve servir para
+  # outros computadores que também forem instalar essa distro)". So every size
+  # below is a PERCENTAGE of the disk of whoever installs, never a number of
+  # gigabytes measured on one laptop. And one guarantee rides with them:
+  # nothing here removes what the person's Nix relies on. The single exception
+  # is `systemGenerations`, and it always keeps the current, the running and
+  # the booted system.
+
+  # BELOW THIS MUCH FREE, SPACE IS MADE, in per cent of the filesystem.
+  #
+  # Nix's own `min-free` (`nix/modules/store.nix` writes it at boot, from this
+  # and the size of the disk under `/nix/store`): a build or a download that
+  # sees less free space collects garbage — only garbage, never a generation —
+  # until `diskGoalPercent` is free. Ten per cent is 25 GB of a 256 GB disk and
+  # 200 GB of a 2 TB one; both are more than one rebuild writes.
+  diskFloorPercent = 10;
+
+  # AND UNTIL THIS MUCH IS FREE, in per cent. Above the floor on purpose: a
+  # collection that stopped AT the floor would start again at the next build.
+  diskGoalPercent = 15;
+
+  # AND NEVER MORE THAN THIS, in GiB — the floor's cap and the goal's.
+  #
+  # A share alone misfires on a big disk: ten per cent of 8 TB is 800 GB, so a
+  # disk that holds mostly the person's own files would count as short with
+  # hundreds of gigabytes free — Nix would collect garbage at every build, and
+  # the brain would make room for nothing, again and again. journald caps its
+  # own percentages the same way. Fifty is more than any rebuild writes; the
+  # goal's cap stays above the floor's for the goal's own reason.
+  diskFloorCapGiB = 50;
+  diskGoalCapGiB = 75;
+
+  # HOW MANY SYSTEM GENERATIONS STAY, counted from the newest.
+  #
+  # The one number here that removes something alive, and the owner's one
+  # exception: only the SYSTEM profile (`/nix/var/nix/profiles/system`), and
+  # the current, the running and the booted generation always stay on top of
+  # these. The person's own profiles are never touched. Five, because the
+  # update is weekly: about the month the old `--delete-older-than 30d` kept.
+  # Never below two — the rescue console's rollback needs the previous one.
+  # The boot menu lists at most this many, so every entry keeps its generation.
+  systemGenerations = 5;
+
+  # HOW LONG A BUILD LOG STAYS, in days (`/nix/var/log/nix/drvs`).
+  #
+  # Nothing reads a month-old build log, and nothing ever removed one. Thirty
+  # is long enough to answer "why did last week's rebuild fail?".
+  buildLogDays = 30;
+
+  # THE MOST ALL CARGO BUILD DIRECTORIES UNDER THE CACHE MAY WEIGH, in per
+  # cent of their filesystem. It has to stay below what the goal leaves
+  # (`100 - diskGoalPercent`), or the cargo tree alone could hold the disk
+  # under the floor.
+  cargoCeilingPercent = 10;
+
+  # A BUILD BY A COMPILER THAT IS NOT THE NEWEST, untouched this many days,
+  # goes whole. Below `keepDays`: an old compiler's build is dead weight long
+  # before an ordinary cache entry is.
+  oldCompilerDays = 7;
+
+  # A RELIEF WAITS THIS LONG after the last one before another, in minutes —
+  # a rehearsal counts. An hour at least, the brain's activity-log rule: a
+  # machine short of disk must not spend it on a relief every heartbeat. And
+  # one that left the disk still short waits, besides, until the disk has
+  # filled further: until then nothing new is there to free.
+  reliefGapMinutes = 60;
+
+  # =======================================================================
+  # THE PLAYER'S SUBTITLES, READ ONCE
+  # =======================================================================
+  #
+  # THE MOST THE PLAYER'S DAEMON KEEPS OF THE SUBTITLE TRACKS IT READ, in MiB
+  # of MEMORY and not of disk (`crates/ronoctua-player-engine/src/engine/
+  # subtitles.rs`). A track inside a film is converted by ffmpeg, which reads
+  # the WHOLE container to find it — seconds for a long film — and every lane
+  # change merges the lanes again; so what was read is kept under its stamp
+  # (the file, its size, when it last changed, the track) and read again only
+  # when the file changes. Past this, the track read least recently goes
+  # first. Counted in the bytes each came from (the file, or ffmpeg's ASS).
+  #
+  # Thirty-two: a film's dialogue is a hundred kilobytes, the heaviest typeset
+  # ASS a few megabytes, and six lanes over four pictures is twenty-four
+  # tracks — all of them, with room. The daemon dies with the session, and
+  # nothing of this outlives it.
+  playerSubtitlesMib = 32;
+
+  # =======================================================================
+  # THE PLAYER'S CACHE ON DISK
+  # =======================================================================
+  #
+  # THE MOST THE PLAYER KEEPS IN ITS CACHE DIRECTORY, in MiB
+  # (`$XDG_CACHE_HOME/ronoctua/player`, `ronoctua_broadcast::cache`): the
+  # covers taken out of the files that play (MPRIS is handed a file, and a
+  # picture inside a FLAC is not one), and what the directories answered —
+  # the radio lists, the TV index, a theme's pages of films and its lives
+  # (`engine/directory.rs`), each kept as long as `assets/channels.nix` says
+  # it stays fresh and shown at once while a fresher one is asked.
+  # Written by the player's daemon alone; past this, the file READ longest ago
+  # goes first, after every write.
+  #
+  # ITS OWN CEILING, because the sweep above never reaches it: the sweep takes
+  # whole entries of the cache's root, each as old as its youngest file, and
+  # `~/.cache/ronoctua` is touched every day.
+  #
+  # Sixty-four: a cover is a few hundred kilobytes (a 3000 px JPEG, two or
+  # three megabytes), the TV index about three, a country's radio list a
+  # quarter of one — an album's worth of covers and every list, with room.
+  playerMib = 64;
 }

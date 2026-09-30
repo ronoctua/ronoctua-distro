@@ -123,6 +123,28 @@ const RENDER_PARAM_SW_STRIDE: c_int = 19;
 const RENDER_PARAM_SW_POINTER: c_int = 20;
 const RENDER_UPDATE_FRAME: u64 = 1;
 
+// THE C LIBRARY'S `_exit`, the one function of it this crate calls by hand
+// — declared here because this is the crate's one module with `unsafe`. See
+// [`leave_now`].
+unsafe extern "C" {
+    fn _exit(status: c_int) -> !;
+}
+
+/// Ends the process NOW with `status`, running nothing on the way out: no
+/// `atexit` handler and no C++ static destructor, which `std::process::exit`
+/// runs while libmpv's threads — its event thread, the render threads, the
+/// demuxers — are still alive. A destructor that pulled something from under
+/// one of them would crash a player that was asked to leave WITH SUCCESS, and
+/// its unit's `Restart=on-failure` would bring it back a second later showing
+/// the queue it had just closed. Everything that has to outlive the process
+/// — the queue remembered, the socket off the disk, every watcher's farewell
+/// — is done before this is called.
+pub fn leave_now(status: c_int) -> ! {
+    // SAFETY: `_exit` takes any status and never returns; nothing of this
+    // process runs after it.
+    unsafe { _exit(status) }
+}
+
 #[link(name = "mpv")]
 unsafe extern "C" {
     fn mpv_create() -> *mut Handle;
@@ -383,19 +405,20 @@ impl Mpv {
 
     /// Registers `protocol://` as a read-only stream this process serves:
     /// `open` is called with the URI's text and answers a reader.
-    pub fn streams(&self, protocol: &str, open: Opener) -> Result<()> {
+    ///
+    /// THE OPENER LIVES AS LONG AS THE PROCESS — `'static`, one for every
+    /// handle: mpv keeps the pointer for the life of the handle, and one
+    /// leaked per handle was one leaked per voice.
+    pub fn streams(&self, protocol: &str, open: &'static Opener) -> Result<()> {
         let p = c(protocol)?;
-        // THE OPENER LIVES AS LONG AS THE PROCESS: mpv keeps the pointer for
-        // the life of the handle, and the handle is the daemon's.
-        let boxed: &'static Opener = Box::leak(Box::new(open));
-        // SAFETY: live handle; `boxed` is 'static and handed back to
+        // SAFETY: live handle; `open` is 'static and handed back to
         // `open_stream` as the `user_data` it was given.
         check(
             unsafe {
                 mpv_stream_cb_add_ro(
                     self.raw(),
                     p.as_ptr(),
-                    std::ptr::from_ref(boxed).cast_mut().cast(),
+                    std::ptr::from_ref(open).cast_mut().cast(),
                     open_stream,
                 )
             },

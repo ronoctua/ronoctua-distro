@@ -73,6 +73,9 @@
   notificationsRs,
   bluetoothProfilesRs,
   audioNamesRs,
+  # The channels by theme (`nix/broadcast.nix`), for the names both languages
+  # owe its categories.
+  broadcastRs,
   # The generated Syncthing option table, so `syncthing-options-have-text`
   # reads the list the generator DERIVED instead of a hand-written copy of it.
   syncthingOptionsRs,
@@ -1568,6 +1571,24 @@ let
         r"web\.archive\.org/web/(\d{14}|\$\{\w+\})id_/",  # a capture, raw bytes
         r"\$\{\w*(version|Version|tag|rev|commit)\w*\}",  # a variable that is one
     ]
+    # A CAPTURE'S STAMP IS A MOMENT THAT EXISTS. Fourteen digits pass the
+    # shape above, and `99999999999999` is the archive's way of saying "the
+    # newest capture", which is the live address again under another name.
+    # What this cannot see offline is a real date that is not a capture
+    # (`20260601000000`): the archive answers it with its NEAREST capture,
+    # and naming the capture itself is the author's part (see
+    # `nix/broadcast.nix`).
+    import datetime
+    def impossible_stamp(url):
+        m = re.search(r"web\.archive\.org/web/(\d{14})id_/", url)
+        if not m:
+            return False
+        try:
+            datetime.datetime.strptime(m.group(1), "%Y%m%d%H%M%S")
+        except ValueError:
+            return True
+        return False
+
     seen = 0
     wrong = []
     for f in sorted(root.rglob("*.nix")):
@@ -1579,12 +1600,13 @@ let
             if not re.match(r"https?://", url):
                 continue
             seen += 1
-            if not any(re.search(p, url) for p in pinned):
+            if not any(re.search(p, url) for p in pinned) or impossible_stamp(url):
                 wrong.append(f"{f.relative_to(root)}: {url}")
 
     floor(seen, 5, "download addresses under nix/")
     if wrong:
-        print("ERROR: these downloads name no version, commit or capture:", file=sys.stderr)
+        print("ERROR: these downloads name no version, commit or capture (or a", file=sys.stderr)
+        print("      capture stamp that is no moment, such as 99999999999999):", file=sys.stderr)
         for w in wrong:
             print("  " + w, file=sys.stderr)
         print("      An address that serves new bytes under the same name breaks the", file=sys.stderr)
@@ -2689,8 +2711,12 @@ let
         "clip", "history",
         # AND THREE THAT ANSWERED THE CLICK BEFORE THIS LIST NAMED THEM, each a
         # door the keyboard has: `camera` runs `camera-settings-open`
-        # (`LEADER s c c`), `player` runs `player-column` (`LEADER p c`), and
-        # `compositor-mode` leaves the mode, which is the mode's own `Esc`.
+        # (`LEADER s c c`), `compositor-mode` leaves the mode, which is the
+        # mode's own `Esc`, and `player` is the player's PAIR — one segment,
+        # two glyphs told apart by `player_mark::zone_at`: play/pause runs
+        # `player-toggle` (`LEADER p t`) and raises the column (`LEADER p c`'s
+        # door, raised and never toggled), next runs `player-next`
+        # (`LEADER p n`) and opens the view, `player-open` (`LEADER p p`).
         "camera", "player", "compositor-mode",
         # AND THE SOFTWARE VIEW'S TWO, each a door the keyboard has:
         # `software-trial` runs `software-trials` (`LEADER i t`) and
@@ -2799,7 +2825,11 @@ let
         ("gestures", 'run_command("gestures")'),
         ("camera", 'run_command("camera-settings-open")'),
         ("recording", 'run_command("camera-settings-open")'),
-        ("player", 'run_command("player-column")'),
+        ("player", "crate::player_mark::zone_at(cell)"),
+        ("player", 'run_command("player-toggle")'),
+        ("player", 'run_with("player-column", Some(crate::player::RAISE))'),
+        ("player", 'run_command("player-next")'),
+        ("player", 'run_command("player-open")'),
         ("software-trial", 'run_command("software-trials")'),
         ("software-android", 'run_command("software-android")'),
         ("resizer", 'run_command("dev-resizer")'),
@@ -2811,6 +2841,9 @@ let
         ("m g", "gestures"),
         ("s c c", "camera-settings-open"),
         ("p c", "player-column"),
+        ("p t", "player-toggle"),
+        ("p n", "player-next"),
+        ("p p", "player-open"),
         ("i a", "software-android"),
         ("d r", "dev-resizer"),
     ):
@@ -3135,6 +3168,61 @@ let
   # `updates-have-text` does the same job for the update sequence, against the
   # list its generator derives. This one has no generator, so it reads the
   # constants.
+  # THE AMBIENT SOUNDS' WORDS AND GLYPHS. `assets/ambience.nix` names each
+  # sound and its group, and the player's page says them by keys built from
+  # those ids (`player::ambience_name`, `player::ambience_group`) and draws a
+  # group by a glyph chosen by its id (`player_ambience::glyph_of`). A key
+  # missing is said as "a sound this player has no name for", and a group
+  # with no glyph arm gets the plain wave — both honest, and both SILENT at
+  # build time: this is what says them.
+  ambience-keys-exist = mkCheck "ambience-keys-exist" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the declaration's `id = "…";` and `group = "…";` fields, which
+    # the build reads the same way (`nix/ambience.nix`), comments taken out.
+    # FILE-WIDE: the two `.ftl` files, whose keys are module-level lines.
+    root_dir = pathlib.Path("${self}")
+    nix = "\n".join(
+        line.split("#", 1)[0]
+        for line in (root_dir / "assets/ambience.nix").read_text().splitlines()
+    )
+    ids = re.findall(r'\bid\s*=\s*"([a-z0-9-]+)"\s*;', nix)
+    groups = sorted(set(re.findall(r'\bgroup\s*=\s*"([a-z0-9-]+)"\s*;', nix)))
+    floor(len(ids), 3, "ambient sounds declared")
+    floor(len(groups), 2, "groups of ambient sounds")
+
+    owed = [f"player-ambience-{i}" for i in ids]
+    owed += [f"player-ambience-group-{g}" for g in groups]
+    failed = 0
+    for language in ${builtins.toJSON languages}:
+        text = (root_dir / "assets/i18n" / f"{language}.ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M))
+        for k in owed:
+            if k not in have:
+                print(f"ERROR: {language} does not have `{k}`", file=sys.stderr)
+                failed = 1
+
+    # THE GLYPHS, by the arms of `glyph_of` — narrowed to that function, so a
+    # group's id written anywhere else in the file is not taken for its arm.
+    page = uncommented((root_dir / "crates/ronoctua-shell/src/player_ambience.rs").read_text())
+    arms = set(re.findall(r'"([a-z0-9-]+)"\s*=>', must(body_of(page, "glyph_of"), "`player_ambience::glyph_of`")))
+    for g in groups:
+        if g not in arms:
+            print(f"ERROR: the group `{g}` has no glyph in `player_ambience::glyph_of`", file=sys.stderr)
+            failed = 1
+
+    if failed:
+        print("", file=sys.stderr)
+        print("A sound or a group the page cannot name is said as one it has no name", file=sys.stderr)
+        print("for, and a group with no glyph is drawn as the plain wave: nothing on", file=sys.stderr)
+        print("screen fails, which is why this does.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {len(ids)} ambient sounds and {len(groups)} groups have words in every language, and every group a glyph")
+    END
+  '';
+
   inspect-keys-exist = mkCheck "inspect-keys-exist" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -5479,9 +5567,16 @@ let
     # `bar_box`, which asks `Scroll`. Demanding the name there would have
     # forced a second call whose only purpose was to satisfy this check.
     floor(swept, 20, "doors swept for a thumb of their own")
+    #
+    # PAINTING THE TONE THROUGH `chrome::thumb` COUNTS AS PAINTING IT: that
+    # function paints `RULE_STRONG` for any rectangle it is handed, so a door
+    # that calls it never names the tone and would walk past a sweep for the
+    # name alone. Its callers are held to the same question — and `chrome.rs`,
+    # which defines it, answers it through `band_bar`.
+    painter = re.compile(r"(?<![\w.])thumb\(")
     for f in sorted(home.glob("*.rs")):
         text = code_of(f.read_text())
-        if "RULE_STRONG" not in text:
+        if "RULE_STRONG" not in text and not painter.search(text):
             continue
         # THE RESIZER'S EDGES are `rule.strong` by the plan, and they are not a
         # thumb: they are the curtains' grips, drawn from the rectangles the
@@ -5492,7 +5587,7 @@ let
             painted = body_of(own, "edges") or ""
             if own.count("RULE_STRONG") == painted.count("RULE_STRONG") > 0:
                 continue
-        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbar_boxes\(|\bbars\(|\bregion_bar\b", text):
+        if not re.search(r"ronoctua_design::Scroll|\bbar_box\b|\bbar_boxes\(|\bbars\(|\bregion_bar\b|\bband_bar\(", text):
             wrong.append(f.name + " paints a thumb without asking `Scroll`")
     # `notifications::bar_boxes` is the fourth way in (8fc9e4a): an open
     # record is two halves, each with its own bar over a BAND, and both doors
@@ -5948,7 +6043,11 @@ let
     floor(swept, 20, "doors swept for a hand-made rule")
     src = code_of((home / mine).read_text())
     floor(len(src), 20000, "characters of chrome.rs")
-    for fn in ("pub fn rule(", "pub fn divider("):
+    # AND THE PLAYER'S: the deck's band and its ghost, its playhead and its
+    # ticks, and the layout schematic's tile are rectangles too, and they are
+    # built here.
+    for fn in ("pub fn rule(", "pub fn divider(", "pub fn lane_band(", "pub fn lane_ghost(",
+               "pub fn playhead(", "pub fn tick(", "pub fn tile(", "pub fn time_bar("):
         if fn not in src:
             print(f"ERROR: chrome.rs lost `{fn}` — there is no longer one place.", file=sys.stderr)
             sys.exit(1)
@@ -7700,6 +7799,31 @@ let
     rows = dict(
         re.findall(r'mime = "([^"]+)";\s*\n\s*token = "([^"]+)";', glyphs)
     )
+    # THE PLAYER'S OWN TWO, `.rset` and `.rqueue`, exist nowhere upstream, so
+    # no row of `exact` may name them: they are declared in
+    # `assets/player-types.nix`'s `own` list, whose `rows` the glyph table
+    # imports whole. Read from THAT block — its mime and token pairs — and the
+    # import itself held, or a type claimed here would draw nobody's glyph.
+    player_types = hashless(pathlib.Path("${../assets/player-types.nix}").read_text())
+    floor(len(player_types), 1000, "characters of player-types.nix")
+    own_block = re.search(r"\n  own = \[(.*?)\n  \];", player_types, re.S)
+    if own_block is None:
+        bad.append("player-types.nix no longer declares its `own` list")
+        own = {}
+    else:
+        own = dict(
+            re.findall(r'mime = "([^"]+)";.*?token = "([^"]+)";', own_block.group(1), re.S)
+        )
+    floor(len(own), 2, "the player's own types")
+    listed = re.search(r"\n  rows = builtins\.concatMap \(.*?\n  \) \(([^)]*)\);", player_types, re.S)
+    if listed is None or "own" not in listed.group(1).split():
+        bad.append("player-types.nix's `rows` no longer carries the `own` list")
+    if "(import ../player-types.nix).rows" not in glyphs:
+        bad.append("mime-glyphs.nix no longer imports the player's rows")
+    for spelling, token in own.items():
+        if spelling in rows:
+            bad.append(f"{spelling} is ours and has a row of its own in mime-glyphs.nix too")
+        rows[spelling] = token
     tokens = set()
     for spelling in sorted(claimed):
         if spelling not in rows:
@@ -9923,24 +10047,37 @@ let
 
         # THE DOOR draws every window: under, then the pictures, then over.
         #
-        # BY THE SPLIT'S NAME too: the first range ends at it and the second
-        # starts at it, and it is the length of the bottom layer taken BEFORE
-        # the top one is appended.
+        # IN TWO STEPS, and both are asked: `compose` lays the frame out —
+        # the top layer appended after the rest, and the SPLIT, the bottom
+        # layer's length taken BEFORE it, kept in `Composed` — and
+        # `Composed::draw` draws it, the first range ending at that split and
+        # the second starting there, the pictures between them. `Door::paint`
+        # and the photograph (`photograph.rs`) both go through the two, so a
+        # photograph is drawn in the order a window is.
         door = code_of(without_tests((shell / "door" / "mod.rs").read_text()))
-        doors = must(scope(door, r"impl<C: Content> Door<C>"), "door/mod.rs: `impl<C: Content> Door<C>`")
-        paint = must(body_of(doors, "paint"), "door/mod.rs: `Door::paint`")
-        floor(len(paint), 400, "characters of the door's `paint`")
-        bound = re.search(r"let (\w+) = [^;]*\bunder\.len\(\)", paint)
-        joined = paint.find("under.extend(over)")
+        compose = must(body_of(door, "compose"), "door/mod.rs: `compose`")
+        floor(len(compose), 400, "characters of the door's `compose`")
+        bound = re.search(r"let (\w+) = [^;]*\bunder\.len\(\)", compose)
+        joined = compose.find("under.extend(over)")
         if not bound or joined < 0 or bound.start() > joined:
             wrong.append("door/mod.rs: the top layer is not put after the rest, where the second range starts")
-        else:
-            split = re.escape(bound.group(1))
-            first = re.search(r"\.draw_range\(\w+,\s*0,\s*" + split + r"\)", paint)
-            pics = paint.find("images.draw(", first.end()) if first else -1
-            second = re.search(r"\.draw_range\(\w+,\s*" + split + r"\s*,", paint[pics:]) if pics >= 0 else None
-            if not second:
-                wrong.append("door/mod.rs: the quads are no longer drawn in two ranges, split where the top layer starts, with the pictures between them")
+        elif not re.search(r"\bsplit\s*(:\s*" + re.escape(bound.group(1)) + r"\s*)?,", compose[joined:]):
+            wrong.append("door/mod.rs: `compose` does not keep the split it took as `Composed::split`")
+        composed = must(scope(door, r"impl Composed"), "door/mod.rs: `impl Composed`")
+        draw = must(body_of(composed, "draw"), "door/mod.rs: `Composed::draw`")
+        first = re.search(r"\.draw_range\(\w+,\s*0,\s*self\.split\)", draw)
+        pics = draw.find("images.draw(", first.end()) if first else -1
+        second = re.search(r"\.draw_range\(\w+,\s*self\.split\s*,", draw[pics:]) if pics >= 0 else None
+        if not second:
+            wrong.append("door/mod.rs: the quads are no longer drawn in two ranges, split where the top layer starts, with the pictures between them")
+        doors = must(scope(door, r"impl<C: Content> Door<C>"), "door/mod.rs: `impl<C: Content> Door<C>`")
+        paint = must(body_of(doors, "paint"), "door/mod.rs: `Door::paint`")
+        present = must(body_of(doors, "present"), "door/mod.rs: `Door::present`")
+        if "compose(" not in paint or ".draw(" not in present:
+            wrong.append("door/mod.rs: the door's frame is not the one `compose` lays out and `Composed::draw` draws")
+        photo = code_of(without_tests((shell / "photograph.rs").read_text()))
+        if ".compose(" not in photo or "composed.draw(" not in photo:
+            wrong.append("photograph.rs: a photograph is not composed and drawn as a door's frame is")
 
         # AND THE FOOTER, which is not a door, still splits its own.
         if footer.count("draw_range(") < 2:
@@ -10190,7 +10327,10 @@ let
     # THE DOOR READS IT for the pointer and for the bands, and records the
     # header's drawer itself — the header is the door's.
     door = code_of((shell / "door" / "mod.rs").read_text())
-    must_ask("door/mod.rs", door, "pointer_frame_here", ["self.bars.on(", "Leave"])
+    # THE DOOR'S POINTER IS `pointer_into`, which a door on the screen and a
+    # detached one (`door::Detached`, the photograph's) both go through.
+    must_ask("door/mod.rs", door, "pointer_frame_here", ["pointer_into("])
+    must_ask("door/mod.rs", door, "pointer_into", ["bars.on(", "Leave"])
     # THE DOOR'S OWN PAINT, whose name the trait's default shares: asked of
     # the door's module as a whole.
     for n in ("bars.clip(&mut under)", "bars.clip(&mut over)", "drawer_track("):
@@ -10257,10 +10397,15 @@ let
             ("chrome.rs", chrome, "laid", ["press.is_none()", "Register::Inert"]),
             ("chrome.rs", chrome, "hint_of_marked", [".pressing("]),
             ("chrome.rs", chrome, "hint_marks", ["press"]),
-            ("door/mod.rs", door, "pointer_frame_here", ["press_under("]),
+            # THE DOOR'S POINTER AND ITS CLICK ON A SHORTCUT are `pointer_into`
+            # and `act_into`, which a door on the screen and a detached one
+            # (`door::Detached`, the photograph's) both go through.
+            ("door/mod.rs", door, "pointer_frame_here", ["pointer_into("]),
+            ("door/mod.rs", door, "pointer_into", ["press_under("]),
+            ("door/mod.rs", door, "act", ["act_into("]),
             # A COMMAND IS HANDED TO THE FOOTER off the loop, and a footer that
             # is not there is said (`Ui::tell_the_footer`).
-            ("door/mod.rs", door, "act", ["keys::event_of(", "tell_the_footer("]),
+            ("door/mod.rs", door, "act_into", ["keys::event_of(", "tell_the_footer("]),
             ("surface.rs", footer, "hint_clicked", ["keys::event_of(", "run_command("]),
             ("brain", brain, "header", ["is_a_control(", "Role::Inert"]),
         ):
@@ -10272,7 +10417,7 @@ let
                     wrong.append(f"{where}: `{name}` does not ask `{n}`")
         if "hint_act_under(" not in (body_of(footer, "pointer_frame_here") or ""):
             wrong.append("surface.rs: a click on the minibuffer's hint does nothing")
-        floor(asked, 7, "places asked")
+        floor(asked, 9, "places asked")
         if wrong:
             print("ERROR: a shortcut that looks clickable and is not, or the other way.", file=sys.stderr)
             for w in wrong:
@@ -10508,7 +10653,8 @@ let
         # it (`camera_view`, `pointer_view` set to `None`), while `run_with`
         # only presses back into a view that is open — so the ring turns once
         # and stops, which is the clipboard's shape above. The player's rows
-        # name only its doors, which `player_door` opens without the registry.
+        # name no command at all: its pages open inside the view, and the swap
+        # goes through `player_door`, which opens without the registry.
         ("camera_settings_press", "run_with"),
         ("pointers_press", "run_with"),
     }
@@ -11317,15 +11463,36 @@ let
     # THE VIEWS ARE FOUND BY THEIR `struct View`, never by a list typed here.
     # `labels-of-a-view-are-distinct` scanned a hand-written six while eight
     # existed, and the two it never opened were the two with the defect.
-    # FILE-WIDE: a view is a FILE here — the census is "every source with a
-    # `struct View`" — and the colour it names may be named anywhere in it.
-    # The cut at `mod tests` is the narrowing.
+    # FILE-WIDE: a view is its FILE and the sibling files that build its rows
+    # — the census is "every source with a `struct View`", and beside it each
+    # `<view>_*.rs` that writes its rows — and the colour it names may be
+    # named anywhere in them. The cut at `mod tests` is the narrowing.
     VIEWS = sorted(
         f.name
         for f in shell.glob("*.rs")
         if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
     floor(len(VIEWS), 12, "views found by their `struct View`")
+
+    # A VIEW IS ITS FILE AND THE SIBLINGS THAT BUILD ITS ROWS — the census of
+    # `labels-of-a-view-are-distinct`, for the same reason: the player's rows
+    # are written in `player_rows.rs` and its pages beside it, and `player.rs`
+    # alone draws none of them, so swept alone it fell into "carries none".
+    def census(name):
+        stem = name[: -len(".rs")]
+        parts = [name]
+        for f in sorted(shell.glob(stem + "_*.rs")):
+            theirs = without_tests(code_of(f.read_text()))
+            if re.search(r"^(?:pub )?struct View\b", theirs, re.M):
+                continue
+            # THE BUILDER BY ITS NAME, however it is written — `Builder<'_>`,
+            # `&mut Builder`, `Builder::piece` — and not only with its
+            # lifetime: `&mut Builder` compiles as well, and a page written
+            # that way left both censuses without a word. A thread's builder
+            # is not the view's.
+            if re.search(r"(?<!thread::)\bBuilder\b|^impl View\b", theirs, re.M):
+                parts.append(f.name)
+        return parts
 
     HERE = re.compile(r"\bTEXT_HERE_[A-Z]+\b")
 
@@ -11336,7 +11503,7 @@ let
     # `false` names the colour — and a call that always says `false` does
     # not, which is the hole this check exists for.
     def names_through_tones(code):
-        for m in re.finditer(r"\.tones\(|chrome::field_pair\(", code):
+        for m in re.finditer(r"\.tones\(|chrome::(?:field_pair|aligned_pair)\(", code):
             args = shut_at(code, m.end()).split(",")
             last = args[-1].strip() if args[-1].strip() else (args[-2].strip() if len(args) > 1 else "")
             if last and last != "false":
@@ -11370,16 +11537,18 @@ let
     # where it is. `chrome::field_pair` is what such a view calls to draw a row
     # at all, and every view in this system that calls it names a cursor colour
     # today — so requiring it costs nothing and closes the hole.
-    PAIRS = "chrome::field_pair("
+    PAIRS = ("chrome::field_pair(", "chrome::aligned_pair(")
 
     wrong, swept, skipped = [], [], []
     for name in VIEWS:
-        body = code_of((shell / name).read_text())
-        # THE TRAILING TEST MODULE IS NOT THE SCREEN. A colour named in an
-        # assertion is a thing the test says, not a thing the view draws.
-        cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
-        code = body[: cut.start()] if cut else body
-        if not LIVE.search(code) and PAIRS not in code:
+        code = ""
+        for part in census(name):
+            body = code_of((shell / part).read_text())
+            # THE TRAILING TEST MODULE IS NOT THE SCREEN. A colour named in an
+            # assertion is a thing the test says, not a thing the view draws.
+            cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
+            code += (body[: cut.start()] if cut else body) + "\n"
+        if not LIVE.search(code) and not any(p in code for p in PAIRS):
             skipped.append(name)
             continue
         swept.append(name)
@@ -11403,6 +11572,12 @@ let
         )
 
     floor(len(swept), 10, "views swept for a cursor colour")
+    # AND THE PLAYER IS SWEPT, with the files beside it that write its rows:
+    # swept as `player.rs` alone it drew none of them and fell into "carries
+    # none", which is the hole the census closed.
+    if "player.rs" not in swept:
+        wrong.append("player.rs is no longer swept: its census found no rows")
+    floor(len(census("player.rs")) - 1, 4, "files beside `player.rs` that write its rows")
 
     for w in wrong:
         print(f"ERROR: {w}", file=sys.stderr)
@@ -11524,7 +11699,12 @@ let
     # A builder is swept only if it NAMES A COLOUR: that is what tells a row
     # builder from a function that returns a key, and from the test named after
     # the thing it tests.
-    SAYS_HEADING = re.compile(r"\w*(?:head|title|drawer)\w*", re.I)
+    #
+    # THE WORD STARTS THE NAME, or a piece of it after `_`: a compound that
+    # only ENDS in one — `chrome::playhead`, the deck's time marker, a quad in
+    # its own colour; `subtitle_refusal`, a sentence — says something else,
+    # and was swept as a heading that names the wrong tone.
+    SAYS_HEADING = re.compile(r"(?:\w*_)?(?:head|title|drawer)\w*", re.I)
     COLOUR = re.compile(r"tokens::color::([A-Z_]+)")
 
     # THE TWO THAT ARE NOT SECTION TITLES, named rather than inferred — and each
@@ -11598,11 +11778,35 @@ let
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: a view is a FILE here — the census is "every source with a
-    # `struct View`" — and the keys it asks for may be named anywhere in it.
-    # The cut at `mod tests` is the narrowing.
+    # FILE-WIDE: a view is its FILE and the sibling files that build its rows
+    # — the census is "every source with a `struct View`", and beside it each
+    # `<view>_*.rs` that writes its rows (`census` below) — and the keys it
+    # asks for may be named anywhere in them. The cut at `mod tests` is the
+    # narrowing.
 
     shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+
+    # A VIEW IS ITS FILE AND THE SIBLINGS THAT BUILD ITS ROWS.
+    #
+    # The player's view is ONE stack of pages written in flat sibling files —
+    # its home, its machines, its internet — because nine checks read this
+    # directory one level deep. Swept as its own file, `player.rs` handed this
+    # check the keys of none of its pages, and two labels of one page reading
+    # the same passed. So a sibling `<view>_*.rs` that declares no `View` of
+    # its own and TAKES THE VIEW'S ROW BUILDER (`Builder`, by its name) or opens
+    # `impl View` is read as part of the view. A sibling with a `View` of its
+    # own (`camera_settings.rs` beside `camera.rs`) is its own view.
+    def census(name):
+        stem = name[: -len(".rs")]
+        parts = [name]
+        for f in sorted(shell.glob(stem + "_*.rs")):
+            theirs = without_tests(code_of(f.read_text()))
+            if re.search(r"^(?:pub )?struct View\b", theirs, re.M):
+                continue
+            # BY ITS NAME, however it is written (`&mut Builder` compiles too).
+            if re.search(r"(?<!thread::)\bBuilder\b|^impl View\b", theirs, re.M):
+                parts.append(f.name)
+        return parts
 
     # EVERY DECLARED LANGUAGE, and not English alone.
     #
@@ -11686,22 +11890,27 @@ let
         if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
     floor(len(VIEWS), 8, "views found by their `struct View`")
-    wrong, checked, borrowed = [], 0, {}
+    wrong, checked, borrowed, joined = [], 0, {}, {}
     for name in VIEWS:
-        f = shell / name
-        # `code_of` and not the raw text: a `key::SOMETHING` named in a comment
-        # is a MENTION of a key, and it used to count as the view asking for one.
-        body = code_of(f.read_text())
-        # ONLY WHAT IS DRAWN AS A LABEL. A key named inside the trailing test
-        # module is an assertion about the screen, not a row on it.
-        #
-        # THE TRAILING ONE, and that is not pedantry: `files.rs` has a
-        # `#[cfg(test)]` on a function at line 209, so splitting at the FIRST
-        # one read 209 lines of an 18,000-line view — 7 of its 90 keys — while
-        # the check printed a total that looked like it had swept everything.
-        # Two duplicates were sitting in the part it never opened.
-        cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
-        code = body[: cut.start()] if cut else body
+        parts = census(name)
+        joined[name] = parts[1:]
+        code = ""
+        for part in parts:
+            # `code_of` and not the raw text: a `key::SOMETHING` named in a
+            # comment is a MENTION of a key, and it used to count as the view
+            # asking for one.
+            body = code_of((shell / part).read_text())
+            # ONLY WHAT IS DRAWN AS A LABEL. A key named inside the trailing
+            # test module is an assertion about the screen, not a row on it.
+            #
+            # THE TRAILING ONE, and that is not pedantry: `files.rs` has a
+            # `#[cfg(test)]` on a function at line 209, so splitting at the
+            # FIRST one read 209 lines of an 18,000-line view — 7 of its 90
+            # keys — while the check printed a total that looked like it had
+            # swept everything. Two duplicates were sitting in the part it
+            # never opened.
+            cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
+            code += (body[: cut.start()] if cut else body) + "\n"
         named = {m.group(1) for m in re.finditer(r"key::([A-Z0-9_]+)", code)}
         # AND THE LABELS IT DRAWS THROUGH ANOTHER MODULE'S `text_key`.
         #
@@ -11740,6 +11949,10 @@ let
 
     # THE FLOOR SCALES WITH THE LANGUAGES, since every one of them is swept.
     floor(checked, 200 * len(LANGUAGES), "labels read across the views")
+    # AND THE PLAYER IS READ WHOLE: its home and its pages, each a file of
+    # its own beside `player.rs` — a census that stopped finding them would
+    # pass on the one file with none of their labels.
+    floor(len(joined.get("player.rs", [])), 4, "files beside `player.rs` that write its rows")
     # AND THE CHOOSER'S ANSWERS ARE READ: four names of a desk (black, white,
     # near-white, the theme's colour), two grounds, two borders.
     floor(borrowed.get("theme_chooser.rs", 0), 8, "answer labels the theme chooser draws through `text_key`")
@@ -13692,6 +13905,12 @@ let
   # So this reads the three places the name is spelled and refuses a
   # disagreement: the daemon's constant, the `--report` argument in the units,
   # and the generator that writes the update's own sheet.
+  #
+  # AND THE DISK'S RELIEF (`nix/modules/space.nix`), whose report file IS its
+  # task's id: `report_path` builds `<id>.json` and `<id>-rehearsal.json`, so
+  # the id in `tasks/space.rs` and the file names in the module are one name
+  # spelled twice — and so are the two units the task starts and the two the
+  # module declares.
   the-brain-reads-what-the-units-write =
     mkCheck "the-brain-reads-what-the-units-write" [ pkgs.python3 ]
       ''
@@ -13718,6 +13937,10 @@ let
         floor(len(runner), 1000, "characters of runner.rs")
         floor(len(module), 500, "characters of nix/modules/cache.nix")
         floor(len(generator), 2000, "characters of gen-updates.py")
+        space = hashless((root / "nix" / "modules" / "space.nix").read_text())
+        disk_task = uncommented((root / "crates" / "ronoctua-brain" / "src" / "tasks" / "space.rs").read_text())
+        floor(len(space), 500, "characters of nix/modules/space.nix")
+        floor(len(disk_task), 500, "characters of tasks/space.rs")
 
         said = re.search(r'pub const REPORTS_LEAF: &str = "([^"]+)";', runner)
         if not said:
@@ -13749,6 +13972,40 @@ let
         if "-rehearsal.json" not in runner and "rehearsal" not in runner:
             sys.exit("ERROR: the brain no longer watches a rehearsal's own file")
 
+        # AND EVERY UNIT THAT WRITES THERE MAKES THE DIRECTORY FIRST. Its
+        # sandbox opens the directory with `ReadWritePaths`, and a path that is
+        # not there fails the unit with 226/NAMESPACE before the program runs
+        # (measured) — nothing else made it but the update's script, so on a
+        # session where no update had run the sweep never started and the brain
+        # waited out its patience. One `RuntimeDirectory` per unit function.
+        for name, text in (("nix/modules/cache.nix", module), ("nix/modules/space.nix", space)):
+            writes = text.count("--report " + wanted)
+            makes = text.count('RuntimeDirectory = "' + leaf + '";')
+            if writes == 0 or makes != writes:
+                sys.exit(
+                    "ERROR: " + name + " writes the brain's report from " + str(writes)
+                    + " unit(s) and makes its directory in " + str(makes)
+                )
+
+        # THE RELIEF: one unit function, so one `--report` line, and the two
+        # file names are the task's id and its rehearsal.
+        if space.count("--report " + wanted) != 1:
+            sys.exit("ERROR: nix/modules/space.nix does not write into `" + wanted + "` from its one unit")
+        disk_id = re.search(r'pub const ID: &str = "([^"]+)";', disk_task)
+        if not disk_id:
+            sys.exit("ERROR: tasks/space.rs lost its `ID`, which is the name of the relief's report")
+        for name in (disk_id.group(1) + ".json", disk_id.group(1) + "-rehearsal.json"):
+            if 'report = "' + name + '";' not in space:
+                sys.exit("ERROR: no unit of nix/modules/space.nix writes `" + name + "`, which the brain watches")
+        # AND THE UNITS IT STARTS ARE THE UNITS DECLARED — a renamed unit would
+        # be a `systemctl start` of nothing, every time the disk is short.
+        units = re.findall(r'pub const (?:UNIT|REHEARSAL_UNIT): &str = "([^"]+)[.]service";', disk_task)
+        if len(units) != 2:
+            sys.exit("ERROR: tasks/space.rs no longer names its two units the way this reads them")
+        for unit in units:
+            if not re.search(r"systemd[.]user[.]services[.]" + re.escape(unit) + r"\s*=", space):
+                sys.exit("ERROR: the brain starts `" + unit + ".service`, and nix/modules/space.nix does not declare it")
+
         # AND THE UPDATE'S SCRIPT WRITES ONE AT ALL, which is the half that was
         # missing entirely: it kept a TSV and the brain wanted JSON.
         if 'REPORTS_LEAF = "' + leaf + '"' not in generator:
@@ -13757,7 +14014,7 @@ let
             if wanted not in generator:
                 sys.exit("ERROR: the update's script no longer writes the sheet the brain reads")
 
-        print("OK: the brain reads the directory the units write into, rehearsals included")
+        print("OK: the brain reads the directory the units write into, rehearsals and the disk's relief included")
         END
       '';
 
@@ -13826,10 +14083,13 @@ let
     touch $out
   '';
 
-  # THE CACHE'S FOUR NUMBERS COME FROM ONE FILE.
+  # THE CACHE'S NUMBERS COME FROM ONE FILE.
   #
   # `assets/cache.nix` declares how long a cached file may live, how often the
-  # sweep runs, when in the day, and when a thumbnail is remade. Two of them
+  # sweep runs, when in the day, and when a thumbnail is remade — and, since
+  # 2026-09-28, the disk's own: the store's floor and goal and their caps, the
+  # system's generations, the build logs' age, the cargo ceiling, an old
+  # compiler's age and the gap between two reliefs. Two of them
   # cross to Rust and two to a unit's arguments — and `freshDays < keepDays` is
   # a promise no single consumer can keep, which is why `nix/cache.nix` refuses
   # the build when it stops holding.
@@ -13854,7 +14114,13 @@ let
 
     # THE DECLARATION ITSELF, so this check knows what it is guarding.
     fields = dict(re.findall(r"^\s*(\w+) = (\d+);$", declared, re.M))
-    for name in ("keepDays", "everyDays", "freshDays"):
+    DISK = ("diskFloorPercent", "diskGoalPercent", "diskFloorCapGiB", "diskGoalCapGiB",
+            "systemGenerations", "buildLogDays", "cargoCeilingPercent", "oldCompilerDays",
+            "reliefGapMinutes")
+    # AND THE PLAYER'S: its cache folder (covers, the directories' lists) and
+    # its merged subtitles, each a ceiling of its own.
+    PLAYER = ("playerMib", "playerSubtitlesMib")
+    for name in ("keepDays", "everyDays", "freshDays") + DISK + PLAYER:
         if name not in fields:
             wrong.append(f"assets/cache.nix no longer declares `{name}`")
     if "partOfDay" not in declared:
@@ -13870,11 +14136,41 @@ let
             "nix/cache.nix no longer refuses `freshDays >= keepDays`: a thumbnail "
             "somebody looks at would be swept on a schedule"
         )
+    # AND THE DISK'S: the goal above the floor, the cargo ceiling inside what
+    # the goal leaves, an old compiler's build before an ordinary entry, the
+    # rescue rollback's two generations, and the hour between two reliefs.
+    for relation in ("diskFloorPercent < declared.diskGoalPercent",
+                     "diskFloorCapGiB < declared.diskGoalCapGiB",
+                     "cargoCeilingPercent < 100 - declared.diskGoalPercent",
+                     "oldCompilerDays < declared.keepDays",
+                     "systemGenerations >= 2",
+                     "reliefGapMinutes >= 60"):
+        if relation not in generator:
+            wrong.append(f"nix/cache.nix no longer refuses the opposite of `{relation}`")
+
+    # NO MODULE WRITES THE DISK'S NUMBERS AGAIN. The floor is written at boot
+    # from the catalogue by `nix/modules/store.nix` and nowhere else; a
+    # `min-free` in `nix.settings` would sit BEFORE the include and lose, and
+    # one in `extraOptions` after it would win in silence. The same for the
+    # build logs' age.
+    modules = 0
+    for f in sorted((root / "nix").rglob("*.nix")):
+        rel = str(f.relative_to(root))
+        text = hashless(f.read_text())
+        modules += 1
+        if rel == "nix/modules/store.nix":
+            continue
+        for needle in ("min-free", "max-free", "/nix/var/log"):
+            if needle in text:
+                wrong.append(f"{rel} names `{needle}` — the store's numbers are nix/modules/store.nix's")
+    floor(modules, 50, "Nix files swept for a second store floor")
 
     # AND NOBODY WRITES THEM AGAIN. The generated table is the only place a
     # number appears in Rust; a literal beside a name that means one of these is
     # a second answer waiting to disagree.
-    NAMES = ("KEEP_DAYS", "EVERY_DAYS", "FRESH_DAYS", "PART_OF_DAY")
+    NAMES = ("KEEP_DAYS", "EVERY_DAYS", "FRESH_DAYS", "PART_OF_DAY", "DISK_FLOOR_PERCENT",
+             "DISK_GOAL_PERCENT", "DISK_FLOOR_CAP_GIB", "DISK_GOAL_CAP_GIB", "CARGO_CEILING_PERCENT",
+             "OLD_COMPILER_DAYS", "RELIEF_GAP_MINUTES", "PLAYER_MIB", "PLAYER_SUBTITLES_MIB")
     swept = 0
     for f in sorted((root / "crates").rglob("*.rs")):
         text = code_of(f.read_text())
@@ -13896,6 +14192,684 @@ let
     END
     touch $out
   '';
+
+  # NOTHING AUTOMATIC DELETES A GENERATION — EXCEPT THE ONE COUNT ON THE SYSTEM.
+  #
+  # The owner's guarantee (2026-09-28): nothing may remove what the person's
+  # Nix relies on, and the one exception is a count limit on the SYSTEM's
+  # generations that always keeps the current, the running and the booted one.
+  # Before it, three things broke that promise and each looked like
+  # housekeeping: the weekly `nix.gc` with `--delete-older-than 30d` (as root it
+  # deletes the old generations of every profile, `per-user` included), the
+  # memory panel's `generations` sweep (the same command), and the update's
+  # `nix-profile-history` step (the person's own profile, on by default).
+  #
+  # What this asks, and how:
+  #
+  #   1. no `nix.gc` timer, on either machine this repository evaluates;
+  #   2. the update ships `old-generations on` and `nix-profile-history off`,
+  #      and its root half starts the trim BEFORE it collects;
+  #   3. no runner the machine starts by itself — the two update halves, the
+  #      memory sweeper, the shell's `ngc` — carries a flag that deletes
+  #      generations, and nothing in `nix/`, `assets/` or `crates/` does either,
+  #      except the trim itself (bound to the system profile) and the person's
+  #      own Tidy in the software CLI;
+  #   4. and the trim DOES what it says, on a planted profile tree: it keeps the
+  #      newest N, the current, the running and the booted generation — a
+  #      specialisation of one included — the one the last switch left, and
+  #      every one the boot menu lists, and leaves every other profile's links
+  #      alone;
+  #   5. the trim runs at every activation without ever failing it, and the
+  #      activation writes what the switch went away from.
+  #
+  # The scanner is sabotaged by construction: a planted line carrying each
+  # forbidden flag must be flagged, or the check refuses to pass — `-d` in
+  # every shape it takes (bundled, quoted, an argument of a Rust `Command`) and
+  # a hand `rm` of a generation's link included.
+  nix-gc-keeps-generations =
+    let
+      vmConfig = self.nixosConfigurations.vm.config;
+      noctuaConfig = self.nixosConfigurations.noctua.config;
+      store = vmConfig.ronoctua.store;
+      trim = vmConfig.systemd.services.${lib.removeSuffix ".service" store.generationsUnit};
+      atActivation = vmConfig.systemd.services.${lib.removeSuffix ".service" store.activationUnit};
+      facts = pkgs.writeText "nix-gc-facts.json" (
+        builtins.toJSON {
+          gc =
+            map
+              (c: {
+                automatic = c.nix.gc.automatic;
+                options = c.nix.gc.options;
+              })
+              [
+                vmConfig
+                noctuaConfig
+              ];
+          unit = store.generationsUnit;
+          keep = store.systemGenerations;
+          trimStart = trim.serviceConfig.ExecStart;
+          trimRemains = trim.serviceConfig.RemainAfterExit or false;
+          activationStart = atActivation.serviceConfig.ExecStart;
+          activationWanted = atActivation.wantedBy;
+          activationRemains = atActivation.serviceConfig.RemainAfterExit or false;
+          activationDefaults = atActivation.unitConfig.DefaultDependencies or true;
+          previous = vmConfig.system.activationScripts.ronoctua-previous-system.text or "";
+          sweepStart = vmConfig.systemd.services."ronoctua-memory-sweep@".serviceConfig.ExecStart;
+          inherit trimStep historyStep;
+        }
+      );
+      updatesConf = pkgs.writeText "updates.conf" vmConfig.environment.etc."ronoctua/updates.conf".text;
+      trimProgram = store.programs.generations;
+      nix = vmConfig.nix.package;
+      # THE TWO STEPS BY WHAT THEY DO, never by id: an id written here would be
+      # the second list `update-has-one-list` refuses. The trim is the step that
+      # starts the store's unit; the person's history is the one that runs the
+      # software CLI's `tidy nix`.
+      steps = (import ../assets/updates.nix).steps;
+      stepThat =
+        what: pred:
+        let
+          found = builtins.filter pred steps;
+        in
+        if builtins.length found == 1 then
+          (builtins.head found).id
+        else
+          throw "nix-gc-keeps-generations: ${toString (builtins.length found)} steps ${what}, and there has to be one";
+      trimStep = stepThat "start ${store.generationsUnit}" (s: (s.unit or null) == store.generationsUnit);
+      historyStep = stepThat "tidy the person's Nix history" (
+        s:
+        (s.package or null) == "software"
+        &&
+          (s.run or [ ]) == [
+            "tidy"
+            "nix"
+          ]
+      );
+    in
+    mkCheck "nix-gc-keeps-generations" [ pkgs.python3 pkgs.coreutils ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # FILE-WIDE: the offence is a FLAG anywhere in a script or a source file
+      # — a runner has no functions, and a flag in any function of the tree is
+      # a flag somebody can reach. The narrowing is by FILE (the allowlist
+      # below), never by function. `hashless` and `uncommented` take the
+      # comments off, so the sentences that explain why a flag is gone do not
+      # count as the flag.
+      facts = json.load(open("${facts}"))
+      wrong = []
+
+      # `-d` IN EVERY SHAPE: a word of its own, bundled with other short flags
+      # (`-vd`), or quoted as an argument (`.arg("-d")`, `["-d"]`) — the last
+      # of which is how a Rust `Command` or a Python list spells it, on a line
+      # of its own, far from the program's name.
+      SHORT_D = r"(?:^|[\s\"'\[,(])-[a-zA-Z]*d[a-zA-Z]*(?=$|[\s\"'\]),;])"
+      FORBIDDEN = [
+          (r"--delete-older-than", "deletes every profile's generations older than an age"),
+          (r"--delete-old\b", "deletes every old generation"),
+          (r"nix-collect-garbage[^\n;&|]*" + SHORT_D, "`-d` deletes every old generation of every profile"),
+          (r"wipe-history", "wipes a profile's history"),
+          (r"--delete-generations", "deletes generations by hand"),
+          (r"\brm\b[^\n;&|]*(?:profiles/|-link\b)", "removes a generation's link by hand"),
+      ]
+
+      def offences(text):
+          found = [why for pattern, why in FORBIDDEN if re.search(pattern, text, re.M)]
+          # A PROGRAM THAT NAMES THE COLLECTOR AND CARRIES A QUOTED `-d`
+          # anywhere: the argument of a `Command` sits lines away from its name.
+          if "nix-collect-garbage" in text and re.search(r"[\"']-[a-zA-Z]*d[a-zA-Z]*[\"']", text):
+              found.append("carries a quoted `-d` beside nix-collect-garbage")
+          return found
+
+      # THE SCANNER BITES, or nothing below means anything.
+      for planted in (
+          "nix-collect-garbage --delete-older-than 30d",
+          "nix-collect-garbage --delete-old",
+          "sudo nix-collect-garbage -d",
+          "sudo nix-collect-garbage -vd",
+          "nix-collect-garbage --verbose -dv",
+          'Command::new("nix-collect-garbage").arg("-d")',
+          'Command::new(collector) // nix-collect-garbage\n    .arg("--max-freed")\n    .arg("-d")',
+          'subprocess.run(["nix-collect-garbage", "-d"])',
+          "nix profile wipe-history --older-than 30d",
+          "nix-env -p /nix/var/nix/profiles/per-user/alice/profile --delete-generations 3",
+          "rm -f /nix/var/nix/profiles/system-3-link",
+          'rm "$dir"/system-*-link',
+      ):
+          if not offences(planted):
+              wrong.append(f"the scanner does not flag a planted `{planted}`")
+      for innocent in ("nix-collect-garbage", "nix-collect-garbage --max-freed 1",
+                       "nix-collect-garbage --dry-run", 'rm -f "$roots/layer-release"'):
+          if offences(innocent):
+              wrong.append(f"the scanner flags `{innocent}`, which deletes no generation")
+
+      # 1. NO TIMER THAT DELETES ANYTHING.
+      for machine, gc in zip(("vm", "noctua"), facts["gc"]):
+          if gc["automatic"]:
+              wrong.append(f"{machine}: `nix.gc.automatic` is on — a clock doing what the update and Nix's floor do")
+          if offences("nix-collect-garbage " + gc["options"]):
+              wrong.append(f"{machine}: `nix.gc.options` is `{gc['options']}`")
+
+      # 2. THE UPDATE'S TABLE, AS THE MACHINE WRITES IT.
+      conf = dict(
+          line.split()
+          for line in hashless(pathlib.Path("${updatesConf}").read_text()).splitlines()
+          if line.strip()
+      )
+      floor(len(conf), 10, "steps in the machine's updates.conf")
+      if conf.get(facts["trimStep"]) != "on":
+          wrong.append(f"updates.conf does not have `{facts['trimStep']} on`: the system's generations would grow for ever")
+      if conf.get(facts["historyStep"]) != "off":
+          wrong.append(f"updates.conf does not have `{facts['historyStep']} off`: the person's own history would be wiped by itself")
+
+      root_half = hashless(pathlib.Path("${updateRunners}/libexec/ronoctua-update-system").read_text())
+      person_half = hashless(pathlib.Path("${updateRunners}/bin/ronoctua-update").read_text())
+      floor(len(root_half), 1000, "characters of the root half")
+      floor(len(person_half), 1000, "characters of the person's half")
+      trims = [m.start() for m in re.finditer(re.escape(facts["unit"]), root_half)]
+      collects = [m.start() for m in re.finditer(r"nix-collect-garbage", root_half)]
+      if not trims or not collects:
+          wrong.append("the root half no longer starts the trim, or no longer collects")
+      elif min(trims) > min(collects):
+          wrong.append("the root half collects BEFORE it trims: what the trimmed generations held stays a week longer")
+
+      # 3. NO RUNNER, AND NO SOURCE, CARRIES A FLAG THAT DELETES GENERATIONS.
+      sweeper = re.match(r"(/nix/store/[^ ]+)", facts["sweepStart"]).group(1)
+      sweep = hashless(pathlib.Path(sweeper).read_text())
+      generations_arm = must(re.search(r"^\s*generations\)(.*?);;", sweep, re.M | re.S) and
+                             re.search(r"^\s*generations\)(.*?);;", sweep, re.M | re.S).group(1),
+                             "the memory sweeper's `generations` arm")
+      if facts["unit"] not in generations_arm or "nix-collect-garbage" not in generations_arm:
+          wrong.append("the memory panel's `generations` no longer starts the trim and then collects")
+      shellrc = hashless(pathlib.Path("${self}/assets/shell/shellrc.sh").read_text())
+      ngc = must(re.search(r"alias ngc='([^']*)'", shellrc) and re.search(r"alias ngc='([^']*)'", shellrc).group(1),
+                 "the shell's `ngc` alias")
+      if facts["unit"] not in ngc:
+          wrong.append(f"`ngc` does not start {facts['unit']}: the alias and the unit went apart")
+      for name, text in (("the root half", root_half), ("the person's half", person_half),
+                         ("the memory sweeper", sweep), ("the shell's ngc", ngc)):
+          for why in offences(text):
+              wrong.append(f"{name} {why}")
+
+      # The one trim, bound to the one profile.
+      start = facts["trimStart"]
+      if "--profile /nix/var/nix/profiles/system " not in start + " " or "--execute" not in start:
+          wrong.append(f"the trim's unit does not act on the system profile: `{start}`")
+      if f"--keep {facts['keep']} " not in start + " ":
+          wrong.append(f"the trim's unit does not keep ronoctua.store.systemGenerations ({facts['keep']})")
+      if facts["trimRemains"]:
+          wrong.append("the trim's unit stays active after it ran, so starting it again does nothing")
+      # 5. AND AT EVERY ACTIVATION, the same trim, which never fails it: a
+      # switch exits 4 over any unit it started that failed, and the update
+      # would stop over a trim while the new system ran.
+      if "multi-user.target" not in facts["activationWanted"] or facts["activationRemains"]:
+          wrong.append("the trim no longer runs at boot and at every switch")
+      if facts["activationStart"] != "-" + start:
+          wrong.append(f"the activation's trim is not the same trim, prefixed `-`: `{facts['activationStart']}`")
+      if facts["activationDefaults"] is not False:
+          wrong.append("the activation's trim has default dependencies: boot would wait for it")
+      if "/run/current-system" not in facts["previous"] or "previous-system" not in facts["previous"]:
+          wrong.append("the activation no longer writes what the switch went away from")
+
+      ALLOWED = {
+          "--delete-generations": ("nix/modules/store.nix",),
+          "wipe-history": ("crates/ronoctua-software/",),
+      }
+      root = pathlib.Path("${self}")
+      swept = 0
+      for f in sorted(root.rglob("*")):
+          rel = str(f.relative_to(root))
+          if not f.is_file() or not rel.startswith(("nix/", "assets/", "crates/", "flake.nix")):
+              continue
+          if f.suffix in (".nix", ".sh", ".py"):
+              text = hashless(f.read_text(errors="replace"))
+          elif f.suffix == ".rs":
+              text = uncommented(f.read_text(errors="replace"))
+          else:
+              continue
+          swept += 1
+          for pattern, why in FORBIDDEN:
+              if not re.search(pattern, text):
+                  continue
+              allowed = next((a for p, a in ALLOWED.items() if re.search(pattern, p)), ())
+              if not allowed or not rel.startswith(allowed):
+                  wrong.append(f"{rel}: {why}")
+      floor(swept, 300, "sources swept for a flag that deletes generations")
+
+      if wrong:
+          for line in wrong:
+              print("ERROR:", line, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: no clock and no runner deletes a generation; {facts['unit']} keeps {facts['keep']} and more")
+      END
+
+      # 4. THE TRIM ON A PLANTED TREE, with the real nix-env against a store of
+      # its own in the build directory: nothing here can reach a real profile.
+      export HOME=$TMPDIR/home NIX_REMOTE="local?root=$TMPDIR/chroot"
+      mkdir -p "$HOME"
+      trim=${trimProgram}/bin/ronoctua-system-generations
+      p=$TMPDIR/profiles
+      plant() {
+        rm -rf "$p" "$TMPDIR/sys" "$TMPDIR/menu" "$TMPDIR/previous"
+        mkdir -p "$p/per-user/alice" "$TMPDIR/sys" "$TMPDIR/menu"
+        for n in "$@"; do
+          mkdir -p "$TMPDIR/sys/g$n"
+          ln -s "$TMPDIR/sys/g$n" "$p/system-$n-link"
+        done
+        for n in 1 2 3; do
+          ln -s "$TMPDIR/sys/g$n" "$p/per-user/alice/profile-$n-link"
+          ln -s "$TMPDIR/sys/g$n" "$p/default-$n-link"
+        done
+      }
+      left() { (cd "$p" && for l in system-*-link; do n=''${l#system-}; echo "''${n%-link}"; done) | sort -n | tr '\n' ' '; }
+      others() { find "$p" -name 'default-*-link' -o -name 'profile-*-link' | wc -l; }
+      expect() {
+        if [ "$(left)" != "$1" ]; then
+          echo "ERROR: $2: left [$(left)], wanted [$1]" >&2
+          exit 1
+        fi
+        if [ "$(others)" != 6 ]; then
+          echo "ERROR: $2: another profile's generations were touched" >&2
+          exit 1
+        fi
+      }
+      run() {
+        "$trim" --profile "$p/system" --running "$TMPDIR/running" --booted "$TMPDIR/booted" \
+          --previous "$TMPDIR/previous" --menu "$TMPDIR/menu" "$@"
+      }
+
+      # Booted 1, current and running 8, keep 5: the newest five and the booted.
+      plant 1 2 3 4 5 6 7 8
+      ln -s system-8-link "$p/system"
+      ln -sfn "$TMPDIR/sys/g8" "$TMPDIR/running"
+      ln -sfn "$TMPDIR/sys/g1" "$TMPDIR/booted"
+      run --keep 5 > /dev/null
+      expect "1 2 3 4 5 6 7 8 " "a rehearsal touched something"
+      run --keep 5 --execute
+      expect "1 4 5 6 7 8 " "keep 5 with 1 booted"
+      run --keep 5 --execute > /dev/null
+      expect "1 4 5 6 7 8 " "a second run"
+
+      # After a rollback: current and running 3, booted 6, ten generations.
+      plant 1 2 3 4 5 6 7 8 9 10
+      ln -s system-3-link "$p/system"
+      ln -sfn "$TMPDIR/sys/g3" "$TMPDIR/running"
+      ln -sfn "$TMPDIR/sys/g6" "$TMPDIR/booted"
+      run --keep 5 --execute > /dev/null
+      expect "3 6 7 8 9 10 " "after a rollback"
+
+      # Rolled back to 3 while booted from 8, then an update built 9 and
+      # switched to it: 3 is what the switch went away from.
+      plant 1 2 3 4 5 6 7 8 9
+      ln -s system-9-link "$p/system"
+      ln -sfn "$TMPDIR/sys/g9" "$TMPDIR/running"
+      ln -sfn "$TMPDIR/sys/g8" "$TMPDIR/booted"
+      ln -sfn "$TMPDIR/sys/g3" "$TMPDIR/previous"
+      run --keep 5 --execute > /dev/null
+      expect "3 5 6 7 8 9 " "the system the last switch left"
+
+      # Booted a specialisation of 2, running one of 3.
+      plant 1 2 3 4 5 6 7 8 9 10
+      ln -s system-10-link "$p/system"
+      mkdir -p "$TMPDIR/sys/g2-x" "$TMPDIR/sys/g2/specialisation" "$TMPDIR/sys/g3-y" "$TMPDIR/sys/g3/specialisation"
+      ln -s "$TMPDIR/sys/g2-x" "$TMPDIR/sys/g2/specialisation/x"
+      ln -s "$TMPDIR/sys/g3-y" "$TMPDIR/sys/g3/specialisation/y"
+      ln -sfn "$TMPDIR/sys/g2-x" "$TMPDIR/booted"
+      ln -sfn "$TMPDIR/sys/g3-y" "$TMPDIR/running"
+      run --keep 5 --execute > /dev/null
+      expect "2 3 6 7 8 9 10 " "specialisations booted and running"
+
+      # A boot menu that fell behind the profile: 2 by a systemd-boot entry, 3
+      # by a lanzaboote image, 4 by a specialisation's entry.
+      plant 1 2 3 4 5 6 7 8 9 10
+      ln -s system-10-link "$p/system"
+      ln -sfn "$TMPDIR/sys/g10" "$TMPDIR/running"
+      ln -sfn "$TMPDIR/sys/g10" "$TMPDIR/booted"
+      mkdir -p "$TMPDIR/menu/loader/entries" "$TMPDIR/menu/EFI/Linux"
+      touch "$TMPDIR/menu/loader/entries/nixos-generation-2.conf" \
+        "$TMPDIR/menu/EFI/Linux/nixos-generation-3-abcdef.efi" \
+        "$TMPDIR/menu/loader/entries/nixos-generation-4-specialisation-x.conf"
+      run --keep 5 --execute > /dev/null
+      expect "2 3 4 6 7 8 9 10 " "boot menu entries by number"
+
+      # A text menu (grub's) naming 2's toplevel by its store path — real paths,
+      # so `readlink -f` answers with them.
+      plant
+      i=0
+      for top in ${pkgs.coreutils} ${pkgs.findutils} ${pkgs.gnugrep} ${pkgs.gnused} ${pkgs.python3} ${trimProgram} ${nix}; do
+        i=$((i + 1))
+        ln -s "$top" "$p/system-$i-link"
+      done
+      ln -s system-7-link "$p/system"
+      ln -sfn ${nix} "$TMPDIR/running"
+      ln -sfn ${nix} "$TMPDIR/booted"
+      mkdir -p "$TMPDIR/menu/grub"
+      printf 'menuentry "NixOS - Configuration 2" {\n  linux /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-linux/bzImage init=%s/init\n}\n' \
+        ${pkgs.findutils} > "$TMPDIR/menu/grub/grub.cfg"
+      run --keep 2 --execute > /dev/null
+      expect "2 6 7 " "a grub menu naming 2's toplevel"
+
+      # And what it refuses: a count below two, and any profile but the system's.
+      plant 2 6 7
+      ln -s system-7-link "$p/system"
+      for bad in "--keep 1" "--keep 5 --profile $p/per-user/alice/profile" "--keep 5 --profile $p/default" \
+                 "--keep 5 --profile $p/system-profiles/system"; do
+        # shellcheck disable=SC2086
+        if "$trim" $bad > /dev/null 2>&1; then
+          echo "ERROR: the trim accepted $bad" >&2
+          exit 1
+        fi
+      done
+      expect "2 6 7 " "a refused run"
+      echo "OK: the trim keeps the newest, the current, the running, the booted, the one left and the menu's, and nobody else's"
+    '';
+
+  # NIX'S OWN FLOOR IS THERE, AND IT IS THE ONE THE DISK ASKS FOR.
+  #
+  # `nix/modules/store.nix` writes `min-free` and `max-free` at boot into a file
+  # `nix.conf` includes. Three ways for that to be silently absent, each of
+  # which this check would see:
+  #
+  #   1. a setting AFTER the include (the later value wins) or the include gone;
+  #   2. the unit not ordered before the daemon, or writing into a directory
+  #      the include does not name;
+  #   3. the writer producing a file Nix does not read — Nix SKIPS an include it
+  #      cannot read, without a word, so a mode mistake is no floor at all.
+  #
+  # The last one is proved by running the writer and asking Nix itself, through
+  # a copy of the machine's own `nix.conf`, what the floor is.
+  store-has-a-floor =
+    let
+      vmConfig = self.nixosConfigurations.vm.config;
+      declared = import ../assets/cache.nix;
+      unit = vmConfig.systemd.services.ronoctua-store-floor;
+      facts = pkgs.writeText "store-floor-facts.json" (
+        builtins.toJSON {
+          wantedBy = unit.wantedBy;
+          before = unit.before;
+          requires = unit.unitConfig.RequiresMountsFor or "";
+          serviceConfig = unit.serviceConfig;
+          triggers = map toString vmConfig.systemd.services.nix-daemon.restartTriggers;
+          floor = declared.diskFloorPercent;
+          goal = declared.diskGoalPercent;
+          floorCap = declared.diskFloorCapGiB;
+          goalCap = declared.diskGoalCapGiB;
+        }
+      );
+      nixConf = vmConfig.environment.etc."nix/nix.conf".source;
+      writer = vmConfig.ronoctua.store.programs.floor;
+      nix = vmConfig.nix.package;
+    in
+    mkCheck "store-has-a-floor" [ pkgs.python3 pkgs.coreutils pkgs.gnused ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: `nix.conf` is `key = value` lines and an `!include`; the unit is
+      # its evaluated attributes, as JSON.
+      # FILE-WIDE: and the question is about the whole file — which setting
+      # comes after which — so there is no function to narrow to.
+      facts = json.load(open("${facts}"))
+      conf = pathlib.Path("${nixConf}").read_text().splitlines()
+      floor(len(conf), 3, "lines of the machine's nix.conf")
+      wrong = []
+
+      includes = [i for i, l in enumerate(conf) if l.strip().startswith("!include ")]
+      if len(includes) != 1:
+          wrong.append(f"nix.conf has {len(includes)} `!include` lines, and the floor needs exactly one")
+      else:
+          path = conf[includes[0]].split(None, 1)[1].strip()
+          for i, line in enumerate(conf):
+              if re.match(r"\s*(min-free|max-free)\s*=", line):
+                  where = "after" if i > includes[0] else "before"
+                  wrong.append(f"nix.conf sets `{line.strip()}` {where} the floor's include")
+          sc = facts["serviceConfig"]
+          if path != f"/run/{sc.get('RuntimeDirectory')}/free.conf":
+              wrong.append(f"the include names {path}, and the unit writes into /run/{sc.get('RuntimeDirectory')}")
+          if f"--into {path}" not in sc.get("ExecStart", ""):
+              wrong.append("the writer is not told the path the include names")
+          open("include-path", "w").write(path)
+
+      sc = facts["serviceConfig"]
+      for key, value in (("Type", "oneshot"), ("RemainAfterExit", True), ("RuntimeDirectoryMode", "0755"),
+                         ("RuntimeDirectoryPreserve", "yes")):
+          if sc.get(key) != value:
+              wrong.append(f"the floor's unit has {key}={sc.get(key)!r}, wanted {value!r}")
+      if "nix-daemon.service" not in facts["before"] or "nix-daemon.service" not in facts["wantedBy"]:
+          wrong.append("the floor's unit is not wanted by and ordered before nix-daemon.service")
+      if "nix-daemon.socket" in facts["before"]:
+          wrong.append("the floor's unit is ordered before nix-daemon.socket: a cycle through basic.target")
+      if "/nix/store" not in facts["requires"]:
+          wrong.append("the floor's unit may run before /nix/store is mounted")
+      want = (f"--floor-percent {facts['floor']} --goal-percent {facts['goal']} "
+              f"--floor-cap-gib {facts['floorCap']} --goal-cap-gib {facts['goalCap']} ")
+      if want not in sc.get("ExecStart", "") + " ":
+          wrong.append(f"the floor's percentages and caps are not assets/cache.nix's ({want.strip()})")
+      if sc.get("ExecStart") not in facts["triggers"]:
+          wrong.append("a new floor does not restart the daemon, which reads nix.conf once")
+
+      if wrong:
+          for line in wrong:
+              print("ERROR:", line, file=sys.stderr)
+          sys.exit(1)
+      print("OK: nix.conf includes the floor last, and the unit writes it before the daemon starts")
+      END
+
+      # THE WRITER, AND NIX READING WHAT IT WROTE — under the strictest umask,
+      # because the file has to be readable by every client all the same.
+      include=$(cat include-path)
+      mkdir -p run conf
+      write() {
+        (umask 077; ${writer}/bin/ronoctua-store-floor --store "$PWD" \
+          --floor-percent ${toString declared.diskFloorPercent} \
+          --goal-percent ${toString declared.diskGoalPercent} \
+          --floor-cap-gib "$1" --goal-cap-gib "$2" --into "$PWD/run/free.conf")
+      }
+      write ${toString declared.diskFloorCapGiB} ${toString declared.diskGoalCapGiB}
+      if [ "$(stat -c %a run/free.conf)" != 644 ]; then
+        echo "ERROR: the floor is written $(stat -c %a run/free.conf): Nix skips an include it cannot read" >&2
+        exit 1
+      fi
+      if [ "$(ls -A run)" != free.conf ]; then
+        echo "ERROR: the writer left a draft behind: $(ls -A run)" >&2
+        exit 1
+      fi
+      read -r block blocks < <(stat -f -c '%S %b' "$PWD")
+      gib=$((1024 * 1024 * 1024))
+      share() { echo $((block * blocks * $1 / 100)); }
+      capped() { local s; s=$(share "$1"); echo $((s < $2 * gib ? s : $2 * gib)); }
+      min=$(capped ${toString declared.diskFloorPercent} ${toString declared.diskFloorCapGiB})
+      max=$(capped ${toString declared.diskGoalPercent} ${toString declared.diskGoalCapGiB})
+      sed "s|^!include $include\$|!include $PWD/run/free.conf|" ${nixConf} > conf/nix.conf
+      ask() { NIX_CONF_DIR=$PWD/conf NIX_USER_CONF_FILES=/dev/null HOME=$PWD ${nix}/bin/nix config show "$1"; }
+      if [ "$(ask min-free)" != "$min" ] || [ "$(ask max-free)" != "$max" ]; then
+        echo "ERROR: Nix reads min-free=$(ask min-free) max-free=$(ask max-free); the disk asks for $min and $max" >&2
+        exit 1
+      fi
+      # AND THE CAP BITES: with caps of one and two GiB, any filesystem bigger
+      # than ten GiB is floored at the cap and not at its share.
+      write 1 2
+      if [ "$(share ${toString declared.diskFloorPercent})" -gt "$gib" ] &&
+         [ "$(ask min-free)" != "$gib" ]; then
+        echo "ERROR: a floor of 1 GiB on a big filesystem reads min-free=$(ask min-free)" >&2
+        exit 1
+      fi
+      write ${toString declared.diskFloorCapGiB} ${toString declared.diskGoalCapGiB}
+      # AND A MISSING FILE IS NO FLOOR, NOT A BROKEN NIX: the first boot before
+      # the unit ran, and every sandbox, look like this.
+      rm run/free.conf
+      if [ "$(ask min-free)" != 0 ]; then
+        echo "ERROR: with the floor's file missing Nix reads min-free=$(ask min-free)" >&2
+        exit 1
+      fi
+      echo "OK: Nix reads min-free=$min and max-free=$max from the floor's file; without it, no floor and no error"
+    '';
+
+  # NO SNAPSHOT HOLDS THE STORE OR A CACHE.
+  #
+  # Snapshots of a root that contains `/nix` hold every store path a
+  # collection frees, so collecting garbage returns almost nothing — most of a
+  # disk can go that way in silence. On the distro's own layout `@nix` is a
+  # top-level subvolume and a snapshot of `@root` never holds it; what this
+  # keeps true is the layout, and the rule for everything a machine adds:
+  #
+  #   1. `@nix` is its own top-level subvolume at `/nix` (no subvolume nested
+  #      under another by name);
+  #   2. a snapper or btrbk target at or under `/nix`, at a `.cache`, or at `/`
+  #      where `/nix` is not a mount of its own, fails evaluation — and `/`,
+  #      `/home` and a btrbk `@home` do NOT;
+  #   3. every normal user's `~/.cache` gets its subvolume unit, before any
+  #      login and bounded in time, and a machine without btrfs gets no unit, no
+  #      scrub and no reclaim;
+  #   4. nothing else makes a subvolume, plants a tmpfiles subvolume on a
+  #      cache, persists a cache or points `XDG_CACHE_HOME` outside the home's
+  #      `.cache`.
+  snapshots-skip-the-store =
+    let
+      noctua = self.nixosConfigurations.noctua;
+      vm = self.nixosConfigurations.vm;
+      user = noctua.config.ronoctua.user;
+      extended = system: module: (system.extendModules { modules = [ module ]; }).config;
+      failed = c: map (a: a.message) (builtins.filter (a: !a.assertion) c.assertions);
+      targets = c: map (t: "${t.target} <- ${t.by}") c.ronoctua.filesystem.refusedSnapshots;
+      cacheUnits =
+        c: lib.filterAttrs (n: _: lib.hasPrefix "ronoctua-cache-subvolume-" n) c.systemd.services;
+      reclaim = c: builtins.filter (r: lib.hasInfix "_reclaim" r) c.systemd.tmpfiles.rules;
+      probe = extended noctua {
+        services.snapper.configs = {
+          store.SUBVOLUME = "/nix";
+          inside.SUBVOLUME = "/nix/store/";
+          root.SUBVOLUME = "/";
+          home.SUBVOLUME = "/home";
+          cache.SUBVOLUME = "/home/${user}/.cache";
+        };
+        services.btrbk.instances.pool.settings.volume."/mnt/pool".subvolume = {
+          "@nix" = { };
+          "@home" = { };
+        };
+      };
+      probeVm = extended vm { services.snapper.configs.root.SUBVOLUME = "/"; };
+      plain = extended vm {
+        fileSystems."/".fsType = lib.mkForce "ext4";
+        fileSystems."/persist".fsType = lib.mkForce "ext4";
+      };
+      facts = pkgs.writeText "snapshot-facts.json" (
+        builtins.toJSON {
+          subvolumes = lib.mapAttrs (
+            _: s: s.mountpoint
+          ) noctua.config.disko.devices.disk.main.content.partitions.luks.content.content.subvolumes;
+          refused = targets probe;
+          failed = failed probe;
+          refusedVm = targets probeVm;
+          clean = targets noctua.config;
+          people = lib.mapAttrs (_: u: u.home) (
+            lib.filterAttrs (_: u: u.isNormalUser) noctua.config.users.users
+          );
+          units = lib.mapAttrs (_: s: {
+            inherit (s) wantedBy before after;
+            requires = s.unitConfig.RequiresMountsFor or [ ];
+            defaults = s.unitConfig.DefaultDependencies or true;
+            timeout = s.serviceConfig.TimeoutStartSec or null;
+          }) (cacheUnits noctua.config);
+          reclaim = reclaim noctua.config;
+          scrubbed = noctua.config.services.btrfs.autoScrub.fileSystems;
+          plain = {
+            btrfs = plain.ronoctua.filesystem.btrfs;
+            scrub = plain.services.btrfs.autoScrub.enable;
+            units = lib.attrNames (cacheUnits plain);
+            reclaim = reclaim plain;
+          };
+          persisted = noctua.config.ronoctua.persist.directories;
+        }
+      );
+    in
+    mkCheck "snapshots-skip-the-store" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      facts = json.load(open("${facts}"))
+      wrong = []
+
+      # 1. THE LAYOUT.
+      subvolumes = facts["subvolumes"]
+      floor(len(subvolumes), 5, "subvolumes in the distro's layout")
+      if subvolumes.get("@nix") != "/nix":
+          wrong.append(f"`@nix` is mounted at {subvolumes.get('@nix')!r}, not /nix")
+      for name in subvolumes:
+          if "/" in name:
+              wrong.append(f"`{name}` is nested under another subvolume, inside its snapshots")
+
+      # 2. THE RULE, BOTH WAYS.
+      refused = sorted(t.split(" <- ")[0] for t in facts["refused"])
+      if refused != ["/home/${user}/.cache", "/nix", "/nix", "/nix/store"]:
+          wrong.append(f"the snapshot rule refused {refused}; wanted the store twice (snapper and btrbk's @nix), inside it, and the cache")
+      if len(facts["failed"]) != 1 or not facts["failed"][0].startswith("ronoctua.filesystem:"):
+          wrong.append(f"the refusal does not reach evaluation as exactly one failed assertion: {facts['failed']}")
+      if [t.split(" <- ")[0] for t in facts["refusedVm"]] != ["/"]:
+          wrong.append("a snapshot of / is not refused where /nix lives inside it")
+      if facts["clean"]:
+          wrong.append(f"the distro itself declares refused snapshots: {facts['clean']}")
+
+      # 3. THE CACHE UNITS, AND NOTHING WITHOUT BTRFS.
+      floor(len(facts["people"]), 1, "normal users")
+      for name, home in facts["people"].items():
+          unit = facts["units"].get(f"ronoctua-cache-subvolume-{name}")
+          if unit is None:
+              wrong.append(f"{name} has no ~/.cache subvolume unit")
+              continue
+          if "systemd-user-sessions.service" not in unit["before"] or "multi-user.target" not in unit["wantedBy"]:
+              wrong.append(f"{name}'s unit does not run at boot ahead of every login")
+          # WITH ITS DEFAULT DEPENDENCIES: before `sysinit.target`, a home mounted
+          # late is an ordering cycle at boot.
+          if unit["defaults"] is not True or "sysinit.target" in unit["before"] or home not in unit["requires"]:
+              wrong.append(f"{name}'s unit is not ordered after the boot's basics and bound to {home}'s mount")
+          if not unit["timeout"]:
+              wrong.append(f"{name}'s unit may hold the logins back without a limit")
+      if len(facts["reclaim"]) != 2:
+          wrong.append(f"the btrfs reclaim lines are {facts['reclaim']}")
+      if facts["scrubbed"] != ["/"]:
+          wrong.append(f"the scrub runs on {facts['scrubbed']}, not once on the one filesystem")
+      plain = facts["plain"]
+      if plain["btrfs"] or plain["scrub"] or plain["units"] or plain["reclaim"]:
+          wrong.append(f"a machine without btrfs still gets btrfs steps: {plain}")
+
+      # 4. NOBODY ELSE UNDOES IT.
+      for d in facts["persisted"]:
+          if ".cache" in d.split("/"):
+              wrong.append(f"{d} is persisted: a bind mount over the cache's subvolume")
+
+      # FILE-WIDE: a subvolume made, a tmpfiles subvolume line or an
+      # `XDG_CACHE_HOME` pointed elsewhere is an offence in any file of the
+      # tree, and a shell script or an attribute set has no function to narrow
+      # to. `hashless` takes the comments off.
+      root = pathlib.Path("${self}")
+      swept = 0
+      MAKERS = ("nix/modules/filesystem.nix", "nix/modules/persist.nix")
+      for f in sorted(root.rglob("*")):
+          rel = str(f.relative_to(root))
+          if not f.is_file() or f.suffix not in (".nix", ".sh", ".py") or not rel.startswith(("nix/", "assets/", "flake.nix")):
+              continue
+          text = hashless(f.read_text(errors="replace"))
+          swept += 1
+          if "subvolume create" in text and rel not in MAKERS:
+              wrong.append(f"{rel} makes a btrfs subvolume; the cache's is filesystem.nix's and the root's persist.nix's")
+          for m in re.finditer(r"[\"'][vqQ][+!]?\s+(\S+)", text):
+              if ".cache" in m.group(1) or "%C" in m.group(1) or "XDG_CACHE_HOME" in m.group(1):
+                  wrong.append(f"{rel} plants a tmpfiles subvolume at {m.group(1)}")
+          for m in re.finditer(r"XDG_CACHE_HOME\s*=\s*\"?([^\";\n]*)", text):
+              if m.group(1).strip() not in ("''${XDG_CACHE_HOME:-$HOME/.cache}", "$HOME/.cache"):
+                  wrong.append(f"{rel} points XDG_CACHE_HOME at {m.group(1)!r}, out of the cache's subvolume")
+      floor(swept, 100, "files swept for a subvolume or a cache moved")
+
+      if wrong:
+          for line in wrong:
+              print("ERROR:", line, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: no snapshot holds the store or a cache; {len(facts['people'])} cache subvolume unit(s)")
+      END
+    '';
 
   one-zip-reader = mkCheck "one-zip-reader" [ pkgs.python3 ] ''
     python3 - <<'END'
@@ -16655,9 +17629,10 @@ let
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
 
-    # FILE-WIDE: for the Rust half, what is asked is whether `globe.rs` reaches
-    # for the path through `option_env!` ANYWHERE in it. The Nix half is
-    # narrowed to one attribute block by `block` below.
+    # FILE-WIDE: for the Rust half, what is asked is whether `globe.rs` — and
+    # the player's `directory.rs` — reaches for the path through `option_env!`
+    # ANYWHERE in it. The Nix half is narrowed to one attribute block by
+    # `block` below, and the daemon's reader to its function.
     #
     # `hashless` for the Nix, whose comment is `#`; `uncommented` for the Rust,
     # because both needles there are string literals — the name of the variable
@@ -16688,6 +17663,18 @@ let
                    "path would be a reference this binary carries into every closure")
     if 'var_os("RONOCTUA_ATLAS")' not in globe:
         bad.append("globe.rs does not read RONOCTUA_ATLAS from the environment")
+
+    # AND THE PLAYER'S DAEMON, the other reader — the directories' marks.
+    # PARSED: its reader is one function, and a read that fails is said.
+    engine = uncommented(pathlib.Path("${../crates/ronoctua-player-engine/src}/engine/directory.rs").read_text())
+    floor(len(engine), 20000, "characters of the player's directory.rs")
+    atlas_map = must(body_of(engine, "atlas_map"), "the player's `atlas_map`")
+    if 'option_env!("RONOCTUA_ATLAS")' in engine:
+        bad.append("the player's daemon bakes the atlas path in with option_env!")
+    if 'var_os("RONOCTUA_ATLAS")' not in atlas_map:
+        bad.append("the player's `atlas_map` does not read RONOCTUA_ATLAS from the environment")
+    if "tracing::warn!" not in atlas_map:
+        bad.append("the player's `atlas_map` reads the atlas and says nothing when it cannot")
 
     if bad:
         for b in bad:
@@ -16952,11 +17939,48 @@ let
         bad.append("Painted still carries ONE picture; the globe and the preview "
                    "cannot both be drawn")
 
+    # AND THE PLAYER'S PICTURES: a set shows up to `PICTURES_MOST` at once,
+    # each a texture of the frame. The renderer counts them by a number of
+    # its own (it knows no player), the shell refuses to build when the two
+    # part, and the doors take no more than that many.
+    if ceiling is None or "PLAYER_PICTURES" not in ceiling.group(1):
+        bad.append(
+            "the image ceiling does not count the player's pictures; a set's "
+            "last pictures would be dropped silently"
+        )
+    # AND THE PLAYER'S GLOBE AND COVERS, each a texture of a frame that may
+    # carry the set's pictures too — counted by name, or only unrelated slack
+    # keeps them from being dropped.
+    for name, what in (("PLAYER_GLOBE", "the directories' globe"),
+                       ("PLAYER_COVERS", "the Metadata's two covers")):
+        if ceiling is None or name not in ceiling.group(1):
+            bad.append(f"the image ceiling does not count {what} ({name})")
+    rows = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/player_rows.rs").read_text())
+    floor(len(rows), 10000, "characters of player_rows.rs")
+    pictures = must(scope(rows, r"pub\(crate\) fn pictures\b"), "player_rows.rs's `pictures`")
+    if "PLAYER_COVERS" not in pictures:
+        bad.append("`Builder::pictures` no longer stops at `PLAYER_COVERS`: a door could "
+                   "lay out more covers than the ceiling counts")
+    layout = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/player_layout.rs").read_text())
+    floor(len(layout), 3000, "characters of player_layout.rs")
+    bond = re.search(
+        r"const _: \(\) = assert!\(\s*ronoctua_render::image::PLAYER_PICTURES\s*>=\s*"
+        r"ronoctua_player::session::PICTURES_MOST",
+        layout,
+    )
+    if bond is None:
+        bad.append("the shell no longer binds the renderer's player pictures to "
+                   "`session::PICTURES_MOST`")
+    tiles = must(scope(layout, r"pub fn tiles_on\b"), "player_layout.rs's `tiles_on`")
+    if "truncate(PICTURES_MOST)" not in tiles:
+        bad.append("`tiles_on` no longer stops at `PICTURES_MOST`: a door could ask "
+                   "for more pictures than the ceiling counts")
+
     if bad:
         for b in bad:
             print("ERROR: " + b, file=sys.stderr)
         sys.exit(1)
-    print("OK: the manager may draw two pictures, and the ceiling counts them")
+    print("OK: the manager may draw two pictures, the player its set's, and the ceiling counts them")
     END
   '';
 
@@ -17786,19 +18810,23 @@ let
 
   # THE FLAKE'S TREE MUST NOT GET FAT. It cost 793 GB to find out.
   #
-  # This project is not a git repository (invariant 2), and it is git's index
-  # that Nix uses to filter a flake's source. With no git, `nix flake check`
-  # copies the WHOLE directory into the store — and since the path is
-  # content-addressed, EVERY EDIT mints a new copy.
+  # It is git's index that Nix uses to filter a flake's source, and the copy is
+  # content-addressed: EVERY EDIT mints a new one. Before the repository had an
+  # index there was nothing to filter by, so `nix flake check` copied the WHOLE
+  # directory into the store.
   #
   # With an 18 GB `target/` inside, that gave 44 copies and 793 GB: 94% of the
   # store and 42% of the disk, with nothing warning. The `nix/rust.nix` already
   # filtered the source `crane` compiles, but that filter runs LATER — the 19 GB
   # copy has already happened at evaluation time.
   #
-  # The fix is keeping the build outside the tree (`CARGO_TARGET_DIR`, see
-  # `nix/devshell.nix`). This check is what stops the fix from being lost: the
-  # cost is invisible day to day and only shows up when the disk fills.
+  # WHAT THIS CHECK SEES is `${self}`, which is only what git tracks: a build
+  # directory that `.gitignore` hides never reaches it, and neither does one a
+  # `cargo` outside the devshell left beside a manifest. That half is kept by
+  # where cargo writes — `nix/cargo-dirs.nix`, exported by the devshell and,
+  # for the intermediates, by every installed session. This check is what
+  # stops a TRACKED build from being lost in the tree: the cost is invisible
+  # day to day and only shows up when the disk fills.
   #
   # THE DEPENDENCY LAYER SEES ONLY WHAT IT USES.
   #
@@ -17816,6 +18844,13 @@ let
   # no build, no import-from-derivation. It is the environment that is checked
   # because the environment is how they got in — the five buffers were never
   # named in `nix/rust.nix`'s deps call, they arrived carried by a variable.
+  #
+  # AND NO CARGO DIRECTORY, in a layer or in anything built on one. crane hands
+  # a layer on as its `target/`: the next derivation unpacks it there and cargo
+  # finds every dependency already compiled. A `CARGO_TARGET_DIR` or a
+  # `CARGO_BUILD_BUILD_DIR` (`nix/cargo-dirs.nix` is where they belong) sends
+  # cargo to look somewhere else — the layer is still unpacked, nothing reads
+  # it, and every leaf compiles the 483 crates again, with no error at all.
   deps-layer-is-lean =
     let
       # BOTH LAYERS, because there are two: one per cargo profile, and the
@@ -17824,8 +18859,31 @@ let
       # often unguarded.
       of = layer: lib.filter (lib.hasPrefix "RONOCTUA_") (lib.attrNames layer.drvAttrs);
       leaked = of rust.cargoArtifacts ++ of rust.loopArtifacts;
+      # A variable reaches cargo as an attribute or through `env`; both count.
+      dirsOf =
+        name: d:
+        map (v: "${name}: ${v}") (
+          lib.filter (v: builtins.match "CARGO_[A-Z_]*DIR" v != null) (
+            lib.attrNames d.drvAttrs ++ lib.attrNames (d.drvAttrs.env or { })
+          )
+        );
+      # The layers, and every derivation that takes one.
+      onALayer = {
+        layer = rust.cargoArtifacts;
+        loop-layer = rust.loopArtifacts;
+      }
+      // lib.filterAttrs (_: d: (d.drvAttrs.cargoArtifacts or null) != null) rustDerivations;
+      redirected = lib.concatLists (lib.mapAttrsToList dirsOf onALayer);
+      # The census has to reach the builds that matter, or an empty list
+      # proves nothing: the tests and clippy are the two every edit waits on.
+      reached = onALayer ? tests && onALayer ? clippy;
     in
     mkCheck "deps-layer-is-lean" [ ] ''
+      if [ "${lib.boolToString reached}" != true ]; then
+        echo "ERROR: the census of nix/rust.nix no longer reaches the tests and clippy;" >&2
+        echo "      finding no cargo directory there would prove nothing." >&2
+        exit 1
+      fi
       leaked="${lib.concatStringsSep " " leaked}"
       if [ -n "$leaked" ]; then
         echo "ERROR: a dependency layer was given variables it does not use:" >&2
@@ -17837,7 +18895,174 @@ let
         echo "      somebody edits the buffer." >&2
         exit 1
       fi
-      echo "OK: neither dependency layer carries a RONOCTUA_* at all"
+      redirected=${lib.escapeShellArg (lib.concatStringsSep "\n" redirected)}
+      if [ -n "$redirected" ]; then
+        echo "ERROR: a crane build names a cargo directory of its own:" >&2
+        echo "$redirected" | sed 's/^/  /' >&2
+        echo >&2
+        echo "      The layer arrives as ./target; with the directory moved, cargo" >&2
+        echo "      never looks there and compiles every dependency again, silently." >&2
+        echo "      The cargo directories belong to nix/cargo-dirs.nix, which only" >&2
+        echo "      the devshell, the loop and the session read." >&2
+        exit 1
+      fi
+      echo "OK: neither dependency layer carries a RONOCTUA_* at all, and" \
+        "the ${toString (lib.length (lib.attrNames onALayer))} builds on a layer name no cargo directory"
+    '';
+
+  # EVERY DERIVATION `nix/rust.nix` MAKES, by name, for the checks that ask the
+  # same question of each. `tryEval`, because an attribute of that set that is
+  # a table or a function must not stop the census.
+  rustDerivations = lib.filterAttrs (
+    _: v:
+    let
+      is = builtins.tryEval (lib.isDerivation v);
+    in
+    is.success && is.value
+  ) rust;
+
+  # A LEAF BUILD KEEPS NOTHING BUT ITS VERDICT.
+  #
+  # crane's default, for everything that is not `buildPackage`, is to tar and
+  # zstd the whole `target/` into `$out`. For a dependency layer that IS the
+  # product — the next build unpacks it. For the tests, clippy and the
+  # formatter it is gigabytes per edit that nothing reads (a check needs the
+  # build to succeed, not its objects), each one holding a link to the loop's
+  # layer as well — and clippy is what the pre-commit hook builds on every
+  # commit. `nix/rust.nix` turns it off in all three.
+  #
+  # The day somebody adds a `cargoDoc`, a `cargoNextest` or a second
+  # `cargoTest`, it comes with the default again. So this asks every
+  # derivation of `nix/rust.nix` whether it archives its build, and only the
+  # two layers may. Read from the attributes, at evaluation time: no build.
+  leaf-builds-keep-no-artifacts =
+    let
+      layers = [
+        rust.cargoArtifacts.drvPath
+        rust.loopArtifacts.drvPath
+      ];
+      archiving = lib.filterAttrs (_: d: d.drvAttrs.doInstallCargoArtifacts or false) rustDerivations;
+      isLayer = d: builtins.elem d.drvPath layers;
+      leaves = lib.attrNames (lib.filterAttrs (_: d: !(isLayer d)) archiving);
+      layersSeen = lib.length (lib.filter isLayer (lib.attrValues archiving));
+    in
+    mkCheck "leaf-builds-keep-no-artifacts" [ ] ''
+      # THE FLOOR: the census has to see the two layers archiving, which is
+      # what they are for. Seeing neither is a census that stopped reaching
+      # crane's derivations — and it would then report no leaf, and pass.
+      if [ "${toString layersSeen}" != 2 ]; then
+        echo "ERROR: ${toString layersSeen} of the 2 dependency layers archive their build." >&2
+        echo "      Either a layer stopped handing its target/ on (every build on it" >&2
+        echo "      would compile the dependencies again), or this census no longer" >&2
+        echo "      reaches nix/rust.nix's derivations and proves nothing." >&2
+        exit 1
+      fi
+      leaves="${lib.concatStringsSep " " leaves}"
+      if [ -n "$leaves" ]; then
+        echo "ERROR: a leaf build archives its whole target/ into the store:" >&2
+        for l in $leaves; do echo "  rust.$l" >&2; done
+        echo >&2
+        echo "      crane defaults \`doInstallCargoArtifacts\` to true for everything" >&2
+        echo "      that is not buildPackage. Only a dependency layer is read again;" >&2
+        echo "      set it to false where the build is only a verdict." >&2
+        exit 1
+      fi
+      echo "OK: only the 2 dependency layers archive a target/, out of" \
+        "${toString (lib.length (lib.attrNames rustDerivations))} rust derivations"
+    '';
+
+  # THE LOCAL `cargo` BUILDS LEAN.
+  #
+  # `[profile.dev]` is what every `cargo test -p`, `cargo clippy` and
+  # rust-analyzer run compiles at, and full debug info was most of it: one test
+  # binary of the shell was 716 MiB, 631 of them `.debug_*`. The root
+  # `Cargo.toml` asks for line tables in our crates and nothing in the
+  # dependencies — the backtrace a panic prints, and no more.
+  #
+  # And `release` and `loop` carry no debug info at all: stdenv strips `bin/`
+  # with `-S`, so `debug = 1` there never reached a machine and only made the
+  # dependency layer bigger and the LTO link slower. It came back once "to
+  # diagnose a missed frame", which is how it would come back again.
+  #
+  # # PARSED
+  #
+  # By Nix's own TOML reader, so a comment cannot answer for a setting. And
+  # the two places that beat the manifest without touching it: a
+  # `CARGO_PROFILE_*` in the devshell (the environment beats every file) and a
+  # `.cargo/config*` in the tree (config beats the manifest).
+  cargo-dev-profile-is-lean =
+    let
+      manifest = builtins.fromTOML (builtins.readFile ../Cargo.toml);
+      profile = manifest.profile or { };
+      # What cargo reads as "no debug info": `false`, `0` and `"none"`.
+      none =
+        v:
+        builtins.elem v [
+          false
+          0
+          "none"
+        ];
+      shown = v: builtins.toJSON v;
+      devDebug = profile.dev.debug or null;
+      depsDebug = profile.dev.package."*".debug or null;
+      # An override may lower a crate's debug info, never raise it past line
+      # tables: that is the dev profile undone one crate at a time.
+      raised =
+        where: packages:
+        lib.mapAttrsToList (n: p: "${where}.package.\"${n}\" asks for debug = ${shown p.debug}") (
+          lib.filterAttrs (_: p: p ? debug && !(none p.debug) && p.debug != "line-tables-only") packages
+        );
+      shell = self.devShells.${system}.default.drvAttrs;
+      overrides = lib.filter (lib.hasPrefix "CARGO_PROFILE_") (
+        lib.attrNames shell ++ lib.attrNames (shell.env or { })
+      );
+      problems =
+        lib.optional (
+          devDebug != "line-tables-only"
+        ) "[profile.dev] debug is ${shown devDebug}, and it has to be \"line-tables-only\""
+        ++ lib.optional (
+          !(none depsDebug)
+        ) "[profile.dev.package.\"*\"] debug is ${shown depsDebug}, and the dependencies take none"
+        ++ lib.optional (
+          (profile.test or { }) ? debug
+          && !(none profile.test.debug)
+          && profile.test.debug != "line-tables-only"
+        ) "[profile.test] debug is ${shown profile.test.debug}, which undoes the dev profile for every test"
+        # `"*"` is the line above, and stricter: the dependencies take none.
+        ++ raised "profile.dev" (removeAttrs (profile.dev.package or { }) [ "*" ])
+        ++ raised "profile.test" (profile.test.package or { })
+        ++
+          lib.concatMap
+            (
+              name:
+              lib.optional ((profile.${name} or { }) ? debug && !(none profile.${name}.debug))
+                "[profile.${name}] debug is ${shown profile.${name}.debug}; stdenv strips it from every installed binary"
+            )
+            [
+              "release"
+              "loop"
+            ]
+        ++ map (v: "the devshell sets ${v}, which beats the manifest for every build in it") overrides
+        ++ lib.optional (lib.hasInfix "CARGO_PROFILE_" (
+          shell.shellHook or ""
+        )) "the devshell's hook exports a CARGO_PROFILE_*, which beats the manifest";
+    in
+    mkCheck "cargo-dev-profile-is-lean" [ pkgs.findutils ] ''
+      problems=${lib.escapeShellArg (lib.concatStringsSep "\n" problems)}
+      # `.cargo/config*` anywhere in the tree: its `[profile]` would beat the
+      # manifest, and its `build-dir` would move a crane build off its layer.
+      configs=$(find ${self} -path '*/.cargo/config*' -print)
+      if [ -n "$configs" ]; then
+        problems="$problems
+      a cargo config in the tree beats the manifest: $configs"
+      fi
+      if [ -n "$(echo "$problems" | tr -d '[:space:]')" ]; then
+        echo "ERROR: the local cargo would not build lean:" >&2
+        echo "$problems" | sed '/^ *$/d; s/^ */  /' >&2
+        exit 1
+      fi
+      echo "OK: dev builds line tables for our crates and nothing for the" \
+        "dependencies; release and loop carry none"
     '';
 
   lean-tree = mkCheck "lean-tree" [ ] ''
@@ -18086,6 +19311,10 @@ let
           # are the same circle filled and hollow, so the measurement is also
           # what keeps them the same drawing.
           "working-one", "working-two",
+          # AND THE PLAYER'S PAIR, one segment of two glyphs (`player_mark`)
+          # with the workspace numbers right beside it: play or pause, and
+          # next. Two drawings side by side at two sizes read as two things.
+          "player", "pause", "player-next",
       ]
 
       face = "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"
@@ -20323,6 +21552,55 @@ let
     PY
   '';
 
+  # THE CHANNELS BY THEME HAVE A NAME IN EVERY LANGUAGE, and the crate reads
+  # the table they came from.
+  #
+  # `assets/channels.nix` declares the ids and `nix/broadcast.nix` turns each
+  # into the key `player-channels-<id>`. The key is a STRING in the generated
+  # table (a category is data, not a `Key` the i18n crate generated), so the
+  # compile-time check every other text gets does not reach it: a category
+  # added in Nix would be a row whose name is `[player-channels-…]`, and only
+  # this list, which the generator derived, knows to ask for it.
+  channels-have-text = mkCheck "channels-have-text" [ pkgs.python3 ] ''
+    python3 - <<'PY'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    keys = pathlib.Path("${broadcastRs}/keys.txt").read_text().split()
+    floor(len(keys), 10, "categories carry a name")
+
+    failed = False
+    for key in keys:
+        if not re.fullmatch(r"player-channels-[a-z][a-z0-9-]*", key):
+            print(f"ERROR: `{key}` is not a channel's key")
+            failed = True
+    for language in ${builtins.toJSON languages}:
+        ftl = pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text()
+        have = set(re.findall(r"^([a-z][a-z0-9-]*) *=", ftl, re.M))
+        missing = [k for k in keys if k not in have]
+        if missing:
+            print(f"ERROR: {language} does not have: {', '.join(missing)}")
+            failed = True
+        else:
+            print(f"ok  {language}: the table's {len(keys)} names are there")
+
+    # FILE-WIDE: the `include!` is at module level. `uncommented` and not
+    # `code_of`: the needle IS a string literal, the path of the file
+    # included. THE PRODUCT, NOT ITS TESTS.
+    table = uncommented(pathlib.Path("${../crates/ronoctua-broadcast/src}/table.rs").read_text())
+    table = table.split("#[cfg(test)]")[0]
+    floor(len(table), 500, "characters of the table module before its tests")
+    wanted = 'include!(concat!(env!("OUT_DIR"), "/broadcast.rs"))'
+    if wanted not in table:
+        print(f"ERROR: the generated table is not included (looked for `{wanted}`)")
+        failed = True
+
+    if failed:
+        sys.exit(1)
+    print(f"OK: {len(keys)} channel names, in every language, and the crate reads them")
+    PY
+  '';
+
   bluetooth-profiles-have-text = mkCheck "bluetooth-profiles-have-text" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
@@ -21316,7 +22594,11 @@ let
               grep 'output \*' "$d/$f" >&2; exit 1; }
             case "$borders" in
               standard) focused=$(hex border.active); others=$(hex border.inactive); resting=$others ;;
-              discreet) focused=$(hex border.discreet); others=$focused; resting=$(hex "border.faint-$desk") ;;
+              # `focused_inactive` IS AN UNFOCUSED WINDOW with discreet
+              # borders (`gen-theme.py`, `write_fragments`): every column is
+              # a container, so nearly every window on the screen wears that
+              # class, and in the discreet colour it read as focused.
+              discreet) focused=$(hex border.discreet); others=$(hex "border.faint-$desk"); resting=$others ;;
             esac
             # ALL FIVE SLOTS, the indicator and the child border included: a
             # slot left at the compositor's default is a colour nobody chose.
@@ -25444,6 +26726,8 @@ let
       # silently: every `nix flake check` starts copying gigabytes.
       lean-tree
       deps-layer-is-lean
+      leaf-builds-keep-no-artifacts
+      cargo-dev-profile-is-lean
       gitignore-keeps-fonts
       fonts-single-family
       fonts-metrics
@@ -25512,6 +26796,7 @@ let
       the-shortcut-line-is-the-systems
       manager-builds-its-own-rows
       inspect-keys-exist
+      ambience-keys-exist
       update-has-one-list
       update-names-agree
       updates-have-text
@@ -25754,6 +27039,7 @@ let
       every-compositor-shortcut-is-bound
       the-microphone-has-one-door
       audio-names-have-text
+      channels-have-text
       one-syncthing-boundary
       one-http-writer
       one-zip-reader
@@ -25763,6 +27049,9 @@ let
       the-step-switch-reaches-the-run
       the-sweep-only-looks-at-links
       cache-has-one-list
+      nix-gc-keeps-generations
+      store-has-a-floor
+      snapshots-skip-the-store
       numeric-selectors-get-numbers
       every-view-follows-its-cursor
       syncthing-options-are-declared
@@ -26223,6 +27512,8 @@ let
     inherit
       lean-tree
       deps-layer-is-lean
+      leaf-builds-keep-no-artifacts
+      cargo-dev-profile-is-lean
       gitignore-keeps-fonts
       fonts-single-family
       fonts-metrics
@@ -26275,6 +27566,7 @@ let
       the-shortcut-line-is-the-systems
       manager-builds-its-own-rows
       inspect-keys-exist
+      ambience-keys-exist
       update-has-one-list
       update-names-agree
       updates-have-text

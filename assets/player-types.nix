@@ -141,6 +141,126 @@ rec {
     ])
   ];
 
+  # THE PLAYER'S OWN TWO FILES (`crates/ronoctua-playlist/src/own.rs`): a
+  # `.rset`, media played together with their settings, and a `.rqueue`, a
+  # queue. Both are JSON underneath, so each is a kind of `application/json` —
+  # a program that knows nothing of them still opens them as text — and both
+  # draw the playlist's glyph, `list`, because what a person keeps in one is
+  # what it PLAYS (`mime-glyphs.nix` says why a list is not `music`). The
+  # file manager's preview lists them (`ronoctua_inspect::playlist::TYPES`),
+  # and opening one from outside the player puts it in the queue after what
+  # plays.
+  own = [
+    {
+      mime = "application/x-ronoctua-set+json";
+      under = "application/json";
+      globs = [ "*.rset" ];
+      token = "list";
+    }
+    {
+      mime = "application/x-ronoctua-queue+json";
+      under = "application/json";
+      globs = [ "*.rqueue" ];
+      token = "list";
+    }
+  ];
+
+  # SUBTITLE FILES, which the player opens over the film they are named after
+  # (`crates/ronoctua-player-engine/src/engine/subtitles.rs`): over that film
+  # in the queue, else over what plays, else over the film beside the file —
+  # and a sentence when there is none. What reads them decides by CONTENT
+  # (`ronoctua_player::subtitles::sniff`); these only say which program a
+  # file manager offers.
+  subtitles = {
+    # The types freedesktop already has: claimed for the player by name.
+    known = [
+      "application/x-subrip"
+      "text/vtt"
+      "application/x-sami"
+      "text/x-ssa"
+      "text/x-mpl2"
+      "text/x-mpsub"
+      "text/x-microdvd"
+      "text/x-subviewer"
+    ];
+    # And the formats it has no type for (checked against the pinned
+    # `globs2`: not one of these globs has a claimant upstream). Left out on
+    # purpose: `.lrc`, lyrics beside a SONG — the player already shows them
+    # when the song plays, and one opened alone has no film to go over, so
+    # claiming it would take the file away from the text editor for a
+    # refusal; and `.stl`, `.usf`, `.ssf`, `.rt`, `.txt`, which name other
+    # things as often, and are only read as subtitles when added to a film.
+    invented = [
+      # TTML's registered name, and DFXP is its older spelling.
+      {
+        mime = "application/ttml+xml";
+        under = "application/xml";
+        globs = [
+          "*.ttml"
+          "*.dfxp"
+        ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "text/x-sbv";
+        under = "text/plain";
+        globs = [ "*.sbv" ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "text/x-jacosub";
+        under = "text/plain";
+        globs = [ "*.jss" ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "text/x-pjs";
+        under = "text/plain";
+        globs = [ "*.pjs" ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "text/x-aqtitle";
+        under = "text/plain";
+        globs = [ "*.aqt" ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "text/x-scc";
+        under = "text/plain";
+        globs = [ "*.scc" ];
+        token = "player-subtitles";
+      }
+      # YouTube's timed text, in its two spellings.
+      {
+        mime = "application/x-youtube-srv3+xml";
+        under = "application/xml";
+        globs = [ "*.srv3" ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "application/x-youtube-json3+json";
+        under = "application/json";
+        globs = [ "*.json3" ];
+        token = "player-subtitles";
+      }
+      # PICTURES: a Blu-ray's PGS, and a DVD's VobSub index (its `.sub` is
+      # already `*.sub` above).
+      {
+        mime = "application/x-pgs";
+        under = "application/octet-stream";
+        globs = [ "*.sup" ];
+        token = "player-subtitles";
+      }
+      {
+        mime = "text/x-vobsub-index";
+        under = "text/plain";
+        globs = [ "*.idx" ];
+        token = "player-subtitles";
+      }
+    ];
+  };
+
   # One row per glob, in `mime-glyphs.nix`'s `ours` shape.
   rows = builtins.concatMap (
     f:
@@ -148,7 +268,7 @@ rec {
       inherit (f) mime under token;
       inherit glob;
     }) f.globs
-  ) families;
+  ) (families ++ own ++ subtitles.invented);
 
-  types = map (f: f.mime) families;
+  types = map (f: f.mime) (families ++ own ++ subtitles.invented) ++ subtitles.known;
 }

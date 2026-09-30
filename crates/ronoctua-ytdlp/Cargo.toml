@@ -1,13 +1,19 @@
 [package]
 name = "ronoctua-ytdlp"
-description = "yt-dlp's device-level flags, shared by the transfer queue and the player."
+description = "Every yt-dlp command line this system runs: where the program is, the device-level flags, a playlist listed flat and a search for lives."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# THE JSON, and nothing else. yt-dlp answers `--dump-single-json` with one
+# document, and the two readers here (`flat`, `lives`) take the few fields they
+# use out of it. Both crates were already in every program that links this one:
+# the transfer queue and the player daemon.
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

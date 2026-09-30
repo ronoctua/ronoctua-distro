@@ -164,7 +164,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=30)
           machine.succeed("mkdir -p /root/.config/ronoctua")
           machine.succeed(
-              "printf '%s' '{\"tasks\":{\"system-update\":{\"enabled\":false}}}' > /root/.config/ronoctua/brain.json"
+              "printf '%s' '{\"tasks\":{\"system-update\":{\"enabled\":false},\"disk-space\":{\"enabled\":false}}}' > /root/.config/ronoctua/brain.json"
           )
           start_xvfb()
           start_compositor("compositor", "${scroll}")

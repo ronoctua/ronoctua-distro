@@ -22,7 +22,7 @@
 //! a cancelled copy makes: nothing half-written is left behind.
 
 use crate::auth::{self, Cookies};
-use crate::engine::{POLL, Progress, media_afoot, yt_dlp};
+use crate::engine::{POLL, Progress};
 use crate::job::{Identity, Stage, Want, Work};
 use crate::ledger::Shared;
 use anyhow::{Context as _, Result, bail};
@@ -194,7 +194,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     // THE REDUCED PROFILE HAS NO yt-dlp, and a row that was accepted there
     // would sit at nothing per cent for ever. Refusing at the door with a
     // sentence is the honest answer.
-    if !media_afoot() {
+    if !ronoctua_ytdlp::installed() {
         shared.touch(id, |j| {
             j.stage = Stage::Failed;
             j.trouble = Some("this installation does not have yt-dlp".to_owned());
@@ -240,7 +240,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
 
 fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>) -> Result<()> {
     let into = asked.into;
-    let program = yt_dlp();
+    let program = ronoctua_ytdlp::program();
     let mut command = std::process::Command::new(&program);
     command
         .args(arguments(
@@ -263,7 +263,7 @@ fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>
 
     let mut child = command
         .spawn()
-        .with_context(|| format!("could not run {program}"))?;
+        .with_context(|| format!("could not run {}", program.display()))?;
     let pid = child.id();
     shared.touch(id, |j| j.stage = Stage::Running);
 
@@ -517,16 +517,18 @@ mod tests {
         // videos. Sweeping by suffix alone made cancelling one delete the
         // other's work, and the survivor failed later at a hash check with a
         // message about a file it no longer had.
-        // `CARGO_TARGET_DIR` at RUN time and not `env!` at compile time, and
-        // never `temp_dir`: on this machine `/tmp` is a RAM filesystem, and
-        // this crate's `transfers-socket-is-private` refuses the call outright.
-        // The build directory is where cargo already writes, so it is a real
-        // disk by construction — and `.` is the build directory anyway.
-        let dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map_or_else(
-                || std::path::PathBuf::from("target"),
-                std::path::PathBuf::from,
-            )
+        // BESIDE THIS TEST'S OWN EXECUTABLE, which is inside cargo's build
+        // directory by construction: a real disk under the devshell and the
+        // session (`nix/cargo-dirs.nix`), the sandbox's own tree under Nix.
+        // Never `temp_dir` — `/tmp` can be a RAM filesystem — and never a
+        // variable with a fallback: it read `CARGO_TARGET_DIR` and fell back
+        // to `target`, relative to the crate, which is a directory INSIDE the
+        // source tree. crane does not set that variable, so every Nix run took
+        // the fallback, and so did every `cargo test` outside the devshell.
+        let dir = std::env::current_exe()
+            .expect("a test knows its own executable")
+            .parent()
+            .expect("an executable lives in a directory")
             .join("sweep-parts");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the directory");

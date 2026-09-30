@@ -217,15 +217,25 @@
       keepSources = "${
         pkgs.callPackage ./nix/kept-sources.nix {
           inherit inputs;
-          downloads = atlasData.sources ++ [
-            pkgs.bibata-cursors.src
-            segmentModel
-            handModels.task
-            # CHROME'S .deb, which Google's pool serves only while the release
-            # is current: `kiosk-vm` (in `.#most`) and the `full` profile's
-            # browser build from it, and no cache has an unfree source.
-            unfreePkgs.google-chrome.src
-          ];
+          downloads =
+            atlasData.sources
+            ++ broadcastRs.sources
+            ++ [
+              pkgs.bibata-cursors.src
+              segmentModel
+              handModels.task
+              # CHROME'S .deb, which Google's pool serves only while the release
+              # is current: `kiosk-vm` (in `.#most`) and the `full` profile's
+              # browser build from it, and no cache has an unfree source.
+              unfreePkgs.google-chrome.src
+            ];
+          # The two dependency layers every edit of the workspace builds on,
+          # held while a checkout still asks for them.
+          layers = {
+            release = rust.cargoArtifacts;
+            loop = rust.loopArtifacts;
+          };
+          releaseDays = (import ./assets/cache.nix).oldCompilerDays;
         }
       }/bin/ronoctua-keep-sources";
 
@@ -234,6 +244,20 @@
       # nix/world.nix.
       worldRs = pkgs.callPackage ./nix/world.nix {
         worldFile = ./assets/world.nix;
+      };
+
+      # The player's channels by theme (`ronoctua_broadcast::table`). One
+      # declaration, and the build refuses an iptv-org category that does not
+      # exist — see nix/broadcast.nix.
+      broadcastRs = pkgs.callPackage ./nix/broadcast.nix {
+        channelsFile = ./assets/channels.nix;
+      };
+
+      # The languages of content (`ronoctua_player::tongues`): what a subtitle
+      # is searched in and a stream is tagged with. One declaration, and the
+      # build refuses a row that could not work — see nix/tongues.nix.
+      tonguesRs = pkgs.callPackage ./nix/tongues.nix {
+        tonguesFile = ./assets/tongues.nix;
       };
 
       chainRs = pkgs.callPackage ./nix/chain.nix {
@@ -411,6 +435,10 @@
       rustToolchain = pkgs.rust-bin.stable.latest.default.override {
         targets = [ "wasm32-wasip2" ];
       };
+      # WHERE A LOCAL `cargo` WRITES, named after this toolchain: the devshell,
+      # the loop and every installed session read it from here, and nowhere
+      # else spells the directories. See nix/cargo-dirs.nix.
+      cargoDirs = import ./nix/cargo-dirs.nix { inherit (rustToolchain) version; };
       # DISPOSABLE Secure Boot keys, for the VM tests only.
       sbKeys = pkgs.callPackage ./nix/testing/sb-keys.nix { };
 
@@ -519,6 +547,8 @@
           chainRs
           widthRs
           worldRs
+          broadcastRs
+          tonguesRs
           ;
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
         src = ./.;
@@ -689,10 +719,17 @@
           scroll
           singleFooter
           rustToolchain
+          cargoDirs
           ;
         # What the player runs; the loop's player is started from beside the
         # footer and has no unit to take them from.
-        playerTools = import ./nix/player-tools.nix { inherit pkgs; };
+        # The Matroska tools too: the loop writes a film's tags like a machine
+        # with the media profile does (it pays mkvtoolnix's closure, which a
+        # development shell can afford).
+        playerTools = import ./nix/player-tools.nix {
+          inherit pkgs;
+          matroska = true;
+        };
         # And the software centre's, for the same reason.
         inherit softwareTools;
         # `rust.loopShell` AND NOT `rust.shell`: the nested loop is where one
@@ -844,6 +881,11 @@
         # The cgroup, oomd and zram policy. It comes early because what it
         # protects — the compositor and the footer — is declared later.
         ./nix/modules/memory.nix
+        # The store looks after itself: Nix's free-space floor, the system's
+        # generations by count, and the build logs' age. Beside the memory
+        # policy because it is the disk's half of the same promise — the
+        # machine keeps itself running with nobody doing anything.
+        ./nix/modules/store.nix
         ./nix/modules/rescue.nix
         # AFTER the rescue console, and the order is load-bearing: the update
         # sequence's `system-rebuild` step BORROWS `ronoctua-rescue-rebuild`
@@ -856,6 +898,9 @@
         # order; a person reading the list does.
         ./nix/modules/brain.nix
         ./nix/modules/cache.nix
+        # The disk's relief: the two user units the brain starts when the disk
+        # is short. After the cache, whose sandbox it copies.
+        ./nix/modules/space.nix
         # The file manager's privileged half: one unit, one polkit rule, and
         # where it opens. Everything else about it needs no configuration.
         ./nix/modules/files.nix
@@ -907,6 +952,11 @@
         ./nix/modules/clipcascade.nix
         ./nix/modules/secrets.nix
         ./nix/modules/persist.nix
+        # Beside the persistence it shares a disk with: `~/.cache` as a
+        # subvolume of its own, the kernel's reclaim, the scrub, and no
+        # snapshot of the store or of a cache. Everything btrfs-only is gated
+        # on btrfs being there, so the VM and every other machine evaluate.
+        ./nix/modules/filesystem.nix
         ./nix/modules/home.nix
         ./nix/modules/cli.nix
         ./nix/modules/archives.nix
@@ -931,6 +981,10 @@
           _module.args = {
             ronoctua = {
               inherit fonts fontconfigConf iconSuperpack;
+              # THE WORLD, for the player's directories: the daemon places a
+              # radio or TV page on the globe from the atlas's anchors, and a
+              # door only draws it (`nix/modules/player.nix`).
+              atlas = atlasData;
               # THE COMPOSITOR ITSELF, for the one line that needs the binary:
               # the unit's `ExecStart`. The config FILE it is given never names
               # it, which is exactly why this was missing and nothing said so —
@@ -990,6 +1044,12 @@
               # its own: a program whose job is `unlink` must not have the
               # whole shell in its closure.
               cacheSweep = rust.cacheSweep;
+              # And the disk's relief, extracted for the same reason: it
+              # deletes cargo builds and asks the daemon for a collection.
+              diskRelief = rust.diskRelief;
+              # Where a local `cargo` writes: the session names the build
+              # directory from the same file the devshell does.
+              inherit cargoDirs;
               # And the one that empties the trash, extracted for the same
               # reason and one sharper: what it deletes is the only copy.
               emptyTrash = rust.emptyTrash;
@@ -1040,6 +1100,8 @@
         chain-rs = chainRs;
         width-rs = widthRs;
         world-rs = worldRs;
+        broadcast-rs = broadcastRs;
+        tongues-rs = tonguesRs;
 
         # Generated glyph layer: icons.json, glyphs.json, coverage.md.
         glyphdb = glyphdb.db;
@@ -1344,6 +1406,7 @@
           notificationsRs
           bluetoothProfilesRs
           audioNamesRs
+          broadcastRs
           syncthingOptionsRs
           torOptionsRs
           atuinOptionsRs
@@ -1486,6 +1549,9 @@
               )
             } \
             "$@"
+          # The loop's dependency layer exists now (the tests and clippy build
+          # on it), so it is held while it is the current one.
+          ${keepSources}
           echo
           echo "OK — and this is a SUBSET, not a category."
           echo "     They are ten chosen for the editing loop. It is not complete and"
@@ -1914,6 +1980,85 @@
               echo "  nix flake update fonts-ttf fonts-ttf-nerdfonts fonts-woff2 fonts-woff2-nerdfonts"
             '';
 
+        # Packs the ambient sounds' originals for a GitHub Release — the fonts'
+        # way, for the fonts' reason: 901 MiB of recordings are not code, and git
+        # keeps every version for ever.
+        #
+        # ONLY WHAT WAS APPROVED GOES IN: every original `assets/ambience.nix`
+        # names, checked against the sha256 recorded when the owner approved it
+        # by ear, and nothing else from the folder — a file that is not the one
+        # the owner heard stops the packing here, not a build later. zstd -19
+        # measured on the three WAVs: 901 MiB into 695 MiB (recorded noise
+        # compresses poorly; a system carries the 42 MiB of loops, never this).
+        #
+        # THE SAME BYTES ON EVERY RUN: sorted names, a fixed mtime, owner and
+        # mode, and zstd's output does not depend on its thread count (measured,
+        # -T0 and -T3: one hash) — so the hash the input is locked by is the one
+        # this prints, whoever packs. The files sit at the archive's root, which
+        # is where `nix/ambience.nix` looks for them after unpacking.
+        #
+        # The input it becomes, `ambience-v1`, is NOT in this flake yet: an input
+        # nobody can fetch stops every evaluation at the lock. The owner's steps,
+        # from the Release to the lock, are in `docs/PENDING.md`.
+        ambience-release =
+          let
+            table = import ./assets/ambience.nix;
+            sums = pkgs.writeText "ambience-originals.sha256" (
+              lib.concatMapStrings (s: "${s.sha256}  ${s.original}\n") table.sounds
+            );
+            credits = lib.concatMapStrings (
+              s: "printf '| %s | %s | %s | %s |\\n' '${s.original}' '${s.author}' '${s.page}' '${s.licence}'\n"
+            ) table.sounds;
+          in
+          mkScriptApp "ronoctua-ambience-release"
+            "packages the ambient sounds' originals for a GitHub Release and prints the hash"
+            ''
+              root="''${1:-}"
+              if [ -z "$root" ] || [ ! -d "$root" ]; then
+                echo "usage: nix run .#ambience-release -- /path/with/the/originals" >&2
+                exit 1
+              fi
+              (cd "$root" && sha256sum --check --strict --quiet ${sums})
+              out=$(mktemp -d -t ronoctua-ambience-release-XXXXXX)
+              asset="$out/ambience-originals.tar.zst"
+              awk '{ print $2 }' ${sums} | sort > "$out/files"
+              tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner --mode='u=rw,go=r' \
+                  -C "$root" -cf - --files-from="$out/files" \
+                | zstd -19 -T0 -q -o "$asset"
+              rm "$out/files"
+              size=$(stat -c %s "$asset")
+              hash=$(nix hash file --sri "$asset")
+              mb=$(awk "BEGIN{printf \"%.1f\", $size/1048576}")
+              # The notes are written here, in English, as the fonts' are.
+              notes="$out/RELEASE-NOTES.md"
+              {
+                echo "# ambience-v1 — the ambient sounds' originals"
+                echo
+                echo "The recordings the player's ambient sounds are cut from, as published"
+                echo "on Freesound and approved by ear. They are not in git: the flake"
+                echo "fetches this archive pinned by hash, and the build refuses any"
+                echo "recording whose sha256 is not the approved one."
+                echo
+                echo "| recording | author | source | licence |"
+                echo "|---|---|---|---|"
+              } > "$notes"
+              {
+                ${credits}
+                echo
+                echo "| asset | size | sha256 |"
+                echo "|---|---|---|"
+                printf "| \`%s\` | %s MB | \`%s\` |\n" "$(basename "$asset")" "$mb" "$hash"
+              } >> "$notes"
+              echo "packed: $asset ($mb MB, $hash)"
+              echo "release notes (in English, ready): $notes"
+              echo
+              echo "Publish it as the one asset of a Release with a tag OF ITS OWN:"
+              echo "  gh release create ambience-v1 '$asset' --repo ronoctua/ronoctua-distro \\"
+              echo "    --title 'ambience-v1' --notes-file '$notes'"
+              echo "Then add the input (ambience-v1) and lock it alone:"
+              echo "  nix flake lock --update-input ambience-v1"
+            '';
+
         # Builds the ISO and says where it is.
         iso = mkScriptApp "ronoctua-iso" "builds the installer's ISO" ''
           out=$(nix build --no-link --print-out-paths .#iso)
@@ -1977,7 +2122,7 @@
         # the command answer the same on this machine, on one with no GPU and
         # inside a check. Section 9.3 still holds: frame time is NEVER measured
         # here.
-        png = mkScriptApp "ronoctua-png" "draws a buffer into a PNG, with no VM" ''
+        png = mkScriptApp "ronoctua-png" "draws a buffer or a native door into a PNG, with no VM" ''
           # NO `LD_LIBRARY_PATH` HERE, and that is deliberate: it beats
           # `DT_RUNPATH`, and the binary already carries the loader it was built
           # against. Putting a second `libvulkan` in front of it is the same
@@ -1993,6 +2138,17 @@
           # unwrapped (the wrapper is `rust.shell`, and it wraps the footer
           # only), so this launcher is one of the nine that has to say it.
           export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
+          # A NATIVE DOOR — the player's window, its column at every size —
+          # is not a buffer: `render-png` cannot reach it, so `--door`
+          # anywhere in the words is the shell's own camera
+          # (`ronoctua-shell photograph`), in the same software Vulkan. The
+          # world goes with it, for a door that draws the globe.
+          for word in "$@"; do
+            if [ "$word" = "--door" ]; then
+              export RONOCTUA_ATLAS=${rust.atRunTime.RONOCTUA_ATLAS}
+              exec ${rust.workspace}/bin/ronoctua-shell photograph "$@"
+            fi
+          done
           exec ${rust.workspace}/bin/ronoctua-render-png "$@"
         '';
       };
@@ -2006,7 +2162,7 @@
         # THE WHOLE TABLE, and not values copied out of it — see the comment on
         # `env` over there.
         inherit (rust) atRunTime generated;
-        inherit iconSuperpack;
+        inherit iconSuperpack cargoDirs;
       };
 
       # THE FORMATTER FORMATS THE TREE — Nix and Rust, in one command.

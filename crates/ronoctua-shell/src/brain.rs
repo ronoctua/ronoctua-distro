@@ -900,6 +900,8 @@ mod tests {
                 memory_stall: None,
                 cpu_stall: None,
                 on_battery: Some(false),
+                disk_free_per_mille: None,
+                disk_short: None,
             },
             ..Mind::default()
         };

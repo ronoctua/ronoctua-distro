@@ -112,9 +112,10 @@ pub fn question_pieces(
     texts: &ronoctua_i18n::Texts,
     columns: u16,
 ) -> Vec<crate::chrome::Piece> {
-    use ronoctua_render::layout::{elide_start, width};
+    use ronoctua_render::layout::{elide_end, elide_start, width};
     let keys = crate::chrome::hint_of(crate::line::OF_THE_LINE, texts);
-    let asked = format!("{}: ", line.question(texts));
+    let question = line.question(texts);
+    let asked = format!("{question}: ");
     let separator = crate::chrome::Piece::separator();
     let taken = width(&asked)
         + width(&separator.text)
@@ -124,9 +125,25 @@ pub fn question_pieces(
     // shows the last letters typed; the keys then wrap into the drawer rather
     // than hide them.
     let room = columns.saturating_sub(taken).max(columns / 2);
+    let typed = elide_start(&line.shown(), room);
+    // AND THE QUESTION GIVES WAY TO IT: the line is cut at its end, so a
+    // question as wide as a narrow column pushed what is typed past the cut,
+    // and the hand typed into nothing. The question is cut instead — its
+    // first words say what it is — and what is typed keeps its place.
+    let usable = columns.saturating_sub(crate::fold::WIDTH);
+    let for_the_question = usable.saturating_sub(width(&typed).saturating_add(1));
+    let asked = if width(&asked) > for_the_question {
+        let colon = width(": ");
+        format!(
+            "{}: ",
+            elide_end(&question, for_the_question.saturating_sub(colon).max(1))
+        )
+    } else {
+        asked
+    };
     let mut pieces = vec![
         crate::chrome::Piece::prose(asked),
-        crate::chrome::Piece::said(elide_start(&line.shown(), room)),
+        crate::chrome::Piece::said(typed),
         separator,
     ];
     pieces.extend(keys);

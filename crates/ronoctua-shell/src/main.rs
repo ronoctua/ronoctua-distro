@@ -123,10 +123,32 @@ mod notifications_window;
 mod osk;
 mod paint;
 mod pasting;
+mod photograph;
 mod player;
+mod player_ambience;
 mod player_browse;
+mod player_directory;
+mod player_find;
+mod player_globe;
+mod player_home;
+mod player_internet;
+mod player_lane;
+mod player_layout;
+mod player_machines;
+mod player_mark;
+mod player_media;
+mod player_metadata;
+mod player_page;
 mod player_picture;
+mod player_question;
+mod player_queue;
+mod player_rows;
 mod player_stage;
+mod player_subtitles;
+mod player_suggest;
+mod player_timeline;
+mod player_tracks;
+mod player_transport;
 mod player_window;
 mod pointers;
 mod pointers_window;
@@ -468,44 +490,77 @@ fn main() -> Result<()> {
         Some("camera-settings") => {
             return camera_settings_window::host_it().context("the camera settings window");
         }
+        // A NATIVE DOOR IN A PNG, with no compositor and no VM — the
+        // player's window and its column at every size, walked by keys and
+        // clicks from a state fixture (`photograph.rs`). What `nix run .#png
+        // -- --door …` runs.
+        Some("photograph") => {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            return photograph::run(&words);
+        }
         // THE PLAYER, in a window and in the column on the right: one host,
         // two kinds of surface (`player_window::Door`).
         // `player only`, `player maximized` and `player pip` open it with the
         // picture alone: in the window, on the whole screen, or small in the
         // corner.
+        //
+        // `player maximized --screen <connector>` is one of the windows "show
+        // on every screen" opens: whole-screen on THAT output, showing what is
+        // routed there (`player_stage::everywhere`).
         Some("player") => {
-            let stage = match std::env::args().nth(2).as_deref() {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            let stage = match words.first().map(String::as_str) {
                 Some("only") => player_window::Stage::Only,
                 Some("maximized") => player_window::Stage::Maximized,
                 Some("pip") => player_window::Stage::Small,
                 _ => player_window::Stage::Off,
             };
-            return player_window::host_window(stage).context("the player's window");
+            let screen = match words.get(1..) {
+                Some([flag, connector]) if flag == player_stage::SCREEN => Some(connector.clone()),
+                Some([]) | None => None,
+                Some(other) => anyhow::bail!(
+                    "`player {}` takes `{} <connector>` and nothing else, not `{}`",
+                    words.first().map_or("", String::as_str),
+                    player_stage::SCREEN,
+                    other.join(" ")
+                ),
+            };
+            anyhow::ensure!(
+                screen.is_none() || stage == player_window::Stage::Maximized,
+                "a screen of its own is for `player maximized` alone"
+            );
+            return player_window::host_window(stage, screen).context("the player's window");
         }
         // WHAT THE `.desktop` ENTRY RUNS: play these, and show the column —
         // a file opened from anywhere is a file somebody wants to see play.
+        // RIGHT AFTER WHAT PLAYS, and the queue kept (the owner's rule): the
+        // player puts them there and plays the first. A folder goes whole —
+        // the player makes it a playlist named after it — and a subtitle
+        // file goes over the film it is named after.
         Some("play") => {
             let items: Vec<String> = std::env::args().skip(2).collect();
             ronoctua_player::client::ensure().context("the player did not start")?;
-            // A FOLDER, handed by a file manager or typed after `play`, is
-            // every file under it the player plays.
-            ronoctua_player::client::tell(&ronoctua_player::wire::Ask::Open {
-                items: player_browse::items_of(
-                    &items
-                        .iter()
-                        .map(|i| {
-                            let path = std::path::Path::new(i);
-                            if i.contains("://") || path.is_absolute() {
-                                i.clone()
-                            } else {
-                                std::env::current_dir()
-                                    .map(|d| d.join(path).to_string_lossy().into_owned())
-                                    .unwrap_or_else(|_| i.clone())
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                ),
-                replace: true,
+            let what = items
+                .iter()
+                .map(|i| {
+                    let path = std::path::Path::new(i);
+                    ronoctua_player::wire::Thing::Location(
+                        if i.contains("://") || path.is_absolute() {
+                            i.clone()
+                        } else {
+                            std::env::current_dir()
+                                .map(|d| d.join(path).to_string_lossy().into_owned())
+                                .unwrap_or_else(|_| i.clone())
+                        },
+                    )
+                })
+                .collect();
+            ronoctua_player::client::tell(&ronoctua_player::wire::Ask::Put {
+                what,
+                after: None,
+                into: None,
+                play: true,
+                replace: false,
             })?;
             // A COLUMN ALREADY UP, on any workspace, is left where it is.
             if right_column::holder(right_column::Tenant::Player).is_none() {
@@ -875,9 +930,9 @@ pub struct Marks<'a> {
     /// The screen is cut by the resizer (`LEADER d r`): what everything is
     /// laid out in is not the whole monitor.
     pub resizer: bool,
-    /// The player has something loaded: its glyph says playing or paused
-    /// (`player::mark`). Absent with nothing loaded — a modeline at rest says
-    /// nothing.
+    /// The player has something loaded: the play/pause glyph of its pair,
+    /// which says what a click does — pause or play (`player_mark::mark`). Absent with
+    /// nothing loaded — a modeline at rest says nothing.
     pub player: Option<char>,
     /// The numbered workspaces that hold something — empty when fewer than
     /// two do (`workspaces::shown`, where the owner's rule lives).
@@ -1150,12 +1205,17 @@ pub fn segments(
     // what places a mark on this side, lowest against the border, so it is
     // also the first of them to go on a line too narrow for everything: the
     // sound itself says it is there.
+    //
+    // A PAIR IN ONE SEGMENT — play/pause, a cell of air, next
+    // (`player_mark`) — so the layout keeps both or drops both.
     if let Some(glyph) = marks.player {
         out.push(Segment {
             id: "player",
-            text: glyph.to_string(),
+            text: crate::player_mark::text(glyph),
             priority: 16,
-            min_cols: 1,
+            // BOTH GLYPHS AND THE AIR, or nothing: it is never cut, so its
+            // floor is its whole width.
+            min_cols: crate::player_mark::CELLS,
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,

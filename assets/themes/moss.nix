@@ -123,6 +123,13 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # THE SUBTITLE LANES, drawn on a film: the same in every seed (the
+    # generator refuses two that differ). 109 is lane one's yellow; 0.70
+    # keeps the closest pair 0.10 apart.
+    subtitle = {
+      hue = 109;
+      chroma = 0.70;
+    };
     # THE CAPTURE'S GUIDES (`capture.guide`): the two lines through the
     # pointer and every outline on the frozen screen. A colour of their own,
     # the accent's complement, so they are never the focused window's border.

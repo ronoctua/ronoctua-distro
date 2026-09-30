@@ -443,6 +443,39 @@ def main() -> int:
         A("        let _ = glyph;")
         A("        super::font::SIZE_ICON")
     A("    }")
+    # THE INK ACROSS, MEASURED — where each glyph's drawing begins and ends,
+    # from the pen's origin, in ems (`gen-glyphdb.py`, `across`). One arm per
+    # pair of numbers, the codepoints that share it together, for the reason
+    # `chrome_size` gives: a repeated pattern is an error under `-D warnings`.
+    by_ink: dict[tuple[float, float], dict[int, str]] = {}
+    for k in sorted(icons):
+        span = icons[k].get("across")
+        if span is None:
+            continue
+        cp = icons[k]["codepoint"]
+        by_ink.setdefault((float(span[0]), float(span[1])), {})[cp] = f"'\\u{{{cp:X}}}'"
+    seen: set[int] = set()
+    A("")
+    A("    /// WHERE A GLYPH'S INK BEGINS AND ENDS across, from the pen's origin, in")
+    A("    /// ems of its size: `(left, right)`. Measured against the real face by")
+    A("    /// the glyph generator, never by hand — the cells cannot say it, because")
+    A("    /// one drawing fills its advance and the next starts a fifth of the way")
+    A("    /// in. `None` for a glyph with no ink, or one that is not an icon token.")
+    A("    #[must_use]")
+    A("    pub fn ink_across(glyph: char) -> Option<(f32, f32)> {")
+    A("        match glyph {")
+    for left, right in sorted(by_ink):
+        # A CODEPOINT TWO TOKENS SHARE is measured once and written once.
+        cps = [cp for cp in sorted(by_ink[(left, right)]) if cp not in seen]
+        seen.update(cps)
+        if cps:
+            A(
+                f"            {' | '.join(by_ink[(left, right)][cp] for cp in cps)} => "
+                f"Some(({left!r}, {right!r})),"
+            )
+    A("            _ => None,")
+    A("        }")
+    A("    }")
     A("}")
     A("")
 

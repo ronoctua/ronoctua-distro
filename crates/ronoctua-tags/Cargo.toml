@@ -1,0 +1,62 @@
+[package]
+name = "ronoctua-tags"
+description = "The boundary with a media file's tags and covers: read them all, write what a person changed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# TWO HALVES, AND THE DOORS LINK ONLY ONE.
+#
+# `sheet` and `can` are the SHAPE of what a file says about itself — what
+# crosses the player's socket — and need nothing but serde. Everything that
+# reads or writes a file is `engine`: lofty, the image decoders, the runner.
+# The wire crate (and through it the shell) depends with
+# `default-features = false`; the daemon takes the default.
+#
+# WHAT THE SPLIT DOES NOT DO YET: `nix/rust.nix` builds the whole
+# workspace in ONE cargo run, and features unify across it. This crate is a
+# member built with its default, so every binary of that run that links it
+# links lofty and the runner as well — and the shell already links TLS through
+# `ronoctua-software/net`. What the split keeps is a crate that COMPILES
+# without `engine`; `cargo clippy -p ronoctua-tags --no-default-features` is what
+# proves it, by hand, until a check does.
+[features]
+default = [ "engine" ]
+engine = [ "dep:lofty", "dep:image", "dep:rustix", "dep:ronoctua-xml", "dep:serde_json", "dep:tracing" ]
+
+[dependencies]
+serde.workspace = true
+# THE TAGS, IN PROCESS, for every container it knows: ID3v1/v2, APE, Vorbis
+# comments, MP4 `ilst`, RIFF INFO, AIFF text chunks, and their pictures.
+# MIT OR Apache-2.0, pure Rust, no store path. Its DEFAULT feature stays on
+# for a measured reason: 0.25.4 does not compile without it (an import of the
+# ID3v2 error type sits behind it), and it is what reads a compressed ID3v2
+# frame. It asks for `flate2` ^1.1.10, and that patch release moved its Rust
+# backend to `miniz_oxide` 0.9 while `png` 0.18.1 still names 0.8: every
+# program that links both (the shell, through `image`) compiles TWO copies of
+# `miniz_oxide`. Forced, and measured: 1.1.9 does not satisfy lofty, and no
+# `png` of this line takes 0.9. The day one does, the second copy goes.
+lofty = { version = "0.25", optional = true }
+# A cover's size out of its header, and a WebP made into PNG for a tag — the
+# workspace's decoders, nothing new.
+image = { workspace = true, optional = true }
+# `ioctl(FICLONE)`, `copy_file_range`, `statvfs`, `access` and `poll`, all
+# SAFE — the reason the workspace chose rustix over libc.
+rustix = { workspace = true, features = [ "fs", "event" ], optional = true }
+# Matroska's tags are XML (`mkvextract`, reading a file that may have come
+# from anywhere): parsed through `ronoctua-xml`, the depth guard the playlist
+# crate and the subtitles share, around the reader the inspector already
+# links.
+ronoctua-xml = { path = "../ronoctua-xml", optional = true }
+# ffprobe, exiftool and `mkvmerge -J` answer in JSON.
+serde_json = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The schema's own tests serialise a refusal, with or without `engine`.
+serde_json.workspace = true
+
+[lints]
+workspace = true

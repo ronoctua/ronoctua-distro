@@ -1,5 +1,9 @@
 //! Skipping what is not the video: SponsorBlock's segments.
 //!
+//! Moved here from `ronoctua-player`, with [`fetch`]: the one request,
+//! through the crate's [`Net`](crate::Net). The player's daemon asks through
+//! it when the person switched sponsored segments on.
+//!
 //! The stream yt-dlp hands mpv already carries no YouTube advertising — that is
 //! the site's player, and this is not it. What is left is advertising INSIDE
 //! the video: a creator reading a sponsor's text, asking for a subscription.
@@ -13,8 +17,41 @@
 //! that is its own recommended form, and the reason SHA-256 is written out
 //! below rather than skipped.
 
+use crate::ask::{Net, Request};
+use crate::{Host, Refusal, Service, Why};
+
 /// A stretch to jump over: `(from, to)` in seconds.
 pub type Segment = (f64, f64);
+
+/// The segments to skip in the video `id`, from the categories chosen.
+///
+/// An empty list is an answer: the service's 404 means it knows no segment of
+/// any video with that prefix.
+///
+/// # Errors
+///
+/// [`Why::Malformed`] for an answer that is not a list, [`Why::Declined`] for
+/// a category the service does not know (its 400), and what the network
+/// answers.
+pub fn fetch(net: &dyn Net, id: &str, categories: &[String]) -> Result<Vec<Segment>, Refusal> {
+    let refused = |why| Refusal::new(Service::SponsorBlock, why);
+    let url = format!("{}{}", Host::SponsorBlock.origin(), path(id, categories));
+    let reply = net
+        .send(&Request::get(Host::SponsorBlock, url))
+        .map_err(refused)?;
+    if reply.status == 404 {
+        return Ok(Vec::new());
+    }
+    if let Some(why) = crate::ask::why_of_status(Service::SponsorBlock, reply.status) {
+        return Err(refused(why));
+    }
+    let listed =
+        serde_json::from_slice::<serde_json::Value>(&reply.body).is_ok_and(|v| v.is_array());
+    if !listed {
+        return Err(refused(Why::Malformed));
+    }
+    Ok(parse(&String::from_utf8_lossy(&reply.body), id))
+}
 
 /// The video id of a YouTube address, when it is one.
 #[must_use]
@@ -284,6 +321,32 @@ mod tests {
         ]"#;
         assert_eq!(parse(body, "dQw4w9WgXcQ"), vec![(5.0, 9.0), (30.5, 45.0)]);
         assert!(parse("[]", "dQw4w9WgXcQ").is_empty());
+    }
+
+    #[test]
+    fn a_video_nobody_marked_has_no_segments_and_a_list_is_asked_for() {
+        use crate::canned::Canned;
+        let id = "dQw4w9WgXcQ";
+        let cats = ["sponsor".to_owned()];
+        let url = format!("https://sponsor.ajay.app{}", path(id, &cats));
+        let net = Canned::new(&[(url.as_str(), 404, b"Not Found")]);
+        assert_eq!(fetch(&net, id, &cats), Ok(Vec::new()));
+        let body =
+            br#"[{"videoID":"dQw4w9WgXcQ","segments":[{"segment":[1,2],"actionType":"skip"}]}]"#;
+        let net = Canned::new(&[(url.as_str(), 200, body)]);
+        assert_eq!(fetch(&net, id, &cats), Ok(vec![(1.0, 2.0)]));
+        let net = Canned::new(&[(url.as_str(), 200, b"{}")]);
+        assert_eq!(
+            fetch(&net, id, &cats).unwrap_err().why,
+            Why::Malformed,
+            "an answer that is not a list is not 'no segments'"
+        );
+        let asked = net.only();
+        assert!(
+            !asked.url.contains(id),
+            "the id never leaves: {}",
+            asked.url
+        );
     }
 
     #[test]

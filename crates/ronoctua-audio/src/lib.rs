@@ -454,6 +454,30 @@ impl Snapshot {
         self.nodes.iter().any(|n| n.kind == Some(Kind::Recording))
     }
 
+    /// What kind of output a sink is, as far as the graph says: a Bluetooth
+    /// card's is Bluetooth, and a card's is what its port in use is called.
+    ///
+    /// Read off facts this crate already reads — the card's address and the
+    /// normalised name of the port ([`Route::plain`]) — and never off a
+    /// description, which is a sentence in whatever language the driver
+    /// wrote it.
+    #[must_use]
+    pub fn output_kind(&self, node: &Node) -> OutputKind {
+        if node.address.is_some() {
+            return OutputKind::Bluetooth;
+        }
+        let port = node
+            .device
+            .and_then(|d| self.device(d))
+            .and_then(|d| d.route(Direction::Output))
+            .map(Route::plain);
+        match port.as_deref() {
+            Some("headphones" | "headphone" | "headset") => OutputKind::Headphones,
+            Some("speaker" | "speakers") => OutputKind::Speakers,
+            _ => OutputKind::Other,
+        }
+    }
+
     /// Whether anything that is NOT ours is recording — the microphone's
     /// event in the minibuffer.
     ///
@@ -468,6 +492,19 @@ impl Snapshot {
             n.kind == Some(Kind::Recording) && n.app.as_deref() != Some(pipewire::OWN_STREAM)
         })
     }
+}
+
+/// What kind of output a sink is ([`Snapshot::output_kind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OutputKind {
+    /// Headphones or a headset, in a socket of a card.
+    Headphones,
+    /// The machine's own speakers.
+    Speakers,
+    /// Anything over Bluetooth.
+    Bluetooth,
+    /// Anything else: HDMI, a line out, a USB interface, a port not named.
+    Other,
 }
 
 /// The volume a person reads, out of the amplitude PipeWire keeps.
@@ -638,7 +675,7 @@ where
     let feed = std::sync::Arc::clone(&on_event);
     std::thread::Builder::new()
         .name("audio-graph".to_owned())
-        .spawn(move || pipewire::follow(&|e| feed(e)))
+        .spawn(move || pipewire::follow(&|e| feed(e), None))
         .map_err(|e| anyhow::anyhow!("could not start the audio thread: {e}"))?;
 
     let feed = std::sync::Arc::clone(&on_event);
@@ -687,6 +724,58 @@ where
         .map_err(|e| anyhow::anyhow!("could not start the audio orders thread: {e}"))?;
 
     Ok(Handle { orders })
+}
+
+/// A reading of the graph for as long as it is held ([`subscribe`]).
+///
+/// Dropping it ends the monitor: its child is killed at once and its thread
+/// leaves without starting another. The drop does NOT wait for the thread —
+/// whoever drops it may hold a lock the thread's last reading is waiting on,
+/// and the thread reaps the child itself.
+#[derive(Debug)]
+pub struct Subscription {
+    halt: std::sync::Arc<pipewire::Halt>,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        self.halt.raise();
+    }
+}
+
+/// Reports every reading of the graph to `on_snapshot` until the answer is
+/// dropped — for a program that wants the outputs only while somebody looks
+/// at them, which [`watch`], alive for as long as the footer, is not.
+///
+/// The same monitor [`watch`] runs, with the same respawn when PipeWire
+/// restarts and the same empty reading when it stays down; nothing is
+/// reported after the drop.
+///
+/// # Errors
+///
+/// When the thread cannot be started at all.
+pub fn subscribe<F>(on_snapshot: F) -> Result<Subscription>
+where
+    F: Fn(Snapshot) + Send + 'static,
+{
+    let halt = std::sync::Arc::new(pipewire::Halt::default());
+    let held = std::sync::Arc::clone(&halt);
+    std::thread::Builder::new()
+        .name("audio-subscription".to_owned())
+        .spawn(move || {
+            pipewire::follow(
+                &|e| {
+                    if let Event::Snapshot(s) = e
+                        && !held.raised()
+                    {
+                        on_snapshot(*s);
+                    }
+                },
+                Some(&held),
+            );
+        })
+        .map_err(|e| anyhow::anyhow!("could not start the audio subscription: {e}"))?;
+    Ok(Subscription { halt })
 }
 
 include!(concat!(env!("OUT_DIR"), "/names.rs"));
@@ -987,6 +1076,29 @@ mod tests {
             ..Node::default()
         });
         assert!(g.someone_else_listens());
+    }
+
+    /// FAILS IF: an output's kind stops being read off the card's port in
+    /// use and the Bluetooth address — the player's list of outputs would
+    /// call a headset a speaker, or read a driver's sentence to decide.
+    #[test]
+    fn an_output_is_what_its_port_and_its_card_say() {
+        let mut g = a_graph();
+        let speaker = g.nodes[0].clone();
+        assert_eq!(g.output_kind(&speaker), OutputKind::Speakers);
+        // THE PORT IN USE, and not the one that is plugged in or named first.
+        if let Some(card) = g.devices.first_mut() {
+            card.active_routes = vec![3, 2];
+        }
+        assert_eq!(g.output_kind(&speaker), OutputKind::Headphones);
+        // A BLUETOOTH CARD is Bluetooth, whatever it calls its port.
+        let mut headset = speaker.clone();
+        headset.address = Some("AA:BB:CC:DD:EE:FF".to_owned());
+        assert_eq!(g.output_kind(&headset), OutputKind::Bluetooth);
+        // NO CARD, or a port nobody named: the honest answer is "other".
+        let mut loose = speaker;
+        loose.device = None;
+        assert_eq!(g.output_kind(&loose), OutputKind::Other);
     }
 
     #[test]

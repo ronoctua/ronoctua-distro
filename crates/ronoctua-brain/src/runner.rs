@@ -148,6 +148,10 @@ pub struct Runner {
     store: Where,
     journal: Journal,
     reports: std::path::PathBuf,
+    /// When each task last STARTED, a rehearsal included — which the journal
+    /// never records. A task that wants itself run again after a rest counts
+    /// the rest from here ([`Runner::enrol`]).
+    started: std::collections::HashMap<String, Moment>,
 }
 
 impl Runner {
@@ -177,6 +181,7 @@ impl Runner {
             store,
             journal,
             reports,
+            started: std::collections::HashMap::new(),
         }
     }
 
@@ -222,6 +227,8 @@ impl Runner {
                 memory_stall = pulse.memory_stall,
                 cpu_stall = pulse.cpu_stall,
                 on_battery = pulse.on_battery,
+                disk_free_per_mille = pulse.disk_free_per_mille,
+                disk_short = pulse.disk_short,
                 queued = mind.queue.len(),
                 running = %mind.running,
                 "tick"
@@ -233,7 +240,7 @@ impl Runner {
         // every half minute until the window closed.
         self.put_off(now);
         let prefs = self.publish(now, pulse);
-        self.enrol(now, &prefs);
+        self.enrol(now, &pulse, &prefs);
         self.maybe_run(now, &pulse, &prefs);
     }
 
@@ -404,12 +411,31 @@ impl Runner {
         prefs
     }
 
-    /// Puts into the queue whatever has come due.
-    fn enrol(&self, now: Moment, prefs: &Prefs) {
+    /// Puts into the queue whatever has come due — by its calendar, or
+    /// because the machine wants it now ([`crate::task::Task::wanted_now`]).
+    ///
+    /// A task the gate may not hold goes to the HEAD of the queue, since the
+    /// runner looks at nothing else: behind a task the gate is holding it would
+    /// be held all the same (`Shared::queue_first`).
+    ///
+    /// The calendar counts from the journal, where a rehearsal is not a run.
+    /// `wanted_now` counts from the last START, a rehearsal included: a task
+    /// that rests between runs rests after a rehearsal too — otherwise a brain
+    /// that only rehearses (the development loop's) would start it on every
+    /// tick, a walk of the cache and a question to the store twice a minute.
+    fn enrol(&self, now: Moment, pulse: &Pulse, prefs: &Prefs) {
         for task in self.tasks.all() {
             let last = self.journal.last(task.id());
-            if matches!(task.due(now, prefs, last), Due::Now) {
+            let started = self.started.get(task.id()).copied().max(last);
+            let wanted = matches!(task.due(now, prefs, last), Due::Now)
+                || task.wanted_now(now, pulse, prefs, started);
+            if !wanted {
+                continue;
+            }
+            if task.gated() {
                 self.shared.queue_up(task.id());
+            } else {
+                self.shared.queue_first(task.id());
             }
         }
     }
@@ -457,9 +483,17 @@ impl Runner {
         // THE GENERAL GATE FIRST, then what only the task knows. A hold is
         // written down and published — never swallowed: a scheduler that
         // quietly does nothing is one nobody trusts.
-        let verdict = match judge(pulse, &prefs.gate) {
-            Verdict::Go => task.needs(pulse, prefs),
-            held => held,
+        //
+        // UNLESS THE TASK IS ONE THE GATE MAY NOT HOLD: a relief of the disk
+        // waiting for the memory to calm down is a relief waiting for the
+        // build that fills the disk to finish filling it.
+        let verdict = if task.gated() {
+            match judge(pulse, &prefs.gate) {
+                Verdict::Go => task.needs(pulse, prefs),
+                held => held,
+            }
+        } else {
+            task.needs(pulse, prefs)
         };
         if let Verdict::Hold(hold) = verdict {
             // ONCE PER EPISODE, and never once per tick.
@@ -617,10 +651,14 @@ impl Runner {
         });
 
         tracing::info!(task = id, rehearsal, "starting");
+        self.started.insert(id.to_owned(), began);
         let outcome = task.run(&report);
         // AND WHAT IT WANTS SAID, which is not what it did. A watch's whole
         // output is a sentence; see `task::Notice`.
         let said = report.said();
+        // AND WHAT A RELIEF OF THE DISK DID, stamped with this clock — never
+        // a rehearsal's, which changed nothing.
+        let relieved = report.relieved().filter(|_| !rehearsal);
         let ended = self.clock.now();
         tracing::info!(task = id, ?outcome, "finished");
 
@@ -652,6 +690,9 @@ impl Runner {
             // does not silence a warning about Emacs.
             if said.is_some() || m.notice.as_ref().is_some_and(|n| n.task == id) {
                 m.notice.clone_from(&said);
+            }
+            if let Some(r) = relieved {
+                m.relieved = Some(crate::task::Relieved { at: ended, ..r });
             }
         });
     }
@@ -1048,6 +1089,136 @@ mod tests {
             runner.journal.latest("always").map(|r| r.kind),
             Some(crate::task::OutcomeKind::Held)
         );
+    }
+
+    /// A task the gate may not hold, wanted while it has never run — and it
+    /// says what it freed, the way the disk's relief does.
+    struct Relief(Arc<AtomicUsize>);
+
+    impl Task for Relief {
+        fn id(&self) -> &'static str {
+            "relief"
+        }
+        fn due(&self, _: Moment, _: &Prefs, _: Option<Moment>) -> Due {
+            Due::Not { why: "when-short" }
+        }
+        fn wanted_now(&self, _: Moment, _: &Pulse, _: &Prefs, last: Option<Moment>) -> bool {
+            last.is_none()
+        }
+        fn gated(&self) -> bool {
+            false
+        }
+        fn needs(&self, _: &Pulse, _: &Prefs) -> Verdict {
+            Verdict::Go
+        }
+        fn countdown(&self, _: &Prefs) -> u16 {
+            0
+        }
+        fn run(&self, report: &Report) -> Outcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            report.relieve(crate::task::Relieved {
+                at: 7,
+                freed_bytes: 42,
+                free_per_mille: 123,
+                short: false,
+            });
+            Outcome::Done(Vec::new())
+        }
+    }
+
+    #[test]
+    fn a_relief_runs_past_a_busy_gate_and_ahead_of_the_queue() {
+        // THE DEFECT THIS CATCHES, twice over. The gate holds everything while
+        // the memory is busy — and a disk filled by a heavy build is exactly a
+        // machine whose memory is busy, so a relief behind the gate would wait
+        // for the disk to be full. And the runner looks only at the HEAD of the
+        // queue: a relief appended behind a task the gate is holding would be
+        // held all the same.
+        let busy = Pulse {
+            ram_used_pct: Some(99),
+            ..Pulse::default()
+        };
+        let ran = Arc::new(AtomicUsize::new(0));
+        let (shared, mut runner) = a_runner(
+            vec![Box::new(Always), Box::new(Relief(Arc::clone(&ran)))],
+            busy,
+            1000,
+        );
+        // `Always` is at the head already, held by the gate.
+        shared.queue_up("always");
+        runner.pump();
+        assert_eq!(
+            ran.load(Ordering::Relaxed),
+            1,
+            "the relief waited behind the gate"
+        );
+        let (mind, _) = shared.snapshot();
+        assert_eq!(
+            mind.queue,
+            vec!["always".to_owned()],
+            "the held task lost its place"
+        );
+        // AND WHAT IT FREED REACHES THE MIND, stamped by the runner's clock
+        // and not by whatever the task wrote.
+        assert_eq!(
+            mind.relieved,
+            Some(crate::task::Relieved {
+                at: 1000,
+                freed_bytes: 42,
+                free_per_mille: 123,
+                short: false,
+            })
+        );
+        // THE GATED ONE IS STILL HELD, by name.
+        runner.pump();
+        assert_eq!(
+            ran.load(Ordering::Relaxed),
+            1,
+            "it ran again with nothing short"
+        );
+        assert_eq!(
+            shared.snapshot().0.task("always").and_then(|t| t.hold),
+            Some(Hold::Ram)
+        );
+    }
+
+    #[test]
+    fn a_rehearsed_relief_rests_like_a_real_one() {
+        // THE DEFECT THIS CATCHES: a rehearsal is not written in the journal,
+        // so a task that rests "since the last run" never rested after one —
+        // and a brain that only rehearses (the development loop's) started
+        // the disk's relief on every tick.
+        let ran = Arc::new(AtomicUsize::new(0));
+        let (shared, mut runner) = a_runner(
+            vec![Box::new(Relief(Arc::clone(&ran)))],
+            Pulse::default(),
+            1000,
+        );
+        shared.change(|m| m.rehearsing = Some("relief".to_owned()));
+        runner.pump();
+        assert_eq!(ran.load(Ordering::Relaxed), 1);
+        runner.pump();
+        runner.pump();
+        assert_eq!(
+            ran.load(Ordering::Relaxed),
+            1,
+            "a relief rehearsed a moment ago ran again"
+        );
+    }
+
+    #[test]
+    fn a_rehearsed_relief_says_nothing_about_the_disk() {
+        // A REHEARSAL CHANGED NOTHING, so "room made" about it would be a lie.
+        let ran = Arc::new(AtomicUsize::new(0));
+        let (shared, mut runner) = a_runner(
+            vec![Box::new(Relief(Arc::clone(&ran)))],
+            Pulse::default(),
+            1000,
+        );
+        shared.change(|m| m.rehearsing = Some("relief".to_owned()));
+        runner.pump();
+        assert_eq!(ran.load(Ordering::Relaxed), 1);
+        assert_eq!(shared.snapshot().0.relieved, None);
     }
 
     #[test]

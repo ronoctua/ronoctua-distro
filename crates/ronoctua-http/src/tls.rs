@@ -26,9 +26,10 @@
 //!
 //! # What it does NOT do
 //!
-//! Redirects, proxies, keep-alive, compression, cookies. A caller that needs a
-//! cookie carries it in a header, which is what [`crate::Call::headers`] is
-//! for and what ClipCascade's session does.
+//! Redirects, proxies, keep-alive, compression, cookies. Redirects and gzip
+//! are one layer up, in [`crate::web`], which walks a chain of these calls. A
+//! caller that needs a cookie carries it in a header, which is what
+//! [`crate::Call::headers`] is for and what ClipCascade's session does.
 
 use std::io::Read;
 use std::net::TcpStream;
@@ -231,8 +232,9 @@ pub const MOST_EVER: u64 = 32 << 20;
 ///
 /// `most` is the caller's ceiling for this answer — a web manifest is small, a
 /// catalogue is not — clamped to [`MOST_EVER`]. Redirects are NOT followed
-/// here: the caller reads `Location` and decides (a downgrade to plain HTTP is
-/// its refusal to make, not the framer's).
+/// here: one call is one hop, and [`crate::web::request`] walks the chain by
+/// its rule (a downgrade to plain HTTP is the rule's refusal to make, not the
+/// transport's).
 ///
 /// # Errors
 ///

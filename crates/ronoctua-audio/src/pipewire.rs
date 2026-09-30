@@ -92,19 +92,83 @@ pub fn dump() -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Follow the graph for as long as the process lives.
+/// What ends a monitor that was started to end ([`crate::subscribe`]).
 ///
-/// It never returns. The child is respawned when it dies, because PipeWire
-/// being restarted — by an update, by `LEADER s q`, by the rescue console's
-/// own "restart audio" — must not leave the screen frozen on the last reading
-/// it ever saw. That is the failure that once killed the tunnel thread and
-/// left two modeline marks lying for the rest of a session.
-pub fn follow(on_event: &dyn Fn(crate::Event)) {
+/// Raised once, it kills the child that is being read — its output ends, and
+/// the reading with it — and wakes the pause between two lives, so the thread
+/// leaves at once instead of starting another child.
+#[derive(Debug, Default)]
+pub(crate) struct Halt {
+    raised: std::sync::atomic::AtomicBool,
+    /// The child being read now, while there is one.
+    child: std::sync::Mutex<Option<std::process::Child>>,
+    /// Rung when raised, for the pause between two lives.
+    bell: (std::sync::Mutex<()>, std::sync::Condvar),
+}
+
+impl Halt {
+    /// Ends the monitor: the child killed now, the thread let out of its
+    /// pause. The thread reaps the child; nothing here waits for it, because
+    /// whoever raises may hold a lock the thread's last reading is waiting on.
+    pub(crate) fn raise(&self) {
+        self.raised.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut child) = self.child.lock()
+            && let Some(child) = child.as_mut()
+        {
+            let _ = child.kill();
+        }
+        let _held = self.bell.0.lock();
+        self.bell.1.notify_all();
+    }
+
+    /// Whether it was raised.
+    pub(crate) fn raised(&self) -> bool {
+        self.raised.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Sleeps `pause`, or less when raised meanwhile.
+    fn rest(&self, pause: std::time::Duration) {
+        let Ok(held) = self.bell.0.lock() else {
+            return;
+        };
+        let _ = self
+            .bell
+            .1
+            .wait_timeout_while(held, pause, |()| !self.raised());
+    }
+}
+
+/// Follow the graph for as long as the process lives — or, with a `halt`,
+/// until it is raised.
+///
+/// Without one it never returns. The child is respawned when it dies, because
+/// PipeWire being restarted — by an update, by `LEADER s q`, by the rescue
+/// console's own "restart audio" — must not leave the screen frozen on the
+/// last reading it ever saw. That is the failure that once killed the tunnel
+/// thread and left two modeline marks lying for the rest of a session.
+pub(crate) fn follow(on_event: &dyn Fn(crate::Event), halt: Option<&Halt>) {
+    // A BUILD WITHOUT THE PROGRAM fails every life the same way a machine
+    // without PipeWire does, and says the graph is empty the same way.
+    let program = PW_DUMP.unwrap_or_default();
+    follow_with(program, &["--monitor", "--no-colors"], on_event, halt);
+}
+
+/// [`follow`], reading `program args` — the monitor, or in a test a program
+/// that prints what it would.
+fn follow_with(program: &str, args: &[&str], on_event: &dyn Fn(crate::Event), halt: Option<&Halt>) {
     let mut pause = FIRST_PAUSE;
     let mut failures = 0_u32;
     let mut said_it_was_empty = false;
+    let raised = || halt.is_some_and(Halt::raised);
     loop {
-        match run_once(on_event) {
+        if raised() {
+            return;
+        }
+        let run = run_once(program, args, on_event, halt);
+        if raised() {
+            return;
+        }
+        match run {
             Ok(saw) if saw > 0 => {
                 // A run that reported something is a run that worked, so the
                 // next outage starts its own backoff from the bottom.
@@ -123,25 +187,54 @@ pub fn follow(on_event: &dyn Fn(crate::Event)) {
             said_it_was_empty = true;
             on_event(crate::Event::Snapshot(Box::default()));
         }
-        std::thread::sleep(pause);
+        match halt {
+            Some(h) => h.rest(pause),
+            None => std::thread::sleep(pause),
+        }
         pause = (pause * 2).min(MOST_PAUSE);
     }
 }
 
 /// One life of the monitor child. Returns how many readings it reported.
-fn run_once(on_event: &dyn Fn(crate::Event)) -> Result<u64> {
-    let program = PW_DUMP.context("this build has no pw-dump")?;
+///
+/// With a `halt`, the child is kept IN it while it is read, so raising it
+/// kills the child from any thread; the reading ends with its output.
+fn run_once(
+    program: &str,
+    args: &[&str],
+    on_event: &dyn Fn(crate::Event),
+    halt: Option<&Halt>,
+) -> Result<u64> {
     let mut child = std::process::Command::new(program)
-        .args(["--monitor", "--no-colors"])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .with_context(|| format!("could not run {program} --monitor"))?;
+        .with_context(|| format!("could not run {program} {}", args.join(" ")))?;
     let Some(out) = child.stdout.take() else {
         let _ = child.kill();
+        let _ = child.wait();
         anyhow::bail!("the monitor came up with no output to read");
     };
+    // HANDED TO THE HALT, and asked again AFTER: a raise that came between
+    // the spawn and here found no child to kill, and this one would
+    // otherwise be read until it ended by itself.
+    let mut own = None;
+    match halt {
+        Some(h) => {
+            if let Ok(mut held) = h.child.lock() {
+                *held = Some(child);
+            }
+            if h.raised()
+                && let Ok(mut held) = h.child.lock()
+                && let Some(c) = held.as_mut()
+            {
+                let _ = c.kill();
+            }
+        }
+        None => own = Some(child),
+    }
 
     // THE FRAMING IS `serde_json`'S OWN. `pw-dump --monitor` prints the whole
     // graph and then one array per change, back to back with no separator —
@@ -152,6 +245,9 @@ fn run_once(on_event: &dyn Fn(crate::Event)) -> Result<u64> {
     let mut reported = 0_u64;
     let reader = std::io::BufReader::new(out);
     for value in serde_json::Deserializer::from_reader(reader).into_iter::<serde_json::Value>() {
+        if halt.is_some_and(Halt::raised) {
+            break;
+        }
         match value {
             Ok(v) => {
                 graph.took(&v);
@@ -167,8 +263,12 @@ fn run_once(on_event: &dyn Fn(crate::Event)) -> Result<u64> {
             }
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    // REAPED HERE, whoever killed it: the halt only kills.
+    let child = own.or_else(|| halt.and_then(|h| h.child.lock().ok()?.take()));
+    if let Some(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     Ok(reported)
 }
 
@@ -475,6 +575,53 @@ mod tests {
                 .windows(2)
                 .any(|w| w[0] == "--target" && w[1] == "7")
         );
+    }
+
+    /// FAILS IF: a monitor that was started to end outlives its halt — its
+    /// child still reading the graph after the one who held it let go, or
+    /// its thread starting another life of it.
+    #[test]
+    fn a_halted_monitor_ends_its_child_and_its_thread() {
+        // A MONITOR THAT PRINTS AN EMPTY GRAPH AND THEN WAITS, as `pw-dump
+        // --monitor` does between two changes.
+        let halt = std::sync::Arc::new(Halt::default());
+        let (said, heard) = std::sync::mpsc::channel::<usize>();
+        let held = halt.clone();
+        let thread = std::thread::spawn(move || {
+            follow_with(
+                "sh",
+                &["-c", "echo '[]'; exec sleep 60"],
+                &|e| {
+                    if let crate::Event::Snapshot(s) = e {
+                        let _ = said.send(s.nodes.len());
+                    }
+                },
+                Some(&held),
+            );
+        });
+        assert_eq!(
+            heard.recv_timeout(std::time::Duration::from_secs(10)),
+            Ok(0),
+            "the monitor's first reading never came"
+        );
+        let began = std::time::Instant::now();
+        halt.raise();
+        thread.join().expect("the monitor's thread");
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "the halt waited {:?} — the child was not killed",
+            began.elapsed()
+        );
+        assert!(
+            halt.child.lock().expect("the child's lock").is_none(),
+            "the child was left behind, unreaped"
+        );
+        // AND A HALT RAISED BEFORE THE FIRST LIFE starts none.
+        let early = Halt::default();
+        early.raise();
+        let began = std::time::Instant::now();
+        follow_with("sh", &["-c", "exec sleep 60"], &|_| {}, Some(&early));
+        assert!(began.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

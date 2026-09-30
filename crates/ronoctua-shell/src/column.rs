@@ -27,13 +27,30 @@
 //!
 //! Line 0 is the column's, in every size: the four sizes as glyphs, counted
 //! from the right edge from the widest to the narrowest — the way the edge
-//! moves — and, under the pointer, what the glyph does. In the bar there is
-//! one glyph, which puts the column back to the size it had, and no sentence:
-//! the bar is a remote control of glyphs everybody knows (the owner's
-//! decision, 2026-09-27). `C-<left>` and `C-<right>` are the keys, read BEFORE
-//! the tenant: the player reads a named key without its modifiers, and would
-//! have taken `C-<left>` for its own `<left>`. The tenant's header goes down
-//! to line 1 (`Content::header_line`, `chrome::Hinted::at`).
+//! moves — and, left of them and apart by a thin rule, the glyph that CLOSES
+//! the column: `[close] │ [L][M][S][B]`. The rule stands where the air on its
+//! two sides is equal, measured on the INK of the two glyphs beside it
+//! (`tokens::icon::ink_across`) and not on their cells: the cross fills its
+//! advance and the widest size starts a fifth of the way into its own, so the
+//! cells' middle is a pixel or two off the eye's.
+//!
+//! Under the pointer, what the glyph does — a short sentence set against the
+//! close glyph from the right, a cell of air before it — and at rest nothing.
+//! In the bar there is one glyph on line 0, which puts the column back to the
+//! size it had, the close on the bar's LAST line, and no sentence: the bar is
+//! a remote control of glyphs everybody knows (the owner's decision,
+//! 2026-09-27).
+//!
+//! `C-<left>`, `C-<right>` and `C-q` are the keys, read BEFORE the tenant: the
+//! player reads a named key without its modifiers, and would have taken
+//! `C-<left>` for its own `<left>`. The tenant's header goes down to line 1
+//! (`Content::header_line`, `chrome::Hinted::at`).
+//!
+//! # Closing
+//!
+//! The glyph and `C-q` close the COLUMN and nothing else: the tenant is told
+//! (`Tenant::closing` — the player lets its pictures go), the door quits, and
+//! `Drop` gives the slot up. What the player plays goes on playing.
 //!
 //! # The focus line
 //!
@@ -112,12 +129,39 @@ pub const MARGIN: u16 = crate::chrome::FIELDS_LEAD;
 pub const HEADER_LINE: u16 = 1;
 
 /// The keys every column teaches after its tenant's: its size, one step at a
-/// time. `C-` and not `M-`: `M-` is the compositor's family and never reaches
-/// a window, and a bare arrow is the tenant's own.
+/// time, and closing it. `C-` and not `M-`: `M-` is the compositor's family
+/// and never reaches a window, and a bare arrow or letter is the tenant's own.
 pub const OF_THE_COLUMN: &[(&str, &str)] = &[
     ("C-<left>", "column-wider"),
     ("C-<right>", "column-narrower"),
+    ("C-q", "column-close"),
 ];
+
+/// What a key of [`OF_THE_COLUMN`] does — EVERY ID NAMED, so a key added to
+/// the table cannot fall into another's arm: with a catch-all, a third key
+/// made the column narrower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Own {
+    /// One size wider.
+    Wider,
+    /// One size narrower.
+    Narrower,
+    /// The column closed.
+    Close,
+}
+
+impl Own {
+    /// The act an id of the table names — `None` for one that is not the
+    /// column's, which a test refuses for every id of the table.
+    fn of(id: &str) -> Option<Self> {
+        match id {
+            "column-wider" => Some(Self::Wider),
+            "column-narrower" => Some(Self::Narrower),
+            "column-close" => Some(Self::Close),
+            _ => None,
+        }
+    }
+}
 
 /// A column's size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,12 +286,24 @@ pub enum Offer {
 }
 
 impl Offer {
-    /// Why a size is not offered, as the key that says it.
+    /// Why a size is not offered, as the key that says it on the tenant's
+    /// line — a whole sentence, where there is the room for one.
     const fn refusal(self) -> Option<&'static str> {
         match self {
             Self::Yes => None,
             Self::NotMade => Some(ronoctua_i18n::key::COLUMN_BAR_NOT_OFFERED),
             Self::NoRoom => Some(ronoctua_i18n::key::COLUMN_NO_ROOM),
+        }
+    }
+
+    /// The same, under the pointer on the control line: as short as the
+    /// sizes' own sentences, because the room there is what a small column
+    /// leaves beside its glyphs, and a refusal cut short loses its reason.
+    const fn refusal_on_the_line(self) -> Option<&'static str> {
+        match self {
+            Self::Yes => None,
+            Self::NotMade => Some(ronoctua_i18n::key::ABOUT_COLUMN_BAR_NOT_MADE),
+            Self::NoRoom => Some(ronoctua_i18n::key::ABOUT_COLUMN_NO_ROOM),
         }
     }
 }
@@ -411,6 +467,18 @@ impl Area {
             top,
             top_px,
             column: true,
+        }
+    }
+
+    /// The line past the tenant's last on a surface `lines` tall: all of them
+    /// — but in a column's BAR the last line is the column's, where its close
+    /// glyph is drawn from the bottom edge, and the tenant stops above it.
+    #[must_use]
+    pub const fn end(&self, lines: u16) -> u16 {
+        if self.column && matches!(self.size, Size::Bar) {
+            lines.saturating_sub(1)
+        } else {
+            lines
         }
     }
 
@@ -660,6 +728,14 @@ pub trait Tenant: Sized + 'static {
         let _ = ui;
     }
 
+    /// The column is closing — its close glyph, or `C-q` — and the door
+    /// quits after this: what the tenant holds for the screen (a picture's
+    /// thread) is let go now. Only the COLUMN closes: what the tenant plays
+    /// or keeps outside it goes on.
+    fn closing(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+
     /// The column went off the screen: the heavy work (a picture's thread) is
     /// the tenant's to stop until it is shown again.
     fn parked(&mut self, ui: &mut Ui) {
@@ -669,6 +745,22 @@ pub trait Tenant: Sized + 'static {
     /// The column is on a screen again, on a surface that is new — what was
     /// on the old one's GPU is not on this one's.
     fn shown(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+
+    /// The column is on the screen `on` (a connector), or on none while it
+    /// is parked — said each time that moves, BEFORE [`Tenant::shown`], and
+    /// once for the screen a column is BORN on, at its first turn and before
+    /// its first frame. The column knows its screen from the compositor (its
+    /// workspace's), which is ahead of the surface's own `enter`: what is
+    /// routed to one screen is chosen by this.
+    fn placed_on(&mut self, ui: &mut Ui, on: Option<&str>) {
+        let _ = (ui, on);
+    }
+
+    /// See `Content::screens_changed` — a screen described or gone, or the
+    /// surface on another.
+    fn screens_changed(&mut self, ui: &mut Ui) {
         let _ = ui;
     }
 
@@ -686,8 +778,10 @@ pub trait Tenant: Sized + 'static {
 pub enum Glyph {
     /// A size.
     Size(Size),
-    /// The bar's one glyph: back to the size before it.
+    /// The bar's one glyph on line 0: back to the size before it.
     Widen,
+    /// The column closed — left of the sizes, and on the bar's last line.
+    Close,
 }
 
 /// The glyphs under the pointers, ONE PER POINTER (by its seat's colour
@@ -722,63 +816,165 @@ impl Under {
     }
 }
 
-/// The control line, the sentence under the pointer and the focus line, as
-/// one frame lays them out — the painter draws `spans` and `over`, and the
-/// pointer reads `placed`.
+/// Where a glyph of the column was drawn: its first cell, counted from the
+/// left as every `Span` is, and whether it is on line 0 or on the LAST line —
+/// the bar's close, drawn from the bottom edge (`Span::foot`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Placed {
+    /// Its first cell.
+    at: u16,
+    /// On the last line, from the bottom edge, and not on line 0.
+    foot: bool,
+    /// Which.
+    glyph: Glyph,
+}
+
+/// The control line, the sentence under the pointer, the rule and the focus
+/// line, as one frame lays them out — the painter draws `spans` and `over`,
+/// and the pointer reads `placed`.
 #[derive(Debug, Clone)]
 struct Decoration {
     spans: Vec<ronoctua_render::Span>,
     over: Vec<ronoctua_render::quad::Quad>,
-    placed: Vec<(u16, Glyph)>,
+    placed: Vec<Placed>,
 }
 
-/// The two cells a size's glyph takes on the control line: the glyph, and the
-/// air after it, which is part of what the pointer takes.
+/// The two cells a glyph takes on the control line: the glyph, and the air
+/// after it, which is part of what the pointer takes.
 const GLYPH_CELLS: u16 = 2;
 
-/// Lays out line 0 of a column drawn at `drawn`, `columns` cells across and
-/// `width` px wide: its glyphs, every one under a pointer lit, what the last
-/// of them says, and — with the keyboard on it — the focus line.
+/// Where the close glyph goes, from the first size's cell: its own two cells
+/// and the ones the rule stands in (`space.column.ruleCells`) — so the rule is
+/// a cell and a half from each glyph's middle before the ink moves it.
+const fn close_at(first: u16) -> Option<u16> {
+    first.checked_sub(GLYPH_CELLS + tokens::space::COLUMN_RULECELLS)
+}
+
+/// Where a chrome glyph drawn on the cell whose left edge is `left_px` has
+/// INK, in logical pixels: `(first, last)`. Its run is centred on the cell
+/// (`Size::OnTheCell`, the renderer's nudge), and the ink is where the
+/// generator measured it inside the drawing (`tokens::icon::ink_across`) —
+/// the whole advance for a glyph it has no measure of.
+fn ink_of(glyph: char, left_px: f32) -> (f32, f32) {
+    // THE RUN AS THE PAINTER MAKES IT — centred on its cell at the measured
+    // size — and the size read back from it, so the two cannot differ.
+    let run = ronoctua_render::Size::OnTheCell(crate::surface::chrome_size_of(glyph));
+    let px = run.px().unwrap_or_else(tokens::text::size);
+    let origin = left_px + run.nudge(tokens::text::size());
+    let (from, to) = tokens::icon::ink_across(glyph)
+        .unwrap_or((0.0, tokens::metrics::cell_width(px) / px.max(1.0)));
+    (from.mul_add(px, origin), to.mul_add(px, origin))
+}
+
+/// The rule between the close glyph at cell `close` and the widest size at
+/// `first`, both counted from the border of a surface `f` describes: WHERE
+/// THE AIR ON BOTH SIDES IS EQUAL, from the two glyphs' measured ink, and as
+/// tall as the control line less `space.column.ruleInset` at each end.
+fn close_rule(f: crate::chrome::Frame, close: u16, first: u16) -> ronoctua_render::quad::Quad {
+    let columns = f.columns();
+    let (_, close_ends) = ink_of(
+        tokens::icon::COLUMN_CLOSE,
+        crate::chrome::edge_x(f.width, columns, close),
+    );
+    let (large_begins, _) = ink_of(
+        Size::Large.glyph(),
+        crate::chrome::edge_x(f.width, columns, first),
+    );
+    let thick = f32::from(tokens::space::RULE_THICKNESS);
+    let inset = f32::from(tokens::space::COLUMN_RULEINSET);
+    crate::chrome::divider(
+        f32::midpoint(close_ends, large_begins) - thick / 2.0,
+        inset,
+        f.line() - inset,
+    )
+}
+
+/// What glyph `g` says under the pointer on the control line, as a key —
+/// its size, or why that size is not offered (`offer_of`), or the close; the
+/// bar's widen says nothing (the owner's decision).
+fn sentence_on_the_line(g: Glyph, offer_of: impl Fn(Size) -> Offer) -> Option<&'static str> {
+    match g {
+        Glyph::Size(size) => Some(
+            offer_of(size)
+                .refusal_on_the_line()
+                .unwrap_or_else(|| size.sentence()),
+        ),
+        Glyph::Close => Some(ronoctua_i18n::key::ABOUT_COLUMN_CLOSE_GLYPH),
+        Glyph::Widen => None,
+    }
+}
+
+/// Lays out the column's own glyphs on a surface `f` describes, drawn at
+/// `drawn`: every one under a pointer lit, what the last of them says, the
+/// rule, and — with the keyboard on it — the focus line.
 ///
 /// PURE, and the one answer: the painter and [`glyph_at`] both read what it
 /// placed, so a glyph is taken where it was drawn.
+#[allow(clippy::too_many_lines)]
 fn decoration(
     drawn: Size,
     offers: &[(Size, Offer)],
-    columns: u16,
+    f: crate::chrome::Frame,
     under: &Under,
     focused: bool,
-    width: f32,
     texts: &ronoctua_i18n::Texts,
 ) -> Decoration {
-    let glyph_span =
-        |g: char, column: u16, color: tokens::Color, edge: bool| ronoctua_render::Span {
+    let glyph_span = |g: char, column: u16, line: u16, color: tokens::Color, edge: bool| {
+        ronoctua_render::Span {
             size: ronoctua_render::Size::OnTheCell(crate::surface::chrome_size_of(g)),
             text: g.to_string(),
             column,
-            line: 0,
+            line,
             color,
             edge,
-            foot: false,
-        };
+            // THE LAST LINE IS COUNTED FROM THE BOTTOM EDGE, so nothing of
+            // the grid's remainder sits under the bar's close.
+            foot: line > 0,
+        }
+    };
+    let quiet = |g: Glyph| {
+        if under.lit(g) {
+            tokens::color::TEXT_SUBTLE_LIT_KEY
+        } else {
+            tokens::color::TEXT_SUBTLE_DEFAULT
+        }
+    };
+    let columns = f.columns();
     let mut spans = Vec::new();
     let mut placed = Vec::new();
+    let mut over = Vec::new();
     if drawn == Size::Bar {
-        // THE BAR'S ONE GLYPH, on its middle cell: the bar is five cells,
-        // odd so this sits in the middle. No sentence (the owner's decision).
-        let lit = under.lit(Glyph::Widen);
+        // THE BAR'S TWO GLYPHS, each on its middle cell: widen on line 0 and
+        // close on the last line — the bar is five cells, odd so each sits in
+        // the middle. No sentence (the owner's decision).
         let at = MARGIN + 1;
         spans.push(glyph_span(
             tokens::icon::COLUMN_WIDEN,
             at,
-            if lit {
-                tokens::color::TEXT_SUBTLE_LIT_KEY
-            } else {
-                tokens::color::TEXT_SUBTLE_DEFAULT
-            },
+            0,
+            quiet(Glyph::Widen),
             false,
         ));
-        placed.push((at, Glyph::Widen));
+        placed.push(Placed {
+            at,
+            foot: false,
+            glyph: Glyph::Widen,
+        });
+        let last = f.lines().saturating_sub(1);
+        if last > 0 {
+            spans.push(glyph_span(
+                tokens::icon::COLUMN_CLOSE,
+                at,
+                last,
+                quiet(Glyph::Close),
+                false,
+            ));
+            placed.push(Placed {
+                at,
+                foot: true,
+                glyph: Glyph::Close,
+            });
+        }
     } else {
         // FOUR GLYPHS COUNTED FROM THE BORDER, from the widest: two cells
         // each, the modeline's air after the last.
@@ -797,40 +993,64 @@ fn decoration(
                 tokens::color::TEXT_PRIMARY
             } else if offer_of(size) != Offer::Yes {
                 tokens::color::TEXT_SUBTLE_INERT
-            } else if under.lit(Glyph::Size(size)) {
-                tokens::color::TEXT_SUBTLE_LIT_KEY
             } else {
-                tokens::color::TEXT_SUBTLE_DEFAULT
+                quiet(Glyph::Size(size))
             };
-            spans.push(glyph_span(size.glyph(), at, color, true));
-            placed.push((at, Glyph::Size(size)));
+            spans.push(glyph_span(size.glyph(), at, 0, color, true));
+            placed.push(Placed {
+                at,
+                foot: false,
+                glyph: Glyph::Size(size),
+            });
         }
-        // WHAT THE GLYPH UNDER THE POINTER DOES, in the room left of them —
-        // and at rest, nothing: a line that is quiet until it is asked.
-        if let Some(Glyph::Size(size)) = under.said() {
-            let said = offer_of(size)
-                .refusal()
-                .map_or_else(|| texts.t(size.sentence()), |k| texts.t(k));
-            let room = first.saturating_sub(MARGIN + 1);
-            if room > 0 {
-                spans.push(ronoctua_render::Span {
-                    size: ronoctua_render::Size::Px(tokens::text::size()),
-                    text: ronoctua_render::layout::elide_end(&said, room),
-                    column: MARGIN,
-                    line: 0,
-                    color: crate::chrome::Register::Explain.color(),
-                    edge: false,
-                    foot: false,
-                });
-            }
+        // THE CLOSE, left of the sizes and apart from them by a rule — only
+        // where the line has room for it past the margin.
+        let close = close_at(first).filter(|c| *c >= MARGIN);
+        if let Some(close) = close {
+            spans.push(glyph_span(
+                tokens::icon::COLUMN_CLOSE,
+                close,
+                0,
+                quiet(Glyph::Close),
+                true,
+            ));
+            placed.push(Placed {
+                at: close,
+                foot: false,
+                glyph: Glyph::Close,
+            });
+            over.push(close_rule(f, close, first));
+        }
+        // WHAT THE GLYPH UNDER THE POINTER DOES, set against the close from
+        // the right with a cell of air — and at rest, nothing: a line that is
+        // quiet until it is asked.
+        let said = under
+            .said()
+            .and_then(|g| sentence_on_the_line(g, offer_of))
+            .map(|k| texts.t(k));
+        let end = close
+            .unwrap_or(first)
+            .saturating_sub(tokens::space::COLUMN_SAIDAIR);
+        if let Some(said) = said
+            && end > MARGIN
+        {
+            let text = ronoctua_render::layout::elide_end(&said, end - MARGIN);
+            let cells = ronoctua_protocol::cells(&text);
+            spans.push(ronoctua_render::Span {
+                size: ronoctua_render::Size::Px(tokens::text::size()),
+                column: end.saturating_sub(cells),
+                text,
+                line: 0,
+                color: crate::chrome::Register::Explain.color(),
+                edge: true,
+                foot: false,
+            });
         }
     }
     // THE FOCUS LINE, over everything and in no line's room.
-    let over = if focused {
-        vec![crate::chrome::focus_line(width)]
-    } else {
-        Vec::new()
-    };
+    if focused {
+        over.push(crate::chrome::focus_line(f.width));
+    }
     Decoration {
         spans,
         over,
@@ -838,24 +1058,35 @@ fn decoration(
     }
 }
 
-/// The glyph a pointer at `x` on line 0 is on, from what was PLACED — the
-/// four counted from the border as they were drawn (`chrome::at_the_edge`),
-/// and in the bar the whole line, which is its one glyph's.
+/// The glyph a pointer at `(x, y)` is on, from what was PLACED — on line 0
+/// counted from the border as it was drawn (`chrome::at_the_edge`), and in
+/// the bar each of its two lines whole, which are their glyphs': line 0 and
+/// the last, counted from the bottom edge as it was drawn.
 fn glyph_at(
-    placed: &[(u16, Glyph)],
+    placed: &[Placed],
     drawn: Size,
+    f: crate::chrome::Frame,
     x: f64,
-    width: f64,
-    columns: u16,
+    y: f64,
 ) -> Option<Glyph> {
+    let line = f64::from(f.line());
+    let height = f64::from(f.height);
+    let on_top = (0.0..line).contains(&y);
+    let on_foot = f.lines() > 1 && (height - line..height).contains(&y);
     if drawn == Size::Bar {
-        return placed.first().map(|(_, g)| *g);
+        return placed
+            .iter()
+            .find(|p| if p.foot { on_foot } else { on_top })
+            .map(|p| p.glyph);
     }
-    let c = crate::chrome::at_the_edge(x, width, columns)?;
+    if !on_top {
+        return None;
+    }
+    let c = crate::chrome::at_the_edge(x, f64::from(f.width), f.columns())?;
     placed
         .iter()
-        .find(|(at, _)| c >= *at && c < *at + GLYPH_CELLS)
-        .map(|(_, g)| *g)
+        .find(|p| !p.foot && c >= p.at && c < p.at + GLYPH_CELLS)
+        .map(|p| p.glyph)
 }
 
 /// Every screen's logical width, by connector — what the clamp is taken of.
@@ -930,6 +1161,11 @@ pub struct Column<T: Tenant> {
     /// The screen it is shown on, by connector — `None` while parked, and
     /// while no compositor named one.
     shown_on: Option<String>,
+    /// Whether the tenant is still owed the screen the column was BORN on.
+    /// The constructor has no `Ui` to tell it with, and the first `place`
+    /// finds the column already where it is wanted (`Step::Stay`), so it is
+    /// told at the first turn ([`Column::tell_where_it_was_born`]).
+    placement_owed: bool,
     /// Every screen's logical width, for the clamp.
     widths: BTreeMap<String, u32>,
     /// The screen resizer's cut, while it is on: the clamp is taken of the
@@ -949,8 +1185,8 @@ pub struct Column<T: Tenant> {
     /// The pointers whose press went to the tenant — a drag of its own, which
     /// goes on over line 0 until the button comes up.
     tenant_holds: BTreeSet<u16>,
-    /// The control line's glyphs as last drawn.
-    placed: Vec<(u16, Glyph)>,
+    /// The column's glyphs as last drawn.
+    placed: Vec<Placed>,
     /// The glyphs under the pointers, each pointer's apart.
     under: Under,
     /// The first frame on a new surface is owed a frame callback, whose
@@ -966,11 +1202,17 @@ pub struct Column<T: Tenant> {
     /// Rung to place the column on the next turn — once the door exists, or
     /// once a screen is described.
     ping: ping::Ping,
+    /// Whether it holds a slot among the columns (`crate::right_column`) —
+    /// every column on a screen does; a photograph's holds none, and never
+    /// reads the one this machine's own column holds.
+    slot: bool,
 }
 
 impl<T: Tenant> Drop for Column<T> {
     fn drop(&mut self) {
-        crate::right_column::leave(T::WHO);
+        if self.slot {
+            crate::right_column::leave(T::WHO);
+        }
     }
 }
 
@@ -1064,6 +1306,7 @@ pub fn run<T: Tenant>(
             workspace,
             workspaces: all,
             born_shown,
+            placement_owed: born_shown && here.is_some(),
             shown_on: if born_shown { here } else { None },
             widths,
             resizer,
@@ -1079,11 +1322,73 @@ pub fn run<T: Tenant>(
             wm,
             qh: w.qh.clone(),
             ping,
+            slot: true,
         })
     })
 }
 
 impl<T: Tenant> Column<T> {
+    /// A column with NO COMPOSITOR BEHIND IT, drawn at `size` on the
+    /// connection of `ui` — what `crate::photograph` draws a tenant in.
+    ///
+    /// It belongs to no workspace and takes no slot, and what it would tell
+    /// the compositor goes nowhere. It is on a screen `screen` logical
+    /// pixels wide, which clamps it and refuses a size that leaves the
+    /// windows no room, as a real one does — or on none, and then nothing
+    /// clamps it. Everything it DRAWS is the column's own — the control
+    /// line, the tenant's area, the bar.
+    ///
+    /// # Errors
+    ///
+    /// When no ping could be made for it.
+    pub fn detached(tenant: T, size: Size, ui: &Ui, screen: Option<u32>) -> Result<Self> {
+        /// The one screen's name: a photograph's has no connector.
+        const SCREEN: &str = "photograph";
+        let queue = ui.conn.new_event_queue::<Door<Self>>();
+        let (ping, _) = ping::make_ping().context("a ping for the column")?;
+        Ok(Self {
+            tenant,
+            sizing: Sizing::at(size),
+            workspace: None,
+            workspaces: Vec::new(),
+            born_shown: true,
+            // A PHOTOGRAPH'S SCREEN HAS NO CONNECTOR: the tenant is told
+            // nothing, which counts as every screen — what a photograph of
+            // it should show.
+            placement_owed: false,
+            shown_on: screen.map(|_| SCREEN.to_owned()),
+            widths: screen.map(|w| (SCREEN.to_owned(), w)).into_iter().collect(),
+            resizer: None,
+            _resizer_watch: None,
+            surf: RefCell::new(None),
+            told_width: Cell::new(0),
+            holders: BTreeSet::new(),
+            tenant_holds: BTreeSet::new(),
+            placed: Vec::new(),
+            under: Under::default(),
+            settle_owed: false,
+            settle_asked: false,
+            wm: None,
+            qh: queue.handle(),
+            ping,
+            slot: false,
+        })
+    }
+
+    /// The size it is drawn at — for a test of a photograph's walk.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn drawn(&self) -> Size {
+        self.sizing.drawn
+    }
+
+    /// The width of the size it is drawn at, on the screen it is on — what
+    /// the compositor configures it at.
+    #[must_use]
+    pub fn drawn_width(&self) -> u32 {
+        width_px(self.sizing.drawn, self.output_width())
+    }
+
     /// What the tenant is handed.
     fn area(&self, ui: &Ui) -> Area {
         Area::of_a_column(
@@ -1163,7 +1468,9 @@ impl<T: Tenant> Column<T> {
         if self.told_width.get() == before || self.surf.borrow().is_none() {
             self.drawn_at(ui, to);
         }
-        crate::right_column::resize(T::WHO, to);
+        if self.slot {
+            crate::right_column::resize(T::WHO, to);
+        }
         tracing::info!(size = to.name(), "the column's size");
         ui.ask_paint();
     }
@@ -1200,10 +1507,20 @@ impl<T: Tenant> Column<T> {
         }
     }
 
-    /// A click on a glyph of the control line.
+    /// Closes the column: the tenant is told first — the player lets its
+    /// pictures go — and the door quits; `Drop` gives the slot up. Only the
+    /// column goes: what plays in it goes on playing.
+    fn close(&mut self, ui: &mut Ui) {
+        self.tenant.closing(ui);
+        ui.quit = true;
+        tracing::info!("the column is closed");
+    }
+
+    /// A click on a glyph of the column.
     fn pressed_glyph(&mut self, ui: &mut Ui, g: Glyph) {
         match g {
             Glyph::Widen => self.restore(ui),
+            Glyph::Close => self.close(ui),
             Glyph::Size(s) => match self.offer(s) {
                 Offer::Yes => self.set_size(ui, s),
                 // AN INERT GLYPH IS NOT A CONTROL: its sentence is already on
@@ -1215,6 +1532,29 @@ impl<T: Tenant> Column<T> {
 
     /// Everything that belonged to the surface that went: the keyboards on
     /// it, the pointers, the glyphs under them, and a settle it was owed.
+    /// The screen the column is shown on is now `on` — `None` parked — and
+    /// the tenant is told when that moved (`Tenant::placed_on`): after birth
+    /// (the constructor, or `detached` for a photograph) the ONE place
+    /// `shown_on` changes, so a tenant cannot miss a move — and the one place
+    /// it is told, the screen it was born on included.
+    fn now_on(&mut self, ui: &mut Ui, on: Option<&str>) {
+        if self.shown_on.as_deref() == on && !self.placement_owed {
+            return;
+        }
+        self.placement_owed = false;
+        self.shown_on = on.map(ToOwned::to_owned);
+        self.tenant.placed_on(ui, on);
+    }
+
+    /// A column born on a screen tells its tenant which, once: at the first
+    /// turn, and at the first frame should that come first.
+    fn tell_where_it_was_born(&mut self, ui: &mut Ui) {
+        if self.placement_owed {
+            let on = self.shown_on.clone();
+            self.now_on(ui, on.as_deref());
+        }
+    }
+
     fn forget_the_surface(&mut self) {
         self.surf.replace(None);
         self.holders.clear();
@@ -1283,7 +1623,7 @@ impl<T: Tenant> Column<T> {
     /// again, or a new one on another screen. A screen this connection has
     /// not been told about yet waits for `outputs_changed`.
     fn show_on(d: &mut Door<Self>, on: &str) {
-        let Some(output) = d.output_named(on) else {
+        let Some(output) = d.ui.screen_named(on) else {
             tracing::info!(
                 output = on,
                 "the column waits for its screen to be described"
@@ -1307,7 +1647,7 @@ impl<T: Tenant> Column<T> {
         let c = &mut d.content;
         c.surf.replace(Some(layer.clone()));
         c.told_width.set(width);
-        c.shown_on = Some(on.to_owned());
+        c.now_on(&mut d.ui, Some(on));
         c.settle_owed = true;
         c.tenant.shown(&mut d.ui);
         tracing::info!(
@@ -1322,7 +1662,7 @@ impl<T: Tenant> Column<T> {
     fn park_it(d: &mut Door<Self>) {
         d.content.tenant.parked(&mut d.ui);
         d.content.forget_the_surface();
-        d.content.shown_on = None;
+        d.content.now_on(&mut d.ui, None);
         tracing::info!(
             workspace = d.content.workspace.as_deref(),
             "the column is parked"
@@ -1362,11 +1702,23 @@ impl<T: Tenant> Column<T> {
     }
 
     /// Which of the column's keys `key` is.
-    fn own_key(key: ronoctua_keymap::Key) -> Option<&'static str> {
+    fn own_key(key: ronoctua_keymap::Key) -> Option<Own> {
         OF_THE_COLUMN
             .iter()
             .find(|(notation, _)| ronoctua_keymap::Key::parse(notation).ok() == Some(key))
-            .map(|(_, id)| *id)
+            .and_then(|(_, id)| Own::of(id))
+    }
+
+    /// Whether `y` is on a line of the column's own — line 0, and in the bar
+    /// the last line too, where its close is.
+    fn ours(&self, f: crate::chrome::Frame, y: f64) -> bool {
+        #[allow(clippy::cast_possible_truncation)]
+        let top = f.line_at(y as f32) == Some(0);
+        let foot = self.sizing.drawn == Size::Bar
+            && f.lines() > 1
+            && y >= f64::from(f.height - f.line())
+            && y < f64::from(f.height);
+        top || foot
     }
 }
 
@@ -1387,12 +1739,16 @@ impl<T: Tenant> Content for Column<T> {
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         if let Some(key) = crate::door::keys::key_of(event, mods) {
             match Self::own_key(key) {
-                Some("column-wider") => {
+                Some(Own::Wider) => {
                     self.wider(ui);
                     return;
                 }
-                Some(_) => {
+                Some(Own::Narrower) => {
                     self.narrower(ui);
+                    return;
+                }
+                Some(Own::Close) => {
+                    self.close(ui);
                     return;
                 }
                 None => {}
@@ -1468,7 +1824,7 @@ impl<T: Tenant> Content for Column<T> {
         }
         self.tenant.parked(ui);
         self.forget_the_surface();
-        self.shown_on = None;
+        self.now_on(ui, None);
         tracing::info!("the column's screen went away; it is parked");
         Closed::Park
     }
@@ -1505,9 +1861,19 @@ impl<T: Tenant> Content for Column<T> {
         self.tenant.resized(ui, &area);
     }
 
-    /// A screen described — a show that waited for its name is tried again.
+    /// A screen plugged or taken away — a show that waited for its screen
+    /// is tried again.
     fn outputs_changed(&mut self, _: &mut Ui) {
         self.ping.ping();
+    }
+
+    /// What `ui.screens` says moved — and a show that waited for its screen's
+    /// NAME is tried again too: a connector can arrive after the screen,
+    /// through `update_output`, which is no `outputs_changed`
+    /// (`Ui::screen_named` says this is the moment to ask).
+    fn screens_changed(&mut self, ui: &mut Ui) {
+        self.ping.ping();
+        self.tenant.screens_changed(ui);
     }
 
     fn language_changed(&mut self, ui: &mut Ui) {
@@ -1521,6 +1887,7 @@ impl<T: Tenant> Content for Column<T> {
     /// A QUESTION IS TYPED WHERE IT IS DRAWN, and the bar draws none: one
     /// asked there puts the column back to its size.
     fn each_turn(&mut self, ui: &mut Ui) {
+        self.tell_where_it_was_born(ui);
         if ui.asking.is_some() && self.sizing.asked == Size::Bar {
             self.restore(ui);
         }
@@ -1542,28 +1909,27 @@ impl<T: Tenant> Content for Column<T> {
         self.tenant.text_area(ui, line, column, &self.area(ui))
     }
 
-    /// Line 0 is the column's: the pointer over it lights a glyph and a press
-    /// takes it — and the tenant is told the pointer LEFT its part. A drag
-    /// that began in the tenant's part stays the tenant's until the button
-    /// comes up, over line 0 too; a release, a leave and the wheel always
-    /// reach it. What each pointer is on is its own ([`Under`]).
+    /// Line 0 is the column's — and in the bar its last line too: the pointer
+    /// over it lights a glyph and a press takes it, and the tenant is told
+    /// the pointer LEFT its part. A drag that began in the tenant's part stays
+    /// the tenant's until the button comes up, over the column's lines too; a
+    /// release, a leave and the wheel always reach it. What each pointer is
+    /// on is its own ([`Under`]).
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<T::Hand>, events: &[PointerEvent]) {
         let f = ui.frame(0);
-        let columns = f.columns();
         let who = ui.pointer_seat;
         let before = self.under.clone();
         let mut theirs: Vec<PointerEvent> = Vec::with_capacity(events.len());
         for e in events {
-            #[allow(clippy::cast_possible_truncation)]
-            let on_the_line = f.line_at(e.position.1 as f32) == Some(0);
+            let on_the_line = self.ours(f, e.position.1);
             let dragging = self.tenant_holds.contains(&who);
             let glyph = || {
                 glyph_at(
                     &self.placed,
                     self.sizing.drawn,
+                    f,
                     e.position.0,
-                    f64::from(f.width),
-                    columns,
+                    e.position.1,
                 )
             };
             match e.kind {
@@ -1621,6 +1987,7 @@ impl<T: Tenant> Content for Column<T> {
     /// The tenant, then the control line over its ground and — with a
     /// keyboard on the column — the focus line over everything.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        self.tell_where_it_was_born(ui);
         let area = self.area(ui);
         self.tenant.paint(ui, canvas, &area);
         let f = ui.frame(0);
@@ -1628,10 +1995,9 @@ impl<T: Tenant> Content for Column<T> {
         let d = decoration(
             self.sizing.drawn,
             &offers,
-            f.columns(),
+            f,
             &self.under,
             !self.holders.is_empty(),
-            f.width,
             &ui.texts,
         );
         canvas.spans.extend(d.spans);
@@ -1852,120 +2218,263 @@ mod tests {
         assert_eq!(Sizing::at(Size::Bar).wider(all), Ok(Size::Medium));
     }
 
+    /// A surface `width` px wide and tall enough for a bar's two lines.
+    fn frame(width: f32) -> crate::chrome::Frame {
+        crate::chrome::Frame::of(width, 400.0, 0)
+    }
+
+    /// Every size offered.
+    fn every_size() -> Vec<(Size, Offer)> {
+        Size::ALL.iter().map(|s| (*s, Offer::Yes)).collect()
+    }
+
+    /// The sentence a decoration says, if any: the one run in the
+    /// explanation's register.
+    fn said(d: &Decoration) -> Option<&ronoctua_render::Span> {
+        d.spans
+            .iter()
+            .find(|s| s.color == crate::chrome::Register::Explain.color())
+    }
+
+    /// Where `glyph` was placed.
+    fn placed(d: &Decoration, glyph: Glyph) -> Placed {
+        *d.placed
+            .iter()
+            .find(|p| p.glyph == glyph)
+            .unwrap_or_else(|| panic!("{glyph:?} was not placed"))
+    }
+
     /// FAILS IF: a glyph of the control line is taken a cell away from where
     /// it was drawn — counted from the border, at a width whose grid leaves
-    /// a remainder — or the bar's glyph is not the whole line's.
+    /// a remainder — the cell the rule stands in answers as a glyph, or a
+    /// line of the bar stops being its glyph's whole.
     #[test]
     fn a_glyph_is_taken_where_it_is_drawn() {
         let t = texts();
         let c = f64::from(cell());
-        let offers: Vec<(Size, Offer)> = Size::ALL.iter().map(|s| (*s, Offer::Yes)).collect();
-        for remainder in [0.0, 0.3, 0.7] {
-            let columns: u16 = 50;
-            let width = c * (f64::from(columns) + remainder);
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let offers = every_size();
+        for remainder in [0.1, 0.3, 0.7] {
+            let width = c * (50.0 + remainder);
             #[allow(clippy::cast_possible_truncation)]
-            let d = decoration(
-                Size::Medium,
-                &offers,
-                columns,
-                &Under::default(),
-                false,
-                width as f32,
-                &t,
-            );
-            assert_eq!(d.placed.len(), 4);
-            for (at, g) in &d.placed {
+            let f = frame(width as f32);
+            let columns = f.columns();
+            let d = decoration(Size::Medium, &offers, f, &Under::default(), false, &t);
+            assert_eq!(d.placed.len(), 5, "the four sizes and the close");
+            let at = |x: f64, y: f64| glyph_at(&d.placed, Size::Medium, f, x, y);
+            for p in &d.placed {
                 // WHERE THE RENDERER PUTS AN EDGE RUN: its distance in cells
                 // from the border, in pixels.
-                let left = width - c * f64::from(columns - at);
-                let hit = glyph_at(&d.placed, Size::Medium, left + c * 0.5, width, columns);
-                assert_eq!(hit, Some(*g), "remainder {remainder}, {g:?}");
-                let air = glyph_at(&d.placed, Size::Medium, left + c * 1.5, width, columns);
-                assert_eq!(air, Some(*g), "the air after it is its own");
+                let left = width - c * f64::from(columns - p.at);
+                assert_eq!(at(left + c * 0.5, line * 0.5), Some(p.glyph), "{remainder}");
+                assert_eq!(
+                    at(left + c * 1.5, line * 0.5),
+                    Some(p.glyph),
+                    "the air after it is its own"
+                );
+                assert_eq!(
+                    at(left + c * 0.5, line * 1.5),
+                    None,
+                    "line 1 is the tenant's"
+                );
             }
-            let first = d.placed[0].0;
-            let before = width - c * f64::from(columns - first) - c * 0.5;
-            assert_eq!(
-                glyph_at(&d.placed, Size::Medium, before, width, columns),
-                None
-            );
+            let close = placed(&d, Glyph::Close);
+            let rule_cell = width - c * f64::from(columns - close.at - GLYPH_CELLS);
+            assert_eq!(at(rule_cell + c * 0.5, line * 0.5), None, "the rule's cell");
+            let before = width - c * f64::from(columns - close.at) - c * 0.5;
+            assert_eq!(at(before, line * 0.5), None);
         }
-        // THE BAR: one glyph, and all of the line is it.
-        let bar = decoration(Size::Bar, &offers, 5, &Under::default(), false, 54.0, &t);
-        assert_eq!(bar.placed, [(MARGIN + 1, Glyph::Widen)]);
+        // THE BAR: widen on line 0 and close on the last, each line whole.
+        let f = frame(54.0);
+        let bar = decoration(Size::Bar, &offers, f, &Under::default(), false, &t);
         assert_eq!(
-            glyph_at(&bar.placed, Size::Bar, 1.0, 54.0, 5),
-            Some(Glyph::Widen)
+            bar.placed,
+            [
+                Placed {
+                    at: MARGIN + 1,
+                    foot: false,
+                    glyph: Glyph::Widen
+                },
+                Placed {
+                    at: MARGIN + 1,
+                    foot: true,
+                    glyph: Glyph::Close
+                },
+            ]
+        );
+        let at = |x: f64, y: f64| glyph_at(&bar.placed, Size::Bar, f, x, y);
+        assert_eq!(at(1.0, line * 0.5), Some(Glyph::Widen));
+        assert_eq!(at(50.0, 399.0), Some(Glyph::Close));
+        assert_eq!(at(1.0, 400.0 - line + 0.5), Some(Glyph::Close));
+        assert_eq!(at(1.0, 200.0), None, "the tenant's lines");
+        // AND THE CLOSE IS DRAWN FROM THE BOTTOM EDGE, on the last line.
+        let close = bar
+            .spans
+            .iter()
+            .find(|s| s.text == tokens::icon::COLUMN_CLOSE.to_string())
+            .expect("the bar's close");
+        assert_eq!((close.line, close.foot), (f.lines() - 1, true));
+        assert_eq!(
+            Area::of_a_column(Size::Bar, 1, 26.1).end(f.lines()),
+            f.lines() - 1
+        );
+        assert_eq!(
+            Area::of_a_column(Size::Small, 1, 26.1).end(f.lines()),
+            f.lines()
         );
     }
 
-    /// FAILS IF: the focus line moves anything — a span or a glyph of the
-    /// control line lands elsewhere with the keyboard on the column — or it
-    /// is not drawn while it is.
+    /// FAILS IF: the close stops being LEFT of the four sizes, the rule
+    /// stops standing where the air on its two sides is equal — measured on
+    /// the glyphs' INK, not on their cells — or leaves the control line, or
+    /// the ink of either glyph stops being measured.
+    #[test]
+    fn close_sits_left_of_the_sizes_with_equal_air() {
+        let t = texts();
+        let line = tokens::metrics::line_height(tokens::text::size());
+        assert!(tokens::icon::ink_across(tokens::icon::COLUMN_CLOSE).is_some());
+        assert!(tokens::icon::ink_across(Size::Large.glyph()).is_some());
+        for width in [540.0, 543.7, 700.0, 811.9] {
+            let f = frame(width);
+            let d = decoration(Size::Medium, &every_size(), f, &Under::default(), false, &t);
+            // THE ORDER, from the border: [close] │ [L][M][S][B].
+            let ats: Vec<u16> = [
+                Glyph::Close,
+                Glyph::Size(Size::Large),
+                Glyph::Size(Size::Medium),
+                Glyph::Size(Size::Small),
+                Glyph::Size(Size::Bar),
+            ]
+            .into_iter()
+            .map(|g| placed(&d, g).at)
+            .collect();
+            assert!(ats.windows(2).all(|p| p[0] < p[1]), "{ats:?}");
+            assert_eq!(ats[1] - ats[0], GLYPH_CELLS + 1, "a cell for the rule");
+            // THE RULE, and only it, before the focus line.
+            assert_eq!(d.over.len(), 1);
+            let rule = d.over[0];
+            assert_eq!(
+                rule,
+                crate::chrome::divider(rule.x, rule.y, rule.y + rule.height),
+                "the rule is chrome's"
+            );
+            assert!(rule.y > 0.0 && rule.y + rule.height < line, "{rule:?}");
+            // THE AIR, from the ink.
+            let columns = f.columns();
+            let (_, close_ends) = ink_of(
+                tokens::icon::COLUMN_CLOSE,
+                crate::chrome::edge_x(width, columns, ats[0]),
+            );
+            let (large_begins, _) = ink_of(
+                Size::Large.glyph(),
+                crate::chrome::edge_x(width, columns, ats[1]),
+            );
+            let left = rule.x - close_ends;
+            let right = large_begins - (rule.x + rule.width);
+            assert!(left > 0.0 && right > 0.0, "{left} / {right}");
+            assert!(
+                (left - right).abs() < 0.01,
+                "{left} against {right} at {width}"
+            );
+            // AND NOT THE CELLS': their middle is more than half a pixel off.
+            let cells = f32::midpoint(
+                crate::chrome::edge_x(width, columns, ats[0]),
+                crate::chrome::edge_x(width, columns, ats[1]),
+            ) + cell() / 2.0;
+            assert!(
+                (rule.x + rule.width / 2.0 - cells).abs() > 0.5,
+                "the rule stands on the cells' middle: the ink was not read"
+            );
+        }
+    }
+
+    /// FAILS IF: the focus line moves anything — a span, a glyph or the rule
+    /// lands elsewhere with the keyboard on the column — or it is not drawn
+    /// over everything while it is.
     #[test]
     fn the_focus_line_moves_nothing() {
         let t = texts();
-        let offers: Vec<(Size, Offer)> = Size::ALL.iter().map(|s| (*s, Offer::Yes)).collect();
+        let offers = every_size();
         for drawn in Size::ALL {
             let under = one(Some(Glyph::Size(Size::Small)));
-            let off = decoration(drawn, &offers, 50, &under, false, 540.0, &t);
-            let on = decoration(drawn, &offers, 50, &under, true, 540.0, &t);
+            let off = decoration(drawn, &offers, frame(540.0), &under, false, &t);
+            let on = decoration(drawn, &offers, frame(540.0), &under, true, &t);
             assert_eq!(seen(&off.spans), seen(&on.spans), "{drawn:?}");
             assert_eq!(off.placed, on.placed, "{drawn:?}");
-            assert!(off.over.is_empty());
-            assert_eq!(on.over, [crate::chrome::focus_line(540.0)]);
+            assert_eq!(on.over.len(), off.over.len() + 1, "{drawn:?}");
+            assert_eq!(on.over[..off.over.len()], off.over[..], "{drawn:?}");
+            assert_eq!(on.over.last(), Some(&crate::chrome::focus_line(540.0)));
         }
     }
 
-    /// FAILS IF: the glyph under the pointer stops saying what it does, a
-    /// glyph that cannot be taken stops saying why, the bar says anything, or
-    /// the line says something at rest.
+    /// FAILS IF: a sentence of the control line is cut short in any language
+    /// on the narrowest column that has one — a refusal would lose its
+    /// reason, the way "This screen has no…" did, and a size its name.
+    #[test]
+    fn every_sentence_of_the_line_fits_a_small_column_in_every_language() {
+        #[allow(clippy::cast_precision_loss)]
+        let f = frame(width_px(Size::Small, None) as f32);
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            for offer in [Offer::Yes, Offer::NoRoom, Offer::NotMade] {
+                let offers: Vec<(Size, Offer)> = Size::ALL.iter().map(|s| (*s, offer)).collect();
+                for glyph in Size::ALL.map(Glyph::Size).into_iter().chain([Glyph::Close]) {
+                    let key = sentence_on_the_line(glyph, |_| offer).expect("a sentence");
+                    let d = decoration(Size::Small, &offers, f, &one(Some(glyph)), false, &t);
+                    let s = said(&d)
+                        .unwrap_or_else(|| panic!("{language} {glyph:?} {offer:?}: nothing"));
+                    assert_eq!(s.text, t.t(key), "{language} {glyph:?} {offer:?}: cut");
+                }
+            }
+        }
+    }
+
+    /// FAILS IF: the glyph under the pointer stops saying what it does — the
+    /// close included — a glyph that cannot be taken stops saying why, the
+    /// sentence stops ending a cell before the close, counted from the
+    /// border, the bar says anything, or the line says something at rest.
     #[test]
     fn a_glyph_under_the_pointer_says_what_it_does_except_in_the_bar() {
         let t = texts();
-        let mut offers: Vec<(Size, Offer)> = Size::ALL.iter().map(|s| (*s, Offer::Yes)).collect();
+        let mut offers = every_size();
         offers[3].1 = Offer::NotMade;
-        let said = |d: &Decoration| {
-            d.spans
-                .iter()
-                .find(|s| !s.edge && s.column == MARGIN)
-                .map(|s| s.text.clone())
-        };
-        let rest = decoration(
-            Size::Medium,
-            &offers,
-            60,
-            &Under::default(),
-            false,
-            648.0,
-            &t,
-        );
-        assert_eq!(said(&rest), None, "the line speaks at rest");
-        let small = decoration(
-            Size::Medium,
-            &offers,
-            60,
-            &one(Some(Glyph::Size(Size::Small))),
-            false,
-            648.0,
-            &t,
-        );
-        assert_eq!(
-            said(&small),
-            Some(t.t(ronoctua_i18n::key::ABOUT_COLUMN_SMALL))
-        );
+        let f = frame(648.0);
+        let rest = decoration(Size::Medium, &offers, f, &Under::default(), false, &t);
+        assert!(said(&rest).is_none(), "the line speaks at rest");
+        let close = placed(&rest, Glyph::Close).at;
+        for (glyph, key) in [
+            (
+                Glyph::Size(Size::Small),
+                ronoctua_i18n::key::ABOUT_COLUMN_SMALL,
+            ),
+            (
+                Glyph::Size(Size::Large),
+                ronoctua_i18n::key::ABOUT_COLUMN_LARGE,
+            ),
+            (
+                Glyph::Size(Size::Bar),
+                ronoctua_i18n::key::ABOUT_COLUMN_BAR_NOT_MADE,
+            ),
+            (Glyph::Close, ronoctua_i18n::key::ABOUT_COLUMN_CLOSE_GLYPH),
+        ] {
+            let d = decoration(Size::Medium, &offers, f, &one(Some(glyph)), false, &t);
+            let s = said(&d).unwrap_or_else(|| panic!("{glyph:?} said nothing"));
+            assert_eq!(s.text, t.t(key), "{glyph:?}");
+            // SET AGAINST THE CLOSE, from the border, with its air.
+            assert!(s.edge, "{glyph:?}: counted from the left");
+            assert_eq!(
+                s.column + ronoctua_protocol::cells(&s.text),
+                close - tokens::space::COLUMN_SAIDAIR,
+                "{glyph:?}"
+            );
+        }
         let bar = decoration(
             Size::Medium,
             &offers,
-            60,
+            f,
             &one(Some(Glyph::Size(Size::Bar))),
             false,
-            648.0,
             &t,
-        );
-        assert_eq!(
-            said(&bar),
-            Some(t.t(ronoctua_i18n::key::COLUMN_BAR_NOT_OFFERED))
         );
         let inert = bar
             .spans
@@ -1973,16 +2482,18 @@ mod tests {
             .find(|s| s.text == Size::Bar.glyph().to_string())
             .expect("the bar's glyph");
         assert_eq!(inert.color, tokens::color::TEXT_SUBTLE_INERT);
-        let in_the_bar = decoration(
-            Size::Bar,
-            &offers,
-            5,
-            &one(Some(Glyph::Widen)),
-            false,
-            54.0,
-            &t,
-        );
-        assert_eq!(in_the_bar.spans.len(), 1, "the bar explained itself");
+        for glyph in [Glyph::Widen, Glyph::Close] {
+            let in_the_bar = decoration(
+                Size::Bar,
+                &offers,
+                frame(54.0),
+                &one(Some(glyph)),
+                false,
+                &t,
+            );
+            assert!(said(&in_the_bar).is_none(), "the bar explained {glyph:?}");
+            assert_eq!(in_the_bar.spans.len(), 2, "the bar's two glyphs");
+        }
         // AND THE CURRENT SIZE IS BRIGHTER, never the accent.
         let current = rest
             .spans
@@ -1992,8 +2503,14 @@ mod tests {
         assert_eq!(current.color, tokens::color::TEXT_PRIMARY);
     }
 
-    /// A tenant with nothing of its own, to see what the column does.
-    struct Nobody;
+    /// A tenant with nothing of its own, to see what the column does — it
+    /// only remembers being told the column closes.
+    #[derive(Default)]
+    struct Nobody {
+        closed: bool,
+        /// Every screen it was told it is on, in order.
+        placed: Vec<Option<String>>,
+    }
 
     impl Tenant for Nobody {
         type Hand = ();
@@ -2004,34 +2521,92 @@ mod tests {
         fn title(&self, _: &ronoctua_i18n::Texts) -> String {
             String::new()
         }
+        fn shape(&self, _: Size) -> Option<Shape> {
+            Some(Shape::Adapted)
+        }
         fn paint(&mut self, _: &mut Ui, _: &mut Canvas<'_>, _: &Area) {}
         fn pointer(&mut self, _: &mut Ui, _: &mut Hand<()>, _: &[PointerEvent], _: &Area) {}
         fn typed(&mut self, _: &mut Ui, _: &KeyEvent, _: Modifiers, _: &Area) {}
+        fn closing(&mut self, _: &mut Ui) {
+            self.closed = true;
+        }
+        fn placed_on(&mut self, _: &mut Ui, on: Option<&str>) {
+            self.placed.push(on.map(ToOwned::to_owned));
+        }
     }
 
-    /// A column at medium on no compositor, its control line laid out as a
-    /// frame of `ui` lays it.
-    fn a_column(ui: &Ui) -> Column<Nobody> {
+    /// FAILS IF: the tenant is not told the screen the column is on each time
+    /// it moves — shown, moved, parked — or is told again when it did not.
+    #[test]
+    fn the_tenant_is_told_the_screen_it_is_on_when_it_moves() {
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").unwrap());
+        let mut c = a_column(&ui);
+        c.now_on(&mut ui, Some("eDP-1"));
+        c.now_on(&mut ui, Some("eDP-1"));
+        c.now_on(&mut ui, Some("DP-2"));
+        c.now_on(&mut ui, None);
+        c.now_on(&mut ui, None);
+        assert_eq!(
+            c.tenant.placed,
+            vec![Some("eDP-1".to_owned()), Some("DP-2".to_owned()), None]
+        );
+        assert_eq!(c.shown_on, None);
+    }
+
+    /// FAILS IF: a column BORN on a screen never tells its tenant which —
+    /// the first `place` finds it where it is wanted (`Step::Stay`), and a
+    /// tenant that counts an unknown screen as every screen would show what
+    /// is routed to another one until the column moved.
+    #[test]
+    fn a_column_born_on_a_screen_tells_its_tenant_which_once() {
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").unwrap());
+        let mut c = a_column(&ui);
+        c.shown_on = Some("DP-2".to_owned());
+        c.placement_owed = true;
+        assert_eq!(
+            step(c.shown_on.as_deref(), Some("DP-2")),
+            Step::Stay,
+            "the first place moves nothing"
+        );
+        c.tell_where_it_was_born(&mut ui);
+        c.tell_where_it_was_born(&mut ui);
+        c.now_on(&mut ui, Some("DP-2"));
+        assert_eq!(c.tenant.placed, vec![Some("DP-2".to_owned())]);
+        c.now_on(&mut ui, Some("eDP-1"));
+        assert_eq!(
+            c.tenant.placed,
+            vec![Some("DP-2".to_owned()), Some("eDP-1".to_owned())]
+        );
+        // A move before the first turn is the telling: never twice.
+        let mut c = a_column(&ui);
+        c.shown_on = Some("DP-2".to_owned());
+        c.placement_owed = true;
+        c.now_on(&mut ui, Some("HDMI-A-1"));
+        c.tell_where_it_was_born(&mut ui);
+        assert_eq!(c.tenant.placed, vec![Some("HDMI-A-1".to_owned())]);
+    }
+
+    /// A column at `size` on no compositor, its glyphs laid out as a frame of
+    /// `ui` lays them.
+    fn a_column_at(ui: &Ui, size: Size) -> Column<Nobody> {
         let queue = ui.conn.new_event_queue::<Door<Column<Nobody>>>();
         let (ping, _) = ping::make_ping().expect("a ping");
-        let f = ui.frame(0);
-        let offers: Vec<(Size, Offer)> = Size::ALL.iter().map(|s| (*s, Offer::Yes)).collect();
         let placed = decoration(
-            Size::Medium,
-            &offers,
-            f.columns(),
+            size,
+            &every_size(),
+            ui.frame(0),
             &Under::default(),
             false,
-            f.width,
             &ui.texts,
         )
         .placed;
         Column {
-            tenant: Nobody,
-            sizing: Sizing::at(Size::Medium),
+            tenant: Nobody::default(),
+            sizing: Sizing::at(size),
             workspace: None,
             workspaces: Vec::new(),
             born_shown: true,
+            placement_owed: false,
             shown_on: None,
             widths: BTreeMap::new(),
             surf: RefCell::new(None),
@@ -2047,7 +2622,77 @@ mod tests {
             ping,
             resizer: None,
             _resizer_watch: None,
+            slot: false,
         }
+    }
+
+    /// A column at medium — see [`a_column_at`].
+    fn a_column(ui: &Ui) -> Column<Nobody> {
+        a_column_at(ui, Size::Medium)
+    }
+
+    /// A press of the left button at `(x, y)`.
+    fn press_at(ui: &Ui, x: f64, y: f64) -> PointerEvent {
+        PointerEvent {
+            surface: ui.surface.clone(),
+            position: (x, y),
+            kind: PointerEventKind::Press {
+                time: 0,
+                button: LEFT_BUTTON,
+                serial: 0,
+            },
+        }
+    }
+
+    /// FAILS IF: the close glyph, the bar's close or `C-q` stop closing the
+    /// column — the door quits, and the tenant is told first so it can let
+    /// its pictures go — or a size's glyph closes it.
+    #[test]
+    fn closing_the_column_quits() {
+        let mut hand = Hand::default();
+        // BY THE GLYPH, where it was drawn.
+        let mut ui = Ui::for_tests(texts());
+        let mut c = a_column(&ui);
+        let f = ui.frame(0);
+        let line = f64::from(f.line());
+        let x_of = |at: u16| {
+            f64::from(crate::chrome::edge_x(f.width, f.columns(), at)) + f64::from(f.cell()) * 0.5
+        };
+        let large = c
+            .placed
+            .iter()
+            .find(|p| p.glyph == Glyph::Size(Size::Large))
+            .expect("large")
+            .at;
+        let e = press_at(&ui, x_of(large), line * 0.5);
+        c.pointer(&mut ui, &mut hand, &[e]);
+        assert!(
+            !ui.quit && !c.tenant.closed,
+            "a size's glyph closed the column"
+        );
+        let close = c
+            .placed
+            .iter()
+            .find(|p| p.glyph == Glyph::Close)
+            .expect("close")
+            .at;
+        let e = press_at(&ui, x_of(close), line * 0.5);
+        c.pointer(&mut ui, &mut hand, &[e]);
+        assert!(ui.quit && c.tenant.closed, "the close glyph");
+        // BY THE KEY, as the keyboard sends it.
+        let mut ui = Ui::for_tests(texts());
+        let mut c = a_column(&ui);
+        let key = ronoctua_keymap::Key::parse("C-q").expect("parses");
+        let (event, mods) = crate::door::keys::event_of(key);
+        Content::typed(&mut c, &mut ui, &event, mods);
+        assert!(ui.quit && c.tenant.closed, "C-q");
+        // AND IN THE BAR, by its last line.
+        let mut ui = Ui::for_tests(texts());
+        let mut c = a_column_at(&ui, Size::Bar);
+        let f = ui.frame(0);
+        let e = press_at(&ui, 1.0, f64::from(f.height) - line * 0.5);
+        c.pointer(&mut ui, &mut hand, &[e]);
+        assert!(ui.quit && c.tenant.closed, "the bar's close");
     }
 
     /// FAILS IF: one pointer's hover reaches another's — a second cursor
@@ -2063,12 +2708,11 @@ mod tests {
         let f = ui.frame(0);
         // WHERE A GLYPH IS, from what was placed: the pointer and the painter
         // read one answer.
-        let x_of = |g: Glyph, placed: &[(u16, Glyph)]| {
+        let x_of = |g: Glyph, placed: &[Placed]| {
+            let y = f64::from(f.line()) * 0.5;
             (0..f.columns() * 2)
                 .map(|half| f64::from(f.cell()) * (f64::from(half) + 0.5) / 2.0)
-                .find(|x| {
-                    glyph_at(placed, Size::Medium, *x, f64::from(f.width), f.columns()) == Some(g)
-                })
+                .find(|x| glyph_at(placed, Size::Medium, f, *x, y) == Some(g))
                 .expect("the glyph is on the line")
         };
         let surface = ui.surface.clone();
@@ -2080,28 +2724,14 @@ mod tests {
         let small = Glyph::Size(Size::Small);
         let large = Glyph::Size(Size::Large);
         let drawn = |c: &Column<Nobody>| {
-            let offers: Vec<(Size, Offer)> = Size::ALL.iter().map(|s| (*s, Offer::Yes)).collect();
-            let d = decoration(
-                Size::Medium,
-                &offers,
-                f.columns(),
-                &c.under,
-                false,
-                f.width,
-                &t,
-            );
+            let d = decoration(Size::Medium, &every_size(), f, &c.under, false, &t);
             let lit = |g: Glyph| {
                 let Glyph::Size(s) = g else { return false };
                 d.spans.iter().any(|x| {
                     x.text == s.glyph().to_string() && x.color == tokens::color::TEXT_SUBTLE_LIT_KEY
                 })
             };
-            let said = d
-                .spans
-                .iter()
-                .find(|x| !x.edge && x.column == MARGIN)
-                .map(|x| x.text.clone());
-            (lit(small), lit(large), said)
+            (lit(small), lit(large), said(&d).map(|x| x.text.clone()))
         };
         let about = |s: Size| Some(t.t(s.sentence()));
         // POINTER 1 rests on the small glyph: lit, and said.
@@ -2199,11 +2829,17 @@ mod tests {
         }
     }
 
-    /// FAILS IF: `C-<left>` and `C-<right>` stop reaching the column as the
-    /// keyboard sends them — the header's click presses them through the
-    /// same reader (`keys::event_of`).
+    /// FAILS IF: `C-<left>`, `C-<right>` and `C-q` stop reaching the column
+    /// as the keyboard sends them — the header's click presses them through
+    /// the same reader (`keys::event_of`) — or an id of the table does
+    /// nothing of its own, and falls into another key's act.
     #[test]
     fn the_column_keys_are_read_as_they_are_sent() {
+        let acts: Vec<Option<Own>> = OF_THE_COLUMN.iter().map(|(_, id)| Own::of(id)).collect();
+        assert_eq!(
+            acts,
+            [Some(Own::Wider), Some(Own::Narrower), Some(Own::Close)]
+        );
         for (notation, id) in OF_THE_COLUMN {
             let key = ronoctua_keymap::Key::parse(notation).expect(notation);
             let (event, mods) = crate::door::keys::event_of(key);

@@ -1,8 +1,8 @@
 # The cache policy, from Nix to Rust.
 #
-# `assets/cache.nix` is the one place the four numbers live. This turns them
-# into a Rust file three crates include, and — the part that matters — REFUSES
-# THE BUILD when the one relationship between them stops holding.
+# `assets/cache.nix` is the one place the numbers live. This turns them into a
+# Rust file three crates include, and — the part that matters — REFUSES THE
+# BUILD when a relationship between them stops holding.
 #
 # # Why a whole derivation for four integers
 #
@@ -44,8 +44,16 @@ let
 
   positive =
     name: value:
-    lib.assertMsg (lib.isInt value && value > 0)
-      "assets/cache.nix: `${name}` must be a positive whole number of days, not ${builtins.toJSON value}";
+    lib.assertMsg (
+      lib.isInt value && value > 0
+    ) "assets/cache.nix: `${name}` must be a positive whole number, not ${builtins.toJSON value}";
+
+  # A PERCENTAGE OF A DISK, and the disk's percentages below are only ever
+  # compared with each other: a whole number strictly between 0 and 100.
+  percent =
+    name: value:
+    lib.assertMsg (lib.isInt value && value > 0 && value < 100)
+      "assets/cache.nix: `${name}` must be a whole percentage between 1 and 99, not ${builtins.toJSON value}";
 in
 assert positive "keepDays" declared.keepDays;
 assert positive "everyDays" declared.everyDays;
@@ -67,6 +75,47 @@ assert lib.assertMsg (declared.freshDays < declared.keepDays) ''
 # to `keepDays + everyDays` and the number on the screen is not the number.
 assert lib.assertMsg (declared.everyDays < declared.keepDays)
   "assets/cache.nix: `everyDays` (${toString declared.everyDays}) must be smaller than `keepDays` (${toString declared.keepDays})";
+
+# THE DISK'S NUMBERS, and the relationships that keep them meaning what
+# `assets/cache.nix` says.
+assert percent "diskFloorPercent" declared.diskFloorPercent;
+assert percent "diskGoalPercent" declared.diskGoalPercent;
+assert percent "cargoCeilingPercent" declared.cargoCeilingPercent;
+assert positive "diskFloorCapGiB" declared.diskFloorCapGiB;
+assert positive "diskGoalCapGiB" declared.diskGoalCapGiB;
+assert positive "systemGenerations" declared.systemGenerations;
+assert positive "buildLogDays" declared.buildLogDays;
+assert positive "oldCompilerDays" declared.oldCompilerDays;
+assert positive "reliefGapMinutes" declared.reliefGapMinutes;
+# The goal above the floor, or a collection that reached its goal would be
+# below the floor again at the next build — a relief every heartbeat.
+assert lib.assertMsg (declared.diskFloorPercent < declared.diskGoalPercent)
+  "assets/cache.nix: `diskFloorPercent` (${toString declared.diskFloorPercent}) must be smaller than `diskGoalPercent` (${toString declared.diskGoalPercent})";
+# And the caps in the same order, or a big disk's goal would sit under its
+# floor — the same relief every heartbeat, by another road.
+assert lib.assertMsg (declared.diskFloorCapGiB < declared.diskGoalCapGiB)
+  "assets/cache.nix: `diskFloorCapGiB` (${toString declared.diskFloorCapGiB}) must be smaller than `diskGoalCapGiB` (${toString declared.diskGoalCapGiB})";
+# The cargo tree inside what the goal leaves, or the cargo tree alone could hold
+# the disk under the floor with nothing else on it.
+assert lib.assertMsg (declared.cargoCeilingPercent < 100 - declared.diskGoalPercent)
+  "assets/cache.nix: `cargoCeilingPercent` (${toString declared.cargoCeilingPercent}) must be smaller than 100 - `diskGoalPercent` (${toString declared.diskGoalPercent})";
+# An old compiler's build goes before an ordinary cache entry would.
+assert lib.assertMsg (declared.oldCompilerDays < declared.keepDays)
+  "assets/cache.nix: `oldCompilerDays` (${toString declared.oldCompilerDays}) must be smaller than `keepDays` (${toString declared.keepDays})";
+# Two, at least: the rescue console's rollback (`nix/modules/rescue.nix`) goes to
+# the PREVIOUS generation, and a count of one would leave it nowhere to go.
+assert lib.assertMsg (declared.systemGenerations >= 2)
+  "assets/cache.nix: `systemGenerations` (${toString declared.systemGenerations}) must be at least 2 — the rescue console's rollback needs the previous generation";
+# An hour at least, the brain's activity-log rule: a machine short of disk must
+# not spend what it has left on a relief every heartbeat.
+assert lib.assertMsg (declared.reliefGapMinutes >= 60)
+  "assets/cache.nix: `reliefGapMinutes` (${toString declared.reliefGapMinutes}) must be at least 60";
+# THE PLAYER'S SUBTITLES: a ceiling of nothing would read every track again at
+# every lane change, which is the cost the cache exists to spare.
+assert positive "playerSubtitlesMib" declared.playerSubtitlesMib;
+# AND ITS CACHE ON DISK: a ceiling of nothing would take every cover out of
+# its file again at every song.
+assert positive "playerMib" declared.playerMib;
 
 writeTextFile {
   name = "ronoctua-cache-rs";
@@ -97,5 +146,35 @@ writeTextFile {
 
     /// How often the trash is emptied of what is past that, in days.
     pub const TRASH_EVERY_DAYS: u16 = ${toString declared.trashEveryDays};
+
+    /// Below this much free space, in per cent of the filesystem, space is made.
+    pub const DISK_FLOOR_PERCENT: u8 = ${toString declared.diskFloorPercent};
+
+    /// And until this much is free, in per cent.
+    pub const DISK_GOAL_PERCENT: u8 = ${toString declared.diskGoalPercent};
+
+    /// The floor is never more than this, in GiB.
+    pub const DISK_FLOOR_CAP_GIB: u32 = ${toString declared.diskFloorCapGiB};
+
+    /// Nor the goal more than this, in GiB.
+    pub const DISK_GOAL_CAP_GIB: u32 = ${toString declared.diskGoalCapGiB};
+
+    /// The most every cargo build directory under the cache may weigh together,
+    /// in per cent of their filesystem.
+    pub const CARGO_CEILING_PERCENT: u8 = ${toString declared.cargoCeilingPercent};
+
+    /// A build by a compiler that is not the newest goes whole after this many
+    /// days untouched.
+    pub const OLD_COMPILER_DAYS: u16 = ${toString declared.oldCompilerDays};
+
+    /// How long a relief waits after the last one, in minutes.
+    pub const RELIEF_GAP_MINUTES: u32 = ${toString declared.reliefGapMinutes};
+
+    /// The most the player's daemon keeps, in memory, of the subtitle tracks
+    /// it read, in MiB.
+    pub const PLAYER_SUBTITLES_MIB: u32 = ${toString declared.playerSubtitlesMib};
+
+    /// The most the player keeps in its cache directory on disk, in MiB.
+    pub const PLAYER_MIB: u32 = ${toString declared.playerMib};
   '';
 }

@@ -4,8 +4,8 @@
 //!
 //! The owner's choice (2026-09-28): a camera or a microphone opening and
 //! closing, the camera's own recording and stream, a Bluetooth device, a
-//! network, a tunnel or the aeroplane coming and going, the charger, and a
-//! program installed are EVENTS — facts about the machine that are worth one
+//! network, a tunnel or the aeroplane coming and going, the charger, a
+//! program installed — and the disk making room by itself — are EVENTS — facts about the machine that are worth one
 //! line and nothing more. The band is where something arrives that may want an
 //! answer; a fact that goes by is what the minibuffer's line already does for
 //! the shell's own answers (the echo), so an event is said there, in its
@@ -110,6 +110,10 @@ pub const TOR_DOWN: &str = "tor-down";
 pub const CHARGER_PLUGGED: &str = "charger-plugged";
 /// The charger stopped delivering.
 pub const CHARGER_UNPLUGGED: &str = "charger-unplugged";
+/// The disk was short and the brain's relief made room.
+pub const DISK_RELIEVED: &str = "disk-relieved";
+/// The disk was short, and after the relief it still is.
+pub const DISK_STILL_SHORT: &str = "disk-still-short";
 
 /// The programs of OURS that hold a camera, by the name `/proc` gives them.
 ///
@@ -385,6 +389,7 @@ const OPPOSITES: &[(&str, &str, Option<&str>)] = &[
     (STREAMING_STARTED, STREAMING_STOPPED, None),
     (AIRPLANE_ON, AIRPLANE_OFF, None),
     (CHARGER_PLUGGED, CHARGER_UNPLUGGED, None),
+    (DISK_RELIEVED, DISK_STILL_SHORT, None),
     (TAILNET_UP, TAILNET_DOWN, None),
     (TOR_UP, TOR_DOWN, None),
     (NETWORK_CONNECTED, NETWORK_LOST, Some("network")),
@@ -588,6 +593,11 @@ pub struct Watch {
     tailnet: Edge<bool>,
     tor: Edge<bool>,
     charger: Edge<Option<bool>>,
+    /// When the brain's last relief of the disk ended.
+    relief: Edge<Option<i64>>,
+    /// Whether "still short" was said and nothing since made room: said once
+    /// per shortness, never once per relief.
+    said_short: bool,
 }
 
 /// Whether this machine is on its tailnet, when tailscaled ANSWERED.
@@ -824,6 +834,36 @@ impl Watch {
                 vec![Event::of(CHARGER_UNPLUGGED, key::NOTIF_POWER_APP)]
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// The disk's relief, as the brain's mind carries it. News when a NEW one
+    /// arrives — the first mind is the baseline, so a relief from before the
+    /// footer started is not said again, and a brain that restarted and
+    /// forgot is no relief at all. `mark` is the language's decimal mark.
+    ///
+    /// "STILL SHORT" ONCE: what fills the disk then is the person's to choose,
+    /// and the sentence that says so does not need saying again after every
+    /// relief that finds the same — unread, each one would pile up in the
+    /// band. It is said again only after a relief has made room.
+    pub fn disk(&mut self, r: Option<&ronoctua_brain::Relieved>, mark: char) -> Vec<Event> {
+        let was = self.relief.saw(r.map(|r| r.at));
+        let (Some(_), Some(r)) = (was, r) else {
+            return Vec::new();
+        };
+        let free = format!("{}{mark}{}", r.free_per_mille / 10, r.free_per_mille % 10);
+        let said = std::mem::replace(&mut self.said_short, r.short);
+        if r.short {
+            if said {
+                return Vec::new();
+            }
+            vec![Event::of(DISK_STILL_SHORT, key::NOTIF_DISK_APP).about("free", free)]
+        } else {
+            vec![
+                Event::of(DISK_RELIEVED, key::NOTIF_DISK_APP)
+                    .about("freed", crate::network::readable_bytes(r.freed_bytes, mark))
+                    .about("free", free),
+            ]
         }
     }
 }
@@ -1138,6 +1178,73 @@ mod tests {
             }),
             ..ronoctua_power::Snapshot::default()
         }
+    }
+
+    fn relief(
+        at: i64,
+        freed_bytes: u64,
+        free_per_mille: u16,
+        short: bool,
+    ) -> ronoctua_brain::Relieved {
+        ronoctua_brain::Relieved {
+            at,
+            freed_bytes,
+            free_per_mille,
+            short,
+        }
+    }
+
+    /// FAILS IF: a relief the footer found when it started is said again, a
+    /// new one is not said, the freed bytes and the free share are not in its
+    /// words in the language's own decimal mark, a disk still short is said as
+    /// relieved, or a brain that restarted and forgot is taken as news.
+    #[test]
+    fn the_disk_says_what_its_relief_made_and_only_once() {
+        let mut w = Watch::default();
+        let old = relief(100, 5, 120, false);
+        assert!(
+            w.disk(Some(&old), '.').is_empty(),
+            "the first mind is the baseline"
+        );
+        assert!(w.disk(Some(&old), '.').is_empty(), "the same relief twice");
+        // A MARK NO LANGUAGE USES, so what comes out is visibly the one
+        // handed in and not a separator written into the format.
+        let made = w.disk(Some(&relief(200, 12_340_000_000, 153, false)), '#');
+        assert_eq!(tags(&made), vec![DISK_RELIEVED]);
+        assert_eq!(arg(&made[0], "freed"), Some("12#3 GB"));
+        assert_eq!(arg(&made[0], "free"), Some("15#3"));
+        let short = w.disk(Some(&relief(300, 0, 42, true)), '.');
+        assert_eq!(tags(&short), vec![DISK_STILL_SHORT]);
+        assert_eq!(arg(&short[0], "free"), Some("4.2"));
+        // STILL SHORT AGAIN is not news: said once, until room is made.
+        assert!(
+            w.disk(Some(&relief(400, 0, 40, true)), '.').is_empty(),
+            "\"still short\" was said twice in a row"
+        );
+        assert_eq!(
+            tags(&w.disk(Some(&relief(500, 9, 160, false)), '.')),
+            vec![DISK_RELIEVED]
+        );
+        assert_eq!(
+            tags(&w.disk(Some(&relief(600, 0, 41, true)), '.')),
+            vec![DISK_STILL_SHORT],
+            "a new shortness after room was made was not said"
+        );
+        assert!(
+            w.disk(None, '.').is_empty(),
+            "a brain that forgot is no relief"
+        );
+        // AND THE SENTENCES EXIST, with their numbers in them.
+        let t = texts();
+        assert!(
+            made[0].summary(&t).contains("12#3 GB"),
+            "{}",
+            made[0].summary(&t)
+        );
+        assert!(short[0].body(&t).contains("4.2"), "{}", short[0].body(&t));
+        // A NEWER ONE CONTRADICTS the other: the line does not say "still short"
+        // after the room was made.
+        assert!(contradicts(&made[0], &short[0]));
     }
 
     /// FAILS IF: the charger is not said when it is plugged or pulled, is
@@ -1547,6 +1654,8 @@ mod tests {
         TOR_DOWN,
         CHARGER_PLUGGED,
         CHARGER_UNPLUGGED,
+        DISK_RELIEVED,
+        DISK_STILL_SHORT,
         crate::surface::BLUETOOTH_CONNECTED,
         crate::surface::BLUETOOTH_DISCONNECTED,
         crate::surface::SOFTWARE_INSTALLED,

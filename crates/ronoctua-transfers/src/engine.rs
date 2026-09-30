@@ -97,34 +97,3 @@ impl<'a> Progress<'a> {
         self.shared.touch(self.id, |j| j.stage = stage);
     }
 }
-
-/// Where yt-dlp is, read from the ENVIRONMENT.
-///
-/// # Why not `option_env!`, which is what every other program path here uses
-///
-/// Because baked in, a store path is a REFERENCE, and this one would be a
-/// reference to a package that is deliberately absent from half the
-/// installations. yt-dlp lives under `ronoctua.media.enable`, which is
-/// `mkDefault full` — so an `option_env!` would drag ffmpeg and yt-dlp into
-/// the REDUCED profile through this binary, and `profile-minimal-closes` would
-/// fail naming a package nobody asked for. It is the same trap
-/// `RONOCTUA_EMACSCLIENT` fell into, and the same fix: the value is set by the
-/// unit, inside the `mkIf` that decides whether the package exists at all.
-///
-/// The fallback is the bare name, which works in a devshell and fails inside a
-/// unit with a minimal `PATH` — which is why the unit sets it.
-pub(crate) fn yt_dlp() -> String {
-    std::env::var("RONOCTUA_YT_DLP")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "yt-dlp".to_owned())
-}
-
-/// Whether this installation has yt-dlp at all.
-///
-/// The reduced profile does not, and a queue that accepted a media job there
-/// would show a row that never moves.
-pub(crate) fn media_afoot() -> bool {
-    std::env::var("RONOCTUA_YT_DLP").is_ok_and(|v| !v.is_empty())
-        || std::path::Path::new("/usr/bin/yt-dlp").exists()
-}

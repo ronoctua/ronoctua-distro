@@ -26,6 +26,11 @@
 //! the three crates that will only ever open a loopback socket do not compile
 //! a TLS stack to get a chunk decoder. See the manifest.
 //!
+//! Redirects and gzip came the same way, when a second caller needed them:
+//! the software centre walked redirects by its own rule, and the player's
+//! lookups needed the same walk across three hosts. The rule is [`web`], under
+//! the same feature, and neither caller keeps a copy.
+//!
 //! # The WebSocket lives here for the same reason the framer does
 //!
 //! It is an HTTP request that is answered `101` and then stops being HTTP.
@@ -60,6 +65,8 @@ use std::time::Duration;
 
 #[cfg(feature = "tls")]
 pub mod tls;
+#[cfg(feature = "tls")]
+pub mod web;
 #[cfg(feature = "ws")]
 pub mod ws;
 

@@ -139,9 +139,21 @@ struct Instance {
 /// low means the globe simply never reaches the GPU on a full region, and
 /// nothing on screen or in any log says why. `files-panels-have-two-pictures`
 /// is what keeps it honest.
+///
+/// # AND THE PLAYER'S PICTURES
+///
+/// A set shows up to [`PLAYER_PICTURES`] pictures at once — every film and
+/// cover routed to one screen, placed side by side in a window, a column or
+/// the footer's panel — each its own texture in the same frame as the rows
+/// around it — and, on a directory's page, the GLOBE beside them
+/// ([`PLAYER_GLOBE`]), and the COVERS its Metadata draws among its rows — a
+/// suggested one beside the file's own ([`PLAYER_COVERS`]).
 const CEILING: usize = tokens::space::EXPANSION_MAXLINES as usize
     + 1
     + crate::image::MANAGER_PICTURES
+    + crate::image::PLAYER_PICTURES
+    + crate::image::PLAYER_GLOBE
+    + crate::image::PLAYER_COVERS
     + tokens::space::FILES_THUMBMOST as usize;
 
 /// How many pictures the file manager can have on screen at once.
@@ -151,6 +163,25 @@ const CEILING: usize = tokens::space::EXPANSION_MAXLINES as usize
 /// The thumbnails are counted separately, by their own token — they come and go
 /// with a mode, and these two do not.
 pub const MANAGER_PICTURES: usize = 2;
+
+/// How many pictures the player can have on screen at once: the most one set
+/// shows (`ronoctua_player::session::PICTURES_MOST`, which this crate cannot
+/// name — it knows no player). The shell, which links both, refuses to build
+/// when the two part (the bond at the head of `player_layout`), and every
+/// door takes no more
+/// than that many.
+pub const PLAYER_PICTURES: usize = 6;
+
+/// The player's globe: a directory's page draws one over its rows — in the
+/// window and the column while a film plays in their band, so it is one more
+/// picture beside the set's, never one of them.
+pub const PLAYER_GLOBE: usize = 1;
+
+/// The covers the player's Metadata draws among its rows at once: a
+/// suggestion's beside the file's own. A door lays out no more than this
+/// many side by side (`player_rows::Builder::pictures`) — each a texture of
+/// the frame, beside the set's pictures while a film plays.
+pub const PLAYER_COVERS: usize = 2;
 
 /// How many textures stay on the GPU between frames.
 ///

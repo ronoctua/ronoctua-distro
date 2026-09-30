@@ -130,7 +130,9 @@ let
   #
   # `system-rebuild` is one: `nix/modules/rescue.nix` already declares the only
   # `nixos-rebuild switch` in this repository, and a second copy here would be a
-  # second copy of `--flake /etc/nixos#<person>` to keep in step.
+  # second copy of `--flake /etc/nixos#<person>` to keep in step. And
+  # `old-generations` is the other: `nix/modules/store.nix` owns the one trim of
+  # the system's generations, which the boot and the memory panel start too.
   borrowed = lib.filter (s: s ? unit) declared.steps;
 in
 {
@@ -145,7 +147,7 @@ in
       type = lib.types.attrsOf lib.types.bool;
       default = { };
       example = {
-        old-generations = true;
+        old-generations = false;
         rust-toolchains = true;
       };
       description = ''
@@ -189,9 +191,9 @@ in
     assertions = map (step: {
       assertion = config.systemd.services ? "${lib.removeSuffix ".service" step.unit}";
       message =
-        "ronoctua.update: the step `${step.id}` starts `${step.unit}`, which is "
-        + "machine does not have. Switch on whoever declares it (`ronoctua.rescue.enable`), or "
-        + "switch the step off: `ronoctua.update.steps.${step.id} = false;`.";
+        "ronoctua.update: the step `${step.id}` starts `${step.unit}`, which this "
+        + "machine does not have. Switch on whoever declares it (`ronoctua.rescue.enable` for "
+        + "the rebuild), or switch the step off: `ronoctua.update.steps.${step.id} = false;`.";
     }) borrowed;
 
     # WHERE THE ROOT HALF LEAVES ITS REPORT.
@@ -330,12 +332,13 @@ in
 
     # NO TIMER, AND THAT IS A DECISION.
     #
-    # `nix/modules/base.nix` already collects garbage weekly and
-    # `nix/modules/cli.nix` already refreshes the tldr cache on a schedule —
-    # housekeeping belongs on a clock. Moving the pinned inputs and rebuilding
-    # the system do not: this sequence can bring a kernel that does not boot,
-    # and the machine choosing the moment for that on its own is the thing
-    # `system.autoUpgrade` does and this distro deliberately does not have.
+    # The store's garbage is collected by Nix itself when a build finds the
+    # disk short (`nix/modules/store.nix`), and `nix/modules/cli.nix` refreshes
+    # the tldr cache on a schedule. Moving the pinned inputs and rebuilding
+    # the system do not belong on a clock: this sequence can bring a kernel
+    # that does not boot, and the machine choosing the moment for that on its
+    # own is the thing `system.autoUpgrade` does and this distro deliberately
+    # does not have.
     #
     # The moment is chosen by the person, or later by `ronoctua-brain`, which is
     # a different thing from a calendar: it knows whether anything is running.

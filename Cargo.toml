@@ -64,9 +64,13 @@ members = [
   "crates/ronoctua-frames",
   "crates/ronoctua-player",
   "crates/ronoctua-player-engine",
+  "crates/ronoctua-xml",
   "crates/ronoctua-playlist",
   "crates/ronoctua-ytdlp",
   "crates/ronoctua-inspect",
+  "crates/ronoctua-tags",
+  "crates/ronoctua-lookup",
+  "crates/ronoctua-broadcast",
   "crates/ronoctua-torrent",
   "crates/ronoctua-software",
   "crates/ronoctua-browser",
@@ -255,12 +259,42 @@ missing_docs = "warn"
 needless_collect = "warn"
 redundant_clone = "warn"
 
+# THE PROFILE OF EVERY LOCAL `cargo` — never of Nix.
+#
+# `cargo test -p`, `cargo clippy`, rust-analyzer and the devshell build at
+# `dev`; every derivation in `nix/rust.nix` names `release` or `loop`, so
+# nothing here reaches a store path. What it decides is how much of the disk a
+# day of `cargo test` takes.
+#
+# Full debug info was the default, and it was most of the build: one test
+# binary of `ronoctua-shell` measured 716 MiB, 631 of them `.debug_*`; with
+# this it is 134 MiB. `line-tables-only` keeps what a panic's backtrace prints
+# — file and line of OUR frames — and drops the types and locals a debugger
+# would read; a session that wants those says `CARGO_PROFILE_DEV_DEBUG=true`
+# for that one run.
+#
+# The dependencies get none: their frames are not what anybody here debugs,
+# and they are hundreds of crates against our sixty. `test` inherits all of
+# it, overrides included, so it has no section of its own.
+#
+# And no `split-debuginfo`: with line tables only, what is left is mostly
+# `.debug_line`, which split DWARF keeps in the binary anyway — `.dwo` files
+# would add a way to fail without a saving to show for it.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
-# The first-frame target is 200 ms (section 5.2); symbols do not help with that,
-# but they help diagnose when it is missed.
-debug = 1
+# NO `debug`. It was `debug = 1`, "to diagnose a missed frame target", and it
+# never reached anybody: stdenv's fixup runs `strip -S` over `bin/` (the log of
+# every workspace build says so, and `.debug_*` is absent from the installed
+# binaries), so the only thing it bought was a bigger dependency layer and a
+# slower LTO link. The symbol table survives the strip — `-S` removes debug
+# sections, not `.symtab` — so `perf` still names functions.
 
 # THE LOOP'S PROFILE — never the one that is installed.
 #
@@ -297,6 +331,4 @@ inherits = "release"
 opt-level = 2
 codegen-units = 16
 lto = false
-# `release` keeps `debug = 1` to diagnose a missed frame target. Here the
-# symbols are only object size and link time.
-debug = 0
+# No `debug` here either: it inherits `release`'s, which is none.

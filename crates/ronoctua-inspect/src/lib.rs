@@ -420,6 +420,9 @@ pub mod key {
     /// is already on screen one panel over, on `files-detail-type`. That is one
     /// line per language rather than two, and it cannot name the wrong one.
     pub const PREVIEW_PLAYLIST_UNREAD: &str = "files-preview-playlist-unread";
+    /// Refusal: one of the player's own files (`.rset`, `.rqueue`), written
+    /// by a NEWER player than this one — intact, and not readable here.
+    pub const PREVIEW_OWN_NEWER: &str = "files-preview-own-newer";
 
     /// Label: how many pixels across and down.
     pub const FACT_DIMENSIONS: &str = "files-fact-dimensions";
@@ -623,7 +626,7 @@ pub mod key {
     pub const VALUE_MESH_OPEN: &str = "files-value-mesh-open";
 
     /// Every key this crate can produce, for the check that keeps them honest.
-    pub const ALL: [&str; 102] = [
+    pub const ALL: [&str; 103] = [
         NO_PREVIEW,
         PREVIEW_NOT_TEXT,
         PREVIEW_EMPTY,
@@ -635,6 +638,7 @@ pub mod key {
         PREVIEW_DRACO,
         PREVIEW_NO_SYNTH,
         PREVIEW_PLAYLIST_UNREAD,
+        PREVIEW_OWN_NEWER,
         FACT_DIMENSIONS,
         FACT_DURATION,
         FACT_CONTAINER,

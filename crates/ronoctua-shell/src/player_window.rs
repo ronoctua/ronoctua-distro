@@ -6,7 +6,7 @@
 //! this door lays the picture out — above a transport line of glyphs and a
 //! time bar a hand can drag, the rows under them — and its stage. Whatever the
 //! view asks is typed on this door's own line, as the footer types it on its
-//! minibuffer (`player::Question`).
+//! minibuffer (`player_question::Question`).
 //!
 //! # Two surfaces, one player
 //!
@@ -21,12 +21,22 @@
 //! # The bar is a remote control
 //!
 //! At the bar's width nothing of the view fits, so the player draws content
-//! of its own there (`Shape::Own`): previous, play or pause and next, one per
-//! line, a line of air and the mute — each taken across the whole line and
-//! lit under the pointer, and the wheel is the volume. No sentence explains
-//! them (the owner's decision): these are the glyphs every player has. A key
-//! that acts on a row nobody sees puts the column back to its size, and so
-//! does a question — both are the base's (`Tenant::acts_without_rows`).
+//! of its own there (`Shape::Own`), one glyph a line: previous, play or pause
+//! and next; a line of air; louder, the mute and quieter; a line of air; and
+//! the swap to the window — each taken across the whole line and lit under
+//! the pointer, and the wheel is the volume. No sentence explains them (the
+//! owner's decision): these are the glyphs every player has. The bar's last
+//! line is the column's own close (`column::Area::end`). A key that acts on a
+//! row nobody sees puts the column back to its size, and so does a question
+//! — both are the base's (`Tenant::acts_without_rows`).
+//!
+//! # The swap
+//!
+//! Every door carries the glyph that trades it for the other
+//! (`player::Errand::Swap`): the window's transport ends with the column —
+//! raised, never toggled, and the window closes — and the column's with the
+//! window, which opens as the column closes. A window opened for a stage
+//! swaps the same way, and closing it is what closes the stage.
 //!
 //! # The frames are the clock
 //!
@@ -39,7 +49,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use ronoctua_player::wire::{Ask, Repeat, State};
+use ronoctua_player::wire::{Ask, State};
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     reexports::calloop::{self, channel},
@@ -59,6 +69,7 @@ use wayland_client::protocol::wl_surface;
 
 use crate::column::{Area, Size};
 use crate::door::{self as base, Canvas, Content, Hand, LEFT_BUTTON, Shell, Ui, Wiring};
+use crate::player_transport::{bar_buttons, glyph_of, lit};
 
 /// The door this module is: the plumbing, and the player in it.
 type Host = base::Door<Player>;
@@ -69,47 +80,17 @@ pub const APP_ID: &str = "br.ronoctua.player";
 /// The margin inside the surface, in cells — see `chrome::FIELDS_LEAD`.
 const MARGIN: u16 = crate::chrome::FIELDS_LEAD;
 
-/// Which surface this host is.
+/// Which door the player is drawn in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Door {
     /// A floating window.
     Window,
     /// The column on the right.
     Column,
-}
-
-/// The transport's buttons, in the order they are drawn: the command each one
-/// runs, which is also what the header says under the pointer.
-const BUTTONS: [&str; 9] = [
-    "player-previous",
-    "player-toggle",
-    "player-next",
-    "player-stop",
-    "player-shuffle",
-    "player-repeat",
-    "player-only",
-    "player-pip",
-    "player-maximize",
-];
-
-/// The bar's buttons, one per line under the control line's air — previous,
-/// play or pause and next, a line of air, and the mute: the glyphs every
-/// player has, which is why the bar says nothing about them. The ids are the
-/// transport's own, so a click asks what the transport's click asks.
-const BAR_BUTTONS: [Option<&str>; 5] = [
-    Some("player-previous"),
-    Some("player-toggle"),
-    Some("player-next"),
-    None,
-    Some("player-mute"),
-];
-
-/// Where each of the bar's buttons goes, in a tenant area whose first line is
-/// `top`: the first a line under it, and one per line.
-fn bar_buttons(top: u16) -> impl Iterator<Item = (u16, &'static str)> {
-    (top + 1..)
-        .zip(BAR_BUTTONS)
-        .filter_map(|(line, id)| id.map(|id| (line, id)))
+    /// The footer's media panel (`crate::player_media`) — never a host of
+    /// this module: it is here so the glyphs its transport wears are asked
+    /// the one way the other two ask them (`player_transport::glyph_of`).
+    Footer,
 }
 
 /// How quick a second click on the picture has to be to be a DOUBLE click,
@@ -151,141 +132,47 @@ const CORNER_WAIT: std::time::Duration = std::time::Duration::from_millis(150);
 /// How long the controls stay over the picture after the last activity.
 const CONTROLS_LINGER: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Each button's glyph, from the state and how the picture is shown.
-fn glyph_of(id: &str, s: Option<&State>, stage: Stage) -> char {
-    let playing = s.is_some_and(|s| s.playing);
-    match id {
-        "player-only" => tokens::icon::PLAYER_ONLY,
-        "player-pip" => tokens::icon::PLAYER_PIP,
-        "player-mute" if s.is_some_and(|s| s.muted) => tokens::icon::VOLUME_OFF,
-        "player-mute" => tokens::icon::VOLUME,
-        // WHERE IT GOES, as the file manager's pair: out when on the screen.
-        "player-maximize" if stage == Stage::Maximized => tokens::icon::THEATRE_OFF,
-        "player-maximize" => tokens::icon::THEATRE,
-        "player-previous" => tokens::icon::PLAYER_PREVIOUS,
-        "player-toggle" if playing => tokens::icon::PAUSE,
-        "player-toggle" => tokens::icon::PLAY,
-        "player-next" => tokens::icon::PLAYER_NEXT,
-        "player-stop" => tokens::icon::PLAYER_STOP,
-        "player-shuffle" if s.is_some_and(|s| s.shuffle) => tokens::icon::PLAYER_SHUFFLE,
-        "player-shuffle" => tokens::icon::PLAYER_SHUFFLE_OFF,
-        "player-repeat" => match s.map_or(Repeat::Nothing, |s| s.repeat) {
-            Repeat::Nothing => tokens::icon::PLAYER_REPEAT_OFF,
-            Repeat::Queue => tokens::icon::PLAYER_REPEAT,
-            Repeat::One => tokens::icon::PLAYER_REPEAT_ONE,
-        },
-        _ => ' ',
-    }
-}
-
-/// Whether a button's glyph is drawn lit: a switch that is on.
-fn lit(id: &str, s: Option<&State>, stage: Stage) -> bool {
-    match id {
-        "player-only" => stage == Stage::Only,
-        "player-pip" => stage == Stage::Small,
-        "player-shuffle" => s.is_some_and(|s| s.shuffle),
-        "player-repeat" => s.is_some_and(|s| s.repeat != Repeat::Nothing),
-        _ => false,
-    }
-}
-
-/// What a button asks the player.
-fn ask_of(id: &str) -> Option<Ask> {
-    Some(match id {
-        "player-previous" => Ask::Previous,
-        "player-toggle" => Ask::Toggle,
-        "player-next" => Ask::Next,
-        "player-stop" => Ask::Stop,
-        "player-shuffle" => Ask::Shuffle,
-        "player-repeat" => Ask::Repeat,
-        "player-mute" => Ask::Mute,
-        _ => return None,
-    })
-}
-
-/// Where one picture is: its lines, and which share of the width.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Place {
-    /// Its first line.
-    pub first: u16,
-    /// How many lines it takes.
-    pub lines: u16,
-    /// Which share of the width, counted from the left…
-    pub share: u16,
-    /// …of how many.
-    pub shares: u16,
-}
-
-impl Place {
-    /// Its rectangle, in logical pixels, on a surface `width` wide.
-    #[must_use]
-    pub fn area(self, width: f32, line: f32) -> ronoctua_render::image::Area {
-        let w = width / f32::from(self.shares.max(1));
-        ronoctua_render::image::Area {
-            x: w * f32::from(self.share),
-            y: line * f32::from(self.first),
-            width: w,
-            height: line * f32::from(self.lines),
-        }
-    }
-}
-
 /// Where everything is, in lines of the grid — ONE answer the painter and
 /// the pointer both read, so a control is taken where it was drawn.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Layout {
-    /// Each picture: the main one first, then every follower.
-    pub pictures: Vec<Place>,
+    /// The picture band — its first line and how many lines it takes — when
+    /// something is shown on this door's screen: the pictures are placed IN
+    /// it (`player_layout::placed`), and a click on it is a click on them.
+    pub band: Option<(u16, u16)>,
     /// The transport's buttons and the clock.
     pub transport: u16,
-    /// The time bar.
+    /// The deck's first line — the time bar, or a set's ruler with its lanes
+    /// under it (`crate::player_timeline`).
     pub bar: u16,
+    /// How many lines the deck takes: one for the time bar.
+    pub deck: u16,
     /// The list's first line.
     pub list: u16,
 }
 
-/// The largest `video`-shaped rectangle inside `width × height`, or the whole
-/// of it when the shape is not known.
-#[must_use]
-pub fn fitted(width: f32, height: f32, video: Option<(u32, u32)>) -> (f32, f32) {
-    let Some((vw, vh)) = video.filter(|(w, h)| *w > 0 && *h > 0) else {
-        return (width, height);
-    };
-    #[allow(clippy::cast_precision_loss)]
-    let ratio = vw as f32 / vh as f32;
-    if width / height.max(1.0) > ratio {
-        (height * ratio, height)
-    } else {
-        (width, width / ratio)
-    }
-}
-
-/// The door on stage: one picture over the whole surface from line `top` —
+/// The door on stage: the pictures over the whole surface from line `top` —
 /// under a column's control line — the transport and the time bar on its
 /// last two lines, and no list.
 #[must_use]
 pub fn stage_layout(top: u16, lines: u16) -> Layout {
     Layout {
-        pictures: vec![Place {
-            first: top,
-            lines: lines.saturating_sub(top).max(1),
-            share: 0,
-            shares: 1,
-        }],
+        band: Some((top, lines.saturating_sub(top).max(1))),
         transport: lines.saturating_sub(2),
         bar: lines.saturating_sub(1),
+        deck: 1,
         list: lines,
     }
 }
 
-/// The smallest a follower's strip gets, in lines.
-const FOLLOWER_FLOOR: u16 = 3;
-
 /// Lays the door out. `area` is what the door is handed (a window's whole
 /// surface, or a column's size), `first` the line under the header, `lines`
 /// how many the surface has, `columns` how wide it is in cells,
-/// `line_over_cell` the font's line height over its cell width, and `video`
-/// the main picture's size, when there is one.
+/// `line_over_cell` the font's line height over its cell width, `shape` the
+/// width over the height the pictures shown here want together
+/// (`arrange::natural_aspect`) — none, and there is no band — and `deck` how
+/// many lines the deck under the transport takes: one, the time bar, but for
+/// a set.
 #[must_use]
 pub fn layout(
     area: &Area,
@@ -293,59 +180,33 @@ pub fn layout(
     lines: u16,
     columns: u16,
     line_over_cell: f32,
-    video: Option<(u32, u32)>,
-    followers: usize,
+    shape: Option<f32>,
+    deck: u16,
 ) -> Layout {
-    let mut pictures = Vec::new();
     let mut at = first;
-    if let Some((vw, vh)) = video {
-        // THE MAIN PICTURE takes the height its shape wants at this width —
-        // in lines, from the width in cells and the font's own proportion —
-        // and never more than half the surface: the rows are the controls.
-        #[allow(clippy::cast_precision_loss)]
-        let wanted = f32::from(columns) * (vh.max(1) as f32 / vw.max(1) as f32) / line_over_cell;
+    let mut band = None;
+    if let Some(shape) = shape.filter(|s| s.is_finite() && *s > 0.0) {
+        // THE PICTURES take the height their shape wants at this width — in
+        // lines, from the width in cells and the font's own proportion — and
+        // never more than half the surface: the rows are the controls.
+        let wanted = f32::from(columns) / shape / line_over_cell;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let wanted = wanted.ceil().max(1.0) as u16;
-        // A COLUMN'S PICTURE is its size's share of the width, and never
-        // past half the surface either (`Area::picture_ceiling`).
+        let wanted = wanted.ceil().clamp(1.0, f32::from(u16::MAX)) as u16;
+        // A COLUMN'S PICTURES are its size's share of the width, and never
+        // past half the surface either (`Area::picture_ceiling`): a picture
+        // added to a set never pushes the rows off.
         let ceiling = area.picture_ceiling(lines);
-        // THE FOLLOWERS SHARE ONE STRIP under it, side by side, and the
-        // strip comes out of the same ceiling: a video added in step never
-        // pushes the rows off. A third of it, and never less than
-        // `FOLLOWER_FLOOR` lines — a smaller picture says nothing.
-        let (main, strip) = if followers == 0 {
-            (wanted.min(ceiling).max(1), 0)
-        } else {
-            let strip = (ceiling / 3)
-                .max(FOLLOWER_FLOOR)
-                .min(ceiling.saturating_sub(1));
-            (wanted.min(ceiling.saturating_sub(strip)).max(1), strip)
-        };
-        pictures.push(Place {
-            first: at,
-            lines: main,
-            share: 0,
-            shares: 1,
-        });
-        at += main;
-        if strip > 0 {
-            let n = u16::try_from(followers).unwrap_or(u16::MAX);
-            for i in 0..n {
-                pictures.push(Place {
-                    first: at,
-                    lines: strip,
-                    share: i,
-                    shares: n,
-                });
-            }
-            at += strip;
-        }
+        let height = wanted.min(ceiling).max(1);
+        band = Some((at, height));
+        at += height;
     }
+    let deck = deck.max(1);
     Layout {
-        pictures,
+        band,
         transport: at,
         bar: at + 1,
-        list: at + 2,
+        deck,
+        list: at + 1 + deck,
     }
 }
 
@@ -354,8 +215,14 @@ pub fn layout(
 /// # Errors
 ///
 /// No Wayland compositor, or no `xdg_shell`.
-pub fn host_window(stage: Stage) -> Result<()> {
-    crate::door::run(|w: &Wiring<'_, Player>| wired(w, Door::Window, stage))
+pub fn host_window(stage: Stage, screen: Option<String>) -> Result<()> {
+    // THIS WINDOW'S FILE, for as long as it is open: closing the player
+    // everywhere with no daemon to say farewell finds it there.
+    let _slot = crate::player_stage::WindowSlot::hold();
+    // AND A SCREEN'S, for a window "show on every screen" opened there:
+    // pressing it again finds every one (`player_stage::everywhere`).
+    let _screen = screen.as_deref().map(crate::player_stage::ScreenSlot::hold);
+    crate::door::run(|w: &Wiring<'_, Player>| wired(w, Door::Window, stage, screen.clone()))
 }
 
 /// Opens the player in the column on the right, as `opening` says
@@ -365,7 +232,7 @@ pub fn host_window(stage: Stage) -> Result<()> {
 ///
 /// No Wayland compositor, or no layer shell.
 pub fn host_column(opening: &crate::column::Opening) -> Result<()> {
-    crate::column::run::<Player>(opening, |w| wired(w, Door::Column, Stage::Off))
+    crate::column::run::<Player>(opening, |w| wired(w, Door::Column, Stage::Off, None))
 }
 
 /// A door the player is in — the window, or the column around it — and how
@@ -389,36 +256,105 @@ impl PlayerHost for crate::column::Column<Player> {
 }
 
 /// The player, with its channels hung on the loop of the door `C` it is in.
-fn wired<C: PlayerHost>(w: &Wiring<'_, C>, door: Door, stage: Stage) -> Result<Player> {
+fn wired<C: PlayerHost>(
+    w: &Wiring<'_, C>,
+    door: Door,
+    stage: Stage,
+    screen: Option<String>,
+) -> Result<Player> {
     // THE PLAYER'S STATE, on its own thread. A door that opens starts the
     // daemon: the nested loop has no unit, and a door onto nothing is a door
     // that says "not running" for ever.
     let _ = ronoctua_player::client::ensure();
-    let (state_sender, states) = channel::channel::<Option<State>>();
-    let watch = ronoctua_player::client::watch(move |s| {
-        let _ = state_sender.send(s);
+    let (heard_sender, heard) = channel::channel::<ronoctua_player::client::Heard>();
+    let watch = ronoctua_player::client::watch(move |h| {
+        let _ = heard_sender.send(h);
     });
     w.handle
-        .insert_source(states, |event, (), d: &mut base::Door<C>| {
-            if let channel::Event::Msg(s) = event {
+        .insert_source(heard, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(h) = event {
                 let (p, ui, _) = C::player(d);
-                p.state_arrived(ui, s);
+                p.heard(ui, h);
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the player channel: {e}"))?;
 
     // HOW A PAIRING ENDED, from the thread that waited for the other
-    // machine (`player::pair_then`).
-    let (paired, pairings) = channel::channel::<crate::player::Paired>();
+    // machine (`player_machines::pair_then`).
+    let (paired, pairings) = channel::channel::<crate::player_machines::Paired>();
     w.handle
         .insert_source(pairings, |event, (), d: &mut base::Door<C>| {
             if let channel::Event::Msg(p) = event {
                 let (_, ui, _) = C::player(d);
-                ui.message = crate::player::paired_said(&p, &ui.texts);
+                ui.message = crate::player_machines::paired_said(&p, &ui.texts);
                 ui.ask_paint();
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the pairing channel: {e}"))?;
+
+    // HOW AN ASK TOLD OFF THE LOOP ENDED (`player::tell_then`): a refusal
+    // is said here, in the door that asked, in place of what it said it did.
+    let (told, answers) = channel::channel::<crate::player::Told>();
+    w.handle
+        .insert_source(answers, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(answer) = event {
+                let (player, ui, _) = C::player(d);
+                // A DRAFT, where the daemon wrote it: into the editor.
+                if let crate::player::Told::Draft(path) = &answer {
+                    player.draft_opened(ui, path);
+                    return;
+                }
+                // THE VIEW'S SHARE of it — a list refused at once is its
+                // page's to say, a key that was not kept read again.
+                if player.view.told(&answer) {
+                    player
+                        .view
+                        .settle_in(player.player.as_ref(), ui.columns, &ui.texts);
+                    ui.ask_paint();
+                }
+                let older = player.player.as_ref().is_some_and(crate::player::older);
+                if let Some(said) = crate::player::told_sentence(&answer, older, &ui.texts) {
+                    ui.message = Some(said);
+                    ui.ask_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the player's answers: {e}"))?;
+
+    // A READ DONE OFF THE LOOP — the folder beside the film — taken by the
+    // view where the thread left it, and the rows drawn again with it.
+    let (woke, wakes) = channel::channel::<()>();
+    w.handle
+        .insert_source(wakes, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(()) = event {
+                let (p, ui, _) = C::player(d);
+                p.view.settle_in(p.player.as_ref(), ui.columns, &ui.texts);
+                ui.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the view's wake: {e}"))?;
+    let woke = std::sync::Mutex::new(woke);
+    let wake = crate::player_subtitles::Wake::new(move || {
+        if let Ok(w) = woke.lock() {
+            let _ = w.send(());
+        }
+    });
+
+    // THE GLOBE OF A DIRECTORY'S PAGE, drawn on a thread of its own and
+    // handed back on a channel of its own: a drag across the world is a
+    // picture every few tens of milliseconds, and none of them is news about
+    // the player (`crate::globe`).
+    let (globe_sender, globes) = channel::channel::<crate::globe::Beat>();
+    w.handle
+        .insert_source(globes, |event, (), d: &mut base::Door<C>| {
+            if let channel::Event::Msg(b) = event {
+                let (p, ui, _) = C::player(d);
+                if p.view.saw_globe(&b) {
+                    ui.ask_paint();
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the globe channel: {e}"))?;
 
     // A PING PER FRAME, from whichever picture's thread has one.
     let (frame_sender, frames) = channel::channel::<usize>();
@@ -469,7 +405,9 @@ fn wired<C: PlayerHost>(w: &Wiring<'_, C>, door: Door, stage: Stage) -> Result<P
     // close it again. The stage itself is set on the first turn, once the
     // window exists to be made whole-screen or small.
     let opened_for = (stage != Stage::Off).then_some(stage);
-    if opened_for.is_some() {
+    // A SCREEN'S WINDOW holds that screen's slot (`host_window`), and not
+    // the one stage's: it is one of several.
+    if opened_for.is_some() && screen.is_none() {
         crate::player_stage::hold(match stage {
             Stage::Only | Stage::Off => crate::player::Show::Only,
             Stage::Maximized => crate::player::Show::Maximized,
@@ -482,15 +420,26 @@ fn wired<C: PlayerHost>(w: &Wiring<'_, C>, door: Door, stage: Stage) -> Result<P
         arm_controls,
         arm_corner,
         window: RefCell::new(None),
-        wm: None,
-        view: crate::player::View::fresh(),
-        pairing: crate::player::Pairing::default(),
+        reach: Reach::machine(),
+        view: crate::player::View::fresh().waking(wake),
+        pairing: crate::player_machines::Pairing::default(),
         paired,
+        told,
         player: None,
         pictures: Vec::new(),
+        placed: Vec::new(),
+        screen_wanted: screen,
+        placed_on: None,
+        sinks: None,
+        screens_given: None,
         frame_sender,
         buttons: Vec::new(),
         layout: Layout::default(),
+        deck: blank_deck(),
+        deck_offset: 0,
+        dragged: None,
+        deck_under: None,
+        deck_chosen: None,
         stage: Stage::Off,
         first_stage: opened_for,
         opened_for,
@@ -502,8 +451,25 @@ fn wired<C: PlayerHost>(w: &Wiring<'_, C>, door: Door, stage: Stage) -> Result<P
         painted: false,
         button_under: None,
         pointer_at: None,
+        globe_stage: crate::globe::stage(globe_sender),
+        globe_drawn: None,
         _watch: watch,
     })
+}
+
+/// The block's deck as a frame draws it ([`Player::block_drawn`]).
+struct BlockDrawn {
+    /// Its shapes.
+    quads: Vec<ronoctua_render::quad::Quad>,
+    /// Its words.
+    spans: Vec<ronoctua_render::Span>,
+    /// Its lanes' bar's track, while they scroll.
+    bar: Option<crate::chrome::Rect>,
+}
+
+/// The deck before anything was laid out: the bar of nothing, no room.
+fn blank_deck() -> crate::player_timeline::Deck {
+    crate::player_timeline::of_state(&[], None, crate::player_timeline::Room::wide(0), 0)
 }
 
 /// A timer armed on the loop of the door the player is in — see [`wired`].
@@ -512,11 +478,11 @@ type Arm<T> = Box<dyn Fn() -> T>;
 /// What this door keeps for ONE pointer, past what every door keeps (the
 /// list's bar, the wheel's leftover, the row under it) — see `crate::seats`.
 #[derive(Debug, Default)]
-struct PerPointer {
-    /// Dragging the time bar.
-    seeking: bool,
-    /// Dragging the volume's bar.
-    turning: bool,
+pub struct PerPointer {
+    /// What a press on a DECK holds — the block's, or a row's — until it is
+    /// let go (`player_timeline::Grip`), where that deck starts in the
+    /// surface's cells, and which deck it is.
+    deck: Option<(crate::player_timeline::Grip, f64, DeckAt)>,
     /// Dragging the bar of a row — the position's or the volume's — by its
     /// row.
     sliding: Option<usize>,
@@ -525,10 +491,402 @@ struct PerPointer {
     picture_clicked: Option<std::time::Instant>,
     /// The transport button under the pointer.
     button_under: Option<&'static str>,
+    /// A press on the GLOBE of a directory's page, held: where it was pressed,
+    /// where the hand was last, and whether it has travelled far enough to
+    /// be a drag that turns it rather than a click on a group of marks
+    /// (`atlas.clickSlack`).
+    globe: Option<GlobeHeld>,
+}
+
+/// A group of the globe's marks as a frame drew it: its members, the cell of
+/// the surface its centre is in, and the point itself in logical pixels
+/// ([`Player::globe_marks_at`]).
+pub type MarkDrawn = (Vec<u32>, (u16, u16), (f64, f64));
+
+/// A press on the globe, held ([`PerPointer::globe`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GlobeHeld {
+    /// Where it was pressed, in the surface's logical pixels.
+    at: (f64, f64),
+    /// Where the hand was last.
+    last: (f64, f64),
+    /// It travelled past the slack: a drag.
+    dragging: bool,
+}
+
+/// Which deck of this door a pointer is on: the BLOCK under the transport,
+/// or the rows of a page that are one (the timeline's) — by the row's place
+/// among the rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeckAt {
+    /// The block under the transport.
+    Block,
+    /// Row `n` of the list.
+    Row(usize),
+}
+
+/// What a player with NO DAEMON behind it keeps instead of acting — a
+/// photograph's (`crate::photograph`, [`Player::detached`]). Everything a
+/// click would have done past the door is here, to be said.
+#[derive(Debug)]
+pub struct Outbox {
+    /// What it would have asked the player, in order.
+    pub asked: Vec<Ask>,
+    /// The switches of the preferences it would have turned, in order —
+    /// each followed, in `asked`, by the `reload` that tells the daemon, as
+    /// on a screen.
+    pub kept: Vec<crate::player::Switch>,
+    /// The machines it would have paired with, by name. NEVER THE CODE: it
+    /// leaves for the player and nowhere else (`player_machines::pair_then`).
+    pub paired_with: Vec<String>,
+    /// The windows of a stage it would have opened — a column's whole
+    /// screen or corner, which is a process of its own.
+    pub stages: Vec<crate::player::Show>,
+    /// Whether it would have ended the player's other doors that are
+    /// processes — closing the player everywhere.
+    pub ended_the_doors: bool,
+    /// Whether it would have started an older player again.
+    pub restarted: bool,
+    /// The windows "show on every screen" would have opened — the screens
+    /// something goes to, each press — or, pressed again, closed.
+    pub every_screen: Vec<Vec<String>>,
+    /// Whether it would have held the sound outputs (`player::SinksHeld`):
+    /// a row of them was on screen.
+    pub sinks_held: bool,
+    /// The consents it would have written into `player.json`, in order: the
+    /// services, the directories, let or no longer.
+    pub lets: Vec<(
+        Vec<ronoctua_lookup::Service>,
+        Vec<ronoctua_player::find::Directory>,
+        bool,
+    )>,
+    /// The person's keys it would have kept, by which — NEVER WHAT: a key
+    /// leaves for its private file and nowhere else.
+    pub keys_kept: Vec<ronoctua_lookup::keys::Key>,
+    /// The keys it would have forgotten.
+    pub keys_forgotten: Vec<ronoctua_lookup::keys::Key>,
+    /// The stills standing in for the daemon's frames, by the LANE whose
+    /// picture each is.
+    pub stills: std::collections::BTreeMap<u32, ronoctua_render::image::Rgba>,
+    /// A still for every picture that has none of its own.
+    pub every: Option<ronoctua_render::image::Rgba>,
+    /// Every lane a picture was laid out for — so a still no picture took
+    /// is said, and not quietly dropped.
+    pub laid_out: std::collections::BTreeSet<u32>,
+    /// The photograph's clock. It MOVES ONLY WHEN TOLD ([`Outbox::wait`]):
+    /// two clicks are a double click by what the walk says, never by how
+    /// long a step took on this machine.
+    now: std::time::Instant,
+}
+
+impl Default for Outbox {
+    fn default() -> Self {
+        Self {
+            asked: Vec::new(),
+            kept: Vec::new(),
+            paired_with: Vec::new(),
+            stages: Vec::new(),
+            ended_the_doors: false,
+            restarted: false,
+            every_screen: Vec::new(),
+            sinks_held: false,
+            lets: Vec::new(),
+            keys_kept: Vec::new(),
+            keys_forgotten: Vec::new(),
+            stills: std::collections::BTreeMap::new(),
+            every: None,
+            laid_out: std::collections::BTreeSet::new(),
+            // A BASE, and never read as a time of day: only what `wait`
+            // adds to it is.
+            now: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Outbox {
+    /// Time passes on the photograph's clock.
+    pub fn wait(&mut self, by: std::time::Duration) {
+        self.now += by;
+    }
+
+    /// An errand, kept: what would have reached the daemon or the person's
+    /// preferences is written down and said as the door says it when the
+    /// daemon took it; what stays in the door is handed back, as
+    /// `player::carry_out` hands it.
+    fn carry_out(
+        &mut self,
+        errand: crate::player::Errand,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Result<Option<String>, crate::player::Errand> {
+        use crate::player::Errand;
+        match errand {
+            Errand::Nothing => Ok(None),
+            Errand::Then(first, then) => {
+                let said = self.carry_out(*first, texts)?;
+                Ok(self.carry_out(*then, texts)?.or(said))
+            }
+            Errand::Restart => {
+                self.restarted = true;
+                Ok(Some(texts.t(ronoctua_i18n::key::PLAYER_RESTARTING)))
+            }
+            Errand::Said(sentence) => Ok(Some(sentence)),
+            Errand::Tell(ask) => {
+                self.asked.push(ask);
+                Ok(None)
+            }
+            Errand::TellSaying(ask, sentence) => {
+                self.asked.push(ask);
+                Ok(Some(sentence))
+            }
+            Errand::Keep(switch) => {
+                self.kept.push(switch);
+                self.asked.push(Ask::Reload);
+                Ok(None)
+            }
+            Errand::Let {
+                services,
+                directories,
+                on,
+                then,
+            } => {
+                self.lets.push((services, directories, on));
+                self.carry_out(*then, texts)
+            }
+            Errand::KeepKey { key, .. } => {
+                self.keys_kept.push(key);
+                self.asked.push(Ask::KeyCheck {
+                    service: key.service(),
+                });
+                Ok(Some(texts.t_with(
+                    ronoctua_i18n::key::PLAYER_KEY_CHECKING,
+                    &[(
+                        "service",
+                        &texts.t(crate::player::service_key(key.service())),
+                    )],
+                )))
+            }
+            Errand::KeepAccount { .. } => {
+                let key = ronoctua_lookup::keys::Key::OpenSubtitlesAccount;
+                self.keys_kept.push(key);
+                self.asked.push(Ask::KeyCheck {
+                    service: key.service(),
+                });
+                Ok(Some(texts.t_with(
+                    ronoctua_i18n::key::PLAYER_KEY_CHECKING,
+                    &[(
+                        "service",
+                        &texts.t(crate::player::service_key(key.service())),
+                    )],
+                )))
+            }
+            Errand::ForgetKey(key) => {
+                self.keys_forgotten.push(key);
+                Ok(Some(texts.t(ronoctua_i18n::key::PLAYER_KEY_FORGOTTEN)))
+            }
+            errand @ (Errand::Close
+            | Errand::Show(_)
+            | Errand::Swap
+            | Errand::QuitEverywhere
+            | Errand::EveryScreen
+            | Errand::Ask(_)
+            | Errand::Pair { .. }) => Err(errand),
+        }
+    }
+}
+
+/// WHERE WHAT THE PLAYER DOES GOES.
+///
+/// Every act that leaves the door — an ask of the daemon, the preferences
+/// written, a pairing, a window for the stage, a question to the
+/// compositor, a thread asking for a picture — is a method of this, and
+/// nothing else in this file calls the functions that act. So a detached
+/// player has NO ROUTE to the machine. It used to be one `Option` checked at
+/// six places, and a seventh call would have gone around all six — acting
+/// on the person's own daemon from a test, or a photograph pausing their
+/// film.
+enum Reach {
+    /// The machine's: the daemon, the compositor, the stage's window.
+    Machine {
+        /// The compositor, through the contract — opened the first time it
+        /// is needed, and again after one failed.
+        wm: Option<Box<dyn ronoctua_compositor::Compositor>>,
+    },
+    /// Nobody's: what it would have done is kept — a photograph's. Boxed:
+    /// the stills are a photograph's, and a window on a screen carries none.
+    Kept(Box<Outbox>),
+}
+
+impl Reach {
+    /// The machine, with the compositor not yet opened.
+    const fn machine() -> Self {
+        Self::Machine { wm: None }
+    }
+
+    /// Tells the player `ask`, off the loop: how it ended comes back down
+    /// `told` (`player::tell_then`).
+    fn tell(&mut self, ask: &Ask, told: &crate::player::ToldSender) {
+        match self {
+            Self::Machine { .. } => {
+                let told = told.clone();
+                crate::player::tell_then(ask.clone(), move |answer| {
+                    let _ = told.send(answer);
+                });
+            }
+            Self::Kept(out) => out.asked.push(ask.clone()),
+        }
+    }
+
+    /// Tells the player `ask` ONLY IF IT RUNS, and does not wait for its
+    /// word (`player::tell_if_running`).
+    fn tell_if_running(&mut self, ask: &Ask) {
+        match self {
+            Self::Machine { .. } => crate::player::tell_if_running(ask),
+            Self::Kept(out) => out.asked.push(ask.clone()),
+        }
+    }
+
+    /// Ends the player's other doors that are processes — the column, every
+    /// other window (`player::end_the_doors`).
+    fn end_the_doors(&mut self) {
+        match self {
+            Self::Machine { .. } => crate::player::end_the_doors(),
+            Self::Kept(out) => out.ended_the_doors = true,
+        }
+    }
+
+    /// Carries an errand out as far as the door's edge — see
+    /// `player::carry_out` — and hands back what is the door's.
+    fn carry_out(
+        &mut self,
+        errand: crate::player::Errand,
+        texts: &ronoctua_i18n::Texts,
+        told: &crate::player::ToldSender,
+    ) -> Result<Option<String>, crate::player::Errand> {
+        match self {
+            Self::Machine { .. } => crate::player::carry_out(errand, texts, Some(told)),
+            Self::Kept(out) => out.carry_out(errand, texts),
+        }
+    }
+
+    /// Pairs with `to`, off the loop, and says how it ended on `paired`.
+    fn pair(
+        &mut self,
+        to: String,
+        code: crate::player_machines::Code,
+        paired: channel::Sender<crate::player_machines::Paired>,
+    ) {
+        match self {
+            Self::Machine { .. } => crate::player_machines::pair_then(to, code, move |p| {
+                let _ = paired.send(p);
+            }),
+            Self::Kept(out) => out.paired_with.push(to),
+        }
+    }
+
+    /// Opens — or closes, pressed again — the window of a column's stage.
+    fn stage_window(&mut self, show: crate::player::Show) -> std::io::Result<()> {
+        match self {
+            Self::Machine { .. } => crate::player_stage::toggle(show),
+            Self::Kept(out) => {
+                out.stages.push(show);
+                Ok(())
+            }
+        }
+    }
+
+    /// The compositor, opened when it is not — and none for a kept player,
+    /// whose window is in no compositor's tree.
+    fn compositor(&mut self) -> Option<&mut Box<dyn ronoctua_compositor::Compositor>> {
+        match self {
+            Self::Machine { wm } => {
+                if wm.is_none() {
+                    *wm = crate::daemon::open_the_compositor().ok();
+                }
+                wm.as_mut()
+            }
+            Self::Kept(_) => None,
+        }
+    }
+
+    /// The compositor's connection failed: it is opened again next time.
+    fn forget_the_compositor(&mut self) {
+        if let Self::Machine { wm } = self {
+            *wm = None;
+        }
+    }
+
+    /// Lane `lane`'s picture: a thread that asks the daemon for its frames
+    /// and pings `frames` with the lane's number on each — or, kept, the
+    /// still that stands in for them.
+    fn picture(
+        &mut self,
+        lane: ronoctua_player::own::LaneId,
+        frames: &channel::Sender<usize>,
+    ) -> crate::player_picture::Picture {
+        match self {
+            Self::Machine { .. } => crate::player_picture::Picture::start(
+                Some(lane),
+                usize::try_from(lane.0).unwrap_or(usize::MAX),
+                frames.clone(),
+            ),
+            Self::Kept(out) => {
+                out.laid_out.insert(lane.0);
+                let still = out.stills.get(&lane.0).or(out.every.as_ref()).cloned();
+                crate::player_picture::Picture::still(Some(lane), still)
+            }
+        }
+    }
+
+    /// "Show on every screen": `connected` screens are known by name, and
+    /// something goes to `routed` — the windows opened, or those up closed
+    /// (`player_stage::everywhere`). Kept, what it would have opened.
+    fn every_screen(
+        &mut self,
+        connected: usize,
+        routed: &[String],
+    ) -> std::io::Result<crate::player_stage::Everywhere> {
+        match self {
+            Self::Machine { .. } => crate::player_stage::everywhere(connected, routed),
+            Self::Kept(out) => {
+                let plan = crate::player_stage::everywhere_plan(0, connected, routed);
+                if let crate::player_stage::Everywhere::Opened(screens) = &plan {
+                    out.every_screen.push(screens.clone());
+                }
+                Ok(plan)
+            }
+        }
+    }
+
+    /// The sound outputs held while `wanted` — a row of them on screen — and
+    /// let go when not ([`crate::player::SinksHeld`]). Kept, whether it would
+    /// have held them.
+    fn sinks(&mut self, wanted: bool, held: &mut Option<crate::player::SinksHeld>) {
+        match self {
+            Self::Machine { .. } => match (wanted, held.is_some()) {
+                (true, false) => *held = Some(crate::player::hold_sinks()),
+                (false, true) => *held = None,
+                _ => {}
+            },
+            Self::Kept(out) => out.sinks_held |= wanted,
+        }
+    }
+
+    /// Now: the machine's clock, or the photograph's.
+    fn now(&self) -> std::time::Instant {
+        match self {
+            Self::Machine { .. } => std::time::Instant::now(),
+            Self::Kept(out) => out.now,
+        }
+    }
+
+    /// Whether this is a photograph's.
+    const fn is_kept(&self) -> bool {
+        matches!(self, Self::Kept(_))
+    }
 }
 
 /// The player, as this door shows it.
-struct Player {
+pub struct Player {
     door: Door,
     /// Arms the timer that takes the controls away — see [`wired`].
     arm_controls: Arm<Option<calloop::RegistrationToken>>,
@@ -537,22 +895,56 @@ struct Player {
     /// The window, kept to act on it — made whole-screen or small. A CLONE of
     /// what the door holds (both are handles onto one object).
     window: RefCell<Option<Window>>,
-    /// The compositor, through the contract — opened the first time it is
-    /// needed.
-    wm: Option<Box<dyn ronoctua_compositor::Compositor>>,
+    /// Where what it does goes: the machine, or — with no daemon behind it
+    /// — an outbox. See [`Reach`].
+    reach: Reach,
     view: crate::player::View,
     /// A pairing's name, between its two questions.
-    pairing: crate::player::Pairing,
+    pairing: crate::player_machines::Pairing,
     /// Where the thread that pairs says how it ended.
-    paired: channel::Sender<crate::player::Paired>,
+    paired: channel::Sender<crate::player_machines::Paired>,
+    /// Where an ask told off the loop says how it ended.
+    told: crate::player::ToldSender,
     player: Option<State>,
+    /// A picture per lane shown on this door's screen, each with its thread.
     pictures: Vec<crate::player_picture::Picture>,
+    /// Where each picture was PLACED this frame — logical pixels of the
+    /// surface, in the order drawn: what the painter draws and a click
+    /// reads (`player_layout::placed`).
+    placed: ronoctua_player::arrange::Placement,
+    /// The screen a window opened for ONE screen shows (`player maximized
+    /// --screen`): what it composes and where it goes whole-screen.
+    screen_wanted: Option<String>,
+    /// The screen the column is on, as its base says it
+    /// (`Tenant::placed_on`) — ahead of the surface's own `enter`.
+    placed_on: Option<String>,
+    /// The sound outputs, held while a row of them is on screen.
+    sinks: Option<crate::player::SinksHeld>,
+    /// The screens a photograph's door knows and the one it is on
+    /// ([`Player::given_screens`]) — `None` on a screen, where the door's
+    /// own connection says them.
+    screens_given: Option<(Vec<crate::player_lane::Known>, Option<String>)>,
     frame_sender: channel::Sender<usize>,
-    /// The transport as last DRAWN: `(line, first column, last column, id)`
-    /// — the volume's glyph is on the time bar's line.
+    /// The transport as last DRAWN: `(line, first column, last column, id)`.
     buttons: Vec<(u16, u16, u16, &'static str)>,
     /// Where everything was last laid out.
     layout: Layout,
+    /// The DECK under the transport as last laid out — the time bar, or a
+    /// set's ruler and lanes (`crate::player_timeline`): what the painter
+    /// drew and what the pointer reads back.
+    deck: crate::player_timeline::Deck,
+    /// The first lane the block shows, when a set has more than it holds.
+    deck_offset: usize,
+    /// A band being DRAGGED — where its ghost would land — until it is let
+    /// go, or `Esc` calls it off.
+    dragged: Option<crate::player_timeline::Held>,
+    /// The control of a deck under the pointer that spoke last: its glyph
+    /// lights, and line 0 says what it does.
+    deck_under: Option<(DeckAt, usize, crate::player_timeline::Hit)>,
+    /// The lane the BLOCK's deck has chosen — a first click on its band or its
+    /// name — which wears the cursor's colour there; a second click on it
+    /// opens its page (invariant 19). The rows' decks choose by the cursor.
+    deck_chosen: Option<ronoctua_player::own::LaneId>,
     /// How the picture is shown.
     stage: Stage,
     /// The stage to be set on the first turn, once the window exists.
@@ -583,6 +975,13 @@ struct Player {
     /// before the first `Enter` it was `(0, 0)`, which is the header's
     /// corner, and the controls stayed up for good.
     pointer_at: Option<(f64, f64)>,
+    /// The thread that draws the GLOBE of a directory's page — `None` in a
+    /// detached player, which draws it in place (`View::globe_drawn_here`).
+    globe_stage: Option<crate::globe::Stage>,
+    /// Where the globe's picture was drawn this frame, and its size in
+    /// pixels: what a pointer on it is read back through
+    /// (`player_globe::picture_px`).
+    globe_drawn: Option<(ronoctua_render::image::Area, (u32, u32))>,
     /// The thread watching the player's state.
     _watch: Arc<AtomicBool>,
 }
@@ -591,13 +990,120 @@ impl Drop for Player {
     fn drop(&mut self) {
         // THE PICTURES' THREADS go with the pictures (`player_picture`), and
         // the column's slot with the column (`crate::column`).
-        if self.opened_for.is_some() {
+        if self.opened_for.is_some() && self.screen_wanted.is_none() {
             crate::player_stage::leave();
         }
     }
 }
 
 impl Player {
+    /// The player with NO DAEMON BEHIND IT, in `door`: nothing is started
+    /// and nothing watched, the state arrives by [`Player::state_arrived`] —
+    /// the path the watch thread's own states take — and everything that
+    /// would leave the door is kept in `outbox` instead ([`Reach::Kept`]).
+    /// What `crate::photograph` draws: a door that could reach a daemon
+    /// would pause the person's film on a click.
+    ///
+    /// Its file browser's places are under `places` (`Music`, `Videos`),
+    /// and the machine's own folders only when that is `None`.
+    #[must_use]
+    pub fn detached(door: Door, outbox: Outbox, places: Option<std::path::PathBuf>) -> Self {
+        let (frame_sender, _) = channel::channel::<usize>();
+        let (paired, _) = channel::channel::<crate::player_machines::Paired>();
+        let (told, _) = channel::channel::<crate::player::Told>();
+        Self {
+            door,
+            // NO LOOP TO ARM A TIMER ON: the controls stay until `rest`.
+            arm_controls: Box::new(|| None),
+            arm_corner: Box::new(|| false),
+            window: RefCell::new(None),
+            reach: Reach::Kept(Box::new(outbox)),
+            // THE PREFERENCES' DEFAULTS, not the person's: a photograph is
+            // the same picture on every machine.
+            view: crate::player::View::blank(places),
+            pairing: crate::player_machines::Pairing::default(),
+            paired,
+            told,
+            player: None,
+            pictures: Vec::new(),
+            placed: Vec::new(),
+            screen_wanted: None,
+            placed_on: None,
+            sinks: None,
+            screens_given: None,
+            frame_sender,
+            buttons: Vec::new(),
+            layout: Layout::default(),
+            deck: blank_deck(),
+            deck_offset: 0,
+            dragged: None,
+            deck_under: None,
+            deck_chosen: None,
+            stage: Stage::Off,
+            first_stage: None,
+            opened_for: None,
+            controls_until: None,
+            controls_timer: None,
+            corner_owed: 0,
+            fullscreen: false,
+            corner_timer: false,
+            painted: false,
+            button_under: None,
+            pointer_at: None,
+            // NO THREAD: the globe is drawn in place, as the frame is.
+            globe_stage: None,
+            globe_drawn: None,
+            _watch: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// What a detached player kept instead of acting — `None` for a player
+    /// on a screen, which acted.
+    #[must_use]
+    pub const fn outbox(&self) -> Option<&Outbox> {
+        match &self.reach {
+            Reach::Kept(out) => Some(&**out),
+            Reach::Machine { .. } => None,
+        }
+    }
+
+    /// Whether its file browser is open.
+    #[must_use]
+    pub fn browsing(&self) -> bool {
+        self.view.browsing()
+    }
+
+    /// What a detached player would have asked, in order — nothing for a
+    /// player on a screen. For a test.
+    #[cfg(test)]
+    #[must_use]
+    pub fn asked(&self) -> &[Ask] {
+        self.outbox().map_or(&[], |out| out.asked.as_slice())
+    }
+
+    /// Time passes on a detached player's clock — between two steps of a
+    /// photograph's walk. A player on a screen has the machine's.
+    pub fn wait(&mut self, by: std::time::Duration) {
+        if let Reach::Kept(out) = &mut self.reach {
+            out.wait(by);
+        }
+    }
+
+    /// The stage, set as a key sets it — see [`Player::set_stage`].
+    pub fn stage_to(&mut self, ui: &mut Ui, to: Stage) {
+        self.set_stage(ui, to);
+    }
+
+    /// The controls' time runs out, as their timer's last ring takes them —
+    /// on stage, the picture alone. A detached player has no loop to ring
+    /// that timer, so this is how a photograph shows the stage nobody has
+    /// touched.
+    pub fn rest(&mut self, ui: &mut Ui) {
+        self.controls_until = None;
+        self.button_under = None;
+        ui.ask_paint();
+    }
+
     /// Whether the picture is shown alone.
     fn on_stage(&self) -> bool {
         self.stage != Stage::Off
@@ -606,10 +1112,13 @@ impl Player {
     /// Whether the transport and the header are drawn — always off stage,
     /// and on stage for a while after activity.
     fn controls_shown(&self) -> bool {
+        // A DETACHED PLAYER HAS NO TIMER to take them: they stay until
+        // `rest` does, so a picture taken on a slow machine is the picture
+        // taken on a fast one.
         !self.on_stage()
             || self
                 .controls_until
-                .is_some_and(|u| std::time::Instant::now() < u)
+                .is_some_and(|u| self.reach.is_kept() || std::time::Instant::now() < u)
     }
 
     /// Whether the pointer rests on the controls drawn over the picture.
@@ -684,7 +1193,7 @@ impl Player {
             } else {
                 crate::player::Show::Maximized
             };
-            if let Err(e) = crate::player_stage::toggle(show) {
+            if let Err(e) = self.reach.stage_window(show) {
                 tracing::warn!(error = %e, "could not open the player's window for its stage");
             }
             return;
@@ -703,7 +1212,14 @@ impl Player {
         let window = self.window.borrow().clone();
         if let Some(w) = &window {
             if to == Stage::Maximized {
-                w.set_fullscreen(None);
+                // ON ITS OWN SCREEN, for a window "show on every screen"
+                // opened there — xdg-shell's own argument — and the
+                // compositor's choice for every other.
+                let output = self
+                    .screen_wanted
+                    .as_deref()
+                    .and_then(|c| ui.screen_named(c));
+                w.set_fullscreen(output.as_ref());
             } else if self.stage == Stage::Maximized {
                 w.unset_fullscreen();
             }
@@ -753,6 +1269,12 @@ impl Player {
     /// the compositor before the commit does. With nothing playing no frame
     /// follows, and the window stayed in the layout — the VM caught it.
     fn float_in_the_corner(&mut self) {
+        // A DETACHED WINDOW HAS NO COMPOSITOR TO FLOAT IT: nothing is owed,
+        // and no turn of a photograph's walk counts the tries down to a
+        // warning about a compositor that was never there.
+        if self.reach.is_kept() {
+            self.corner_owed = 0;
+        }
         if self.corner_owed == 0 {
             return;
         }
@@ -785,10 +1307,7 @@ impl Player {
         &mut self,
         ask: impl FnOnce(&mut dyn ronoctua_compositor::Compositor, u64) -> Result<()>,
     ) -> bool {
-        if self.wm.is_none() {
-            self.wm = crate::daemon::open_the_compositor().ok();
-        }
-        let Some(wm) = self.wm.as_mut() else {
+        let Some(wm) = self.reach.compositor() else {
             return false;
         };
         let me = i32::try_from(std::process::id()).ok();
@@ -804,7 +1323,7 @@ impl Player {
             Err(e) => {
                 tracing::warn!(error = %e, "the compositor refused the window's place");
                 // A CONNECTION THAT FAILED is opened again next time.
-                self.wm = None;
+                self.reach.forget_the_compositor();
                 false
             }
         }
@@ -820,18 +1339,137 @@ impl Player {
         self.set_stage(ui, if self.stage == to { Stage::Off } else { to });
     }
 
-    /// Where a picture is on the surface: its band, or on stage the whole
-    /// surface from `area`'s top — under a column's control line.
-    fn picture_area(&self, ui: &Ui, place: Place, area: &Area) -> ronoctua_render::image::Area {
+    /// Where the pictures go on the surface, in logical pixels: the band the
+    /// layout gave them, or on stage the whole surface from `area`'s top —
+    /// under a column's control line. `None` with no band.
+    fn band_area(&self, ui: &Ui, area: &Area) -> Option<ronoctua_player::arrange::Rect> {
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (ui.width as f32, ui.height as f32);
-        if self.on_stage() {
-            return stage_area(w, h, area);
-        }
-        place.area(w, line_px())
+        let a = if self.on_stage() {
+            stage_area(w, h, area)
+        } else {
+            let (first, lines) = self.layout.band?;
+            ronoctua_render::image::Area {
+                x: 0.0,
+                y: line_px() * f32::from(first),
+                width: w,
+                height: line_px() * f32::from(lines),
+            }
+        };
+        Some(ronoctua_player::arrange::Rect {
+            x: a.x,
+            y: a.y,
+            width: a.width,
+            height: a.height,
+        })
     }
 
-    fn state_arrived(&mut self, ui: &mut Ui, s: Option<State>) {
+    /// THE SCREEN THIS DOOR SHOWS: the one a window was opened for (`player
+    /// maximized --screen`), else the column's — its base says it, ahead of
+    /// the surface — else the one its surface entered. `None` is unknown,
+    /// which shows every picture (`player_layout::tiles_on`).
+    fn screen(&self, ui: &Ui) -> Option<String> {
+        if let Some(c) = &self.screen_wanted {
+            return Some(c.clone());
+        }
+        if let Some((_, here)) = &self.screens_given {
+            return here.clone();
+        }
+        match self.door {
+            Door::Column => self
+                .placed_on
+                .clone()
+                .or_else(|| ui.screens.here().map(ToOwned::to_owned)),
+            Door::Window | Door::Footer => ui.screens.here().map(ToOwned::to_owned),
+        }
+    }
+
+    /// The screens this door knows BY NAME — what a lane's page routes a
+    /// picture to.
+    fn known(&self, ui: &Ui) -> Vec<crate::player_lane::Known> {
+        if let Some((known, _)) = &self.screens_given {
+            return known.clone();
+        }
+        ui.screens
+            .all()
+            .iter()
+            .filter_map(|s| {
+                Some(crate::player_lane::Known {
+                    connector: s.connector.clone()?,
+                    description: s.description.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// The screens moved — described, gone, the surface on another, the
+    /// column placed elsewhere: the view is told, and what is composed here
+    /// follows at the next frame.
+    fn screens_follow(&mut self, ui: &mut Ui) {
+        let (known, here) = (self.known(ui), self.screen(ui));
+        if self.view.screens_are(known, here) {
+            ui.ask_paint();
+        }
+        // A WINDOW OPENED FOR ONE SCREEN waited for that screen's name to go
+        // whole-screen on it (`each_turn_here`).
+        if self.first_stage.is_some() {
+            self.each_turn_here(ui);
+        }
+    }
+
+    /// The screens a PHOTOGRAPH's door knows — no compositor describes an
+    /// output to a detached door — and the one it is on (`crate::photograph`).
+    pub fn given_screens(
+        &mut self,
+        ui: &mut Ui,
+        known: Vec<crate::player_lane::Known>,
+        here: Option<String>,
+    ) {
+        self.screens_given = Some((known, here));
+        self.screens_follow(ui);
+    }
+
+    /// What the player's watch heard: a state to show — none, and the door
+    /// says the player is not running — or the farewell of a player closed
+    /// everywhere, and the door closes (`player::hearing`).
+    pub fn heard(&mut self, ui: &mut Ui, heard: ronoctua_player::client::Heard) {
+        match crate::player::hearing(heard) {
+            crate::player::Hearing::Shows(s) => {
+                // GONE, and the queue it had with it — and what this door
+                // held of ITS sheets and desks: a player that comes back
+                // counts them from zero again, and says its own.
+                if s.is_none() {
+                    self.view.outline_arrived(None);
+                    self.view.player_gone();
+                }
+                self.state_arrived(ui, s.map(|s| *s));
+            }
+            crate::player::Hearing::Outline(o) => self.outline_arrived(ui, Some(o)),
+            crate::player::Hearing::Closes => self.leave(ui),
+        }
+    }
+
+    /// THIS DOOR CLOSES because the player closed: its pictures let go now,
+    /// and the loop ends — the column's `Drop` gives its slot up, a stage's
+    /// window its own.
+    fn leave(&mut self, ui: &mut Ui) {
+        self.pictures.clear();
+        ui.quit = true;
+        ui.ask_paint();
+    }
+
+    /// A state from the player — the watch thread's, or a photograph's
+    /// fixture (`crate::photograph`): the cursor follows what it was on.
+    pub fn state_arrived(&mut self, ui: &mut Ui, s: Option<State>) {
+        // A HOLD ON THE OUTPUTS WHOSE PLAYER WENT is no hold: the one that
+        // speaks now is held again by the next frame that shows the rows.
+        if self
+            .sinks
+            .as_ref()
+            .is_some_and(crate::player::SinksHeld::ended)
+        {
+            self.sinks = None;
+        }
         let spot = self
             .rows(ui)
             .get(self.view.cursor())
@@ -846,24 +1484,172 @@ impl Player {
         ui.ask_paint();
     }
 
+    /// The sheet of the file the Metadata section shows — a photograph's
+    /// fixture (`crate::photograph`, `--sheet`): the view holds it as a
+    /// door's thread would have left it, its cover decoded.
+    pub fn sheet_arrived(&mut self, ui: &mut Ui, sheet: ronoctua_tags::Sheet) {
+        let location = sheet.location.to_string_lossy().into_owned();
+        let generation = self.player.as_ref().map_or(0, |s| s.sheet_generation);
+        // THE FILE AS WHAT PLAYS NAMES IT: the ring's own spelling, which is
+        // what the section looks for.
+        let location = self
+            .player
+            .as_ref()
+            .map(crate::player_metadata::locations)
+            .and_then(|all| {
+                all.into_iter()
+                    .find(|l| std::path::Path::new(l) == std::path::Path::new(&location))
+            })
+            .unwrap_or(location);
+        self.view.meta.given(
+            &location,
+            generation,
+            crate::player_metadata::Got::Sheet(Box::new(sheet)),
+        );
+        self.view
+            .settle_in(self.player.as_ref(), ui.columns, &ui.texts);
+        ui.ask_paint();
+    }
+
+    /// A desk's page — a photograph's fixture (`crate::photograph`,
+    /// `--desk`): the view holds it as a door's thread would have left it,
+    /// a suggested cover decoded.
+    pub fn desk_arrived(&mut self, ui: &mut Ui, desk: ronoctua_player::find::Desk) {
+        self.view.found.given(desk);
+        self.view
+            .settle_in(self.player.as_ref(), ui.columns, &ui.texts);
+        ui.ask_paint();
+    }
+
+    /// A directory's list the player refused at once — a photograph's
+    /// (`--refused`): what the answer to its `find` does in a door on a
+    /// screen (`player::Told::Listing`).
+    pub fn listing_refused(
+        &mut self,
+        ui: &mut Ui,
+        query: ronoctua_player::find::Query,
+        trouble: ronoctua_player::wire::Trouble,
+    ) {
+        let told = crate::player::Told::Listing {
+            query,
+            answer: Box::new(crate::player::Told::Refused(trouble)),
+        };
+        if self.view.told(&told) {
+            self.view
+                .settle_in(self.player.as_ref(), ui.columns, &ui.texts);
+        }
+        let older = self.player.as_ref().is_some_and(crate::player::older);
+        ui.message = crate::player::told_sentence(&told, older, &ui.texts);
+        ui.ask_paint();
+    }
+
+    /// The favourites and the played lately — a photograph's
+    /// (`--favourites`, `--recent`): never read from this machine's files.
+    pub fn picks_given(
+        &mut self,
+        favourites: Vec<ronoctua_broadcast::picks::Pick>,
+        recent: Vec<ronoctua_broadcast::picks::Pick>,
+    ) {
+        self.view.directories.picks.given(favourites, recent);
+    }
+
+    /// Every group of the globe's marks the last frame drew, and the cell of
+    /// the surface its centre is in — what a photograph says it drew, so a
+    /// walk can point at one (`--list`).
+    #[must_use]
+    pub fn globe_marks_at(&self) -> Vec<MarkDrawn> {
+        let Some((drawn, size)) = self.globe_drawn else {
+            return Vec::new();
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let (sx, sy) = (
+            drawn.width / size.0.max(1) as f32,
+            drawn.height / size.1.max(1) as f32,
+        );
+        self.view
+            .globe_groups()
+            .into_iter()
+            .map(|(members, (x, y))| {
+                let at = (f64::from(drawn.x + x * sx), f64::from(drawn.y + y * sy));
+                (members, (column_at(at.0), line_at(at.1)), at)
+            })
+            .collect()
+    }
+
+    /// The person's keys as kept — a photograph's (`--kept`): never read
+    /// from this machine's files.
+    pub fn keys_given(&mut self, keys: Vec<ronoctua_lookup::keys::Key>) {
+        self.view.kept = crate::player_internet::Kept::given(keys);
+    }
+
+    /// A several-line field's draft, where the daemon wrote it: opened in the
+    /// editor — `files::editor_command`, the file manager's own answer — or,
+    /// with no editor on this machine, that said.
+    fn draft_opened(&mut self, ui: &mut Ui, path: &std::path::Path) {
+        let client = std::env::var("RONOCTUA_EMACSCLIENT").ok();
+        ui.message = Some(
+            match crate::files::editor_command(client.as_deref(), path) {
+                Some((program, args, cwd)) => {
+                    ui.launch(&program, &args, cwd.as_deref());
+                    ui.texts.t(ronoctua_i18n::key::PLAYER_DRAFT_OPENED)
+                }
+                None => ui.texts.t(ronoctua_i18n::key::FILES_NO_EDITOR),
+            },
+        );
+        ui.ask_paint();
+    }
+
+    /// The queue's outline from the player — the watch thread's, or a
+    /// photograph's fixture: kept by the view, which draws the queue from it,
+    /// and the cursor follows what it was on.
+    pub fn outline_arrived(
+        &mut self,
+        ui: &mut Ui,
+        outline: Option<Box<ronoctua_player::queue::Outline>>,
+    ) {
+        self.view
+            .outline_heard(outline, self.player.as_ref(), ui.columns, &ui.texts);
+        ui.ask_paint();
+    }
+
+    /// A frame of lane `k`'s picture arrived.
     fn frame_arrived(&mut self, ui: &mut Ui, k: usize) {
+        let lane = u32::try_from(k).ok().map(ronoctua_player::own::LaneId);
         if self
             .pictures
-            .get_mut(k)
+            .iter_mut()
+            .find(|p| p.of.is_some() && p.of == lane)
             .is_some_and(crate::player_picture::Picture::took_a_frame)
         {
             ui.ask_paint();
         }
     }
 
-    fn rows(&self, ui: &Ui) -> Vec<crate::player::Row> {
+    fn rows(&self, ui: &Ui) -> Vec<crate::player_rows::Row> {
         self.view.rows(self.player.as_ref(), ui.columns, &ui.texts)
     }
 
     /// Lays the door out from the state, the size and the area it is handed.
     fn relayout(&mut self, ui: &Ui, area: &Area) {
-        let video = self.player.as_ref().and_then(|s| s.video);
-        let followers = self.player.as_ref().map_or(0, |s| s.participants.len());
+        // THE PICTURES ROUTED TO THIS DOOR'S SCREEN, in the arrangement's
+        // order (`player_layout::tiles_on`) — and the view told the screens,
+        // for a lane's page.
+        let screen = self.screen(ui);
+        let known = self.known(ui);
+        self.view.screens_are(known, screen.clone());
+        let tiles = self
+            .player
+            .as_ref()
+            .map(|s| crate::player_layout::tiles_on(s, screen.as_deref()))
+            .unwrap_or_default();
+        let form = self.player.as_ref().map_or(
+            ronoctua_player::own::Form::Auto,
+            crate::player_layout::form_of,
+        );
+        let shape =
+            (!tiles.is_empty()).then(|| ronoctua_player::arrange::natural_aspect(form, &tiles));
+        self.deck = self.block_deck(ui, area);
+        let deck = u16::try_from(self.deck.lines.len()).unwrap_or(1);
         self.layout = if self.on_stage() {
             stage_layout(area.top, ui.lines)
         } else {
@@ -873,53 +1659,280 @@ impl Player {
                 ui.lines,
                 ui.columns + 2 * MARGIN,
                 line_px() / cell_px(),
-                video,
-                followers,
+                shape,
+                deck,
             )
         };
-        // A THREAD PER PICTURE, started and ended with the layout.
-        let n = self.layout.pictures.len();
-        self.pictures.truncate(n);
-        while self.pictures.len() < n {
-            let k = self.pictures.len();
-            let of = k.checked_sub(1);
-            self.pictures.push(crate::player_picture::Picture::start(
-                of,
-                k,
-                self.frame_sender.clone(),
-            ));
+        // WHERE EACH GOES in the band — or on stage the whole surface — by
+        // the one placement every door shares: what is painted and what a
+        // click reads.
+        let band = self.band_area(ui, area);
+        self.placed = match (band, self.player.as_ref()) {
+            (Some(band), Some(s)) => crate::player_layout::placed(s, &tiles, band),
+            _ => Vec::new(),
+        };
+        // AND THE VIEW TOLD WHERE THEY ARE LAID OUT: the Layout page draws
+        // what this door shows, and says what it leaves out.
+        self.view
+            .pictures_room_is(band.map(|b| (b.width, b.height)));
+        // A THREAD PER PICTURE, BY ITS LANE: kept while the lane is shown
+        // here — moved to another place of the order, it keeps its frames —
+        // ended when it is not; and in a detached player a STILL, standing
+        // in for the daemon's frames (`Reach::picture`).
+        let placed = &self.placed;
+        self.pictures
+            .retain(|p| p.of.is_some_and(|l| placed.iter().any(|(x, _)| *x == l)));
+        for (lane, _) in &self.placed {
+            if !self.pictures.iter().any(|p| p.of == Some(*lane)) {
+                let picture = self.reach.picture(*lane, &self.frame_sender);
+                self.pictures.push(picture);
+            }
         }
         // AND THE SIZE EACH ASKS FOR, in PHYSICAL pixels: the frame is drawn
-        // one pixel to one pixel, sharp on a scale-2 screen.
-        //
-        // THE VIDEO'S OWN PROPORTION, fitted in the band — not the band's: a
-        // frame asked in the band's shape comes back letterboxed by the player,
-        // in black, and the band's surface tone behind it never shows. Asked
-        // in the video's shape, the band is what surrounds it. Only the main
-        // picture's shape is known (`State::video`); a follower keeps the
-        // band's.
-        //
-        // ON STAGE THE BAND'S SHAPE, on purpose: there the letterbox the
-        // player draws is the black a picture on its own is framed in.
-        let video = self.player.as_ref().and_then(|s| s.video);
-        for (p, place) in self.pictures.iter().zip(&self.layout.pictures) {
-            let band = self.picture_area(ui, *place, area);
-            let (fw, fh) = fitted(
-                band.width,
-                band.height,
-                if p.of.is_none() && !self.on_stage() {
-                    video
+        // one pixel to one pixel, sharp on a scale-2 screen — its place's,
+        // which is already the picture's own shape: a frame asked in a band's
+        // shape comes back letterboxed by the player, in black, and the band's
+        // surface tone behind it never shows.
+        for (lane, rect) in &self.placed {
+            if let Some(p) = self.pictures.iter().find(|p| p.of == Some(*lane)) {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_precision_loss
+                )]
+                let size = (
+                    (rect.width * ui.scale as f32) as u32,
+                    (rect.height * ui.scale as f32) as u32,
+                );
+                p.want(size);
+            }
+        }
+    }
+
+    /// THE DECK UNDER THE TRANSPORT, laid out for this frame: a SET's lanes
+    /// on one clock — `space.player.deckLanes` of them at most, and never
+    /// more than a quarter of the surface's lines, the rest scrolling under
+    /// one bar — and otherwise the one time bar: a file alone, a stage (the
+    /// picture alone, the whole screen, the corner), and the timeline's own
+    /// page, whose rows are every lane already. The small column keeps a
+    /// lane's glyph, its band and its mute (`Room::narrow`).
+    fn block_deck(&mut self, ui: &Ui, area: &Area) -> crate::player_timeline::Deck {
+        use crate::player_timeline::{Room, of_state, set_lanes};
+        let s = self.player.as_ref();
+        let lanes = match s {
+            Some(s) if !self.on_stage() && self.view.page() != crate::player::PageId::Timeline => {
+                set_lanes(s, self.view.outline.as_deref())
+            }
+            _ => &[],
+        };
+        let room = if area.size == Size::Small {
+            Room::narrow(ui.columns)
+        } else {
+            Room::wide(ui.columns)
+        }
+        .at_most(tokens::space::PLAYER_DECKLANES.min(ui.lines / 4));
+        let deck = of_state(lanes, s, room, self.deck_offset);
+        self.deck_offset = deck.scroll.offset;
+        deck
+    }
+
+    /// Which DECK is under `(x, y)`, which of its lines, and at which column
+    /// of it (fractional cells from the deck's own first cell), with the
+    /// deck's first cell in the surface — the block under the transport, or a
+    /// row that is a line of one. None while the controls are hidden: hidden
+    /// controls are not controls.
+    fn deck_at(
+        &self,
+        ui: &Ui,
+        rows: &[crate::player_rows::Row],
+        x: f64,
+        y: f64,
+    ) -> Option<(DeckAt, usize, f64, f64)> {
+        if !self.controls_shown() || y < 0.0 {
+            return None;
+        }
+        let l = line_at(y);
+        let cells = x / f64::from(cell_px()).max(1.0);
+        if l >= self.layout.bar && l < self.layout.bar + self.layout.deck {
+            let line = usize::from(l - self.layout.bar);
+            if line < self.deck.lines.len() {
+                let origin = f64::from(MARGIN);
+                return Some((DeckAt::Block, line, cells - origin, origin));
+            }
+        }
+        let n = self.row_at(ui, x, y)?;
+        let (d, column) = crate::player_rows::deck_at(rows, n, Self::column_in_rows(x))?;
+        Some((DeckAt::Row(n), d.line, column, f64::from(MARGIN + d.left)))
+    }
+
+    /// What the deck `at` says a press at `column` of its `line` takes — the
+    /// block's, or the one a row carries.
+    fn deck_hit(
+        &self,
+        at: DeckAt,
+        rows: &[crate::player_rows::Row],
+        line: usize,
+        column: f64,
+    ) -> Option<crate::player_timeline::Hit> {
+        match at {
+            DeckAt::Block => self.deck.hit(line, column),
+            DeckAt::Row(n) => rows.get(n)?.deck.as_ref()?.deck.hit(line, column),
+        }
+    }
+
+    /// The control of a deck under `(x, y)`, when one is: what lights, and
+    /// what line 0 says.
+    fn deck_hover(
+        &self,
+        ui: &Ui,
+        rows: &[crate::player_rows::Row],
+        x: f64,
+        y: f64,
+    ) -> Option<(DeckAt, usize, crate::player_timeline::Hit)> {
+        let (at, line, column, _) = self.deck_at(ui, rows, x, y)?;
+        self.deck_hit(at, rows, line, column)
+            .map(|hit| (at, line, hit))
+    }
+
+    /// What a deck `at` asked — the player told, a lane's page opened, or a
+    /// lane CHOSEN: on a row the first click brings the cursor to it and the
+    /// second opens its page; on the block the lane is lit as chosen, and a
+    /// second click on it opens its page (invariant 19).
+    fn deck_act(&mut self, ui: &mut Ui, act: crate::player_timeline::Act, at: DeckAt) {
+        use crate::player_timeline::Act;
+        match act {
+            Act::Nothing => ui.ask_paint(),
+            Act::Tell(ask) => self.tell(ui, &ask),
+            Act::Choose(lane) => {
+                let again = match at {
+                    DeckAt::Row(n) => self.view.band_clicked(n),
+                    DeckAt::Block => self.deck_chosen.replace(lane) == Some(lane),
+                };
+                if again {
+                    self.pressed(
+                        ui,
+                        crate::player::Press::Go(crate::player::PageId::Lane(lane)),
+                    );
                 } else {
-                    None
-                },
-            );
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss
-            )]
-            let size = ((fw * ui.scale as f32) as u32, (fh * ui.scale as f32) as u32);
-            p.want(size);
+                    ui.ask_paint();
+                }
+            }
+        }
+    }
+
+    /// The block's lanes put where a press at height `y` on their bar puts
+    /// them — the bar grabbed by its whole track.
+    fn deck_bar_to(&mut self, ui: &mut Ui, y: f64) {
+        #[allow(clippy::cast_possible_truncation)]
+        let y = y as f32;
+        self.deck_offset = self.deck.offset_at(
+            ui.frame(0),
+            self.layout.bar,
+            MARGIN,
+            0..self.deck.lines.len(),
+            y,
+        );
+        ui.ask_paint();
+    }
+
+    /// A COVER over the rows of `cr`'s run — `run` of its lines on screen,
+    /// the first at line `y` — as `player_metadata::cover_place` places it:
+    /// in its own proportion from the box's corner, the part the scroll cut
+    /// cut from the picture too, under a key of its own. Uploaded when the
+    /// texture is missing; `None` when the view holds no such picture or
+    /// nothing of it shows.
+    fn cover_drawn(
+        &self,
+        cr: &crate::player_rows::CoverRow,
+        run: usize,
+        y: u16,
+        canvas: &mut Canvas<'_>,
+    ) -> Option<(String, ronoctua_render::image::Area)> {
+        let s = self.player.as_ref()?;
+        let (key, rgba) = self.view.picture(s, &cr.key)?;
+        let first = cr.line;
+        let end = first.saturating_add(u16::try_from(run).unwrap_or(u16::MAX));
+        let (place, crop) = crate::player_metadata::cover_place(
+            (cr.cells, cr.lines),
+            (cell_px(), line_px()),
+            cr.size,
+            (first, end),
+        )?;
+        let key = if crop == (0.0, 1.0) {
+            key.clone()
+        } else {
+            format!("{key}:{:.4}:{:.4}", crop.0, crop.1)
+        };
+        if canvas.images.missing(&key) {
+            let piece = if crop == (0.0, 1.0) {
+                Some((**rgba).clone())
+            } else {
+                crate::player_metadata::cropped(rgba, crop)
+            };
+            if let Some(piece) = piece {
+                canvas
+                    .images
+                    .upload_it(canvas.device, canvas.queue, &key, &piece);
+            }
+        }
+        // THE BOX'S TOP is `first` lines above the line drawn first.
+        let top = (f32::from(y) - f32::from(first)) * line_px();
+        Some((
+            key,
+            ronoctua_render::image::Area {
+                x: f32::from(MARGIN + cr.left) * cell_px() + place.x,
+                y: top + place.y,
+                width: place.width,
+                height: place.height,
+            },
+        ))
+    }
+
+    /// THE BLOCK'S DECK AS IT IS DRAWN: its shapes — a dragged band's ghost
+    /// among them — its words, each glyph lit under the pointer as a button
+    /// is, and its bar's track. The painter draws this, and nothing else of
+    /// the block; the pointer reads the same deck at the same place
+    /// ([`Player::deck_at`]).
+    fn block_drawn(&self, ui: &Ui) -> BlockDrawn {
+        let f = ui.frame(0);
+        let s = self.player.as_ref();
+        let sound = s.map(|s| crate::player_timeline::Sound {
+            volume_percent: s.volume,
+            muted: s.muted,
+        });
+        let nothing = State::default();
+        let said = s.unwrap_or(&nothing);
+        let deck = self.deck.holding(self.dragged);
+        let every = 0..deck.lines.len();
+        let mut spans = Vec::new();
+        for line in every.clone() {
+            let lit = self
+                .deck_under
+                .filter(|(at, l, _)| *at == DeckAt::Block && *l == line)
+                .and_then(|(_, _, hit)| hit.part());
+            let y = self.layout.bar + u16::try_from(line).unwrap_or(0);
+            // THE LANE A FIRST CLICK CHOSE wears the cursor's colour.
+            let chosen = self
+                .deck_chosen
+                .is_some_and(|c| deck.lane_line(line).is_some_and(|l| l.lane == c));
+            for w in deck.words(line, said, &ui.texts, lit, chosen) {
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::Px(tokens::text::size()),
+                    text: w.text,
+                    column: MARGIN + w.at,
+                    line: y,
+                    color: w.color,
+                    edge: false,
+                    foot: false,
+                });
+            }
+        }
+        BlockDrawn {
+            quads: deck.quads(f, self.layout.bar, MARGIN, every.clone(), sound),
+            spans,
+            bar: deck
+                .bar(f, self.layout.bar, MARGIN, every)
+                .map(|(track, _)| track),
         }
     }
 
@@ -947,28 +1960,68 @@ impl Player {
     }
 
     fn apply(&mut self, ui: &mut Ui, errand: crate::player::Errand) {
-        match crate::player::carry_out(errand, &ui.texts) {
+        // WHAT REACHES PAST THE DOOR — the daemon, the person's preferences —
+        // is `Reach`'s: a detached player keeps it, and says what the door
+        // says when the daemon took it. Everything that stays in the door —
+        // a stage, a question, an order for the footer queued on a loop that
+        // never turns — is the door's, in both.
+        let carried = self.reach.carry_out(errand, &ui.texts, &self.told);
+        // WHAT THE ERRAND WROTE — a switch, a consent — read back from its
+        // file: a write that was refused is not shown as done.
+        self.view.errand_carried();
+        match carried {
             Ok(said) => ui.message = said,
             Err(crate::player::Errand::Close) => {
                 ui.quit = true;
                 return;
             }
             Err(crate::player::Errand::Show(show)) => self.toggle_stage(ui, show),
+            Err(crate::player::Errand::Swap) => {
+                self.swap(ui);
+                return;
+            }
+            // THE PLAYER CLOSED EVERYWHERE, from this door: the daemon told
+            // here — only if it runs, and never waited for — and the other
+            // doors that are processes ended here too, so it all goes even
+            // with no footer to hear the order; the footer is handed the same
+            // order for its own view; and this door goes.
+            Err(crate::player::Errand::QuitEverywhere) => {
+                self.reach.tell_if_running(&Ask::Quit);
+                self.reach.end_the_doors();
+                ui.tell_the_footer("player-quit", None);
+                self.leave(ui);
+                return;
+            }
             // WHAT THE VIEW ASKS IS TYPED HERE, on this door's own line — as
             // the footer types it on its minibuffer — and comes back to
             // `Content::answered`, a pairing's code masked.
             Err(crate::player::Errand::Ask(q)) => {
-                ui.ask(crate::line::Line::new(q.id, q.secret, None));
+                ui.ask(crate::line::Line::new(q.id, q.secret, q.initial.as_deref()));
             }
-            // A DOOR — the column, another window — is the footer's to open,
-            // and it is told off the loop.
-            Err(crate::player::Errand::Run(id)) => ui.tell_the_footer(id, None),
             // THE PAIRING, off the loop: the player answers only once the
             // other machine has, and this window's loop does not wait for it.
             Err(crate::player::Errand::Pair { to, code }) => {
-                let paired = self.paired.clone();
-                crate::player::pair_then(to, code, move |p| {
-                    let _ = paired.send(p);
+                self.reach.pair(to, code, self.paired.clone());
+            }
+            // WHAT PLAYS ON EVERY SCREEN — the screens this door knows by
+            // name, and those something goes to — or the windows up closed.
+            Err(crate::player::Errand::EveryScreen) => {
+                let known: Vec<String> = self.known(ui).into_iter().map(|k| k.connector).collect();
+                let routed: Vec<String> = self.player.as_ref().map_or_else(Vec::new, |s| {
+                    crate::player_layout::screens_with_pictures(s, &known)
+                        .into_iter()
+                        .map(ToOwned::to_owned)
+                        .collect()
+                });
+                ui.message = Some(match self.reach.every_screen(known.len(), &routed) {
+                    Ok(done) => crate::player_stage::everywhere_said(&done, &ui.texts),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "the windows for every screen could not be opened");
+                        ui.texts.t_with(
+                            ronoctua_i18n::key::PLAYER_EVERY_SCREEN_FAILED,
+                            &[("why", &e.to_string())],
+                        )
+                    }
                 });
             }
             Err(_) => {}
@@ -976,67 +2029,65 @@ impl Player {
         ui.ask_paint();
     }
 
-    fn tell(ui: &mut Ui, ask: &Ask) {
-        ui.message = crate::player::tell(ask, &ui.texts);
+    fn tell(&mut self, ui: &mut Ui, ask: &Ask) {
+        ui.message = None;
+        self.reach.tell(ask, &self.told);
         ui.ask_paint();
+    }
+
+    /// THIS DOOR FOR THE OTHER (`player::Errand::Swap`): a window asks the
+    /// footer to RAISE the column — never the toggle, which would close one
+    /// already up — and closes, which for a window opened for a stage is the
+    /// stage closing; the column asks for the window and closes, and its
+    /// `Drop` gives the slot up. The footer opens the door; and a footer that
+    /// did not take the order keeps this one open, saying so
+    /// (`Ui::hand_over`) — never a door gone and nothing in its place.
+    fn swap(&mut self, ui: &mut Ui) {
+        match self.door {
+            Door::Window => ui.hand_over("player-column", Some(crate::player::RAISE)),
+            // THE WINDOW, from the column — and from the footer, which
+            // carries its own swap out (`Footer::player_errand`).
+            Door::Column | Door::Footer => ui.hand_over("player-window", None),
+        }
+    }
+
+    /// A button pressed, in either door and in the bar: what
+    /// `player_transport::button_errand` says it does, carried out as a key's errand.
+    fn pressed_button(&mut self, ui: &mut Ui, id: &str) {
+        // A KEY OF THE VIEW — the media in the file opens a page — goes to
+        // the view, as the key would.
+        if let Some(press) = crate::player_transport::button_press(id) {
+            self.pressed(ui, press);
+            return;
+        }
+        let errand = crate::player_transport::button_errand(id, self.player.as_ref(), &ui.texts);
+        self.apply(ui, errand);
     }
 
     fn pressed(&mut self, ui: &mut Ui, press: crate::player::Press) {
         ui.message = None;
+        // ON STAGE THE ROWS ARE NOT DRAWN: a key that needs them brings them
+        // back first — and one that opens a page opens it there, in front of
+        // the person (`player::Unseen`).
+        if self.on_stage() && press.unseen() != crate::player::Unseen::Acts {
+            // A WINDOW OPENED FOR ITS STAGE is that stage and nothing else:
+            // leaving it closes it, so there are no rows here to bring back.
+            if self.opened_for.is_some() {
+                ui.message = Some(ui.texts.t(ronoctua_i18n::key::PLAYER_STAGE_HAS_NO_ROWS));
+                ui.ask_paint();
+                return;
+            }
+            self.set_stage(ui, Stage::Off);
+            if press.unseen() == crate::player::Unseen::ShowsTheRows {
+                return;
+            }
+        }
         let errand = self
             .view
             .key(press, self.player.as_ref(), ui.columns, &ui.texts);
         let rows = self.rows(ui).len();
         self.follow(ui, rows);
         self.apply(ui, errand);
-    }
-
-    /// The volume on the time bar's line, in cells: its glyph's first
-    /// column, and its track's `(first, end)` — at the right end, so the time
-    /// bar keeps the width it reads by.
-    fn volume_cells(ui: &Ui) -> (u16, (u16, u16)) {
-        let end = MARGIN + ui.columns;
-        let first = end.saturating_sub(tokens::space::PLAYER_VOLUMEBAR);
-        (first.saturating_sub(3), (first, end))
-    }
-
-    /// The time bar's track, in logical pixels: `(left, right)` — up to a
-    /// cell of air before the volume's glyph.
-    fn bar_track(ui: &Ui) -> (f32, f32) {
-        let cell = cell_px();
-        let left = cell * f32::from(MARGIN);
-        let right = cell * f32::from(Self::volume_cells(ui).0.saturating_sub(1));
-        (left, right.max(left))
-    }
-
-    /// The volume's track, in logical pixels: `(left, right)`.
-    fn volume_track(ui: &Ui) -> (f32, f32) {
-        let cell = cell_px();
-        let (from, to) = Self::volume_cells(ui).1;
-        (cell * f32::from(from), cell * f32::from(to))
-    }
-
-    /// The volume at `x` on its track, in percent.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn volume_at(ui: &Ui, x: f64) -> u8 {
-        let (l, r) = Self::volume_track(ui);
-        let f = ((x as f32 - l) / (r - l).max(1.0)).clamp(0.0, 1.0);
-        (f * f32::from(crate::player::VOLUME_MOST)).round() as u8
-    }
-
-    /// Whether `(x, y)` is on the volume's track.
-    fn on_the_volume(&self, ui: &Ui, x: f64, y: f64) -> bool {
-        let (l, r) = Self::volume_track(ui);
-        #[allow(clippy::cast_possible_truncation)]
-        let x = x as f32;
-        line_at(y) == self.layout.bar && x >= l && x < r
-    }
-
-    /// Where on the time bar `x` is, as a fraction.
-    #[allow(clippy::cast_possible_truncation)]
-    fn fraction_at(ui: &Ui, x: f64) -> f64 {
-        let (l, r) = Self::bar_track(ui);
-        ((x as f32 - l) / (r - l).max(1.0)).clamp(0.0, 1.0).into()
     }
 
     /// Where `x` is among the rows' own cells — a field's `at`, in fractions
@@ -1053,7 +2104,7 @@ impl Player {
         let Some(bar) = rows.get(row).and_then(|r| r.slider) else {
             return false;
         };
-        let errand = crate::player::slid(bar.of, bar.along(column), self.player.as_ref());
+        let errand = crate::player_rows::slid(bar.of, bar.along(column), self.player.as_ref());
         self.apply(ui, errand);
         true
     }
@@ -1082,25 +2133,47 @@ impl Player {
             .map(|(_, _, _, id)| *id)
     }
 
-    /// Whether `y` is on a picture.
+    /// The transport's panel: the surface inside its margins — the footer's
+    /// panel's arithmetic, on this door's line (`player_media::buttons`).
+    const fn transport_panel(ui: &Ui) -> crate::player_media::Panel {
+        crate::player_media::Panel {
+            from: MARGIN,
+            cells: ui.columns,
+        }
+    }
+
+    /// Every button of the transport this frame, where it goes — the ones
+    /// the state shows, three cells apart, only the ones whole. None while
+    /// the controls are hidden: HIDDEN CONTROLS ARE NOT CONTROLS, so a click
+    /// on stage lands on the picture and not on a button nobody can see. The
+    /// volume's glyph is the deck's, on its first line (`Deck::press`).
+    fn placed_buttons(&self, ui: &Ui, shown: bool) -> Vec<crate::player_media::Placed> {
+        if !shown {
+            return Vec::new();
+        }
+        crate::player_media::buttons(
+            Self::transport_panel(ui),
+            self.layout.transport,
+            self.player.as_ref(),
+        )
+    }
+
+    /// The point `at` of the surface in the globe's picture, as this frame
+    /// drew it, when it is on it — hidden controls are not controls, and on
+    /// stage no globe is drawn.
+    fn globe_px(&self, at: (f64, f64)) -> Option<(f32, f32)> {
+        let (drawn, size) = self.globe_drawn?;
+        #[allow(clippy::cast_possible_truncation)]
+        crate::player_globe::picture_px(drawn, size, (at.0 as f32, at.1 as f32))
+    }
+
+    /// Whether `y` is on the pictures' band — the pictures and the ground
+    /// they are framed on, which answers the click a picture would.
     fn on_a_picture(&self, y: f64) -> bool {
         let l = line_at(y);
         self.layout
-            .pictures
-            .iter()
-            .any(|p| l >= p.first && l < p.first + p.lines)
-    }
-
-    fn seek_to(&self, ui: &mut Ui, fraction: f64) {
-        if let Some(d) = self.player.as_ref().and_then(|s| s.duration) {
-            Self::tell(
-                ui,
-                &Ask::Seek {
-                    seconds: d * fraction,
-                    relative: false,
-                },
-            );
-        }
+            .band
+            .is_some_and(|(first, lines)| l >= first && l < first + lines)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1108,7 +2181,11 @@ impl Player {
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (ui.width as f32, ui.height as f32);
         let head = ui.frame(0);
-        let before = (hand.row_under_pointer, hand.extra.button_under);
+        let before = (
+            hand.row_under_pointer,
+            hand.extra.button_under,
+            self.deck_under,
+        );
         let total = self.rows(ui).len();
         let scroll = crate::chrome::list_scroll(total, self.room(ui), ui.offset);
         for e in events {
@@ -1139,21 +2216,54 @@ impl Player {
                         ui.ask_paint();
                         continue;
                     }
-                    if hand.extra.seeking {
-                        let f = Self::fraction_at(ui, e.position.0);
-                        self.seek_to(ui, f);
+                    // THE GLOBE HELD: past the slack, the hand turns it.
+                    if let Some(held) = hand.extra.globe.as_mut() {
+                        let far = (e.position.0 - held.at.0).hypot(e.position.1 - held.at.1);
+                        if far > f64::from(tokens::space::ATLAS_CLICKSLACK) {
+                            held.dragging = true;
+                        }
+                        if held.dragging {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let moved = self.view.globe_panned(
+                                (e.position.0 - held.last.0) as f32,
+                                (e.position.1 - held.last.1) as f32,
+                            );
+                            held.last = e.position;
+                            if moved {
+                                ui.ask_paint();
+                            }
+                        }
                         continue;
                     }
-                    if hand.extra.turning {
-                        let percent = Self::volume_at(ui, e.position.0);
-                        Self::tell(ui, &Ask::Volume { percent });
+                    // A DECK HELD: the drag goes on along what was pressed.
+                    if let Some((grip, origin, at)) = hand.extra.deck {
+                        self.deck_dragged(ui, hand, (grip, origin, at), e.position);
                         continue;
                     }
                     if let Some(row) = hand.extra.sliding {
                         self.slide(ui, row, e.position.0);
                         continue;
                     }
-                    hand.row_under_pointer = self.row_at(ui, e.position.0, e.position.1);
+                    let rows = self.rows(ui);
+                    self.deck_under = self.deck_hover(ui, &rows, e.position.0, e.position.1);
+                    // A LINE OF A DECK IS A FIGURE, and no band of the list
+                    // lights behind it: its controls say what they do. The
+                    // layout's schematic is one too.
+                    hand.row_under_pointer =
+                        self.row_at(ui, e.position.0, e.position.1).filter(|&n| {
+                            rows.get(n).is_none_or(|r| {
+                                r.deck.is_none()
+                                    && r.schematic.is_none()
+                                    && r.covers.is_empty()
+                                    && r.globe.is_none()
+                            })
+                        });
+                    // THE GLOBE UNDER THE HAND: the group there lit, and the
+                    // line under it saying where it is.
+                    let px = self.globe_px(e.position);
+                    if self.view.globe_pointed(px) {
+                        ui.ask_paint();
+                    }
                     hand.extra.button_under = self.button_at(e.position.0, e.position.1);
                 }
                 PointerEventKind::Leave { .. } => {
@@ -1163,18 +2273,62 @@ impl Player {
                         ui.ask_paint();
                     }
                     hand.dragging = false;
-                    hand.extra.seeking = false;
-                    hand.extra.turning = false;
                     hand.extra.sliding = None;
                     hand.row_under_pointer = None;
                     hand.extra.button_under = None;
+                    hand.extra.globe = None;
+                    if self.view.globe_pointed(None) {
+                        ui.ask_paint();
+                    }
+                    // A DRAG THAT LEFT is a drag called off: nothing is asked.
+                    if hand.extra.deck.take().is_some() {
+                        self.dragged = None;
+                    }
+                    self.deck_under = None;
                 }
                 PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                     ui.hinted.let_go();
                     hand.dragging = false;
-                    hand.extra.seeking = false;
-                    hand.extra.turning = false;
                     hand.extra.sliding = None;
+                    // THE GLOBE LET GO where it was pressed: a click on the
+                    // group there — the first selects, the second acts.
+                    if let Some(held) = hand.extra.globe.take()
+                        && !held.dragging
+                        && let Some(px) = self.globe_px(held.at)
+                    {
+                        let errand = self.view.globe_clicked(
+                            px,
+                            self.player.as_ref(),
+                            ui.columns,
+                            &ui.texts,
+                        );
+                        // A FIRST CLICK only brings the cursor: the globe
+                        // stays under the hand for the second.
+                        if !self.view.globe_keeps_the_scroll() {
+                            let n = self.rows(ui).len();
+                            self.follow(ui, n);
+                        }
+                        self.apply(ui, errand);
+                        ui.ask_paint();
+                    }
+                    // A DECK LET GO: a band dragged asks its new start, and
+                    // one let go where it was pressed chooses its lane — the
+                    // second click opens its page.
+                    if let Some((grip, _, at)) = hand.extra.deck.take() {
+                        let act = grip.released(self.dragged.take());
+                        // A BAND DRAGGED on a row brings the cursor to its
+                        // row, as every other control of it does.
+                        if let (
+                            crate::player_timeline::Grip::Band { moved: true, .. },
+                            DeckAt::Row(n),
+                        ) = (grip, at)
+                        {
+                            self.view.grabbed(n);
+                        }
+                        if self.player.is_some() {
+                            self.deck_act(ui, act, at);
+                        }
+                    }
                 }
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
                     if ui.hinted.pressed(head, e.position.0, e.position.1) {
@@ -1190,32 +2344,23 @@ impl Player {
                     }
                     // A BUTTON of the transport: what its key does.
                     if let Some(id) = self.button_at(e.position.0, e.position.1) {
-                        if let Some(ask) = ask_of(id) {
-                            Self::tell(ui, &ask);
-                        }
-                        match id {
-                            "player-only" => self.toggle_stage(ui, crate::player::Show::Only),
-                            "player-pip" => self.toggle_stage(ui, crate::player::Show::Small),
-                            "player-maximize" => {
-                                self.toggle_stage(ui, crate::player::Show::Maximized);
-                            }
-                            _ => {}
-                        }
+                        self.pressed_button(ui, id);
                         continue;
                     }
-                    // THE VOLUME'S TRACK: a press sets it there, and holding
-                    // drags — the time bar's gesture, on its own track.
-                    if self.controls_shown() && self.on_the_volume(ui, e.position.0, e.position.1) {
-                        hand.extra.turning = true;
-                        let percent = Self::volume_at(ui, e.position.0);
-                        Self::tell(ui, &Ask::Volume { percent });
+                    // THE GLOBE: held — a drag turns it, and let go where it
+                    // was pressed it is a click on the group there.
+                    if self.globe_px(e.position).is_some() {
+                        hand.extra.globe = Some(GlobeHeld {
+                            at: e.position,
+                            last: e.position,
+                            dragging: false,
+                        });
                         continue;
                     }
-                    // THE TIME BAR: a press seeks there, and holding drags.
-                    if line_at(e.position.1) == self.layout.bar && self.controls_shown() {
-                        hand.extra.seeking = true;
-                        let f = Self::fraction_at(ui, e.position.0);
-                        self.seek_to(ui, f);
+                    // THE DECK — the time bar, or a set's lanes — under the
+                    // transport or as rows: what `Deck::press` says the press
+                    // takes, and what it holds until it is let go.
+                    if self.deck_pressed(ui, hand, e.position) {
                         continue;
                     }
                     // A PICTURE: a click plays or pauses, as on every player;
@@ -1224,8 +2369,10 @@ impl Player {
                     // second plays it again — what a double click leaves is
                     // the screen changed and the film as it was.
                     if self.on_a_picture(e.position.1) {
-                        Self::tell(ui, &Ask::Toggle);
-                        let now = std::time::Instant::now();
+                        self.tell(ui, &Ask::Toggle);
+                        // THE REACH'S CLOCK: a photograph's moves only
+                        // between the steps of its walk.
+                        let now = self.reach.now();
                         let double = hand
                             .extra
                             .picture_clicked
@@ -1240,11 +2387,11 @@ impl Player {
                     }
                     // A BAR OF A ROW — the position's, the volume's: a press
                     // sets it there and holding drags it, through the one
-                    // answer the footer asks too (`player::slider_at`).
+                    // answer the footer asks too (`player_rows::slider_at`).
                     if let Some(row) = self.row_at(ui, e.position.0, e.position.1) {
                         let rows = self.rows(ui);
                         let column = Self::column_in_rows(e.position.0);
-                        if crate::player::slider_at(&rows, row, column).is_some() {
+                        if crate::player_rows::slider_at(&rows, row, column).is_some() {
                             self.view.grabbed(row);
                             hand.extra.sliding = Some(row);
                             self.slide(ui, row, e.position.0);
@@ -1281,6 +2428,20 @@ impl Player {
                         ui.ask_paint();
                         continue;
                     }
+                    // THE WHEEL OVER THE GLOBE brings it nearer, or further.
+                    if self.globe_px(e.position).is_some() {
+                        if self.view.globe_wheeled(by) {
+                            ui.ask_paint();
+                        }
+                        continue;
+                    }
+                    // THE WHEEL OVER THE BLOCK'S DECK is a volume — a lane's
+                    // that sounds, the player's elsewhere — and on its bar it
+                    // scrolls the lanes. Over the deck's ROWS it is the list's,
+                    // which a page longer than the door needs.
+                    if self.deck_wheeled(ui, e.position, by) {
+                        continue;
+                    }
                     // OVER THE PICTURES AND THE TRANSPORT THE WHEEL IS THE
                     // VOLUME — the gesture belongs to what is under the hand,
                     // and there is no list there to walk.
@@ -1302,21 +2463,154 @@ impl Player {
                 _ => {}
             }
         }
-        if before != (hand.row_under_pointer, hand.extra.button_under) {
+        if before
+            != (
+                hand.row_under_pointer,
+                hand.extra.button_under,
+                self.deck_under,
+            )
+        {
             ui.ask_paint();
         }
+    }
+
+    /// A press on a DECK — the block's, or a row's — at `(x, y)`: what
+    /// `Deck::press` says it takes, done, and what it holds kept on the hand.
+    /// `false` when no control of a deck is there. A lane's NAME on a row is
+    /// the row's: the first click selects, the second opens its page, as on
+    /// every list.
+    fn deck_pressed(
+        &mut self,
+        ui: &mut Ui,
+        hand: &mut Hand<PerPointer>,
+        (x, y): (f64, f64),
+    ) -> bool {
+        use crate::player_timeline::{Grip, Hit};
+        let rows = self.rows(ui);
+        let Some((at, line, column, origin)) = self.deck_at(ui, &rows, x, y) else {
+            return false;
+        };
+        let hit = self.deck_hit(at, &rows, line, column);
+        if hit.is_none() || matches!((at, hit), (DeckAt::Row(_), Some(Hit::Name(_)))) {
+            return false;
+        }
+        let (grip, act) = match at {
+            DeckAt::Block => self.deck.press(line, column),
+            DeckAt::Row(n) => {
+                // THE CURSOR COMES TO THE ROW whose control was pressed: it
+                // is what the control is about — a BAND's when it is let go,
+                // whose first click chooses the row and second opens it.
+                if !matches!(hit, Some(Hit::Band { .. })) {
+                    self.view.grabbed(n);
+                }
+                rows[n]
+                    .deck
+                    .as_ref()
+                    .map_or((None, crate::player_timeline::Act::Nothing), |d| {
+                        d.deck.press(line, column)
+                    })
+            }
+        };
+        if matches!(grip, Some(Grip::Bar)) && at == DeckAt::Block {
+            self.deck_bar_to(ui, y);
+        }
+        hand.extra.deck = grip.map(|g| (g, origin, at));
+        self.dragged = None;
+        self.deck_act(ui, act, at);
+        true
+    }
+
+    /// The pointer moved with a deck HELD: the drag goes on along the track
+    /// or the meter it was pressed on — a band's ghost follows it once it is
+    /// a drag, and nothing is asked until it is let go; the lanes' bar
+    /// scrolls them.
+    fn deck_dragged(
+        &mut self,
+        ui: &mut Ui,
+        hand: &mut Hand<PerPointer>,
+        (grip, origin, at): (crate::player_timeline::Grip, f64, DeckAt),
+        (x, y): (f64, f64),
+    ) {
+        use crate::player_timeline::Grip;
+        // NO PLAYER, NO DRAG: what the grip would ask is about lanes that are
+        // gone with the state — and telling it would start a player again.
+        if self.player.is_none() {
+            hand.extra.deck = None;
+            self.dragged = None;
+            return;
+        }
+        let mut grip = grip;
+        if matches!(grip, Grip::Bar) {
+            if at == DeckAt::Block {
+                self.deck_bar_to(ui, y);
+            }
+            return;
+        }
+        let column = x / f64::from(cell_px()).max(1.0) - origin;
+        let was_a_drag = matches!(grip, Grip::Band { moved: true, .. });
+        let (act, ghost) = grip.moved(column);
+        // A DRAG `Esc` CALLED OFF stays off: its ghost is not brought back.
+        if let Some(h) = ghost
+            && (!was_a_drag || self.dragged.is_some())
+        {
+            self.dragged = Some(h);
+            ui.ask_paint();
+        }
+        hand.extra.deck = Some((grip, origin, at));
+        self.deck_act(ui, act, at);
+    }
+
+    /// The wheel at `(x, y)`, `by` lines, over the block's deck: its bar and
+    /// a lane that plays no sound scroll the lanes, and a lane that sounds or
+    /// the ruler turn the volume under the pointer (`Deck::wheel`). `false`
+    /// off the block.
+    fn deck_wheeled(&mut self, ui: &mut Ui, (x, y): (f64, f64), by: i64) -> bool {
+        let rows = self.rows(ui);
+        let Some((DeckAt::Block, line, column, _)) = self.deck_at(ui, &rows, x, y) else {
+            return false;
+        };
+        // ON THE BAR, or on a lane that plays no sound — which has no volume
+        // to turn — the wheel scrolls the lanes, as over any list.
+        let silent = self.deck.lane_line(line).is_some_and(|l| !l.sounds);
+        if silent || self.deck.hit(line, column) == Some(crate::player_timeline::Hit::Bar) {
+            self.deck_offset = usize::try_from(
+                i64::try_from(self.deck_offset)
+                    .unwrap_or(0)
+                    .saturating_add(by)
+                    .max(0),
+            )
+            .unwrap_or(0);
+            ui.ask_paint();
+            return true;
+        }
+        // NO STATE, NO VOLUME TO TURN FROM (`turn_the_volume`).
+        let Some(volume) = self.player.as_ref().map(|s| s.volume) else {
+            ui.message = Some(ui.texts.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING));
+            ui.ask_paint();
+            return true;
+        };
+        if let Some(ask) = self.deck.wheel(line, by, volume) {
+            self.tell(ui, &ask);
+        }
+        true
     }
 }
 
 impl Player {
     /// The wheel over what is not a list: the volume, a step per line.
-    fn turn_the_volume(&self, ui: &mut Ui, by: i64) {
-        let now = self.player.as_ref().map_or(100, |s| s.volume);
+    fn turn_the_volume(&mut self, ui: &mut Ui, by: i64) {
+        // NO STATE, NO VOLUME TO TURN FROM: one guessed from nothing would be
+        // sent, and kept (`player_transport::volume_step`).
+        let Some(now) = self.player.as_ref().map(|s| s.volume) else {
+            ui.message = Some(ui.texts.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING));
+            ui.ask_paint();
+            return;
+        };
         let step = i64::from(crate::player::VOLUME_STEP);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let percent =
             (i64::from(now) - by * step).clamp(0, i64::from(crate::player::VOLUME_MOST)) as u8;
-        Self::tell(ui, &Ask::Volume { percent });
+        self.tell(ui, &Ask::Volume { percent });
     }
 
     /// THE BAR: the remote control's glyphs, one per line on the middle cell,
@@ -1333,15 +2627,18 @@ impl Player {
             height: h,
             color: tokens::color::SURFACE_CHROME,
         });
-        // NO PICTURE, and no thread decoding one for nobody.
+        // NO PICTURE, and no thread decoding one for nobody — and no hold on
+        // the sound outputs: the bar shows none of their rows.
         self.pictures.clear();
+        self.reach.sinks(false, &mut self.sinks);
         ui.room = crate::chrome::Room::default();
         self.buttons.clear();
         let s = self.player.as_ref();
         let across = ui.columns + 2 * MARGIN;
         for (line, id) in bar_buttons(area.top) {
-            // A COLUMN SHORTER THAN ITS BUTTONS draws the ones that fit.
-            if line >= ui.lines {
+            // A COLUMN SHORTER THAN ITS BUTTONS draws the ones that fit — above
+            // the bar's last line, which is the column's close.
+            if line >= area.end(ui.lines) {
                 break;
             }
             self.buttons.push((line, 0, across, id));
@@ -1352,7 +2649,7 @@ impl Player {
             };
             canvas.spans.push(ronoctua_render::Span {
                 size: ronoctua_render::Size::Px(tokens::text::size()),
-                text: glyph_of(id, s, self.stage).to_string(),
+                text: glyph_of(id, s, self.stage, self.door).to_string(),
                 // THE MIDDLE CELL: the bar is five, the margins included.
                 column: MARGIN + 1,
                 line,
@@ -1375,8 +2672,8 @@ impl Player {
                 }
                 PointerEventKind::Leave { .. } => hand.extra.button_under = None,
                 PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    if let Some(ask) = self.button_at(e.position.0, e.position.1).and_then(ask_of) {
-                        Self::tell(ui, &ask);
+                    if let Some(id) = self.button_at(e.position.0, e.position.1) {
+                        self.pressed_button(ui, id);
                     }
                 }
                 PointerEventKind::Axis {
@@ -1401,6 +2698,12 @@ impl Player {
     /// A key, in either door.
     fn typed_here(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         self.wake_controls(ui);
+        // `Esc` CALLS A DRAG OFF first: the band stays where it was, and
+        // letting it go asks nothing.
+        if event.keysym == Keysym::Escape && self.dragged.take().is_some() {
+            ui.ask_paint();
+            return;
+        }
         // `Esc` ON STAGE brings the door back first — one level, as every
         // view with levels has it — and only then reaches the view.
         if event.keysym == Keysym::Escape && self.on_stage() {
@@ -1419,7 +2722,14 @@ impl Player {
 
     /// Once per turn, in either door.
     fn each_turn_here(&mut self, ui: &mut Ui) {
-        if let Some(stage) = self.first_stage.take() {
+        // A WINDOW OPENED FOR ONE SCREEN waits until its connection has
+        // described that screen by name: made whole-screen before, it would
+        // go wherever the compositor chose (`screens_follow` tries again).
+        let waiting = self
+            .screen_wanted
+            .as_deref()
+            .is_some_and(|c| self.window.borrow().is_some() && ui.screen_named(c).is_none());
+        if !waiting && let Some(stage) = self.first_stage.take() {
             self.set_stage(ui, stage);
         }
         // AFTER A FRAME: the window is in the compositor's tree only once a
@@ -1456,14 +2766,14 @@ fn cell_px() -> f32 {
     tokens::metrics::cell_width(tokens::text::size())
 }
 
-fn line_at(y: f64) -> u16 {
+pub(crate) fn line_at(y: f64) -> u16 {
     let line = f64::from(line_px()).max(1.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let l = (y.max(0.0) / line) as u16;
     l
 }
 
-fn column_at(x: f64) -> u16 {
+pub(crate) fn column_at(x: f64) -> u16 {
     let cell = f64::from(cell_px()).max(1.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let c = (x.max(0.0) / cell) as u16;
@@ -1543,14 +2853,22 @@ impl Content for Player {
     }
 
     /// What was typed on this door's line — the ONE function the footer's
-    /// minibuffer reaches too (`player::answered`).
+    /// minibuffer reaches too (`player_question::answered`).
     fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
-        let errand = crate::player::answered(id, text, &mut self.pairing);
+        let errand = self.view.answered(
+            id,
+            text,
+            &mut self.pairing,
+            self.player.as_ref(),
+            ui.columns,
+            &ui.texts,
+        );
         self.apply(ui, errand);
     }
 
     /// The line was let go: a pairing's name goes with it.
     fn unanswered(&mut self, _: &mut Ui, _: &'static str) {
+        self.view.let_go();
         self.pairing.let_go();
     }
 
@@ -1577,6 +2895,13 @@ impl Content for Player {
 
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         self.paint_in(ui, canvas, &Area::whole());
+    }
+
+    /// A SCREEN described, renamed or gone, or the window on another: what is
+    /// composed here follows, and a lane's page lists them anew.
+    fn screens_changed(&mut self, ui: &mut Ui) {
+        self.screens_follow(ui);
+        ui.ask_paint();
     }
 }
 
@@ -1628,7 +2953,14 @@ impl crate::column::Tenant for Player {
         self.button_under = hand.extra.button_under;
     }
 
-    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers, _: &Area) {
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers, area: &Area) {
+        // IN THE BAR `Esc` CLOSES THE COLUMN, whatever page is open under it:
+        // the bar draws no page, and a key that went back through pages
+        // nobody sees left the column up and did nothing a person could see.
+        if area.size == Size::Bar && event.keysym == Keysym::Escape {
+            self.apply(ui, crate::player::Errand::Close);
+            return;
+        }
         self.typed_here(ui, event, mods);
     }
 
@@ -1657,6 +2989,13 @@ impl crate::column::Tenant for Player {
     /// with the picture, and the next frame drawn starts them again.
     fn parked(&mut self, _: &mut Ui) {
         self.pictures.clear();
+        self.reach.sinks(false, &mut self.sinks);
+    }
+
+    /// THE COLUMN CLOSES and the pictures go with it, now: what plays goes
+    /// on playing, and nothing decodes for a column that is not there.
+    fn closing(&mut self, _: &mut Ui) {
+        self.pictures.clear();
     }
 
     /// A NEW SURFACE IS A NEW GPU SURFACE: everything drawn on the old one is
@@ -1667,19 +3006,33 @@ impl crate::column::Tenant for Player {
         }
     }
 
+    /// THE COLUMN'S SCREEN, as its base knows it: what is routed there is
+    /// what it shows.
+    fn placed_on(&mut self, ui: &mut Ui, on: Option<&str>) {
+        self.placed_on = on.map(ToOwned::to_owned);
+        self.screens_follow(ui);
+        ui.ask_paint();
+    }
+
+    fn screens_changed(&mut self, ui: &mut Ui) {
+        self.screens_follow(ui);
+        ui.ask_paint();
+    }
+
     /// IN THE BAR, a key acts when it is the view's everywhere
     /// (`player::Where::Anywhere`) — play, the next, the volume, the mute,
     /// the window's stages — and `Esc`. The cursor's keys walk rows the bar
     /// does not draw, `o` shows a picture it has no room for, and the rest
     /// act on a row; those put the column back instead.
     fn acts_without_rows(&self, key: ronoctua_keymap::Key) -> bool {
-        use crate::player::{OF_THE_VIEW, Press, Where, press_of_key, pressed};
+        use crate::player::{Press, Unseen, press_of_key};
         match press_of_key(key) {
-            None | Some(Press::Escape) => true,
-            Some(Press::Up | Press::Down | Press::Only) => false,
-            Some(press) => OF_THE_VIEW.iter().any(|(notation, _, at)| {
-                *at == Where::Anywhere && pressed(notation) == Some(press)
-            }),
+            None => true,
+            // THE PICTURE ALONE needs a picture, and the bar has no room for
+            // one: the column comes back.
+            Some(Press::Only) => false,
+            // THE ONE ANSWER the window's stage and the footer's `o` read.
+            Some(press) => press.unseen() == Unseen::Acts,
         }
     }
 }
@@ -1699,6 +3052,12 @@ impl Player {
         let rows = self.rows(ui);
         let room = self.room(ui);
         ui.offset = ui.offset.min(rows.len().saturating_sub(room));
+        // THE SOUND OUTPUTS, held while a row of them is on screen and let go
+        // when none is (`player_lane::sinks_in_sight`) — read here, where the
+        // rows on screen are known.
+        let in_sight =
+            !self.on_stage() && crate::player_lane::sinks_in_sight(&rows, ui.offset, room);
+        self.reach.sinks(in_sight, &mut self.sinks);
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (ui.width as f32, ui.height as f32);
         let span =
@@ -1720,24 +3079,46 @@ impl Player {
             color: tokens::color::SURFACE_CHROME,
         });
 
+        // THE BUTTONS, PLACED FIRST — the transport's and the volume's glyph
+        // — and the one under a pointer that has NOT moved read again against
+        // them: the media glyph comes and goes with the file, every button
+        // after it moves three cells, and a resting hand kept lighting and
+        // explaining the button that had been there while a press took the
+        // one that is (`the-pointer-lights-what-the-click-takes`).
+        let stage = self.on_stage();
+        let shown = self.controls_shown();
+        self.buttons = self.placed_buttons(ui, shown);
+        self.button_under = self.pointer_at.and_then(|(x, y)| self.button_at(x, y));
+        // AND THE DECK'S CONTROL under a resting pointer, read against the
+        // deck just laid out: a state that moved the playhead under the hand
+        // is what the hand now points at.
+        self.deck_under = self
+            .pointer_at
+            .and_then(|(x, y)| self.deck_hover(ui, &rows, x, y));
         // THE HEADER'S LINE — 0 in the window, 1 in a column: the keys, what
-        // the last order said, or — with the pointer on a button — what that
-        // button does.
+        // the last order said, or — with the pointer on a button or on a
+        // control of a deck — what that does.
         let under_button = self.button_under;
+        let pointed = match under_button {
+            Some(id) => crate::chrome::hint_sentence(id, &ui.texts),
+            None => self.deck_under.and_then(|(_, _, hit)| {
+                crate::player_timeline::hover_sentence(hit, self.player.as_ref(), &ui.texts)
+            }),
+        };
         let question = crate::door::list::the_question(ui);
-        let (pieces, hinting) = match (question, &ui.message, under_button) {
+        let (pieces, hinting) = match (question, &ui.message, pointed) {
             // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
             (Some(q), _, _) => (q, true),
             (None, Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
-            (None, None, Some(id)) => (
-                vec![crate::chrome::Piece::said(
-                    crate::chrome::hint_sentence(id, &ui.texts).unwrap_or_default(),
-                )],
-                false,
-            ),
-            // AND IN A COLUMN, its own keys after the view's.
+            (None, None, Some(said)) => (vec![crate::chrome::Piece::said(said)], false),
+            // THE WAY BACK FIRST, and clickable: `Esc` leaves a page of the
+            // view, and a pointer that could not leave one would go in and
+            // stay. AND IN A COLUMN, its own keys after the view's.
             (None, None, None) => {
-                let mut hint = self.view.hint(self.player.as_ref(), ui.columns, &ui.texts);
+                let mut hint = crate::chrome::with_the_way_back(
+                    self.view.hint(self.player.as_ref(), ui.columns, &ui.texts),
+                    &ui.texts,
+                );
                 let column = area.teach(&ui.texts);
                 if !hint.is_empty() && !column.is_empty() {
                     hint.push(crate::chrome::Piece::separator());
@@ -1749,8 +3130,6 @@ impl Player {
         // ON STAGE, what is drawn over the picture: the translucent band
         // under the header and the transport, and the time bar — after the
         // images, or the picture would cover them.
-        let stage = self.on_stage();
-        let shown = self.controls_shown();
         let mut top: Vec<ronoctua_render::quad::Quad> = Vec::new();
         if shown {
             canvas.spans.extend(
@@ -1776,21 +3155,17 @@ impl Player {
             }
         }
 
-        // THE PICTURES: a band each, and the frame fitted into it. The band is
-        // a surface of the theme in the door, and the content's ground on
-        // stage, where a picture alone is framed in black.
+        // THE PICTURES: the band they are framed on, and each frame in the
+        // place `relayout` gave it (`player_layout::placed`). The band is a
+        // surface of the theme in the door, and the content's ground on
+        // stage, where pictures alone are framed in black.
         //
         // THE THEME'S DESK AS THE LETTERBOX, deliberately, on every page: it
         // is a frame for a picture and carries no letter (`every-ground-is-
         // measured` names it among the grounds nothing is written on). On the
         // desk's own page it is the window's ground, and the letterbox simply
         // reads as the page around the film.
-        for (p, place) in self.pictures.iter_mut().zip(&self.layout.pictures) {
-            let band = if stage {
-                stage_area(w, h, area)
-            } else {
-                place.area(w, line)
-            };
+        if let Some(band) = self.band_area(ui, area).filter(|_| !self.placed.is_empty()) {
             canvas.under.push(ronoctua_render::quad::Quad {
                 x: band.x,
                 y: band.y,
@@ -1802,26 +3177,36 @@ impl Player {
                     tokens::color::SURFACE_BACKDROP
                 },
             });
+        }
+        // ONE KEY A LANE A SCREEN (`Picture::key`): the screen this door
+        // shows, or the surface's own while it knows none.
+        let output = self
+            .screen(ui)
+            .unwrap_or_else(|| crate::player_picture::THIS_SURFACE.to_owned());
+        for (lane, rect) in &self.placed {
+            let Some(p) = self.pictures.iter_mut().find(|p| p.of == Some(*lane)) else {
+                continue;
+            };
             if let Some(f) = &p.frame {
                 // A NEW FRAME UNDER THE SAME KEY is sent again: the key is the
                 // picture, and what is in it moves every frame.
-                let key = p.key();
+                let key = p.key(&output);
                 if !p.uploaded || canvas.images.missing(&key) {
                     canvas
                         .images
-                        .upload_it(&canvas.gpu.device, &canvas.gpu.queue, &key, f);
+                        .upload_it(canvas.device, canvas.queue, &key, f);
                     p.uploaded = true;
                 }
-                // THE FRAME IS ALREADY THE BAND'S SHAPE (the player rendered it
-                // at this size, letterboxed); `picture_in` only keeps it inside
-                // the band while a new size is on its way.
+                // THE FRAME IS ALREADY ITS PLACE'S SHAPE (the player rendered
+                // it at this size); `picture_in` only keeps it inside the place
+                // while a new size is on its way.
                 let fit =
-                    crate::camera::picture_in(band.width, band.height, (f.width, f.height), false);
+                    crate::camera::picture_in(rect.width, rect.height, (f.width, f.height), false);
                 canvas.pictures.push((
                     key,
                     ronoctua_render::image::Area {
-                        x: band.x + fit.x,
-                        y: band.y + fit.y,
+                        x: rect.x + fit.x,
+                        y: rect.y + fit.y,
                         width: fit.width,
                         height: fit.height,
                     },
@@ -1829,34 +3214,28 @@ impl Player {
             }
         }
 
-        // THE TRANSPORT: glyph buttons, then the clock.
+        // THE TRANSPORT: glyph buttons, then the clock — drawn where
+        // `placed_buttons` put them, the answer the pointer reads back.
         let tl = self.layout.transport;
-        self.buttons.clear();
-        let mut at = MARGIN;
         let s = self.player.as_ref();
-        // HIDDEN CONTROLS ARE NOT CONTROLS: nothing is laid out for the hand,
-        // so a click on stage lands on the picture and not on a button nobody
-        // can see. AND A BUTTON THAT DOES NOT FIT IS NOT DRAWN: a column
-        // clamped narrower than the transport keeps the ones that are whole.
-        for id in BUTTONS.iter().copied().filter(|_| shown) {
-            if !fits(at, ui.columns) {
-                break;
-            }
-            let colour = if under_button == Some(id) || lit(id, s, self.stage) {
+        let transport: Vec<crate::player_media::Placed> = self
+            .buttons
+            .iter()
+            .copied()
+            .filter(|(line, _, _, _)| *line == tl)
+            .collect();
+        for (line, at, _, id) in &transport {
+            let colour = if under_button == Some(*id) || lit(id, s, self.stage) {
                 tokens::color::STATE_ACCENT
             } else {
                 tokens::color::TEXT_PRIMARY
             };
-            // A GLYPH AND AIR ON BOTH SIDES: two cells a button, and the
-            // click answers on both.
-            self.buttons.push((tl, at, at + 2, id));
             canvas.spans.push(span(
-                glyph_of(id, s, self.stage).to_string(),
-                at,
-                tl,
+                glyph_of(id, s, self.stage, self.door).to_string(),
+                *at,
+                *line,
                 colour,
             ));
-            at += 3;
         }
         if let Some(s) = s.filter(|s| s.current.is_some() && shown) {
             let clock = s.duration.map_or_else(
@@ -1869,102 +3248,191 @@ impl Player {
                     )
                 },
             );
+            // WHERE IT FITS WHOLE, after the last button — the footer's
+            // panel's own answer (`player_media::clock_at`): the small window
+            // in the corner is narrower than the buttons and the clock, and a
+            // clock cut at the edge reads as a wrong time.
             let cells = ronoctua_protocol::cells(&clock);
-            let right = MARGIN + ui.columns;
-            let from = right.saturating_sub(cells).max(at + 1);
-            // WHERE IT FITS: the small window in the corner is narrower than
-            // the buttons and the clock, and a clock cut at the edge reads as
-            // a wrong time.
-            if from + cells <= right {
+            if let Some(from) =
+                crate::player_media::clock_at(Self::transport_panel(ui), &transport, cells)
+            {
                 canvas
                     .spans
                     .push(span(clock, from, tl, tokens::color::TEXT_SECONDARY));
             }
         }
 
-        // THE TIME BAR: a rule, and the part already played in the accent.
-        // Under the pictures in the door; over the picture on stage.
-        let mut bar: Vec<ronoctua_render::quad::Quad> = Vec::new();
-        let (l, r) = Self::bar_track(ui);
-        let thickness = f32::from(tokens::space::RULE_THICKNESS).max(1.0) * 3.0;
-        let y = line * f32::from(self.layout.bar) + (line - thickness) / 2.0;
-        bar.push(ronoctua_render::quad::Quad {
-            x: l,
-            y,
-            width: r - l,
-            height: thickness,
-            color: tokens::color::RULE_DEFAULT,
+        // THE DECK under the transport: the time bar — the part played in the
+        // accent, the player's mute and volume at its end — or a set's ruler
+        // and a line a lane, the playhead one line across them all, drawn
+        // from the deck `relayout` laid out: the one the pointer reads. A
+        // band being dragged shows its ghost. Under the pictures in the door;
+        // over the picture on stage, and there only the one bar. Hidden with
+        // the rest of the controls.
+        let f = ui.frame(0);
+        let sound = s.map(|s| crate::player_timeline::Sound {
+            volume_percent: s.volume,
+            muted: s.muted,
         });
-        if let Some(s) = s
-            && let Some(d) = s.duration.filter(|d| *d > 0.0)
-        {
-            #[allow(clippy::cast_possible_truncation)]
-            let played = ((s.position / d).clamp(0.0, 1.0)) as f32;
-            bar.push(ronoctua_render::quad::Quad {
-                x: l,
-                y,
-                width: (r - l) * played,
-                height: thickness,
-                color: tokens::color::STATE_ACCENT,
-            });
-        }
-
-        // THE VOLUME, at the end of the same line: its glyph — a button that
-        // mutes — and a track of its own, filled to the volume and dimmed
-        // while muted. Hidden with the rest of the controls.
         if shown {
-            let (glyph, _) = Self::volume_cells(ui);
-            let bl = self.layout.bar;
-            self.buttons.push((bl, glyph, glyph + 2, "player-mute"));
-            let colour = if under_button == Some("player-mute") {
-                tokens::color::STATE_ACCENT
+            let block = self.block_drawn(ui);
+            if stage {
+                top.extend(block.quads);
             } else {
-                tokens::color::TEXT_PRIMARY
-            };
-            canvas.spans.push(span(
-                glyph_of("player-mute", s, self.stage).to_string(),
-                glyph,
-                bl,
-                colour,
-            ));
-            let (vl, vr) = Self::volume_track(ui);
-            bar.push(ronoctua_render::quad::Quad {
-                x: vl,
-                y,
-                width: vr - vl,
-                height: thickness,
-                color: tokens::color::RULE_DEFAULT,
-            });
-            if let Some(s) = s {
-                let filled = f32::from(s.volume.min(crate::player::VOLUME_MOST))
-                    / f32::from(crate::player::VOLUME_MOST);
-                bar.push(ronoctua_render::quad::Quad {
-                    x: vl,
-                    y,
-                    width: (vr - vl) * filled,
-                    height: thickness,
-                    color: if s.muted {
-                        tokens::color::TEXT_DIM
-                    } else {
-                        tokens::color::STATE_ACCENT
-                    },
-                });
+                canvas.under.extend(block.quads);
             }
-        }
-        if stage {
-            top.extend(bar);
-        } else {
-            canvas.under.extend(bar);
+            // THE LANES' BAR IS A CONTROL, and its column its own.
+            canvas.bar(block.bar.map(crate::bars::Track::of));
+            canvas.spans.extend(block.spans);
         }
 
-        // THE ROWS, under all of it, scrolling.
+        // THE ROWS, under all of it, scrolling — and a subtitle lane's colour
+        // chip under its glyph (`chrome::chip`, the footer's drawing too),
+        // painted over the bands below.
         let first = self.layout.list;
+        let mut chips = Vec::new();
+        // THE GLOBE'S BOX among the rows on screen, once for its run of lines
+        // (`player_globe::box_of`): what is painted in it and what the
+        // pointer reads back.
+        let mut globe_box: Option<(ronoctua_render::image::Area, u32)> = None;
         for (i, row) in rows.iter().skip(ui.offset).take(room).enumerate() {
             let y = first + u16::try_from(i).unwrap_or(0);
+            if let Some(g) = &row.globe {
+                let starts = i
+                    .checked_sub(1)
+                    .and_then(|k| rows.get(ui.offset + k))
+                    .is_none_or(|r| r.globe.is_none());
+                if starts {
+                    let run = rows
+                        .iter()
+                        .skip(ui.offset + i)
+                        .take(room - i)
+                        .take_while(|r| r.globe.is_some())
+                        .count();
+                    globe_box = Some(crate::player_globe::box_of(
+                        g,
+                        run,
+                        (f32::from(MARGIN) * cell_px(), f32::from(y) * line),
+                        (cell_px(), line),
+                    ));
+                }
+            }
             for f in &row.fields {
                 canvas
                     .spans
                     .push(span(f.text.clone(), MARGIN + f.at, y, f.color));
+            }
+            // A LINE OF A DECK — the timeline's rows: its shapes under its
+            // words, from the deck the rows were built with. The playhead is
+            // one line across the deck's rows on screen: each run of them is
+            // drawn at once, from its first.
+            if let Some(d) = &row.deck {
+                let before = i
+                    .checked_sub(1)
+                    .and_then(|k| rows.get(ui.offset + k))
+                    .and_then(|r| r.deck.as_ref());
+                let starts_a_run = before
+                    .is_none_or(|b| !std::rc::Rc::ptr_eq(&b.deck, &d.deck) || b.line + 1 != d.line);
+                if starts_a_run {
+                    let run = rows
+                        .iter()
+                        .skip(ui.offset + i)
+                        .take(room - i)
+                        .map_while(|r| r.deck.as_ref())
+                        .take_while(|r| std::rc::Rc::ptr_eq(&r.deck, &d.deck))
+                        .count();
+                    let deck = d.deck.holding(self.dragged);
+                    canvas.under.extend(deck.quads(
+                        f,
+                        y,
+                        MARGIN + d.left,
+                        d.line..d.line + run,
+                        sound,
+                    ));
+                }
+            }
+            // A LINE OF THE LAYOUT'S SCHEMATIC: its tiles, once for each run
+            // of its lines on screen, from the first — cut to what is shown.
+            if let Some(sc) = &row.schematic {
+                let before = i
+                    .checked_sub(1)
+                    .and_then(|k| rows.get(ui.offset + k))
+                    .and_then(|r| r.schematic.as_ref());
+                if before.is_none_or(|b| !std::rc::Rc::ptr_eq(&b.figure, &sc.figure)) {
+                    let run = rows
+                        .iter()
+                        .skip(ui.offset + i)
+                        .take(room - i)
+                        .map_while(|r| r.schematic.as_ref())
+                        .take_while(|r| std::rc::Rc::ptr_eq(&r.figure, &sc.figure))
+                        .count();
+                    canvas.under.extend(sc.figure.quads(
+                        (f32::from(MARGIN + sc.left) * cell_px(), f32::from(y) * line),
+                        (sc.line, u16::try_from(run).unwrap_or(u16::MAX)),
+                        (cell_px(), line),
+                    ));
+                }
+            }
+            // A LINE OF A COVER — of each picture on it, two side by side
+            // where a suggested cover stands beside the file's own: the
+            // picture the view holds, once for each run of its lines on
+            // screen, from the first — cut to what shows.
+            for cr in &row.covers {
+                let of = |r: &crate::player_rows::Row| {
+                    r.covers.iter().find(|c| c.key == cr.key).cloned()
+                };
+                let before = i
+                    .checked_sub(1)
+                    .and_then(|k| rows.get(ui.offset + k))
+                    .and_then(of);
+                if before.is_none_or(|b| b.line + 1 != cr.line) {
+                    let run = rows
+                        .iter()
+                        .skip(ui.offset + i)
+                        .take(room - i)
+                        .map_while(of)
+                        .count();
+                    if let Some(picture) = self.cover_drawn(cr, run, y, canvas) {
+                        canvas.pictures.push(picture);
+                    }
+                }
+            }
+            for chip in &row.chips {
+                chips.push(crate::chrome::chip(
+                    f32::from(MARGIN + chip.at) * cell_px(),
+                    f32::from(y) * line,
+                    cell_px(),
+                    line,
+                ));
+            }
+        }
+        // THE GLOBE, measured in the box its lines on screen make, asked of its
+        // thread — or drawn in place by a door with none — and painted there:
+        // a moving picture, sent again each frame under its one key.
+        self.globe_drawn = None;
+        if let Some((area, gone)) = globe_box.filter(|_| !stage) {
+            self.view.globe_measured(
+                &rows,
+                crate::files::globe_texture(area),
+                gone,
+                tokens::theme::palette(),
+                crate::globe::tongue(&ui.texts),
+            );
+            match self.globe_stage.as_mut() {
+                Some(stage) => {
+                    if let Some(ask) = self.view.wants_globe() {
+                        stage.tell(ask);
+                    }
+                }
+                None => self.view.globe_drawn_here(),
+            }
+            if let Some((key, rgba)) = self.view.globe_picture() {
+                let drawn = crate::files::picture_in(area, rgba.width, rgba.height);
+                canvas
+                    .images
+                    .upload_it(canvas.device, canvas.queue, &key, &rgba);
+                canvas.pictures.push((key, drawn));
+                self.globe_drawn = Some((drawn, (rgba.width, rgba.height)));
             }
         }
         // THE BAR'S COLUMN IS ITS OWN WHILE IT IS DRAWN, and only then —
@@ -1976,8 +3444,14 @@ impl Player {
         } else {
             crate::chrome::Room::of(scroll, w, h)
         };
+        // A ROW OF SEVERAL LINES — a label or a value wrapped, what is said
+        // under a result — lights WHOLE under the pointer, as a click takes
+        // it whole: one lit line of three said the click takes one.
+        let lit = canvas.lit.iter().flat_map(|&(colour, row)| {
+            crate::player_rows::whole_row(&rows, row).map(move |line| (colour, Some(line)))
+        });
         let bands = crate::chrome::hover_bands(
-            canvas.lit.iter().copied(),
+            lit,
             ui.offset,
             room,
             rows.len(),
@@ -1990,6 +3464,7 @@ impl Player {
             canvas.over.extend(top);
         }
         canvas.over.extend(bands);
+        canvas.over.extend(chips);
         if !stage {
             canvas
                 .over
@@ -2004,16 +3479,58 @@ impl Player {
     }
 }
 
-/// Whether a transport button drawn at cell `at` fits whole in a surface
-/// `columns` cells wide inside its margins.
-const fn fits(at: u16, columns: u16) -> bool {
-    at + 2 <= MARGIN + columns
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
+
+    /// FAILS IF: a photograph's door — which reaches no machine — writes a
+    /// key, or keeps WHAT was typed anywhere it says or prints, or stops
+    /// saying the consent and the key it would have kept, in order, then the
+    /// ask that follows them.
+    #[test]
+    fn a_kept_door_keeps_which_key_and_never_the_key() {
+        use crate::player::Errand;
+        use ronoctua_lookup::{Secret, Service, keys::Key};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut out = Outbox::default();
+        let said = out.carry_out(
+            Errand::Let {
+                services: vec![Service::Tmdb],
+                directories: Vec::new(),
+                on: true,
+                then: Box::new(Errand::KeepKey {
+                    key: Key::Tmdb,
+                    secret: Secret::new("eyJh.very.secret"),
+                }),
+            },
+            &t,
+        );
+        assert_eq!(
+            said,
+            Ok(Some(t.t_with(
+                ronoctua_i18n::key::PLAYER_KEY_CHECKING,
+                &[("service", "TMDB")]
+            )))
+        );
+        assert_eq!(out.lets, vec![(vec![Service::Tmdb], Vec::new(), true)]);
+        assert_eq!(out.keys_kept, vec![Key::Tmdb]);
+        assert_eq!(
+            out.asked,
+            vec![Ask::KeyCheck {
+                service: Service::Tmdb
+            }]
+        );
+        assert!(
+            !format!("{out:?}").contains("very.secret"),
+            "a key is kept where it is printed"
+        );
+        assert_eq!(
+            out.carry_out(Errand::ForgetKey(Key::SubDl), &t),
+            Ok(Some(t.t(ronoctua_i18n::key::PLAYER_KEY_FORGOTTEN)))
+        );
+        assert_eq!(out.keys_forgotten, vec![Key::SubDl]);
+    }
 
     /// A column's area at `size`, the header on line 1 as the column puts it.
     fn column(size: Size) -> Area {
@@ -2022,118 +3539,161 @@ mod tests {
 
     #[test]
     fn with_no_video_the_transport_is_under_the_header() {
-        let l = layout(&column(Size::Medium), 2, 40, 50, 2.0, None, 0);
-        assert!(l.pictures.is_empty());
+        let l = layout(&column(Size::Medium), 2, 40, 50, 2.0, None, 1);
+        assert!(l.band.is_none());
         assert_eq!((l.transport, l.bar, l.list), (2, 3, 4));
     }
 
     #[test]
     fn a_wide_video_takes_the_height_its_shape_wants() {
         // 60 cells wide, a line twice a cell: 16:9 wants 60 × 9/16 / 2 ≈ 17.
-        let l = layout(&Area::whole(), 1, 60, 60, 2.0, Some((1920, 1080)), 0);
-        assert_eq!((l.pictures[0].first, l.pictures[0].lines), (1, 17));
+        let l = layout(&Area::whole(), 1, 60, 60, 2.0, Some(16.0 / 9.0), 1);
+        assert_eq!(l.band, Some((1, 17)));
         assert_eq!(l.transport, 18);
     }
 
-    /// FAILS IF: a picture asks for the band's shape again, and the player
-    /// letterboxes it in black where the band's surface should show.
-    #[test]
-    fn a_picture_asks_for_the_video_s_shape() {
-        assert_eq!(
-            super::fitted(400.0, 300.0, Some((1920, 1080))),
-            (400.0, 225.0)
-        );
-        assert_eq!(super::fitted(400.0, 100.0, Some((1920, 1080))).1, 100.0);
-        assert_eq!(
-            super::fitted(400.0, 300.0, Some((500, 500))),
-            (300.0, 300.0)
-        );
-        assert_eq!(super::fitted(400.0, 300.0, None), (400.0, 300.0));
-    }
-
-    /// FAILS IF: a picture takes more than half the surface, or a column's
-    /// picture stops taking its SIZE's share — medium's lines at medium, more
+    /// FAILS IF: the pictures take more than half the surface, or a column's
+    /// pictures stop taking its SIZE's share — medium's lines at medium, more
     /// at large, fewer at small.
     #[test]
     fn the_pictures_never_take_more_than_half() {
-        let l = layout(&Area::whole(), 1, 20, 200, 2.0, Some((1080, 1920)), 0);
-        assert_eq!(l.pictures[0].lines, 10);
+        let tall = Some(1080.0 / 1920.0);
+        let l = layout(&Area::whole(), 1, 20, 200, 2.0, tall, 1);
+        assert_eq!(l.band.map(|b| b.1), Some(10));
         for size in [Size::Large, Size::Medium, Size::Small] {
-            let c = layout(&column(size), 2, 80, 50, 2.0, Some((1080, 1920)), 0);
-            assert_eq!(c.pictures[0].lines, size.picture_lines(), "{size:?}");
-            let short = layout(&column(size), 2, 10, 50, 2.0, Some((1080, 1920)), 0);
-            assert_eq!(short.pictures[0].lines, 5, "{size:?} past half");
+            let c = layout(&column(size), 2, 80, 50, 2.0, tall, 1);
+            assert_eq!(c.band.map(|b| b.1), Some(size.picture_lines()), "{size:?}");
+            let short = layout(&column(size), 2, 10, 50, 2.0, tall, 1);
+            assert_eq!(short.band.map(|b| b.1), Some(5), "{size:?} past half");
         }
         assert_eq!(Size::Medium.picture_lines(), tokens::space::COLUMN_PICTURES);
     }
 
-    #[test]
-    fn followers_share_a_strip_inside_the_same_ceiling() {
-        let l = layout(&Area::whole(), 1, 60, 60, 2.0, Some((1920, 1080)), 2);
-        assert_eq!(l.pictures.len(), 3);
-        let (main, a, b) = (l.pictures[0], l.pictures[1], l.pictures[2]);
-        assert_eq!(a.first, main.first + main.lines);
-        assert_eq!((a.first, a.lines), (b.first, b.lines), "one strip");
-        assert_eq!((a.share, b.share, a.shares), (0, 1, 2));
-        assert!(main.lines + a.lines <= 30, "never past half: {l:?}");
-        // AND ON A SHORT SURFACE the strip is still there, at its floor.
-        let tight = layout(&Area::whole(), 1, 24, 60, 2.0, Some((1920, 1080)), 3);
-        assert_eq!(tight.pictures.len(), 4);
-        assert!(tight.pictures[1].lines >= FOLLOWER_FLOOR);
-        assert!(tight.list <= 1 + 12 + 2, "{tight:?}");
+    /// The screens a photograph's door is told of: the built-in one and a
+    /// monitor.
+    fn two_screens() -> Vec<crate::player_lane::Known> {
+        vec![
+            crate::player_lane::Known {
+                connector: "eDP-1".into(),
+                description: None,
+            },
+            crate::player_lane::Known {
+                connector: "DP-2".into(),
+                description: Some("A wide monitor".into()),
+            },
+        ]
     }
 
-    #[test]
-    fn a_place_divides_the_width_and_keeps_its_lines() {
-        let p = Place {
-            first: 2,
-            lines: 3,
-            share: 1,
-            shares: 4,
-        };
-        let a = p.area(400.0, 20.0);
-        assert_eq!((a.x, a.y, a.width, a.height), (100.0, 40.0, 100.0, 60.0));
+    /// The lanes a door placed, in the order drawn.
+    fn placed_lanes(w: &Player) -> Vec<u32> {
+        w.placed.iter().map(|(l, _)| l.0).collect()
     }
 
+    /// FAILS IF: the window shows a picture routed to another screen, stops
+    /// showing one routed to its own, stops placing them in the band in the
+    /// form of what plays and in each picture's own shape, asks a picture's
+    /// frames of any lane but its own, or a window that does not know its
+    /// screen stops showing them all.
     #[test]
-    fn every_button_asks_the_player_something_and_has_a_command() {
-        // THE VOLUME'S GLYPH is a button too, on the time bar's line.
-        for id in BUTTONS.into_iter().chain(["player-mute"]) {
-            // THE THREE STAGE BUTTONS ARE THE DOOR'S, not the player's: they
-            // change how the picture is shown, and nothing is asked.
-            let the_door_s = matches!(id, "player-only" | "player-pip" | "player-maximize");
-            assert!(ask_of(id).is_some() || the_door_s, "{id}");
-            assert_ne!(glyph_of(id, None, Stage::Off), ' ', "{id}");
-            assert!(
-                crate::leader::default_of().is_ok_and(|(_, r)| r.search(id).is_some()),
-                "{id} is not a command of the registry"
-            );
-        }
-    }
-
-    /// FAILS IF: the bar's buttons stop being one per line from the line
-    /// under the control line's air, with air before the mute — or one of
-    /// them is not a transport button: a glyph, an ask and a command.
-    #[test]
-    fn the_bar_is_one_button_a_line() {
-        let lines: Vec<(u16, &str)> = bar_buttons(1).collect();
+    fn only_lanes_routed_here_are_tiles_in_the_window() {
+        let s = crate::player::fixture::routed();
+        let (mut w, mut ui) = a_photographs(Door::Window, s);
+        w.relayout(&ui, &Area::whole());
         assert_eq!(
-            lines,
-            [
-                (2, "player-previous"),
-                (3, "player-toggle"),
-                (4, "player-next"),
-                (6, "player-mute"),
-            ]
+            placed_lanes(&w),
+            vec![1, 2, 3],
+            "no screen known: every one"
         );
-        for (_, id) in lines {
-            assert!(ask_of(id).is_some(), "{id} asks nothing");
-            assert_ne!(glyph_of(id, None, Stage::Off), ' ', "{id}");
-            assert!(
-                crate::leader::default_of().is_ok_and(|(_, r)| r.search(id).is_some()),
-                "{id} is not a command of the registry"
-            );
+        w.given_screens(&mut ui, two_screens(), Some("DP-2".into()));
+        w.relayout(&ui, &Area::whole());
+        assert_eq!(placed_lanes(&w), vec![1, 2]);
+        let of: Vec<Option<u32>> = w.pictures.iter().map(|p| p.of.map(|l| l.0)).collect();
+        assert_eq!(of, vec![Some(1), Some(2)], "a picture a lane, by its lane");
+        w.given_screens(&mut ui, two_screens(), Some("eDP-1".into()));
+        w.relayout(&ui, &Area::whole());
+        assert_eq!(placed_lanes(&w), vec![1, 3]);
+        // SIDE BY SIDE in the band, each in its own shape.
+        let (first, lines) = w.layout.band.expect("a band");
+        let top = line_px() * f32::from(first);
+        let bottom = top + line_px() * f32::from(lines);
+        let (a, b) = (w.placed[0].1, w.placed[1].1);
+        assert!(a.right() <= b.x, "{a:?} {b:?}");
+        assert!((a.width / a.height - 16.0 / 9.0).abs() < 0.01);
+        assert!(
+            (b.width / b.height - 1.0).abs() < 0.01,
+            "the cover is square"
+        );
+        for (_, r) in &w.placed {
+            assert!(r.y >= top - 0.01 && r.bottom() <= bottom + 0.01, "{r:?}");
         }
+        assert_eq!(
+            w.outbox()
+                .map(|o| o.laid_out.iter().copied().collect::<Vec<_>>()),
+            Some(vec![1, 2, 3]),
+            "every picture laid out asked its own lane"
+        );
+    }
+
+    /// FAILS IF: the column stops showing what is routed to the screen its
+    /// base says it is on, or a window opened for ONE screen shows anything
+    /// but what goes there.
+    #[test]
+    fn only_lanes_routed_here_are_tiles_in_the_column_and_a_screen_s_window() {
+        let s = crate::player::fixture::routed();
+        let (mut c, mut ui) = a_photographs(Door::Column, s.clone());
+        crate::column::Tenant::placed_on(&mut c, &mut ui, Some("DP-2"));
+        c.relayout(&ui, &column(Size::Medium));
+        assert_eq!(placed_lanes(&c), vec![1, 2]);
+        crate::column::Tenant::placed_on(&mut c, &mut ui, Some("HDMI-A-1"));
+        c.relayout(&ui, &column(Size::Medium));
+        assert_eq!(placed_lanes(&c), vec![1]);
+        let (mut w, ui) = a_photographs(Door::Window, s);
+        w.screen_wanted = Some("eDP-1".into());
+        w.relayout(&ui, &Area::whole());
+        assert_eq!(placed_lanes(&w), vec![1, 3]);
+    }
+
+    /// FAILS IF: "show on every screen" stops being the door's own — the
+    /// screens it knows, each something goes to a window — or one screen
+    /// stops being said instead of opening a window on it.
+    #[test]
+    fn every_screen_opens_a_window_where_something_goes() {
+        use crate::player::Press;
+        let mut s = crate::player::fixture::routed();
+        let (mut w, mut ui) = a_photographs(Door::Window, s.clone());
+        w.given_screens(&mut ui, two_screens(), Some("eDP-1".into()));
+        w.pressed(&mut ui, Press::EveryScreen);
+        assert_eq!(
+            w.outbox().map(|o| o.every_screen.clone()),
+            Some(vec![vec!["eDP-1".to_owned(), "DP-2".to_owned()]])
+        );
+        assert!(ui.message.is_some(), "it says what it did");
+        // ONE SCREEN: said, and nothing opened.
+        let (mut one, mut ui) = a_photographs(Door::Window, s.clone());
+        one.given_screens(&mut ui, two_screens()[..1].to_vec(), Some("eDP-1".into()));
+        one.pressed(&mut ui, Press::EveryScreen);
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::PLAYER_EVERY_SCREEN_ONE)
+                    .as_str()
+            )
+        );
+        assert!(one.outbox().is_some_and(|o| o.every_screen.is_empty()));
+        // NOTHING WITH A PICTURE: said too.
+        s.lane_states.clear();
+        let (mut none, mut ui) = a_photographs(Door::Window, s);
+        none.given_screens(&mut ui, two_screens(), None);
+        none.pressed(&mut ui, Press::EveryScreen);
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::PLAYER_EVERY_SCREEN_NOTHING)
+                    .as_str()
+            )
+        );
     }
 
     /// FAILS IF: a bar button stops being taken across the whole line —
@@ -2152,21 +3712,56 @@ mod tests {
             assert_eq!(w.button_at(cell * 0.5, y), Some(id), "the first cell");
             assert_eq!(w.button_at(cell * 4.5, y), Some(id), "the last cell");
         }
-        assert_eq!(w.button_at(cell * 2.5, line * 5.5), None, "the air");
+        for air in [5.5, 9.5] {
+            assert_eq!(
+                w.button_at(cell * 2.5, line * air),
+                None,
+                "the air at {air}"
+            );
+        }
         assert_eq!(w.button_at(cell * 2.5, line * 1.5), None, "the air on top");
     }
 
     /// FAILS IF: the transport stops fitting a column at its small size —
-    /// the size exists because the nine buttons still fit there — or a
-    /// button that does not fit a clamped column is drawn cut.
+    /// the size exists because the eleven buttons still fit there, the last
+    /// one's air on the last cell — or a twelfth would fit too (the room is
+    /// exact, and a new button is a decision about what goes), or a button
+    /// that does not fit a clamped column is drawn cut.
     #[test]
     fn the_transport_fits_the_small_column() {
-        let mut at = MARGIN;
-        for _ in BUTTONS {
-            assert!(fits(at, tokens::space::COLUMN_SMALL), "at {at}");
-            at += 3;
-        }
-        assert!(!fits(MARGIN + 3 * 9, 3 * 9), "a button past the edge");
+        assert_eq!(crate::player_transport::BUTTONS.len(), 11);
+        // EVERY BUTTON SHOWN: two sounds make the media in the file one.
+        let s = crate::player::fixture::alone(
+            "/films/a.mkv",
+            [1, 2]
+                .map(|id| {
+                    crate::player::fixture::track(
+                        id,
+                        ronoctua_player::wire::TrackKind::Audio,
+                        None,
+                        id == 1,
+                    )
+                })
+                .to_vec(),
+        );
+        let panel = |cells| crate::player_media::Panel {
+            from: MARGIN,
+            cells,
+        };
+        let small = crate::player_media::buttons(panel(tokens::space::COLUMN_SMALL), 0, Some(&s));
+        assert_eq!(small.len(), 11, "{small:?}");
+        // ZERO SLACK: the eleventh ends on the last cell, a twelfth is out.
+        assert_eq!(
+            small.last().map(|b| b.2),
+            Some(MARGIN + tokens::space::COLUMN_SMALL)
+        );
+        let short =
+            crate::player_media::buttons(panel(tokens::space::COLUMN_SMALL - 1), 0, Some(&s));
+        assert_eq!(short.len(), 10, "a button cut at the edge");
+        assert_eq!(
+            crate::player_media::buttons(panel(27), 0, Some(&s)).len(),
+            9
+        );
     }
 
     /// FAILS IF: in the bar a key acts on a row nobody sees, or a key the
@@ -2190,27 +3785,114 @@ mod tests {
         );
     }
 
+    /// A film with two sounds: the media in the file is a choice.
+    fn with_two_sounds() -> State {
+        crate::player::fixture::alone(
+            "/films/a.mkv",
+            [1, 2]
+                .map(|id| {
+                    crate::player::fixture::track(
+                        id,
+                        ronoctua_player::wire::TrackKind::Audio,
+                        Some(&format!("sound {id}")),
+                        id == 1,
+                    )
+                })
+                .to_vec(),
+        )
+    }
+
+    /// FAILS IF: on stage — the picture alone — the media glyph or `k` opens
+    /// a page behind the picture, or a key that acts on the cursor's row acts
+    /// on one nobody sees; or a window opened for its stage, which has no
+    /// rows to bring back, leaves it (which closes it) instead of saying so.
+    #[test]
+    fn on_stage_a_key_that_needs_the_rows_brings_them_back() {
+        use crate::player::{PageId, Press, TrackKind};
+        let (mut w, mut ui) = a_photographs(Door::Window, with_two_sounds());
+        w.stage_to(&mut ui, Stage::Only);
+        w.pressed_button(&mut ui, "player-tracks");
+        assert_eq!(w.stage, Stage::Off, "the page opened behind the picture");
+        assert_eq!(w.view.page(), PageId::Tracks(TrackKind::Sound));
+        // A KEY OF THE CURSOR'S ROW brings the rows back and is spent on it.
+        w.stage_to(&mut ui, Stage::Only);
+        w.pressed(&mut ui, Press::Enter);
+        assert_eq!(w.stage, Stage::Off);
+        assert!(
+            w.asked().is_empty(),
+            "acted on a row nobody saw: {:?}",
+            w.asked()
+        );
+        // A KEY OF EVERYWHERE acts on stage.
+        w.stage_to(&mut ui, Stage::Only);
+        w.pressed(&mut ui, Press::Toggle);
+        assert_eq!(w.stage, Stage::Only);
+        assert_eq!(w.asked(), [Ask::Toggle]);
+        // A WINDOW OPENED FOR ITS STAGE says where the rows are.
+        let (mut w, mut ui) = a_photographs(Door::Window, with_two_sounds());
+        w.opened_for = Some(Stage::Maximized);
+        w.stage_to(&mut ui, Stage::Maximized);
+        w.pressed(&mut ui, Press::Tracks);
+        assert!(!ui.quit, "the stage's window closed");
+        assert_eq!(w.view.page(), PageId::Home);
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::PLAYER_STAGE_HAS_NO_ROWS)
+                    .as_str()
+            )
+        );
+    }
+
+    /// FAILS IF: `Esc` in the column's bar goes back through a page the bar
+    /// does not draw — the column stays up and nothing a person sees changes
+    /// — instead of closing the column, as it does on the home.
+    #[test]
+    fn in_the_bar_esc_closes_the_column_over_any_page() {
+        use crate::player::{PageId, Press};
+        let (mut c, mut ui) = a_photographs(Door::Column, with_two_sounds());
+        c.pressed(&mut ui, Press::Go(PageId::Machines));
+        assert_eq!(c.view.page(), PageId::Machines);
+        let key = ronoctua_keymap::Key::parse("ESC").expect("parses");
+        let (event, mods) = crate::door::keys::event_of(key);
+        crate::column::Tenant::typed(&mut c, &mut ui, &event, mods, &column(Size::Bar));
+        assert!(ui.quit, "the column stayed");
+    }
+
     /// A window onto a player that answered, with no daemon, no compositor,
     /// no loop and no thread behind it — its timers arm nothing.
     fn a_window(state: State) -> (Player, Ui) {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
         let ui = Ui::for_tests(texts);
         let (frame_sender, _) = channel::channel::<usize>();
-        let (paired, _) = channel::channel::<crate::player::Paired>();
+        let (paired, _) = channel::channel::<crate::player_machines::Paired>();
+        let (told, _) = channel::channel::<crate::player::Told>();
         let me = Player {
             door: Door::Window,
             arm_controls: Box::new(|| None),
             arm_corner: Box::new(|| false),
             window: RefCell::new(None),
-            wm: None,
+            reach: Reach::machine(),
             view: crate::player::View::fresh(),
-            pairing: crate::player::Pairing::default(),
+            pairing: crate::player_machines::Pairing::default(),
             paired,
+            told,
             player: Some(state),
             pictures: Vec::new(),
+            placed: Vec::new(),
+            screen_wanted: None,
+            placed_on: None,
+            sinks: None,
+            screens_given: None,
             frame_sender,
             buttons: Vec::new(),
             layout: Layout::default(),
+            deck: blank_deck(),
+            deck_offset: 0,
+            dragged: None,
+            deck_under: None,
+            deck_chosen: None,
             stage: Stage::Off,
             first_stage: None,
             opened_for: None,
@@ -2222,9 +3904,18 @@ mod tests {
             painted: false,
             button_under: None,
             pointer_at: None,
+            globe_stage: None,
+            globe_drawn: None,
             _watch: Arc::new(AtomicBool::new(false)),
         };
         (me, ui)
+    }
+
+    /// Opens `page` by its row on the home, as two clicks do.
+    fn go_to(w: &mut Player, ui: &mut Ui, page: crate::player::PageId) {
+        stand_on(w, ui, &crate::player::Target::Go(page));
+        w.pressed(ui, crate::player::Press::Enter);
+        assert_eq!(w.view.page(), page, "the row did not open its page");
     }
 
     /// Puts the cursor on the row whose target is `target`, as a click does.
@@ -2242,12 +3933,14 @@ mod tests {
     /// to the footer, or a line let go keeps the name for a later code.
     #[test]
     fn pairing_is_typed_on_the_windows_own_line() {
-        use crate::player::{PAIR, PAIR_CODE, Press, Target};
+        use crate::player::{PageId, Press, Target};
+        use crate::player_question::{PAIR, PAIR_CODE};
         let state = State {
             tailnet: Some("here".into()),
             ..State::default()
         };
         let (mut w, mut ui) = a_window(state);
+        go_to(&mut w, &mut ui, PageId::Machines);
         stand_on(&mut w, &ui, &Target::Pair);
         w.pressed(&mut ui, Press::Enter);
         let line = ui.asking.as_ref().expect("the name is asked here");
@@ -2271,7 +3964,8 @@ mod tests {
     /// window says to type in the footer again.
     #[test]
     fn a_path_is_typed_here_with_the_files_open_under_it() {
-        use crate::player::{ENQUEUE, Press, Purpose, Target};
+        use crate::player::{Press, Purpose, Target};
+        use crate::player_question::ENQUEUE;
         let root =
             std::env::temp_dir().join(format!("ronoctua-window-library-{}", std::process::id()));
         std::fs::create_dir_all(root.join("Album")).expect("a library");
@@ -2289,16 +3983,354 @@ mod tests {
         std::fs::remove_dir_all(&root).expect("the library goes");
     }
 
-    /// FAILS IF: a door row stops being an order for the footer, off the
-    /// loop — the one thing this window hands it.
+    /// FAILS IF: louder and quieter stop being ONE step of the volume, the
+    /// same through the bar's buttons, the transport's mapping and the
+    /// view's `=` and `-` — or a step goes past the loudest or under nothing.
     #[test]
-    fn opening_another_door_is_the_footers_order() {
+    fn louder_and_quieter_step_the_volume() {
+        use crate::player::{Errand, Press, VOLUME_MOST, VOLUME_STEP};
+        use crate::player_transport::{button_errand, stepped_volume};
+        assert_eq!(stepped_volume(72, true), 72 + VOLUME_STEP);
+        assert_eq!(stepped_volume(72, false), 72 - VOLUME_STEP);
+        assert_eq!(stepped_volume(VOLUME_MOST - 1, true), VOLUME_MOST);
+        assert_eq!(stepped_volume(VOLUME_STEP - 1, false), 0);
+        let state = State {
+            volume: 72,
+            ..State::default()
+        };
+        let louder = Ask::Volume {
+            percent: 72 + VOLUME_STEP,
+        };
+        let quieter = Ask::Volume {
+            percent: 72 - VOLUME_STEP,
+        };
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        assert_eq!(
+            button_errand("player-louder", Some(&state), &texts),
+            Errand::Tell(louder.clone())
+        );
+        assert_eq!(
+            button_errand("player-quieter", Some(&state), &texts),
+            Errand::Tell(quieter.clone())
+        );
+        // THE VIEW'S KEYS, the same step.
+        let mut view = crate::player::View::blank(None);
+        assert_eq!(
+            view.key(Press::Louder, Some(&state), 40, &texts),
+            Errand::Tell(louder.clone())
+        );
+        assert_eq!(
+            view.key(Press::Quieter, Some(&state), 40, &texts),
+            Errand::Tell(quieter.clone())
+        );
+        // AND THE BAR'S BUTTONS, clicked on their lines.
+        let (mut c, mut ui) = a_photographs(Door::Column, state);
+        c.buttons = bar_buttons(1)
+            .map(|(line, id)| (line, 0, ui.columns + 2 * MARGIN, id))
+            .collect();
+        let line = f64::from(line_px());
+        let mut hand = Hand::<PerPointer>::default();
+        for l in [6.5, 8.5] {
+            let e = PointerEvent {
+                surface: ui.surface.clone(),
+                position: (f64::from(cell_px()) * 2.5, line * l),
+                kind: PointerEventKind::Press {
+                    time: 0,
+                    button: LEFT_BUTTON,
+                    serial: 0,
+                },
+            };
+            c.pointer_bar(&mut ui, &mut hand, &[e]);
+        }
+        assert_eq!(c.asked(), [louder, quieter]);
+    }
+
+    /// FAILS IF: louder or quieter, with no state from the player yet (the
+    /// bar after a crash, a door before the first state), sends a volume
+    /// guessed from nothing — the player keeps it, and a person at 20% who
+    /// pressed "quieter" played next at 95% — instead of saying the player
+    /// is not answering. Through the buttons, the view's keys and the wheel.
+    #[test]
+    fn no_state_no_volume_is_guessed() {
+        use crate::player::{Errand, Press};
+        use crate::player_transport::button_errand;
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let not_running = texts.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING);
+        for id in ["player-louder", "player-quieter"] {
+            assert_eq!(
+                button_errand(id, None, &texts),
+                Errand::Said(not_running.clone()),
+                "{id}"
+            );
+        }
+        let mut view = crate::player::View::blank(None);
+        for press in [Press::Louder, Press::Quieter] {
+            assert_eq!(
+                view.key(press, None, 40, &texts),
+                Errand::Said(not_running.clone()),
+                "{press:?}"
+            );
+        }
+        let (mut c, mut ui) = a_photographs(Door::Column, State::default());
+        c.player = None;
+        c.turn_the_volume(&mut ui, 1);
+        assert!(c.asked().is_empty(), "the wheel asked {:?}", c.asked());
+        assert_eq!(ui.message, Some(not_running));
+    }
+
+    /// FAILS IF: the swap stops trading the door for the other — a window
+    /// asking the footer to RAISE the column (never the toggle, which closes
+    /// one already up) and closing, a window opened for a stage doing the
+    /// same, the column asking for the window and closing — by its button or
+    /// by `w`, or it asks the player anything.
+    #[test]
+    fn swap_from_a_window_raises_the_column_and_quits() {
+        let raise = format!("command player-column {}", crate::player::RAISE);
+        // THE WINDOW, by its button.
+        let (mut w, mut ui) = a_photographs(Door::Window, State::default());
+        w.pressed_button(&mut ui, "player-swap");
+        assert_eq!(ui.orders(), std::slice::from_ref(&raise));
+        assert!(ui.quit);
+        assert!(w.asked().is_empty(), "the swap asked the player");
+        // BY ITS KEY, `w`.
+        let (mut w, mut ui) = a_photographs(Door::Window, State::default());
+        let key = ronoctua_keymap::Key::parse("w").expect("parses");
+        let (event, mods) = crate::door::keys::event_of(key);
+        w.typed_here(&mut ui, &event, mods);
+        assert_eq!(ui.orders(), std::slice::from_ref(&raise));
+        assert!(ui.quit);
+        // A WINDOW OPENED FOR A STAGE closes, which closes the stage.
+        let (mut w, mut ui) = a_photographs(Door::Window, State::default());
+        w.opened_for = Some(Stage::Maximized);
+        w.pressed_button(&mut ui, "player-swap");
+        assert_eq!(ui.orders(), [raise]);
+        assert!(ui.quit);
+        w.opened_for = None;
+        // THE COLUMN: the window, and it closes.
+        let (mut c, mut ui) = a_photographs(Door::Column, State::default());
+        c.pressed_button(&mut ui, "player-swap");
+        assert_eq!(ui.orders(), ["command player-window".to_owned()]);
+        assert!(ui.quit);
+    }
+
+    /// FAILS IF: a door stays open when the player closed everywhere — the
+    /// window, a stage's window or the column left over a player that is
+    /// gone — or one closes when the player merely went away: a crash is a
+    /// player the door says is not running, and nothing closed it on
+    /// purpose. The footer reads the same answer (`player::hearing`).
+    #[test]
+    fn a_farewell_closes_every_door_and_a_crash_does_not() {
+        use crate::player::{Hearing, hearing};
+        use ronoctua_player::client::Heard;
+        let playing = State {
+            current: None,
+            playing: true,
+            ..State::default()
+        };
+        for door in [Door::Window, Door::Column] {
+            // A CRASH: the door stays, and says the player is not running.
+            let (mut d, mut ui) = a_photographs(door, playing.clone());
+            d.heard(&mut ui, Heard::Gone);
+            assert!(!ui.quit, "{door:?} closed on a crash");
+            let not_running = ui.texts.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING);
+            let said = d
+                .rows(&ui)
+                .iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(said.contains(&not_running), "{door:?}: {said}");
+            // AND A STATE AGAIN brings it back, still open.
+            d.heard(&mut ui, Heard::State(Box::new(playing.clone())));
+            assert!(!ui.quit);
+            // A FAREWELL: the door goes, and asks the player nothing on
+            // its way out.
+            d.heard(&mut ui, Heard::Farewell);
+            assert!(ui.quit, "{door:?} stayed after the farewell");
+            assert!(d.asked().is_empty());
+            assert!(d.pictures.is_empty());
+        }
+        // A STAGE'S WINDOW closes the same way, which closes the stage.
+        let (mut w, mut ui) = a_photographs(Door::Window, playing);
+        w.opened_for = Some(Stage::Small);
+        w.heard(&mut ui, Heard::Farewell);
+        assert!(ui.quit);
+        w.opened_for = None;
+        // THE FOOTER'S VIEW reads the same three answers.
+        assert_eq!(hearing(Heard::Farewell), Hearing::Closes);
+        assert_eq!(hearing(Heard::Gone), Hearing::Shows(None));
+        assert_eq!(
+            hearing(Heard::State(Box::default())),
+            Hearing::Shows(Some(Box::default()))
+        );
+    }
+
+    /// FAILS IF: closing the player everywhere from a window or the column
+    /// stops asking first — "no" drawn first and the cursor on it — or, told
+    /// yes, the door does not tell the player itself (only if it runs), end
+    /// the other doors that are processes itself (so they go with no footer
+    /// too), hand the footer the same order for its view, and close; or "no"
+    /// does anything but put the question away.
+    #[test]
+    fn closing_everywhere_asks_then_tells_the_player_and_the_footer() {
         use crate::player::{Press, Target};
-        let (mut w, mut ui) = a_window(State::default());
-        stand_on(&mut w, &ui, &Target::Run("player-column"));
+        for door in [Door::Window, Door::Column] {
+            // WITH NO PLAYER RUNNING the row is there: it still closes the
+            // doors that are up.
+            let (mut d, mut ui) = a_photographs(door, State::default());
+            d.state_arrived(&mut ui, None);
+            stand_on(&mut d, &ui, &Target::Quit);
+            d.pressed(&mut ui, Press::Enter);
+            let rows = d.rows(&ui);
+            let answers: Vec<_> = rows
+                .iter()
+                .filter_map(|r| match r.target {
+                    Target::Answer(yes) => Some(yes),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(answers, [false, true], "{door:?}: no is drawn first");
+            assert_eq!(
+                rows.get(d.view.cursor()).map(|r| &r.target),
+                Some(&Target::Answer(false)),
+                "{door:?}: the cursor is born on no"
+            );
+            // NO puts it away, and nothing is done.
+            d.pressed(&mut ui, Press::Enter);
+            assert!(!ui.quit);
+            assert!(d.asked().is_empty());
+            assert!(ui.orders().is_empty());
+            assert!(d.outbox().is_some_and(|o| !o.ended_the_doors));
+            // YES closes the player everywhere.
+            stand_on(&mut d, &ui, &Target::Quit);
+            d.pressed(&mut ui, Press::Enter);
+            d.pressed(&mut ui, Press::Down);
+            d.pressed(&mut ui, Press::Enter);
+            assert_eq!(d.asked(), [Ask::Quit], "{door:?}");
+            assert!(
+                d.outbox().is_some_and(|o| o.ended_the_doors),
+                "{door:?}: the other doors were left to the footer"
+            );
+            assert_eq!(ui.orders(), ["command player-quit".to_owned()]);
+            assert!(ui.quit, "{door:?} stayed");
+        }
+    }
+
+    /// A player with NO DAEMON behind it, on a `Ui` of a test.
+    fn a_photographs(door: Door, state: State) -> (Player, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut ui = Ui::for_tests(texts);
+        let mut me = Player::detached(door, Outbox::default(), None);
+        me.state_arrived(&mut ui, Some(state));
+        (me, ui)
+    }
+
+    /// FAILS IF: anything a detached player does past its door is done —
+    /// the preferences written, a pairing sent, a window of the stage
+    /// started — instead of kept (`Reach::Kept`). Each of them, done, lands
+    /// on the machine the tests run on, and `daemon::about_to_act` fails
+    /// the test before it does.
+    #[test]
+    fn a_photographs_player_keeps_every_act_past_its_door() {
+        use crate::player::{PageId, Press, Show, Target};
+        use crate::player_question::{PAIR, PAIR_CODE};
+        let state = State {
+            playing: true,
+            tailnet: Some("here".into()),
+            ..State::default()
+        };
+        let (mut w, mut ui) = a_photographs(Door::Window, state.clone());
+        // A SWITCH writes the preferences, and tells the daemon to read them.
+        go_to(&mut w, &mut ui, PageId::Internet);
+        stand_on(&mut w, &ui, &Target::Sponsors);
         w.pressed(&mut ui, Press::Enter);
-        assert_eq!(ui.orders(), ["command player-column".to_owned()]);
-        assert!(ui.asking.is_none());
+        let out = w.outbox().expect("a photograph's");
+        assert_eq!(out.kept, [crate::player::Switch::Sponsors(true)], "{out:?}");
+        assert_eq!(out.asked, [Ask::Reload]);
+        // A PAIRING, by name — and the code nowhere: the Machines page, back
+        // on the home first.
+        w.pressed(&mut ui, Press::Escape);
+        go_to(&mut w, &mut ui, PageId::Machines);
+        stand_on(&mut w, &ui, &Target::Pair);
+        w.pressed(&mut ui, Press::Enter);
+        ui.asking = None;
+        Content::answered(&mut w, &mut ui, PAIR, "den");
+        ui.asking = None;
+        Content::answered(&mut w, &mut ui, PAIR_CODE, "123456");
+        let out = w.outbox().expect("a photograph's");
+        assert_eq!(out.paired_with, ["den".to_owned()]);
+        assert!(!format!("{out:?}").contains("123456"), "the code was kept");
+        // A COLUMN'S WHOLE SCREEN is a window of its own: not started.
+        let (mut c, mut ui) = a_photographs(Door::Column, state);
+        c.toggle_stage(&mut ui, Show::Maximized);
+        assert_eq!(
+            c.outbox().expect("a photograph's").stages,
+            [Show::Maximized]
+        );
+        assert_eq!(c.stage, Stage::Off, "the column itself stays");
+    }
+
+    /// FAILS IF: a detached player reads the machine's clock for a double
+    /// click on the picture — two clicks a step apart became one double
+    /// click on a fast machine and two on a slow one — or clicks with no
+    /// time between stop being one. The photograph's walk says which.
+    #[test]
+    fn a_photographs_clock_moves_only_when_told() {
+        use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
+        let state = State {
+            duration: Some(60.0),
+            ..crate::player::fixture::alone(
+                "/films/a.mkv",
+                vec![crate::player::fixture::track(
+                    1,
+                    ronoctua_player::wire::TrackKind::Video,
+                    None,
+                    true,
+                )],
+            )
+        };
+        let (mut w, mut ui) = a_photographs(Door::Window, state);
+        w.relayout(&ui, &Area::whole());
+        let (first, _) = w.layout.band.expect("a picture is laid out");
+        let at = (
+            f64::from(cell_px()) * 10.5,
+            (f64::from(first) + 0.5) * f64::from(line_px()),
+        );
+        assert!(w.on_a_picture(at.1), "the click is on the picture");
+        let mut hand = Hand::<PerPointer>::default();
+        let mut click = |w: &mut Player, ui: &mut Ui| {
+            for kind in [
+                PointerEventKind::Press {
+                    time: 0,
+                    button: LEFT_BUTTON,
+                    serial: 0,
+                },
+                PointerEventKind::Release {
+                    time: 0,
+                    button: LEFT_BUTTON,
+                    serial: 0,
+                },
+            ] {
+                let e = PointerEvent {
+                    surface: ui.surface.clone(),
+                    position: at,
+                    kind,
+                };
+                w.pointer_here(ui, &mut hand, &[e]);
+            }
+        };
+        // TWO CLICKS, A STEP APART: two presses of play, and the door as it
+        // was — however long this machine took between them.
+        click(&mut w, &mut ui);
+        w.wait(std::time::Duration::from_secs(1));
+        click(&mut w, &mut ui);
+        assert_eq!(w.asked(), [Ask::Toggle, Ask::Toggle]);
+        assert_eq!(w.stage, Stage::Off);
+        // TWO WITH NO TIME BETWEEN: a double click, the whole screen.
+        w.wait(std::time::Duration::from_secs(1));
+        click(&mut w, &mut ui);
+        click(&mut w, &mut ui);
+        assert_eq!(w.stage, Stage::Maximized);
     }
 
     /// FAILS IF: the stage stops being the picture over the whole surface
@@ -2307,14 +4339,530 @@ mod tests {
     #[test]
     fn on_stage_the_picture_is_everything_and_the_transport_is_its_foot() {
         let l = super::stage_layout(0, 20);
-        assert_eq!(l.pictures.len(), 1);
-        assert_eq!((l.pictures[0].first, l.pictures[0].lines), (0, 20));
+        assert_eq!(l.band, Some((0, 20)));
         assert_eq!((l.transport, l.bar, l.list), (18, 19, 20));
         // IN A COLUMN, under its control line — which stays the column's.
         let c = super::stage_layout(1, 20);
-        assert_eq!((c.pictures[0].first, c.pictures[0].lines), (1, 19));
+        assert_eq!(c.band, Some((1, 19)));
         assert_eq!((c.transport, c.bar), (18, 19));
         let band = stage_area(300.0, 400.0, &column(Size::Medium));
         assert_eq!((band.y, band.height), (line_px(), 400.0 - line_px()));
+    }
+
+    /// Three lanes played as a SET: a picture of a minute from 0, a dub of
+    /// forty seconds from 10 (muted, at 60 %), and subtitles that are off —
+    /// the clock at 20 s of 60.
+    fn a_set_of_three() -> (State, Box<ronoctua_player::queue::Outline>) {
+        use ronoctua_player::own::{Lane, LaneId, LaneKind};
+        let mut video = Lane::new(LaneId(1), LaneKind::Video, "/films/one.mkv");
+        video.title = Some("One".into());
+        let mut audio = Lane::new(LaneId(2), LaneKind::Audio, "/films/dub.flac");
+        audio.start_seconds = 10.0;
+        audio.muted = true;
+        audio.volume_percent = 60;
+        let mut words = Lane::new(LaneId(3), LaneKind::Subtitle, "/films/one.srt");
+        words.start_seconds = 5.0;
+        words.enabled = false;
+        crate::player::fixture::set(
+            vec![video, audio, words],
+            &[Some(60.0), Some(40.0), Some(45.0)],
+            Some(60.0),
+            20.0,
+        )
+    }
+
+    /// A window onto `state` and its outline, laid out once — a photograph's.
+    fn a_laid_window(
+        door: Door,
+        (state, outline): (State, Box<ronoctua_player::queue::Outline>),
+    ) -> (Player, Ui) {
+        let (mut w, mut ui) = a_photographs(door, state);
+        w.outline_arrived(&mut ui, Some(outline));
+        w.relayout(&ui, &Area::whole());
+        (w, ui)
+    }
+
+    /// One pointer event at `(x, y)`.
+    fn pointed(
+        w: &mut Player,
+        ui: &mut Ui,
+        hand: &mut Hand<PerPointer>,
+        kind: PointerEventKind,
+        position: (f64, f64),
+    ) {
+        let e = PointerEvent {
+            surface: ui.surface.clone(),
+            position,
+            kind,
+        };
+        w.pointer_here(ui, hand, &[e]);
+    }
+
+    const PRESS: PointerEventKind = PointerEventKind::Press {
+        time: 0,
+        button: LEFT_BUTTON,
+        serial: 0,
+    };
+    const RELEASE: PointerEventKind = PointerEventKind::Release {
+        time: 0,
+        button: LEFT_BUTTON,
+        serial: 0,
+    };
+    const MOTION: PointerEventKind = PointerEventKind::Motion { time: 0 };
+
+    /// The middle of the cell `column` (fractional) on `line`, in pixels.
+    fn at_cell(column: f32, line: u16) -> (f64, f64) {
+        (
+            f64::from(column * cell_px()),
+            (f64::from(line) + 0.5) * f64::from(line_px()),
+        )
+    }
+
+    /// Where the span `text` on `line` was DRAWN: its first cell.
+    fn drawn_at(spans: &[ronoctua_render::Span], line: u16, text: char) -> f32 {
+        let span = spans
+            .iter()
+            .find(|sp| sp.line == line && sp.text == text.to_string())
+            .unwrap_or_else(|| panic!("no `{text}` drawn on line {line}: {spans:?}"));
+        f32::from(span.column) + 0.5
+    }
+
+    /// FAILS IF: a control of the window's DECK answers a press anywhere but
+    /// where the frame drew it — the lane's glyph, its mute, the player's
+    /// mute, a band dragged by its ghost, a band clicked open — or the drag
+    /// asks anything before it is let go, or `Esc` fails to call it off.
+    #[test]
+    fn the_deck_is_taken_where_the_window_draws_it() {
+        use crate::player_timeline::band_color;
+        use ronoctua_player::own::{LaneId, LaneKind};
+        use ronoctua_player::wire::LaneChange;
+        let (mut w, mut ui) = a_laid_window(Door::Window, a_set_of_three());
+        assert_eq!(w.layout.deck, 4, "the ruler and three lanes");
+        assert_eq!(w.layout.list, w.layout.bar + 4, "the list under the deck");
+        let bar = w.layout.bar;
+        let drawn = w.block_drawn(&ui);
+        let mut hand = Hand::<PerPointer>::default();
+        let click = |w: &mut Player, ui: &mut Ui, hand: &mut Hand<PerPointer>, p| {
+            pointed(w, ui, hand, MOTION, p);
+            pointed(w, ui, hand, PRESS, p);
+            pointed(w, ui, hand, RELEASE, p);
+        };
+        let lane = |id, change| Ask::Lane {
+            lane: LaneId(id),
+            change,
+        };
+        // THE PICTURE'S GLYPH, where it was drawn: switched off.
+        let c = drawn_at(
+            &drawn.spans,
+            bar + 1,
+            crate::player_queue::lane_glyph(LaneKind::Video),
+        );
+        click(&mut w, &mut ui, &mut hand, at_cell(c, bar + 1));
+        assert_eq!(
+            w.asked().last(),
+            Some(&lane(1, LaneChange::Enabled { on: false }))
+        );
+        // THE DUB'S MUTE — it is muted, so the glyph says so — given back.
+        let c = drawn_at(&drawn.spans, bar + 2, tokens::icon::VOLUME_OFF);
+        click(&mut w, &mut ui, &mut hand, at_cell(c, bar + 2));
+        assert_eq!(
+            w.asked().last(),
+            Some(&lane(2, LaneChange::Mute { muted: false }))
+        );
+        // THE SUBTITLES PLAY NO SOUND and draw no mute.
+        assert!(!drawn.spans.iter().any(|sp| {
+            sp.line == bar + 3
+                && [tokens::icon::VOLUME, tokens::icon::VOLUME_OFF]
+                    .map(|g| g.to_string())
+                    .contains(&sp.text)
+        }));
+        // THE PLAYER'S MUTE, on the ruler.
+        let c = drawn_at(&drawn.spans, bar, tokens::icon::VOLUME);
+        click(&mut w, &mut ui, &mut hand, at_cell(c, bar));
+        assert_eq!(w.asked().last(), Some(&Ask::Mute));
+        // THE DUB'S BAND, a cell into where it was painted.
+        let band = drawn
+            .quads
+            .iter()
+            .find(|q| q.color == band_color(LaneKind::Audio, true))
+            .expect("the dub's band");
+        let into = band.x / cell_px() + 1.0;
+        let asked = w.asked().len();
+        // HELD AND MOVED five cells: a ghost, and nothing asked yet.
+        pointed(&mut w, &mut ui, &mut hand, PRESS, at_cell(into, bar + 2));
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            MOTION,
+            at_cell(into + 5.0, bar + 2),
+        );
+        assert_eq!(w.asked().len(), asked, "a drag asked before it was let go");
+        let ghost = w.dragged.expect("a ghost");
+        assert!(
+            w.block_drawn(&ui)
+                .quads
+                .iter()
+                .any(|q| q.color == tokens::color::PLAYER_LANE_HELD),
+            "the ghost is painted"
+        );
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            RELEASE,
+            at_cell(into + 5.0, bar + 2),
+        );
+        match w.asked().last() {
+            Some(Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Start { seconds },
+            }) => assert!((seconds - ghost.start()).abs() < 1e-9 && *seconds > 10.0),
+            other => panic!("the drag asked {other:?}"),
+        }
+        assert!(w.dragged.is_none());
+        // CALLED OFF by `Esc`: nothing asked when it is let go.
+        let asked = w.asked().len();
+        pointed(&mut w, &mut ui, &mut hand, PRESS, at_cell(into, bar + 2));
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            MOTION,
+            at_cell(into + 5.0, bar + 2),
+        );
+        let (event, mods) =
+            crate::door::keys::event_of(ronoctua_keymap::Key::parse("ESC").expect("parses"));
+        w.typed_here(&mut ui, &event, mods);
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            MOTION,
+            at_cell(into + 7.0, bar + 2),
+        );
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            RELEASE,
+            at_cell(into + 7.0, bar + 2),
+        );
+        assert_eq!(
+            w.asked().len(),
+            asked,
+            "a drag called off asked {:?}",
+            w.asked().last()
+        );
+        assert_eq!(
+            w.view.page(),
+            crate::player::PageId::Home,
+            "Esc left the page"
+        );
+        // CLICKED WITHOUT MOVING: the FIRST click chooses the lane — it wears
+        // the cursor's colour on the block — and the second opens its page
+        // (invariant 19).
+        click(&mut w, &mut ui, &mut hand, at_cell(into, bar + 2));
+        assert_eq!(
+            w.view.page(),
+            crate::player::PageId::Home,
+            "one click on a band opened its page"
+        );
+        assert_eq!(w.deck_chosen, Some(LaneId(2)), "the lane was not chosen");
+        let chosen = w.block_drawn(&ui);
+        assert!(
+            chosen
+                .spans
+                .iter()
+                .any(|s| s.color == crate::chrome::Kind::Setting.tones(true).0),
+            "the chosen lane does not wear the cursor's colour"
+        );
+        click(&mut w, &mut ui, &mut hand, at_cell(into, bar + 2));
+        assert_eq!(w.view.page(), crate::player::PageId::Lane(LaneId(2)));
+        // AND A POINTER RESTING ON THE BAND is what line 0 explains.
+        assert_eq!(
+            w.deck_under.map(|(_, _, hit)| hit.about()),
+            Some(Some("player-lane-band"))
+        );
+        assert!(crate::chrome::hint_sentence("player-lane-band", &ui.texts).is_some());
+    }
+
+    /// FAILS IF: the track of the deck stops seeking where it is pressed, or
+    /// the wheel over a lane that sounds stops turning that lane's volume and
+    /// over the ruler the player's.
+    #[test]
+    fn the_deck_seeks_and_the_wheel_turns_the_volume_under_it() {
+        use ronoctua_player::own::LaneId;
+        use ronoctua_player::wire::LaneChange;
+        let (mut w, mut ui) = a_laid_window(Door::Window, a_set_of_three());
+        let bar = w.layout.bar;
+        let mut hand = Hand::<PerPointer>::default();
+        let (first, _) = w.deck.track();
+        let column = f32::from(first) + 4.0;
+        let x = f64::from(MARGIN) + f64::from(column);
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            PRESS,
+            at_cell(f32::from(MARGIN) + column, bar),
+        );
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            RELEASE,
+            at_cell(f32::from(MARGIN) + column, bar),
+        );
+        match w.asked().last() {
+            Some(Ask::Seek {
+                seconds,
+                relative: false,
+            }) => assert!((seconds - w.deck.seconds_at(x - f64::from(MARGIN))).abs() < 1e-6),
+            other => panic!("the ruler asked {other:?}"),
+        }
+        let notch = |n: i32| PointerEventKind::Axis {
+            time: 0,
+            horizontal: smithay_client_toolkit::seat::pointer::AxisScroll::default(),
+            vertical: smithay_client_toolkit::seat::pointer::AxisScroll {
+                value120: n * 120,
+                ..Default::default()
+            },
+            source: None,
+        };
+        // A NOTCH IS THE LINES THE WHEEL'S ONE ARITHMETIC SAYS, a step each.
+        let lines = {
+            let mut owed = 0.0;
+            if let PointerEventKind::Axis {
+                horizontal,
+                vertical,
+                ..
+            } = notch(1)
+            {
+                crate::surface::wheel_arrived(&mut owed, &vertical, &horizontal);
+            }
+            u8::try_from(crate::surface::wheel_lines(&mut owed)).expect("a few lines")
+        };
+        let step = crate::player::VOLUME_STEP * lines;
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            notch(-1),
+            at_cell(f32::from(MARGIN) + column, bar + 2),
+        );
+        assert_eq!(
+            w.asked().last(),
+            Some(&Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Volume { percent: 60 + step }
+            })
+        );
+        pointed(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            notch(1),
+            at_cell(f32::from(MARGIN) + column, bar),
+        );
+        assert_eq!(
+            w.asked().last(),
+            Some(&Ask::Volume {
+                percent: 100 - step
+            })
+        );
+    }
+
+    /// FAILS IF: a file alone stops being the one time bar under the
+    /// transport, or a stage — the corner, the whole screen, the picture
+    /// alone — draws more than the one global bar; or a set past the room
+    /// stops scrolling under ONE bar whose track is recorded where it is
+    /// drawn.
+    #[test]
+    fn a_file_alone_and_every_stage_keep_the_one_bar_and_lanes_past_the_room_scroll() {
+        use ronoctua_player::own::{Lane, LaneId, LaneKind};
+        let film = crate::player::fixture::alone(
+            "/films/a.mkv",
+            vec![crate::player::fixture::track(
+                1,
+                ronoctua_player::wire::TrackKind::Video,
+                None,
+                true,
+            )],
+        );
+        let (mut w, ui) = a_photographs(Door::Window, film);
+        w.relayout(&ui, &Area::whole());
+        assert_eq!(
+            (w.layout.deck, w.deck.lines.len()),
+            (1, 1),
+            "a file alone is the bar"
+        );
+        // A SET ON EVERY STAGE: the one bar.
+        let (mut w, mut ui) = a_laid_window(Door::Window, a_set_of_three());
+        for stage in [Stage::Only, Stage::Maximized, Stage::Small] {
+            w.stage_to(&mut ui, stage);
+            w.relayout(&ui, &Area::whole());
+            assert_eq!(w.deck.lines.len(), 1, "{stage:?} draws lanes");
+            assert!(w.deck.playhead.is_none(), "{stage:?}");
+            w.stage_to(&mut ui, Stage::Off);
+        }
+        // FIVE LANES in a window of 24 lines: four, and one bar.
+        let five: Vec<Lane> = (1..=5)
+            .map(|i| Lane::new(LaneId(i), LaneKind::Audio, format!("/m/{i}.flac")))
+            .collect();
+        let (mut w, ui) = a_laid_window(
+            Door::Window,
+            crate::player::fixture::set(five, &[Some(30.0); 5], Some(30.0), 3.0),
+        );
+        w.relayout(&ui, &Area::whole());
+        assert_eq!(w.layout.deck, 5, "the ruler and four lanes");
+        assert!(w.deck.scrolls());
+        let drawn = w.block_drawn(&ui);
+        let track = drawn.bar.expect("the lanes' bar is recorded");
+        let (x, y) = (
+            f64::from(track.0 + track.2 / 2.0),
+            f64::from(track.1 + track.3 - 1.0),
+        );
+        let rows = w.rows(&ui);
+        let (at, line, column, _) = w.deck_at(&ui, &rows, x, y).expect("on the deck");
+        assert_eq!(at, DeckAt::Block);
+        assert_eq!(
+            w.deck_hit(at, &rows, line, column),
+            Some(crate::player_timeline::Hit::Bar)
+        );
+    }
+
+    /// FAILS IF: the timeline's own page stops drawing every lane as a row
+    /// that carries its line of the deck — the block keeping the one bar —
+    /// or a press on a lane's band there stops being the window's gesture,
+    /// or `←`/`→` on a lane's row stop moving when it begins, half a second
+    /// a step.
+    #[test]
+    fn the_timeline_s_rows_are_the_deck_and_the_keys_move_a_lane() {
+        use crate::player::{PageId, Press};
+        use crate::player_timeline::band_color;
+        use ronoctua_player::own::{LaneId, LaneKind};
+        use ronoctua_player::wire::LaneChange;
+        let (mut w, mut ui) = a_laid_window(Door::Window, a_set_of_three());
+        let key = ronoctua_keymap::Key::parse("t").expect("parses");
+        let (event, mods) = crate::door::keys::event_of(key);
+        w.typed_here(&mut ui, &event, mods);
+        assert_eq!(w.view.page(), PageId::Timeline);
+        w.relayout(&ui, &Area::whole());
+        assert_eq!(w.layout.deck, 1, "the block keeps the one bar");
+        let rows = w.rows(&ui);
+        assert_eq!(
+            rows.iter().filter(|r| r.deck.is_some()).count(),
+            4,
+            "the ruler and a row a lane"
+        );
+        // THE DUB'S ROW, and its band where the row's deck paints it.
+        let n = rows
+            .iter()
+            .position(|r| r.target == crate::player::Target::Lane(LaneId(2)))
+            .expect("the dub's row");
+        let d = rows[n].deck.clone().expect("a line of the deck");
+        let y = w.layout.list + u16::try_from(n - ui.offset).expect("on screen");
+        let quads = d
+            .deck
+            .quads(ui.frame(0), y, MARGIN + d.left, d.line..d.line + 1, None);
+        let band = quads
+            .iter()
+            .find(|q| q.color == band_color(LaneKind::Audio, true))
+            .expect("the band");
+        let into = band.x / cell_px() + 1.0;
+        let mut hand = Hand::<PerPointer>::default();
+        // HALF A CELL BEFORE THE BAND is the track: a seek, and no band.
+        pointed(&mut w, &mut ui, &mut hand, PRESS, at_cell(into - 1.5, y));
+        pointed(&mut w, &mut ui, &mut hand, RELEASE, at_cell(into - 1.5, y));
+        assert!(
+            matches!(w.asked().last(), Some(Ask::Seek { .. })),
+            "before the band: {:?}",
+            w.asked().last()
+        );
+        pointed(&mut w, &mut ui, &mut hand, PRESS, at_cell(into, y));
+        pointed(&mut w, &mut ui, &mut hand, MOTION, at_cell(into + 4.0, y));
+        pointed(&mut w, &mut ui, &mut hand, RELEASE, at_cell(into + 4.0, y));
+        // THE START MOVED BY THE FOUR CELLS the pointer moved, on the row's
+        // own deck.
+        let origin = f64::from(MARGIN + d.left);
+        let pressed = f64::from(into) - origin;
+        let want = 10.0 + d.deck.seconds_at(pressed + 4.0) - d.deck.seconds_at(pressed);
+        match w.asked().last() {
+            Some(Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Start { seconds },
+            }) => assert!((seconds - want).abs() < 1e-3, "{seconds} against {want}"),
+            other => panic!("the drag on the row asked {other:?}"),
+        }
+        assert_eq!(w.view.cursor(), n, "the cursor came to the row pressed");
+        // A CLICK ON ANOTHER LANE'S BAND chooses its row — the cursor goes
+        // there, the page stays — and a second click opens its page
+        // (invariant 19).
+        let m = rows
+            .iter()
+            .position(|r| r.target == crate::player::Target::Lane(LaneId(1)))
+            .expect("the picture's row");
+        let dm = rows[m].deck.clone().expect("a line of the deck");
+        let ym = w.layout.list + u16::try_from(m - ui.offset).expect("on screen");
+        let picture = dm
+            .deck
+            .quads(
+                ui.frame(0),
+                ym,
+                MARGIN + dm.left,
+                dm.line..dm.line + 1,
+                None,
+            )
+            .into_iter()
+            .find(|q| q.color == band_color(LaneKind::Video, true))
+            .expect("the picture's band");
+        let on = picture.x / cell_px() + 1.0;
+        let asked = w.asked().len();
+        let click = |w: &mut Player, ui: &mut Ui, hand: &mut Hand<PerPointer>, p| {
+            pointed(w, ui, hand, MOTION, p);
+            pointed(w, ui, hand, PRESS, p);
+            pointed(w, ui, hand, RELEASE, p);
+        };
+        click(&mut w, &mut ui, &mut hand, at_cell(on, ym));
+        assert_eq!(w.view.page(), PageId::Timeline, "one click opened the page");
+        assert_eq!(w.view.cursor(), m, "the first click did not choose the row");
+        assert_eq!(w.asked().len(), asked, "a click on a band asked something");
+        click(&mut w, &mut ui, &mut hand, at_cell(on, ym));
+        assert_eq!(w.view.page(), PageId::Lane(LaneId(1)));
+        w.pressed(&mut ui, Press::Escape);
+        let rows = w.rows(&ui);
+        let n = rows
+            .iter()
+            .position(|r| r.target == crate::player::Target::Lane(LaneId(2)))
+            .expect("the dub's row");
+        w.view.grabbed(n);
+        // THE KEYS, on the same row.
+        w.pressed(&mut ui, Press::More);
+        assert_eq!(
+            w.asked().last(),
+            Some(&Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Start { seconds: 10.5 }
+            })
+        );
+        w.pressed(&mut ui, Press::Less);
+        assert_eq!(
+            w.asked().last(),
+            Some(&Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Start { seconds: 9.5 }
+            })
+        );
+        w.pressed(&mut ui, Press::Remove);
+        assert_eq!(
+            w.asked().last(),
+            Some(&Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Remove
+            })
+        );
+        w.pressed(&mut ui, Press::Enter);
+        assert_eq!(w.view.page(), PageId::Lane(LaneId(2)));
     }
 }

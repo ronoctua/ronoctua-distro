@@ -109,23 +109,7 @@ impl Offscreen {
 
         let width = width.clamp(1, ceiling);
         let height = height.clamp(1, ceiling);
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("target"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            // `COPY_SRC` is the whole point: without it the drawing exists and
-            // cannot be read back, which looks exactly like a drawing that did
-            // not happen.
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let target = target_of(&device, width, height);
 
         Ok(Self {
             device,
@@ -135,6 +119,24 @@ impl Offscreen {
             ceiling,
             target,
         })
+    }
+
+    /// Draws into a target `width × height` from now on, ON THE SAME DEVICE
+    /// — clamped at the ceiling, as [`Offscreen::new`] clamps.
+    ///
+    /// For a caller whose size moves while it works: a door photographed
+    /// after a key that changed its size (`ronoctua-shell photograph`)
+    /// keeps every picture it uploaded and the atlas its text was shaped
+    /// into, which a second device would have to build again.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let width = width.clamp(1, self.ceiling);
+        let height = height.clamp(1, self.ceiling);
+        if (width, height) == (self.width, self.height) {
+            return;
+        }
+        self.target = target_of(&self.device, width, height);
+        self.width = width;
+        self.height = height;
     }
 
     /// Clears with `background` and lets `draw` paint on top.
@@ -261,6 +263,27 @@ impl Offscreen {
         scratch.unmap();
         Ok(out)
     }
+}
+
+/// The texture drawn into, `width × height`.
+fn target_of(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        // `COPY_SRC` is the whole point: without it the drawing exists and
+        // cannot be read back, which looks exactly like a drawing that did
+        // not happen.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 /// Encodes RGBA into a PNG, with no compression and no dependency.

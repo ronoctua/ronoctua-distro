@@ -59,7 +59,13 @@ EXEMPT = re.compile(
     # `ronoctua-memory-profile@tolerant.service` into a polkit rule reads as
     # personal data in the repository, which is the opposite of what this
     # scanner is for.
-    r"@[A-Za-z0-9_.-]+\.(service|slice|scope|socket|timer|target|mount|path))"
+    r"@[A-Za-z0-9_.-]+\.(service|slice|scope|socket|timer|target|mount|path)|"
+    # A SLOT'S PID FILE takes the same template syntax: the player's stage
+    # on one screen is `ronoctua-player-stage@DP-2.pid`, the instance being
+    # the connector. `.pid` is a file's kind and no top-level domain, and
+    # the instance is a connector's name — uppercase letters, digits and
+    # dashes — which no mail host is written as.
+    r"@[A-Z0-9-]+\.pid\b)"
 )
 
 # THE LICENCE OF A THIRD PARTY IS NOT OURS TO EDIT.

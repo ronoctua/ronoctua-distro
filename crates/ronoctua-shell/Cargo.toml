@@ -108,6 +108,15 @@ ronoctua-gestures = { path = "../ronoctua-gestures" }
 # The player's CLIENT only: its socket, its words and its frames. The engine is
 # `ronoctua-player-engine`, a crate of its own, so libmpv never reaches here.
 ronoctua-player = { path = "../ronoctua-player" }
+# The words of what the player says about a file (`Say::Sheet`: fields,
+# covers, streams, why a change is refused), of its online lookups (a
+# service, why it gave nothing, the person's keys) and of its directories
+# (a source, why it gave nothing, the favourites' kinds): SCHEMA only, each
+# without its default features — lofty, the programs, TLS and the caches are
+# the daemon's, and a door never reads a tag nor asks a host itself.
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false }
 ronoctua-effects = { path = "../ronoctua-effects" }
 ronoctua-syncthing = { path = "../ronoctua-syncthing" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }

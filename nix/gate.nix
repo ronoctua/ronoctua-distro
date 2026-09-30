@@ -405,14 +405,29 @@ writeShellApplication {
     echo ""
 
     # ── 1 ──────────────────────────────────────────────────────────────────
+    #
+    # HELD WHILE THE BATTERY RUNS, and not a minute longer. The store now
+    # collects itself when the disk runs short (Nix's floor, see
+    # `nix/modules/store.nix`), and a collection during a later phase would
+    # take what this one paid for — and the phases after it, whose systems
+    # carry the shell and whose last step builds every check, would compile
+    # the workspace again.
+    # So each result is an out-link in `$work`, which the `EXIT` trap removes:
+    # a root for exactly as long as the battery lasts.
     echo "== 1. the ''${#heavy[@]} heavy ones, one at a time =="
     for i in "''${!heavy[@]}"; do
       echo "-- ''${heavy_name[i]}"
-      if ! nix build --no-link --max-jobs 1 --cores "$heavy_cores" "''${heavy[i]}"; then
+      if ! nix build --out-link "$work/heavy-$i" --max-jobs 1 --cores "$heavy_cores" "''${heavy[i]}"; then
         blame_earlyoom
         exit 1
       fi
     done
+    ${lib.optionalString (keepSources != null) ''
+      # AND THE DEPENDENCY LAYERS, which the heavy ones were built on and now
+      # exist: they keep a root of their own past the battery, while they are
+      # the current ones (`nix/kept-sources.nix`).
+      ${keepSources}
+    ''}
     echo ""
 
     # ── 2 ──────────────────────────────────────────────────────────────────
@@ -423,8 +438,9 @@ writeShellApplication {
         boots+=("''${driver[$n]}^*")
       done
       # `--keep-going` and no exit: a system that does not build fails its
-      # test in phase 3, by name, and every other test still runs.
-      if ! nix build --no-link --keep-going -L \
+      # test in phase 3, by name, and every other test still runs. Held in
+      # `$work` for phase 1's reason.
+      if ! nix build --out-link "$work/boot" --keep-going -L \
            --max-jobs "$jobs" --cores "$cores" "''${boots[@]}"; then
         blame_earlyoom
       fi

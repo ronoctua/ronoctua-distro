@@ -1,0 +1,53 @@
+[package]
+name = "ronoctua-broadcast"
+description = "World radio (radio-browser), world TV (iptv-org) and the Internet Archive's films: the one crate that talks to the three."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHAT THE ONE FEATURE IS FOR
+# ---------------------------
+# Every module here is PURE without it: the address a question goes to, and
+# what the answer means. They talk to a `Net`, and a test hands one made of
+# answers. `net` adds the one `Net` that reaches a host (`internet`), and with
+# it the TLS stack.
+#
+# The daemon takes it. A door (the shell) takes the crate with
+# `default-features = false` for the table of categories, the types it draws
+# and the favourites it writes — and links no TLS for them.
+#
+# WHAT THE SPLIT DOES NOT DO YET: `nix/rust.nix` builds the whole
+# workspace in ONE cargo run, and features unify across it. This crate is a
+# member built with its default, so every binary of that run that links it
+# links the TLS stack as well — and the shell already links TLS through
+# `ronoctua-software/net`. What the split keeps is a crate that COMPILES
+# without `net`; `cargo clippy -p ronoctua-broadcast --no-default-features` is what
+# proves it, by hand, until a check does.
+#
+# NO THREAD, NO CLOCK: every fetch blocks its caller, and the caller is a
+# worker thread of the daemon. Time arrives as an argument.
+
+[features]
+default = [ "net" ]
+net = [ "ronoctua-http/tls", "dep:tracing" ]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing = { workspace = true, optional = true }
+# The framer, for `Reply` (no dependency but `anyhow` without `tls`), and
+# `web` (redirects, gzip) with it.
+ronoctua-http = { path = "../ronoctua-http" }
+# Where the cache and the favourites live, per instance.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# The favourites and the recently played: one file each, written whole and
+# atomically, read back with `parsed` before a write.
+ronoctua-store = { path = "../ronoctua-store" }
+# `Stream` and `Origin`: what a station, a channel or an archive file becomes
+# in the queue. Pure (an XML reader and serde).
+ronoctua-playlist = { path = "../ronoctua-playlist" }
+
+[lints]
+workspace = true

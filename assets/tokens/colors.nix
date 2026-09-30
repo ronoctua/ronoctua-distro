@@ -1122,7 +1122,70 @@
         of = "neutral.chrome";
         alpha = 0.85;
       };
+      # THE MARK SOMEBODY CHOSE OR IS POINTING AT (`Ink::Chosen`), among many
+      # that are `dot`. Not the accent at another weight: the dot already IS
+      # the accent at its loudest, and a second rung of one hue differs in
+      # lightness only, which a small disc does not carry. The `guide` family
+      # is the accent's complement in every seed (the capture's lines, made to
+      # be the thing pointed at and never the focus), and its SOLID rather than
+      # a text step: every text step sits at the land's own lightness, because
+      # the land is `neutral.text-loud`. Measured over the 44 palettes before
+      # it was gated, at the nearest: from the dot 0.064 as `text-strong`,
+      # 0.106 as `capture.guide`'s own recipe, 0.215 as the solid; from the
+      # land 0.065, 0.065 and 0.161. It wears the halo every mark wears.
+      chosen = {
+        of = "guide.solid";
+      };
     };
+  };
+
+  # -------------------------------------------------------------------
+  # The player's deck and layout — `player_timeline`, `chrome::tile`
+  # -------------------------------------------------------------------
+  #
+  # A GROUP OF ITS OWN and not `surface.*`: a band on a track, a playhead and
+  # a tile of a schematic are drawn ON a ground (the chrome, or a desk on its
+  # page), they are not one. Every recipe here is solved on each page like the
+  # rest, and the gates (`gen-theme.py`, "THE PLAYER'S DECK") keep them apart
+  # from the chrome, from the track's rule and from each other.
+  player = {
+    # ONE HUE PER KIND OF LANE, and the kinds are the ones every editor of
+    # sound and film already colours: pictures blue, sounds green, words
+    # purple. The families are the content hues that land furthest from the
+    # film colours a photograph looks for (`sky`, `cyan` and `orange` solids
+    # come within the film floor in some theme) and furthest from each other:
+    # measured over the 44 palettes before they were gated, blue and green
+    # are the nearest pair, in `flashbang`'s own desk.
+    #
+    # NOT PURPLE EVERYWHERE, measured: a recipe names a family and each seed
+    # chooses the family's hue, and `cyber`'s `group` is a blue-violet (275,
+    # beside its azure at 255) — there the words read as a second, paler
+    # blue beside the pictures, 0.090 apart. The kind's glyph and the name at
+    # the head of the line say which is which; making them purple in `cyber`
+    # is that seed's `group`, or a family of its own for the lanes, and
+    # either is the owner's choice of colour.
+    lane = {
+      video = "azure.solid";
+      audio = "success.solid";
+      subtitle = "group.solid";
+      # A LANE THAT IS OFF keeps its place and its length, in the quiet text's
+      # grey: still readable as a band, no longer a hue.
+      off = "neutral.text-muted";
+      # THE GHOST of a band being dragged, where it would land if let go. A
+      # warm hue none of the kinds is, at the chroma that keeps it off the
+      # film's orange.
+      held = {
+        of = "orange.solid";
+        chroma = 0.8;
+      };
+    };
+    # NOW, one vertical line across every lane. The body text's own ink:
+    # no hue, so it reads over a band of any kind and is never taken for one.
+    playhead = "neutral.text-strong";
+    # A PICTURE'S PLACE on the Layout page's schematic, and the one whose row
+    # the cursor is on — in the accent, which is what says "this one".
+    tile = "neutral.border-strong";
+    tile-lit = "accent.solid";
   };
 
   # THE SCREEN CAPTURE'S OVERLAY (`ronoctua-shell capture`), drawn over a
@@ -1149,6 +1212,35 @@
   glance = {
     ground = "neutral.chrome-loud";
     ground-alternate = "neutral.chrome";
+  };
+
+  # THE PLAYER'S SUBTITLE LANES — up to six over one picture, each read in
+  # its own colour (`ronoctua_player::subtitles::merge`), with one rim round
+  # every letter.
+  #
+  # DRAWN ON A FILM AND NOT ON A PAGE, which is what makes them unlike every
+  # other role here. They are solved against one fixed dark picture, never
+  # the chrome (`PICTURE_FAMILIES` in the generator), so a lane is the same
+  # colour in every theme and on every page — the build refuses otherwise.
+  # The player's daemon draws them into the film with no door open and no
+  # theme to ask, and resolves them itself.
+  #
+  # `lane-one` is the lane nearest the edge, and the order is the stack's:
+  # the six hues are spaced in equal ΔE arcs from the `subtitle` family's hue,
+  # every one at the same contrast on the picture. Named with words, because
+  # a WIT segment starts with a letter.
+  #
+  # ON THE CHROME, a lane's colour only ever appears inside a chip filled with
+  # `edge` — the ground it was measured on; on a page it would be unmeasured.
+  subtitle = {
+    lane-one = "subtitle.lane-one";
+    lane-two = "subtitle.lane-two";
+    lane-three = "subtitle.lane-three";
+    lane-four = "subtitle.lane-four";
+    lane-five = "subtitle.lane-five";
+    lane-six = "subtitle.lane-six";
+    # THE RIM: black, the outline of every lane's letters.
+    edge = "subtitle.edge";
   };
 
   notification = {

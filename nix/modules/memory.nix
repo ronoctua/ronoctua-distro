@@ -134,9 +134,14 @@ let
         # Garbage only: what no generation points at. Generations stay, so
         # rolling back is still possible afterwards.
         store) nix-collect-garbage ;;
-        # And this one DOES remove the old generations — which is why it is a
-        # separate key and a separate confirmation.
-        generations) nix-collect-garbage --delete-older-than 30d ;;
+        # And this one DOES remove old generations — which is why it is a
+        # separate key and a separate confirmation. The SYSTEM's only, by the
+        # one trim `nix/modules/store.nix` owns: the newest ones, the running
+        # and the booted stay, and no other profile is touched. It was
+        # `nix-collect-garbage --delete-older-than 30d`, which as root deleted
+        # every profile's history, the person's own included. Then the garbage
+        # that frees what the trimmed generations held.
+        generations) systemctl start ${config.ronoctua.store.generationsUnit} && nix-collect-garbage ;;
         journal) journalctl --vacuum-size=256M ;;
         *) echo "ERROR: no such sweep: $1" >&2; exit 1 ;;
       esac
@@ -160,6 +165,12 @@ let
   };
 in
 {
+  # THE STORE'S MODULE, because the panel's `generations` starts its unit and
+  # names it through its handle. Imported here too so a machine (or a test)
+  # that takes this module alone still has what it starts; the module system
+  # loads a file once however many times it is imported.
+  imports = [ ./store.nix ];
+
   options.ronoctua.memory = {
     desktopMin = lib.mkOption {
       type = lib.types.str;

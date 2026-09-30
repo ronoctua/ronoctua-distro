@@ -341,10 +341,14 @@ fn launch_with(scopes: bool, scope: &str, direct: &[String], cmd: &[String]) -> 
 
     // It DEGRADES, and does not give up. See `Launch::Orphan`.
     match std::process::Command::new(program).args(args).spawn() {
-        Ok(_) => Launch::Orphan {
-            program: program.clone(),
-            reason,
-        },
+        // WAITED FOR, aside: with no scope nothing else ever reaps it.
+        Ok(child) => {
+            let _ = waited(child);
+            Launch::Orphan {
+                program: program.clone(),
+                reason,
+            }
+        }
         // It does NOT take the session down: a program that does not exist is the user's error,
         // not the shell's.
         Err(e) => Launch::Failed {
@@ -495,11 +499,60 @@ pub fn origin_at(procfs: &Path, pid: i32) -> Origin {
     }
 }
 
+/// A child WAITED FOR on a thread of its own ([`waited`]), and what the one
+/// who started it can still ask: its pid, and whether it has ended.
+#[derive(Debug)]
+pub struct Waited {
+    /// The child's pid.
+    pub pid: u32,
+    ended: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Waited {
+    /// Whether the child has ended — and been reaped, by its thread.
+    #[must_use]
+    pub fn ended(&self) -> bool {
+        self.ended.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// `child` waited for on a thread of its own until it ends — never on the
+/// loop —, with its pid and an "ended" that is asked without waiting.
+///
+/// # Why
+///
+/// A `Child` dropped is NOT reaped: what it started ends as a ZOMBIE of this
+/// process, and the footer lives for the whole session. The final battery's
+/// `modeline-pair` found two: the player's column, kept for `try_wait` and
+/// asked only when a second raise came, and the player's window started
+/// without a scope ([`Launch::Orphan`]), whose `Child` was dropped at once —
+/// each still answered `kill -0` after `player-quit` had closed it.
+///
+/// A thread that cannot be started says the child ENDED: nothing would ever
+/// say so otherwise, and a door asking "is it still coming?" would refuse
+/// every raise after it.
+pub fn waited(mut child: std::process::Child) -> Waited {
+    let pid = child.id();
+    let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let said = std::sync::Arc::clone(&ended);
+    let born = std::thread::Builder::new()
+        .name("child-wait".to_owned())
+        .spawn(move || {
+            let _ = child.wait();
+            said.store(true, std::sync::atomic::Ordering::Release);
+        });
+    if let Err(e) = born {
+        tracing::warn!(error = %e, pid, "could not start the thread that waits for a child");
+        ended.store(true, std::sync::atomic::Ordering::Release);
+    }
+    Waited { pid, ended }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         APP_OOM_SCORE_ADJUST, APP_SLICE, Launch, Next, Origin, SCOPE_PREFIX, launch_with, next,
-        origin_at, probe_command, scope_command, scope_from_cgroup,
+        origin_at, probe_command, scope_command, scope_from_cgroup, waited,
     };
     use std::os::unix::process::ExitStatusExt as _;
 
@@ -720,5 +773,43 @@ mod tests {
         assert!(probe.contains(&"--unit=ronoctua-probe-42".to_owned()));
         // NOT a buffer's scope: a window is matched to a buffer by that prefix.
         assert!(probe.iter().all(|a| !a.contains(SCOPE_PREFIX)), "{probe:?}");
+    }
+
+    /// FAILS IF: a child that ends stays a ZOMBIE of whoever started it (its
+    /// `/proc` entry says `Z`), `ended` says so while it still runs, or it
+    /// never says so once the child is gone — the footer would then refuse
+    /// every raise of the column as "still coming".
+    #[test]
+    fn a_child_that_ends_is_reaped_and_says_so() {
+        let state = |pid: u32| {
+            std::fs::read_to_string(format!("/proc/{pid}/status"))
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find_map(|l| l.strip_prefix("State:").map(|v| v.trim().to_owned()))
+                })
+        };
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "read -r _"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("sh");
+        let stdin = child.stdin.take().expect("stdin");
+        let door = waited(child);
+        assert!(!door.ended(), "a child still reading said it had ended");
+        drop(stdin);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !door.ended() {
+            assert!(
+                std::time::Instant::now() < until,
+                "the child ended and nothing said so"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let left = state(door.pid);
+        assert!(
+            !left.as_deref().is_some_and(|s| s.starts_with('Z')),
+            "the ended child is a zombie: {left:?}"
+        );
     }
 }

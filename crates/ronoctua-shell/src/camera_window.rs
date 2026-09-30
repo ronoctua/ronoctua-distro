@@ -949,7 +949,7 @@ impl Content for CameraWindow {
             if !self.uploaded || canvas.images.missing(PROGRAM) {
                 canvas
                     .images
-                    .upload_it(&canvas.gpu.device, &canvas.gpu.queue, PROGRAM, f);
+                    .upload_it(canvas.device, canvas.queue, PROGRAM, f);
                 self.uploaded = true;
             }
             canvas.pictures.push((PROGRAM.to_owned(), area));

@@ -111,8 +111,8 @@
     # own programs; this is the one that moves the pinned inputs forward, and
     # therefore the one that can bring a kernel that does not boot. That risk is not answered here and it does not
     # need to be: the way back is the previous generation, which the boot menu
-    # already offers, and which `store-collect-garbage` below is written so as
-    # not to delete.
+    # already offers, and which `old-generations` below always keeps — with the
+    # booted one — and `store-collect-garbage` cannot touch.
     #
     # `carry-on` AND NOT `stop`, which is the less obvious of the two. Failing
     # here leaves the lock untouched and the machine exactly as it was — but the
@@ -240,14 +240,42 @@
       enable = false;
     }
 
-    # 5. GARBAGE ONLY, AND THE GENERATIONS STAY.
+    # 5. THE SYSTEM'S OLD GENERATIONS, BY COUNT — AND ONLY THE SYSTEM'S.
     #
-    # This is `nix-collect-garbage` with no `--delete-older-than`, and that is
-    # the whole decision: the sequence has just switched to a generation whose
-    # kernel has never booted, and deleting the older ones in the same breath is
-    # deleting the way back. `nix/modules/base.nix` already sweeps 30 days
-    # weekly, on a day when nothing has just changed — which is when that sweep
-    # belongs. The 30-day one is declared below and ships OFF.
+    # It starts `ronoctua-system-generations.service` (`nix/modules/store.nix`),
+    # which keeps the newest N, the profile's current one, the running system,
+    # the BOOTED one, the one the last switch went AWAY from and every one the
+    # boot menu lists — so the generation this sequence just switched away
+    # from (even one the person had rolled back to, older than the newest N),
+    # and the one whose kernel is known to boot, both stay: the way back is not
+    # deleted in the same breath as the step forward. It touches no other
+    # profile, and the person's own Nix history least of all.
+    #
+    # It was `nix-collect-garbage --delete-older-than 30d`, shipped off, and
+    # that command is the thing this distro no longer runs anywhere: as root it
+    # deletes the old generations of EVERY profile, the person's included.
+    #
+    # BEFORE the collection, so the collection frees what the trimmed
+    # generations held. `carry-on`: a trim that failed leaves the garbage to
+    # collect all the same.
+    {
+      id = "old-generations";
+      does = "reclaim-space";
+      root = true;
+      unit = "ronoctua-system-generations.service";
+      needs = [ { always = true; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 6. GARBAGE ONLY.
+    #
+    # This is `nix-collect-garbage` with no `--delete-older-than` and no `-d`,
+    # and that is the whole decision: it deletes what nothing references —
+    # never a generation, never anything a root reaches. What generations go
+    # was decided by the step above, by count, and nowhere else. Between two
+    # updates Nix's own floor (`min-free`, `nix/modules/store.nix`) collects the
+    # same garbage whenever a build finds the disk short.
     {
       id = "store-collect-garbage";
       does = "reclaim-space";
@@ -260,7 +288,7 @@
       enable = true;
     }
 
-    # 6. AND THEN DEDUPLICATE WHAT IS LEFT.
+    # 7. AND THEN DEDUPLICATE WHAT IS LEFT.
     #
     # AFTER the collection and not before: optimising a path that is about to be
     # deleted is work thrown away. `auto-optimise-store` is already on
@@ -280,31 +308,6 @@
       needs = [ { always = true; } ];
       on-failure = "carry-on";
       enable = true;
-    }
-
-    # 7. THE ONE THAT DELETES THE WAY BACK — OFF.
-    #
-    # Same command `nix/modules/memory.nix` offers as `@generations`, and the
-    # same reasoning that put it behind its own key there: it removes the older
-    # generations, so after it the boot menu has nothing to fall back to. In a
-    # sequence that has just installed a new kernel, that is the one thing that
-    # must not happen by default.
-    #
-    # Turn it on for a machine short of disk that is willing to pay that: one
-    # line, `ronoctua.update.steps.old-generations = true;`.
-    {
-      id = "old-generations";
-      does = "reclaim-space";
-      root = true;
-      package = "nix";
-      program = "nix-collect-garbage";
-      run = [
-        "--delete-older-than"
-        "30d"
-      ];
-      needs = [ { always = true; } ];
-      on-failure = "carry-on";
-      enable = false;
     }
 
     # 8. AND THE JOURNAL — ALSO OFF, AND FOR A SMALLER REASON.
@@ -657,10 +660,16 @@
       enable = true;
     }
 
-    # 21. THE NIX PROFILE'S OLD GENERATIONS. Each one keeps the programs it had
-    # alive in the store, and a generation older than the CLI's window is a
-    # way back nobody is going to take — the software view's "go back" reaches
-    # the recent ones, which this leaves.
+    # 21. THE NIX PROFILE'S OLD GENERATIONS — OFF, AND ON PURPOSE.
+    #
+    # `nix profile wipe-history` on the PERSON's own profile. The owner's
+    # guarantee is that nothing automatic removes what the person's Nix relies
+    # on, and a generation of their profile is exactly that: the way back to a
+    # program they had. The one count limit he granted is on the SYSTEM's
+    # generations (step 5), never on the person's. The software view still
+    # offers the same tidy as a deliberate act, which is the person's to take;
+    # and a machine whose person wants it every week turns it on in one line,
+    # `ronoctua.update.steps.nix-profile-history = true;`.
     {
       id = "nix-profile-history";
       does = "reclaim-space";
@@ -673,7 +682,7 @@
       ];
       needs = [ { directory = "$XDG_STATE_HOME/nix/profiles"; } ];
       on-failure = "carry-on";
-      enable = true;
+      enable = false;
     }
 
     # 22. WHAT `appimage-run` UNPACKED for AppImages that are gone or were

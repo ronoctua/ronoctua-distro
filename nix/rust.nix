@@ -105,6 +105,8 @@
   chainRs,
   widthRs,
   worldRs,
+  broadcastRs,
+  tonguesRs,
   primaryFontFile,
   src,
 }:
@@ -331,6 +333,12 @@ let
     RONOCTUA_WIDTH_RS = "${widthRs}/width.rs";
     # The glance's places, generated from assets/world.nix — see nix/world.nix.
     RONOCTUA_WORLD_RS = "${worldRs}/world.rs";
+    # The player's channels by theme, generated from assets/channels.nix — see
+    # nix/broadcast.nix.
+    RONOCTUA_BROADCAST_RS = "${broadcastRs}/broadcast.rs";
+    # The languages of content, generated from assets/tongues.nix — see
+    # nix/tongues.nix.
+    RONOCTUA_TONGUES_RS = "${tonguesRs}/tongues.rs";
 
     # THE TWO PROGRAMS THE SHELL SPAWNS, BY PATH AND NOT BY NAME.
     #
@@ -1062,6 +1070,16 @@ rec {
     patchelf --shrink-rpath $out/bin/ronoctua-cache-sweep
   '';
 
+  # AND THE DISK'S RELIEF, extracted for the sweep's reason: it deletes cargo
+  # builds and asks the daemon to collect the store, and a program whose job is
+  # `unlink` must not carry the shell in its closure.
+  diskRelief = pkgs.runCommand "ronoctua-disk-relief" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-disk-relief $out/bin/
+    chmod +w $out/bin/ronoctua-disk-relief
+    patchelf --shrink-rpath $out/bin/ronoctua-disk-relief
+  '';
+
   # Tests. A separate derivation so it can say WHAT broke.
   #
   # AND THE FIVE PROGRAMS, which is a defect being closed and not a nicety.
@@ -1086,6 +1104,13 @@ rec {
       # this many times a day and installs the system rarely.
       cargoArtifacts = loopArtifacts;
       CARGO_PROFILE = loopProfile;
+      # NOTHING IS KEPT BUT THE VERDICT. crane's default for a derivation that
+      # is not `buildPackage` is to tar and zstd the whole `target/` into
+      # `$out` — gigabytes per edit, a link to the loop's layer beside it, and
+      # nothing that ever reads either: a check needs the build to SUCCEED, not
+      # its objects. `$out` still exists (crane's install is `mkdir -p $out`),
+      # and `leaf-builds-keep-no-artifacts` refuses a new leaf that forgets.
+      doInstallCargoArtifacts = false;
       pname = "ronoctua-tests";
       RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
       RONOCTUA_FFPROBE = "${pkgs.ffmpeg-full}/bin/ffprobe";
@@ -1107,6 +1132,11 @@ rec {
       RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
       # And the hands', so `the_outputs_are_tflites_own` compares.
       RONOCTUA_HAND_MODELS = "${handModels}";
+      # AND THE NIX THE MACHINE RUNS, so `the_pinned_nix_prints_roots_this_reads`
+      # asks the real `nix-store` how it prints a root — against a store of its
+      # own in the build directory — instead of returning early: the cache
+      # sweep's guard is only as good as its reading of that listing.
+      RONOCTUA_NIX_STORE = "${pkgs.nix}/bin/nix-store";
       # AND LIBWAYLAND, for every window's test. `Ui::for_tests` opens a real
       # `Connection` over a socket pair nobody serves, and `wayland-client`
       # loads the library with `dlopen`: the workspace's binaries find it
@@ -1126,6 +1156,9 @@ rec {
       # the tests' layer is what keeps it from being a third compilation.
       cargoArtifacts = loopArtifacts;
       CARGO_PROFILE = loopProfile;
+      # The tests' reason: the answer is the output, the objects are not. This
+      # is also the one the pre-commit hook builds on every commit.
+      doInstallCargoArtifacts = false;
       pname = "ronoctua-clippy";
       cargoClippyExtraArgs = "--all-targets -- --deny warnings";
     }
@@ -1135,5 +1168,8 @@ rec {
   fmt = craneLib.cargoFmt {
     inherit (commonArgs) src;
     pname = "ronoctua-fmt";
+    # Formatting compiles nothing, so there is nothing to keep — and crane would
+    # still archive the empty `target/` it creates.
+    doInstallCargoArtifacts = false;
   };
 }

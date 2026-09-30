@@ -358,11 +358,8 @@ in
         cfg.user
       ];
     };
-    nix.gc = {
-      automatic = true;
-      dates = "weekly";
-      options = "--delete-older-than 30d";
-    };
+    # No `nix.gc` timer: `nix/modules/store.nix` says why, and what does the
+    # collecting instead (Nix's own floor, and the update's weekly step).
 
     # -----------------------------------------------------------------
     # Boot — section 7.2: systemd-boot, not GRUB.
@@ -370,8 +367,8 @@ in
     boot.loader.systemd-boot = {
       enable = lib.mkDefault true;
       # The ESP is 1 GiB (section 7.2) because NixOS keeps kernel+initrd for
-      # several generations in there. Even so, cap it.
-      configurationLimit = lib.mkDefault 10;
+      # several generations in there. The cap is `nix/modules/store.nix`'s: the
+      # menu lists no more generations than the system keeps.
       editor = false; # an editable cmdline at boot destroys the PCR 12 measurement
     };
     boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;

@@ -1,20 +1,51 @@
-//! The engine: the mpv that plays, the ones that follow it, and whoever is
+//! The engine: the voices that play, the clock they keep, and whoever is
 //! watching.
 //!
 //! # One decode, many pictures
 //!
-//! The item playing is decoded ONCE, by one mpv, and rendered by the software
-//! renderer at every size a viewer asked for — the column, the footer and a
-//! window each get their own ring, and each ring gets the same frame. Being in
-//! step is therefore not something that is achieved: nothing could be out of
-//! it. Sound comes out of that mpv, once.
+//! A picture is decoded ONCE, by the voice that plays it, and rendered by the
+//! software renderer at every size a viewer asked for — the column, the
+//! footer and a window each get their own ring, and each ring gets the same
+//! frame. Two doors showing one picture are never out of step: nothing could
+//! be.
 //!
-//! # The participants
+//! # Voices and lanes
 //!
-//! A DIFFERENT file shown alongside (two videos to one soundtrack) is a second
-//! mpv with no sound, measured against the first every `sync::TICK` and nudged
-//! by `sync::correct` — a speed a few percent off until it catches up, or a
-//! seek when it is too far.
+//! What plays is lanes — a picture, a sound, subtitles — and a voice is one
+//! mpv playing one source's picture and sound from one start (`voice.rs`).
+//! A file alone is one voice; a set is as many as it needs, on one clock
+//! (`session.rs`): the first sound keeps the time and every other voice is
+//! measured against it every `sync::TICK` and sent, or nudged — a picture
+//! five percent, a sound two — until it is in step.
+//!
+//! # The queue is ours
+//!
+//! The queue is a tree the daemon owns (`ronoctua_player::queue`), and what
+//! plays next is ITS answer — repeat and shuffle included. mpv is handed a
+//! window of two entries: the leaf that plays and the one after, because
+//! audio without a gap between two files only exists inside mpv's own
+//! playlist. When mpv moves on by itself the window moves with it
+//! (`queue.rs`, `settle`); everything else is loaded by us.
+//!
+//! # What a file says about itself
+//!
+//! A file's tags are read and written by `ronoctua-tags`, on two threads of
+//! their own and never under the lock (`tags.rs`): its sheet goes only to the
+//! door that asks for it, a write goes into a draft beside the file that is
+//! renamed over it, and what the player says of the file follows the new one.
+//! A several-line field is edited in the editor, in a draft the daemon keeps
+//! and watches (`drafts.rs`), so its question survives the door that opened it.
+//!
+//! # What is looked up on the network
+//!
+//! Every lookup is the daemon's (`desk.rs`, `lookups.rs`): tags suggested for a
+//! file, subtitles for a film, lyrics for a song — one thread per desk, one
+//! pace per host, the page kept for every door. The two lookups that ask on
+//! their own when the person switched them on are `fetch.rs`'s.
+//!
+//! And so is every directory (`directory.rs`): the world's radio and TV, a
+//! theme's films and lives — listed on desks of their own, kept in the
+//! player's cache, placed on the globe here and only drawn by a door.
 //!
 //! # At rest
 //!
@@ -22,25 +53,72 @@
 //! socket and a sleeping thread. The queue it remembers is only a file.
 
 use std::{
-    collections::HashMap,
-    io::{BufReader, Read, Write as _},
+    io::{BufReader, Read as _, Write as _},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, LazyLock, Mutex, Weak},
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
+use ronoctua_lookup::sponsorblock::{self, Segment};
 use ronoctua_player::{
-    decoders, lrclib,
+    decoders,
+    own::LaneId,
     prefs::{self, Preferences},
-    sponsorblock::{self, Segment},
-    sync::{self, Correction},
-    wire::{self, Ask, Item, Participant, Repeat, Say, State, Track, Trouble},
+    queue::{EntryId, Queue},
+    wire::{self, Ask, Repeat, Say, State, Trouble},
 };
 
-use crate::mpv::{self, Aligned, Event, Mpv, Render, Value};
+use crate::mpv::{self, Event, Mpv, Value};
+
+mod ambience;
+mod decode;
+mod desk;
+mod directory;
+mod drafts;
+mod fetch;
+mod lookups;
+mod queue;
+mod resolve;
+mod session;
+mod sinks;
+mod subtitles;
+mod tags;
+mod voice;
+
+pub use decode::forget_old_decodes;
+pub(crate) use fetch::{Fetch, spawn_fetch};
+pub(crate) use queue::name_text;
+pub use resolve::{Resolved, path_of_uri, resolve_all};
+
+/// Why an ask was not carried out: the trouble the asker is answered with.
+///
+/// A newtype so `?` works on the three kinds of failure an ask meets — the
+/// engine's own (`anyhow`), the queue's refusals, and a trouble said as one.
+#[derive(Debug)]
+pub struct Refused(pub Trouble);
+
+impl From<anyhow::Error> for Refused {
+    fn from(e: anyhow::Error) -> Self {
+        Self(Trouble::NoEngine {
+            why: format!("{e:#}"),
+        })
+    }
+}
+
+impl From<Trouble> for Refused {
+    fn from(t: Trouble) -> Self {
+        Self(t)
+    }
+}
+
+impl From<ronoctua_player::queue::Refusal> for Refused {
+    fn from(r: ronoctua_player::queue::Refusal) -> Self {
+        Self(Trouble::from(r))
+    }
+}
 
 /// The shared engine: a lock and the bell the render and sync threads sleep on.
 pub type Shared = Arc<(Mutex<Engine>, Condvar)>;
@@ -49,19 +127,12 @@ pub type Shared = Arc<(Mutex<Engine>, Condvar)>;
 struct Viewer {
     stream: UnixStream,
     ring: ronoctua_frames::Ring,
-    /// Whose picture: `None` the main one, `Some(i)` a participant.
-    of: Option<usize>,
+    /// Whose picture: `None` the first one shown, `Some(lane)` that lane's.
+    lane: Option<LaneId>,
     /// Owed the frame on screen NOW. A paused video and an mp3's cover send
     /// no new frame, so a view opened on one waited for something to change
     /// — the owner's cover stayed black until a click paused the song.
     owed: bool,
-}
-
-/// A participant: another file, no sound, kept in step.
-struct Follower {
-    item: String,
-    mpv: Arc<Mpv>,
-    drift_ms: i64,
 }
 
 /// Property ids for `observe`.
@@ -80,17 +151,76 @@ mod id {
     pub const WIDTH: u64 = 12;
     pub const HEIGHT: u64 = 13;
     pub const IDLE: u64 = 14;
+    pub const EOF: u64 = 15;
 }
 
 /// The engine's state behind the lock.
 pub struct Engine {
-    mpv: Option<Arc<Mpv>>,
+    /// The voices: the first plays the queue's window when a file plays
+    /// alone, and the first part of a set when a set plays; the others only
+    /// exist while a set needs them.
+    voices: Vec<voice::Voice>,
+    /// The last voice's serial handed out.
+    serials: u64,
+    /// What plays together, while a set (or another machine's lanes) plays.
+    session: Option<session::Session>,
+    /// The last session's number.
+    generations: u64,
+    /// Which voice draws which picture: `(lane, voice serial)`, `None` for
+    /// the first picture shown.
+    drawn: Vec<(Option<LaneId>, u64)>,
+    /// The sound outputs, while somebody needs them.
+    sinks: sinks::Sinks,
+    /// The ambient sounds: apart from the voices, and from everything the
+    /// queue is told.
+    ambience: ambience::Ambience,
+    /// The subtitle lanes over each picture: read and merged off the lock,
+    /// one script per picture voice (`subtitles.rs`).
+    subtitles: subtitles::Subtitles,
+    /// Files' sheets read, changes written and the cover of what plays kept,
+    /// off the lock (`tags.rs`).
+    tags: tags::Tags,
+    /// Several-line fields open in the editor (`drafts.rs`).
+    drafts: drafts::Drafts,
+    /// What the lookups found, for every door (`desk.rs`).
+    desks: desk::Desks,
+    /// What the directories listed, for every door (`directory.rs`).
+    directories: directory::Directories,
+    /// The engine's own place in the process, for the threads it starts.
+    me: Option<Weak<(Mutex<Self>, Condvar)>>,
     state: State,
+    /// The queue: OUR tree, and the one answer to what plays next.
+    queue: Queue,
+    /// The shuffled order of the leaves, while shuffle is on.
+    order: Option<Vec<EntryId>>,
+    /// What mpv's playlist holds, as (mpv's entry id, ours), in its order:
+    /// the leaf that plays and the one after it.
+    window: Vec<(i64, EntryId)>,
+    /// The outline's revision the watchers were last sent.
+    told: Option<u64>,
+    /// The revision last written to the disk.
+    kept_revision: Option<u64>,
+    /// Entries still being read from the network.
+    resolving: Vec<EntryId>,
+    /// The entry to play once its reading is done.
+    play_when_resolved: Option<EntryId>,
+    /// Where the remembered leaf was, for the first time it plays again.
+    resume: Option<(EntryId, f64)>,
+    /// A person stopped it: the idle that follows is not the queue ending.
+    stopping: bool,
+    /// The file that ended last ended with an error.
+    failed: bool,
+    /// How many leaves in a row failed, so a queue of broken files stops
+    /// instead of spinning.
+    failures: usize,
+    /// Which address of the current stream is being tried.
+    address: usize,
+    /// mpv's own title for what plays (its tags, else its file name).
+    mpv_title: Option<String>,
+    /// What mpv loaded last, as the queue writes locations.
+    loaded: Option<String>,
     watchers: Vec<UnixStream>,
     viewers: Vec<Viewer>,
-    /// How to wake each render thread, by whose picture it draws.
-    pokes: Vec<(Option<usize>, mpv::Poke)>,
-    followers: Vec<Follower>,
     /// Something changed that watchers have not been told.
     dirty: bool,
     /// When watchers were last told of a mere POSITION change: those come
@@ -117,67 +247,53 @@ pub struct Engine {
     following: Option<crate::remote::Following>,
     /// Poked on every broadcast, so MPRIS announces what changed.
     mpris: Option<std::sync::mpsc::Sender<()>>,
-    /// This machine's own queue, where it was, while it follows another —
-    /// put back when it leaves. Following plays in the main player, and a
-    /// queue that was simply replaced would be a person's playlist lost to
-    /// pressing "join".
-    kept: Option<(Vec<Item>, Option<usize>, f64)>,
-    /// A start position set only for the queue being put back, cleared once
-    /// that file has loaded — `start` is an option, and it would otherwise
-    /// apply to every file after it.
-    start_once: bool,
-}
-
-/// A request to a host on the internet, and the item it is for.
-#[derive(Debug, Clone)]
-enum Fetch {
-    Lyrics {
-        item: String,
-        path: String,
-    },
-    Segments {
-        item: String,
-        id: String,
-        path: String,
-    },
-}
-
-/// The file the queue is remembered in.
-const QUEUE_FILE: &str = "player.json";
-
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-struct Remembered {
-    queue: Vec<Item>,
-    current: Option<usize>,
-    volume: Option<u8>,
-    repeat: Repeat,
-}
-
-fn remembered() -> ronoctua_store::Store<Remembered> {
-    ronoctua_store::Store::at(ronoctua_store::state_dir(), QUEUE_FILE)
+    /// The player is closing ([`quit`]): the queue was remembered as it
+    /// stood, and nothing after writes it again — the stop that ends the
+    /// sound moves mpv's place in the queue, and the file would wake with
+    /// none.
+    leaving: bool,
 }
 
 impl Engine {
     /// An engine with no mpv, and the queue it last had.
     #[must_use]
     pub fn new() -> Self {
-        let r = remembered().read();
-        let state = State {
-            queue: r.queue,
-            current: r.current,
-            volume: r.volume.unwrap_or(100),
-            repeat: r.repeat,
-            speed: 1.0,
-            ..State::default()
-        };
-        Self {
-            mpv: None,
-            state,
+        let mut engine = Self {
+            voices: Vec::new(),
+            serials: 0,
+            session: None,
+            generations: 0,
+            drawn: Vec::new(),
+            sinks: sinks::Sinks::default(),
+            ambience: ambience::Ambience::open(),
+            subtitles: subtitles::Subtitles::open(),
+            tags: tags::Tags::open(),
+            drafts: drafts::Drafts::open(),
+            desks: desk::Desks::open(),
+            directories: directory::Directories::open(),
+            me: None,
+            state: State {
+                protocol: wire::PROTOCOL,
+                volume: 100,
+                speed: 1.0,
+                ..State::default()
+            },
+            queue: Queue::new(),
+            order: None,
+            window: Vec::new(),
+            told: None,
+            kept_revision: None,
+            resolving: Vec::new(),
+            play_when_resolved: None,
+            resume: None,
+            stopping: false,
+            failed: false,
+            failures: 0,
+            address: 0,
+            mpv_title: None,
+            loaded: None,
             watchers: Vec::new(),
             viewers: Vec::new(),
-            pokes: Vec::new(),
-            followers: Vec::new(),
             dirty: false,
             last_tick: Instant::now(),
             idle: true,
@@ -190,23 +306,72 @@ impl Engine {
             tailnet: None,
             following: None,
             mpris: None,
-            kept: None,
-            start_once: false,
-        }
+            leaving: false,
+        };
+        engine.restore();
+        engine
+    }
+
+    /// Where the engine lives: the threads it starts — a voice's, the
+    /// clock's, the outputs' reading — reach it through this.
+    pub fn set_shared(&mut self, shared: &Shared) {
+        self.me = Some(Arc::downgrade(shared));
+    }
+
+    /// The engine's place, for a thread it starts.
+    fn shared(&self) -> Result<Shared, Refused> {
+        self.me.as_ref().and_then(Weak::upgrade).ok_or_else(|| {
+            Refused(Trouble::NoEngine {
+                why: "the engine is not placed yet".to_owned(),
+            })
+        })
+    }
+
+    /// Whether the voice `serial` draws the picture `lane` asks for.
+    fn draws(&self, serial: u64, lane: Option<LaneId>) -> bool {
+        self.drawn.contains(&(lane, serial))
     }
 
     /// The state, for an answer.
     #[must_use]
     pub fn state(&self) -> State {
         let mut s = self.state.clone();
-        s.participants = self
-            .followers
-            .iter()
-            .map(|f| Participant {
-                item: f.item.clone(),
-                drift_ms: f.drift_ms,
-            })
-            .collect();
+        s.protocol = wire::PROTOCOL;
+        s.revision = self.queue.revision();
+        s.resolving.clone_from(&self.resolving);
+        if self.following.is_some() {
+            // ANOTHER MACHINE'S: nothing of this queue plays while following,
+            // and what plays is where its first lane is opened from.
+            s.current = None;
+            s.next = None;
+            s.title.clone_from(&self.mpv_title);
+        } else {
+            s.location = s.current.and_then(|c| self.location_of_leaf(c));
+            s.title = s
+                .current
+                .and_then(|c| self.given_title(c))
+                .or_else(|| self.mpv_title.clone());
+            s.next = self
+                .queue
+                .next(
+                    s.current,
+                    s.repeat,
+                    ronoctua_player::queue::Step::Asked,
+                    self.order.as_deref(),
+                )
+                .and_then(|n| self.queue.find(n))
+                .map(|n| n.body.name());
+        }
+        let (lanes, arrangement) = self.lanes_now();
+        s.lane_states = self.lane_states(&lanes, arrangement.as_ref());
+        s.sources = self.sources_of(&lanes);
+        s.lanes = lanes;
+        s.arrangement = arrangement;
+        s.sinks.clone_from(&self.sinks.list);
+        s.ambience = self.ambience.state();
+        s.drafts = self.drafts.list();
+        s.desks = self.desks.summaries();
+        s.desks.extend(self.directories.summaries());
         s.invite = self
             .invite
             .as_ref()
@@ -270,94 +435,132 @@ impl Engine {
         Some(ronoctua_player::remote::key_of(&bytes))
     }
 
-    /// Where this machine is, for a machine that follows it.
+    /// Where this machine is, for a machine that follows it: its leaf, the
+    /// set's time NOW (read from the voice that keeps it, not the last
+    /// broadcast), and its lanes, each with where to open it.
     #[must_use]
     pub fn moment(&self) -> ronoctua_player::remote::Moment {
-        let item = self.state.current;
-        let address = item
-            .and_then(|i| self.state.queue.get(i))
-            .map(|i| i.location.clone())
-            .filter(|l| l.contains("://"));
+        let item = self.state.current.filter(|_| self.following.is_none());
         let speed = if self.state.speed > 0.0 {
             self.state.speed
         } else {
             1.0
         };
+        let position = if self.session.is_some() {
+            self.clock_now()
+        } else {
+            self.voices
+                .first()
+                .and_then(|v| v.mpv.float("time-pos"))
+                .unwrap_or(self.state.position)
+        };
+        let (lanes, _) = self.lanes_now();
         ronoctua_player::remote::Moment {
             clock_ms: ronoctua_player::remote::clock_ms(),
-            address,
-            item,
-            position: self.state.position,
+            position,
             playing: self.state.playing,
             speed,
-            title: self.state.title.clone(),
-            name: item
-                .and_then(|i| self.state.queue.get(i))
-                .filter(|i| !i.location.contains("://"))
-                .and_then(|i| {
-                    Path::new(&i.location)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                }),
+            title: item
+                .and_then(|c| self.given_title(c))
+                .or_else(|| self.mpv_title.clone()),
+            lanes: item
+                .map(|i| ronoctua_player::remote::lanes_of(i.0, &lanes))
+                .unwrap_or_default(),
+            item: item.map(|i| i.0),
         }
     }
 
-    /// The location of queue item `i`.
+    /// A lane's local file of the leaf that plays, for a machine that
+    /// follows this one — never an address, which is handed over as itself,
+    /// and never a leaf that does not play: only what plays is shared.
     #[must_use]
-    pub fn location_of(&self, i: usize) -> Option<String> {
-        self.state.queue.get(i).map(|i| i.location.clone())
+    pub fn media_location(&self, leaf: u64, lane: LaneId) -> Option<String> {
+        if self.following.is_some() || self.state.current != Some(EntryId(leaf)) {
+            return None;
+        }
+        let (lanes, _) = self.lanes_now();
+        lanes
+            .into_iter()
+            .find(|l| l.id == lane)
+            .map(|l| l.source)
+            .filter(|s| !s.contains("://"))
     }
 
-    /// Puts back what following borrowed: the tracks and the speed as they
-    /// were, and this machine's own queue, paused where it was.
-    fn put_back(&mut self) {
-        let Some(mpv) = self.mpv.clone() else {
-            self.kept = None;
+    /// This machine stops playing in step with another: what that machine
+    /// played leaves, and this machine's own leaf is loaded again, paused
+    /// where it was. Its queue was never touched.
+    fn leave_following(&mut self) {
+        let Some(f) = self.following.take() else {
             return;
         };
-        let _ = mpv.set("http-header-fields", "");
-        let _ = mpv.set("aid", "auto");
-        let _ = mpv.set("vid", "auto");
-        let _ = mpv.set("speed", "1");
-        let Some((queue, current, position)) = self.kept.take() else {
+        f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.end_session();
+        self.window.clear();
+        self.loaded = None;
+        self.state.location = None;
+        let Some(mpv) = self.voices.first().map(|v| v.mpv.clone()) else {
             return;
         };
-        let _ = mpv.set("pause", "yes");
-        let _ = mpv.command(&["playlist-clear"]);
-        let _ = mpv.command(&["stop"]);
-        for item in &queue {
-            let _ = load(&mpv, &item.location, "append");
-        }
-        if let Some(at) = current {
-            let _ = mpv.set("start", &format!("{position:.3}"));
-            self.start_once = true;
-            let _ = mpv.set("playlist-pos", &at.to_string());
+        let (current, position) = f.resume;
+        match current.filter(|c| self.queue.find(*c).is_some()) {
+            // LOADED OVER what the other machine played: a stop in between
+            // would leave an idle behind it that reads as the queue ending.
+            Some(leaf) => {
+                self.resume = Some((leaf, position));
+                if let Err(Refused(t)) = self.load_leaf(&mpv, leaf, true) {
+                    self.state.troubles = vec![t];
+                }
+            }
+            None => {
+                self.stopping = true;
+                let _ = mpv.command(&["stop"]);
+                self.set_current(None);
+            }
         }
         self.dirty = true;
     }
 
-    /// Following ended on its own: why, in the troubles.
-    pub fn left(&mut self, why: &str) {
-        self.following = None;
-        self.put_back();
+    /// Says a trouble in the state, for every door.
+    pub fn say_trouble(&mut self, t: Trouble) {
+        self.state.troubles = vec![t];
+        self.dirty = true;
+    }
+
+    /// Following ended on its own: why, in the troubles — when it is still
+    /// the following that ended, and not one that replaced it.
+    pub fn left(&mut self, follow: &Arc<std::sync::atomic::AtomicBool>, why: &str) {
+        if !self
+            .following
+            .as_ref()
+            .is_some_and(|f| Arc::ptr_eq(&f.stop, follow))
+        {
+            return;
+        }
+        self.leave_following();
         self.state.troubles = vec![Trouble::Remote {
             why: why.to_owned(),
         }];
     }
 
-    /// How far this machine is from the one it follows.
-    pub fn drifted(&mut self, ms: i64) {
-        if let Some(f) = self.following.as_mut() {
-            f.drift_ms = ms;
-        }
-        self.dirty = true;
-    }
-
-    /// Tells every watcher, dropping the ones gone.
+    /// Tells every watcher, dropping the ones gone: the outline first when
+    /// the queue's shape changed since they were last told (and the queue
+    /// is written to the disk then too — a change is an event), then the
+    /// state.
     pub fn broadcast(&mut self) {
-        let say = Say::State(Box::new(self.state()));
-        self.watchers
-            .retain_mut(|w| wire::write_line(w, &say).is_ok());
+        let revision = self.queue.revision();
+        // EACH LINE MADE ONCE, and written whole to every watcher.
+        if self.told != Some(revision) {
+            if let Ok(line) = wire::line_of(&Say::Queue(Box::new(self.queue.outline()))) {
+                self.watchers.retain_mut(|w| w.write_all(&line).is_ok());
+            }
+            self.told = Some(revision);
+        }
+        if self.kept_revision != Some(revision) {
+            self.keep_queue();
+        }
+        if let Ok(line) = wire::line_of(&Say::State(Box::new(self.state()))) {
+            self.watchers.retain_mut(|w| w.write_all(&line).is_ok());
+        }
         self.dirty = false;
         self.last_tick = Instant::now();
         if let Some(m) = &self.mpris {
@@ -370,23 +573,104 @@ impl Engine {
         self.mpris = poke;
     }
 
-    fn remember(&self) {
-        // ANOTHER MACHINE'S QUEUE IS NOT THIS ONE'S: while following, what
-        // the player holds is borrowed, and remembering it would make it the
-        // queue this machine wakes up with.
-        if self.following.is_some() {
+    /// Everything the player does on its way out, but leaving: the queue
+    /// remembered — this machine's own, when it was following another —,
+    /// the sound stopped, every watcher told [`Say::Farewell`] and let go,
+    /// every picture's connection shut, and the socket taken off the disk,
+    /// so nothing asks a player that is going and the next ask starts a new
+    /// one. See [`quit`].
+    fn farewell(&mut self) {
+        // ONCE: a second quit while the first is leaving has nothing to add.
+        if self.leaving {
             return;
         }
-        let r = Remembered {
-            queue: self.state.queue.clone(),
-            current: self.state.current,
-            volume: Some(self.state.volume),
-            repeat: self.state.repeat,
-        };
-        if let Err(e) = remembered().write(&r) {
-            tracing::warn!(error = %e, "could not remember the queue");
+        self.keep_queue();
+        self.remember_where();
+        self.leaving = true;
+        if let Some(f) = self.following.take() {
+            f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         }
+        self.stopping = true;
+        for v in &self.voices {
+            let _ = v.mpv.command(&["stop"]);
+        }
+        // THE OUTPUTS' MONITOR ENDS with the player, and so does every
+        // ambient sound: closing is the one thing the queue is told that
+        // reaches them.
+        self.sinks = sinks::Sinks::default();
+        self.ambience.end();
+        self.subtitles.end();
+        // A WRITE UNDER WAY stops, leaving the file as it was; the drafts go
+        // with the player.
+        self.tags.end();
+        self.drafts.end();
+        // THE LOOKUPS post nothing more, and a fetched cover waiting to be
+        // written goes; nor do the directories.
+        self.desks.end();
+        self.directories.end();
+        farewell_to(std::mem::take(&mut self.watchers));
+        for v in self.viewers.drain(..) {
+            let _ = v.stream.shutdown(std::net::Shutdown::Both);
+        }
+        if let Ok(path) = wire::socket_path() {
+            let _ = std::fs::remove_file(path);
+        }
+        tracing::info!("the player is closing, as asked");
     }
+}
+
+/// Every watcher told [`Say::Farewell`] — the last line it reads — and let
+/// go: its stream ends right after, so a door closes on the word and never
+/// waits on a silence. A watcher that stopped reading is given up on after
+/// [`WATCHER_PATIENCE`], never waited for.
+fn farewell_to(watchers: Vec<UnixStream>) {
+    for mut w in watchers {
+        let _ = w.set_write_timeout(Some(WATCHER_PATIENCE));
+        let _ = wire::write_line(&mut w, &Say::Farewell);
+        let _ = w.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+/// How long a write to a watcher may wait for it to read — the state four
+/// times a second, the farewell once. Every one is written under the
+/// engine's lock, so a door that stopped reading (stopped, or stuck) would
+/// otherwise hold the lock, every ask and every MPRIS call behind it, for as
+/// long as it stayed stopped. Past this it is let go, and its watch connects
+/// again when it wakes.
+const WATCHER_PATIENCE: Duration = Duration::from_secs(1);
+
+/// How long the process lives on after its farewell: the answer to whoever
+/// asked has to leave first — MPRIS's caller waits for a reply.
+const LEAVING: Duration = Duration::from_millis(200);
+
+/// How long the farewell may take before the process leaves without it — a
+/// lock held by something that never lets go must not keep a player that
+/// was asked to close alive.
+const FAREWELL_AT_MOST: Duration = Duration::from_secs(5);
+
+/// CLOSES THE PLAYER, everywhere — [`Ask::Quit`] on the socket, MPRIS's
+/// `Quit`: the farewell ([`Engine::farewell`]), and the process leaves
+/// [`LEAVING`] later WITH SUCCESS, which its unit's `Restart=on-failure` does
+/// not bring back. The next thing played starts it again (`client::ensure`).
+///
+/// THE WAY OUT IS ARMED FIRST, and it waits for the farewell only
+/// [`FAREWELL_AT_MOST`]; and it leaves by `_exit` ([`crate::mpv::leave_now`]),
+/// never through the C library's exit handlers with libmpv still running.
+pub fn quit(shared: &Shared) {
+    let (said, farewell_said) = std::sync::mpsc::channel::<()>();
+    let _ = std::thread::Builder::new()
+        .name("player-quit".into())
+        .spawn(move || {
+            let _ = farewell_said.recv_timeout(FAREWELL_AT_MOST);
+            std::thread::sleep(LEAVING);
+            crate::mpv::leave_now(0);
+        });
+    let (lock, bell) = &**shared;
+    if let Ok(mut e) = lock.lock() {
+        e.farewell();
+    }
+    bell.notify_all();
+    let _ = said.send(());
 }
 
 impl Default for Engine {
@@ -395,8 +679,9 @@ impl Default for Engine {
     }
 }
 
-/// What every mpv here is started with.
-fn options(sound: bool) -> Vec<(&'static str, String)> {
+/// What every mpv here is started with — every one the same, with sound:
+/// a voice that plays no sound is told `aid=no`.
+fn options() -> Vec<(&'static str, String)> {
     let mut o = vec![
         ("vo", "libmpv".to_owned()),
         // NO TERMINAL: measured, mpv touching a terminal it does not own
@@ -416,8 +701,19 @@ fn options(sound: bool) -> Vec<(&'static str, String)> {
         // COVER ART IS THE PICTURE of a song: it arrives as a video track and
         // every door shows it like one.
         ("audio-display", "embedded-first".to_owned()),
-        ("sub-auto", "fuzzy".to_owned()),
-        ("audio-file-auto", "fuzzy".to_owned()),
+        // NO SUBTITLE OR SOUND FILE IS PICKED UP BY NAME: each is a lane the
+        // person sees and chose, never one mpv found beside the film.
+        // Measured: `fuzzy` added `long1.flac` beside `long.mp4` and CHOSE it
+        // as the film's sound — and a machine following this one, opening
+        // the film by its address, had no such track and played silence.
+        ("sub-auto", "no".to_owned()),
+        ("audio-file-auto", "no".to_owned()),
+        // THE WINDOW OF TWO: the next leaf is opened while this one plays, and
+        // the sound goes on across the join when both can share an output —
+        // `weak`, mpv's own default, said here because the window exists for
+        // it (`queue.rs`). URLs yt-dlp resolves are never prefetched.
+        ("gapless-audio", "weak".to_owned()),
+        ("prefetch-playlist", "yes".to_owned()),
         ("hwdec", "auto-copy".to_owned()),
         ("audio-client-name", "ronoctua".to_owned()),
         ("keep-open", "no".to_owned()),
@@ -428,18 +724,22 @@ fn options(sound: bool) -> Vec<(&'static str, String)> {
         ("audio-fallback-to-null", "yes".to_owned()),
         ("ytdl", "yes".to_owned()),
     ];
-    if !sound {
-        o.push(("ao", "null".to_owned()));
-        o.push(("audio", "no".to_owned()));
+    // YT-DLP BY PATH, where the unit names it (`ronoctua_ytdlp::program`):
+    // a unit's PATH does not have it.
+    if std::env::var_os(ronoctua_ytdlp::VARIABLE).is_some() {
+        o.push((
+            "script-opts",
+            format!(
+                "ytdl_hook-ytdl_path={}",
+                ronoctua_ytdlp::program().display()
+            ),
+        ));
     }
-    // YT-DLP BY PATH, and the flags the queue already uses for it (cookies,
-    // the PO token): a unit's PATH does not have it.
-    if let Ok(path) = std::env::var("RONOCTUA_YT_DLP") {
-        o.push(("script-opts", format!("ytdl_hook-ytdl_path={path}")));
-    }
-    // A LIST IS A QUEUE: an address with `list=` opens every video of it,
-    // which is what a person who pasted a playlist meant.
-    let mut raw = vec!["yes-playlist=".to_owned()];
+    // ONE VIDEO, NEVER A LIST: a list is OURS to open — a playlist of the
+    // queue, named, listed flat by `ronoctua_ytdlp::flat` (`resolve.rs`) —
+    // and mpv expanding one on its own would put entries in its playlist
+    // that the queue does not have.
+    let mut raw = vec!["no-playlist=".to_owned()];
     // AND THE PO TOKEN, the queue's own flags (`ronoctua_ytdlp`): what makes
     // an anonymous request work is the same for playing as for downloading.
     let pot = ronoctua_ytdlp::pot_flags();
@@ -450,11 +750,16 @@ fn options(sound: bool) -> Vec<(&'static str, String)> {
     o
 }
 
-fn open_mpv(sound: bool) -> Result<Arc<Mpv>> {
-    let owned = options(sound);
+/// What mpv opens a `ronoctua-decode://` URI with — ONE for the process,
+/// however many voices register it: mpv keeps the pointer for the handle's
+/// life, and one made per voice would be one leaked per voice.
+static DECODED: LazyLock<mpv::Opener> = LazyLock::new(|| Box::new(open_decoded));
+
+fn open_mpv() -> Result<Arc<Mpv>> {
+    let owned = options();
     let pairs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let mpv = Arc::new(Mpv::new(&pairs)?);
-    mpv.streams(decoders::PROTOCOL, Box::new(open_decoded))?;
+    mpv.streams(decoders::PROTOCOL, &DECODED)?;
     Ok(mpv)
 }
 
@@ -462,324 +767,13 @@ fn open_mpv(sound: bool) -> Result<Arc<Mpv>> {
 fn open_decoded(uri: &str) -> Option<Box<dyn mpv::Stream>> {
     let path = decoders::path_of(uri)?;
     let decoder = decoders::for_path(Path::new(path))?;
-    match crate::engine::decode(decoder, Path::new(path)) {
+    match decode::decode(decoder, Path::new(path)) {
         Ok(r) => Some(r),
         Err(e) => {
             tracing::warn!(error = %e, decoder = decoder.id, "a decoder would not start");
             None
         }
     }
-}
-
-/// Starts `decoder` on `path` and answers what it writes, WAV-shaped.
-pub fn decode(decoder: &'static decoders::Decoder, path: &Path) -> Result<Box<dyn mpv::Stream>> {
-    let (reader, child) = start(decoder, path)?;
-    Ok(Box::new(Decoded {
-        decoder,
-        path: path.to_path_buf(),
-        reader,
-        child,
-        at: 0,
-        beyond: false,
-    }))
-}
-
-/// Starts `decoder` on `path`: the WAV it writes, header mended, and the
-/// process when the reader does not own it already.
-fn start(
-    decoder: &decoders::Decoder,
-    path: &Path,
-) -> Result<(Box<dyn Read + Send>, Option<std::process::Child>)> {
-    let program =
-        std::env::var(decoder.env).with_context(|| format!("{} is not set", decoder.env))?;
-    let soundfont = std::env::var("RONOCTUA_SOUNDFONT").unwrap_or_default();
-    // A FIFO for the decoders that only write to a file. It lives in the
-    // runtime directory, named after this process and a counter.
-    let fifo = match decoder.output {
-        decoders::Output::WavToFile => {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let at = ronoctua_xdg::runtime_file(&format!("player-{}-{n}.wav", std::process::id()))
-                .context("no runtime directory")?;
-            let _ = std::fs::remove_file(&at);
-            rustix::fs::mknodat(
-                rustix::fs::CWD,
-                &at,
-                rustix::fs::FileType::Fifo,
-                rustix::fs::Mode::from_raw_mode(0o600),
-                0,
-            )?;
-            Some(at)
-        }
-        // A REGULAR FILE for the decoders that will not write into a FIFO —
-        // zxtune checks what it creates and refuses one. In the CACHE and not
-        // the runtime directory: a song is tens of megabytes as WAV, and the
-        // runtime directory is memory. The decoder is given the name without
-        // `.wav`, which it adds itself.
-        decoders::Output::WavToGrowingFile => {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let dir = ronoctua_xdg::cache_dir().context("no cache directory")?;
-            std::fs::create_dir_all(&dir)?;
-            let stem = dir.join(format!("player-{}-{n}", std::process::id()));
-            let _ = std::fs::remove_file(stem.with_extension("wav"));
-            Some(stem)
-        }
-        _ => None,
-    };
-    let args: Vec<String> = decoder
-        .args
-        .iter()
-        .map(|a| {
-            a.replace("{in}", &path.to_string_lossy())
-                .replace(
-                    "{out}",
-                    &fifo
-                        .as_ref()
-                        .map(|f| f.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )
-                .replace("{soundfont}", &soundfont)
-        })
-        .collect();
-    let child = std::process::Command::new(&program)
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stdout(if fifo.is_some() {
-            std::process::Stdio::null()
-        } else {
-            std::process::Stdio::piped()
-        })
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| format!("running {program}"))?;
-    let mut child = Some(child);
-    let mut wav: Box<dyn Read + Send> = match (decoder.output, fifo) {
-        (decoders::Output::WavToGrowingFile, Some(stem)) => Box::new(Growing::open(
-            stem.with_extension("wav"),
-            child.take().context("no decoder")?,
-        )?),
-        (decoders::Output::WavToFile, Some(at)) => {
-            let file = std::fs::File::open(&at)?;
-            let _ = std::fs::remove_file(&at);
-            Box::new(file)
-        }
-        (decoders::Output::RawOnStdout, _) => {
-            let out = child
-                .as_mut()
-                .and_then(|c| c.stdout.take())
-                .context("no stdout")?;
-            Box::new(std::io::Cursor::new(decoders::wav_header().to_vec()).chain(out))
-        }
-        _ => Box::new(
-            child
-                .as_mut()
-                .and_then(|c| c.stdout.take())
-                .context("no stdout")?,
-        ),
-    };
-    // Every one is a WAV by now, and a streamed one says its data is empty.
-    let mut header = [0u8; 44];
-    wav.read_exact(&mut header)
-        .context("the decoder wrote no header")?;
-    decoders::endless(&mut header);
-    let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(header.to_vec()).chain(wav));
-    Ok((reader, child))
-}
-
-/// Removes what an earlier daemon's decoders left in the cache. A daemon that
-/// is killed never runs the `Drop` that removes its file, and a song as WAV is
-/// tens of megabytes; this runs once, before anything plays, when no file of
-/// this process exists yet.
-pub fn forget_old_decodes() {
-    let Some(dir) = ronoctua_xdg::cache_dir() else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let name = e.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("player-") {
-            let _ = std::fs::remove_file(e.path());
-        }
-    }
-}
-
-/// A file a decoder is still writing, read as it grows: at its end the reader
-/// waits for more while the decoder lives, and answers the end only once it
-/// has exited and nothing more came. It owns the decoder and the file, and
-/// both go with it.
-struct Growing {
-    file: std::fs::File,
-    path: PathBuf,
-    child: std::process::Child,
-}
-
-/// How long a reader waits at the end of a growing file before looking again.
-const GROWING_WAIT: Duration = Duration::from_millis(20);
-
-/// How long the decoder is given to create its file at all.
-const GROWING_BIRTH: Duration = Duration::from_secs(10);
-
-impl Growing {
-    fn open(path: PathBuf, mut child: std::process::Child) -> Result<Self> {
-        let born = Instant::now();
-        loop {
-            if let Ok(file) = std::fs::File::open(&path) {
-                return Ok(Self { file, path, child });
-            }
-            if child.try_wait().ok().flatten().is_some() || born.elapsed() > GROWING_BIRTH {
-                let _ = child.kill();
-                let _ = child.wait();
-                anyhow::bail!("the decoder wrote no file");
-            }
-            std::thread::sleep(GROWING_WAIT);
-        }
-    }
-}
-
-impl Read for Growing {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let n = self.file.read(buf)?;
-            if n > 0 {
-                return Ok(n);
-            }
-            if self.child.try_wait()?.is_some() {
-                // EXITED: whatever it wrote after the last read is still owed.
-                return self.file.read(buf);
-            }
-            std::thread::sleep(GROWING_WAIT);
-        }
-    }
-}
-
-impl Drop for Growing {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-/// A decoder's output, which reaps the decoder when mpv closes it.
-///
-/// # It SEEKS, and that is what makes a position row and a follower work
-///
-/// A pipe cannot go back, and a stream with no seek is one mpv can neither
-/// jump in nor START at: a machine following another played a SID six
-/// seconds behind for ever. Forward, the bytes up to the place are decoded
-/// and thrown away — every decoder here is many times faster than playing;
-/// backward, the decoder starts again from the beginning and does the same.
-/// Its output is the same bytes every time, so a byte offset means one moment.
-struct Decoded {
-    decoder: &'static decoders::Decoder,
-    path: PathBuf,
-    reader: Box<dyn Read + Send>,
-    child: Option<std::process::Child>,
-    /// The byte the next read gives.
-    at: u64,
-    /// Sent past the claimed end by a probe: reads answer nothing.
-    beyond: bool,
-}
-
-impl Read for Decoded {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.beyond {
-            return Ok(0);
-        }
-        let n = self.reader.read(buf)?;
-        self.at += n as u64;
-        Ok(n)
-    }
-}
-
-/// Where the endless WAV header's claimed data ends (`decoders::endless`).
-const PAST_THE_CLAIM: u64 = u32::MAX as u64 - 36;
-
-impl mpv::Stream for Decoded {
-    fn seek_to(&mut self, to: u64) -> std::io::Result<u64> {
-        // PAST THE END THE HEADER CLAIMS is a probe, not a place: the WAV
-        // says "until the stream ends" with the largest size it can hold, and
-        // the demuxer looks for a chunk after it — measured, a seek to byte
-        // 4 294 967 304 on open. Decoding up to there played nothing for the
-        // length of the whole song; REFUSING it made mpv take the stream for
-        // ended. So the stream goes there without decoding anything, answers
-        // nothing from there, and the seek back that follows starts the
-        // decoder again — one restart per file, at open.
-        if to >= PAST_THE_CLAIM {
-            self.beyond = true;
-            self.at = to;
-            return Ok(to);
-        }
-        self.beyond = false;
-        if to < self.at {
-            let (reader, child) = start(self.decoder, &self.path).map_err(std::io::Error::other)?;
-            if let Some(mut old) = std::mem::replace(&mut self.child, child) {
-                let _ = old.kill();
-                let _ = old.wait();
-            }
-            self.reader = reader;
-            self.at = 0;
-        }
-        let skipped = std::io::copy(
-            &mut (&mut self.reader).take(to - self.at),
-            &mut std::io::sink(),
-        )?;
-        self.at += skipped;
-        Ok(self.at)
-    }
-}
-
-impl Drop for Decoded {
-    fn drop(&mut self) {
-        if let Some(mut c) = self.child.take() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
-}
-
-/// What mpv is given for a queue item: a decoder's URI for the formats it
-/// cannot read, the item itself otherwise.
-/// What is asked for, with the playlists libmpv cannot read opened here.
-///
-/// # Only XSPF and ASX
-///
-/// libmpv reads `.m3u`, `.m3u8` and `.pls` itself, and reads them LAZILY — an
-/// entry becomes an item when the queue reaches it, which is also how an HLS
-/// stream is played. XSPF and ASX it does not know at all: handed one, it
-/// ends the file at once and the queue moves on as if nothing had been asked.
-/// Those two are read by the same parser the file manager's preview uses, so
-/// the queue holds exactly the entries that panel listed.
-///
-/// A list that cannot be read, or names nothing, is passed through as it was:
-/// libmpv then refuses it the way it refuses any other file, and the queue
-/// shows that, instead of the ask vanishing here.
-fn expanded(items: Vec<String>) -> Vec<String> {
-    use ronoctua_playlist::{Kind, Where};
-    let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        let path = std::path::Path::new(item.strip_prefix("file://").unwrap_or(&item));
-        let list = match ronoctua_playlist::kind_by_name(path) {
-            Some(kind @ (Kind::Xspf | Kind::Asx)) => ronoctua_playlist::read(path, kind).ok(),
-            _ => None,
-        };
-        let Some(list) = list else {
-            out.push(item);
-            continue;
-        };
-        for entry in list.entries {
-            match entry.at {
-                Where::Local(at) => out.push(at.to_string_lossy().into_owned()),
-                Where::Remote(url) => out.push(url),
-                Where::Refused => {}
-            }
-        }
-    }
-    out
 }
 
 /// The names libgme reads: the music of consoles and 8-bit computers, one
@@ -801,20 +795,45 @@ const GAME_MUSIC: [&str; 11] = [
 fn load_options(location: &str) -> Option<&'static str> {
     let path = location.split(['?', '#']).next().unwrap_or(location);
     let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
-    GAME_MUSIC
-        .contains(&extension.as_str())
-        .then_some("demuxer-lavf-format=libgme")
+    GAME_MUSIC.contains(&extension.as_str()).then_some("libgme")
 }
 
-/// Loads one item — through its decoder when one of ours reads it, and with
-/// the demuxer named when libmpv would not find it on its own.
-pub(crate) fn load(mpv: &Mpv, location: &str, how: &str) -> Result<()> {
+/// Loads one location — through its decoder when one of ours reads it, and
+/// with the demuxer named when libmpv would not find it on its own — with
+/// `options` set for this file only.
+pub(crate) fn load(mpv: &Mpv, location: &str, how: &str, options: &[(&str, String)]) -> Result<()> {
     let target = loadable(location);
-    match load_options(location) {
-        // `loadfile <url> <flags> <index> <options>`: -1 is "no index".
-        Some(options) => mpv.command(&["loadfile", &target, how, "-1", options]),
-        None => mpv.command(&["loadfile", &target, how]),
+    let mut all: Vec<(&str, String)> = options.to_vec();
+    if let Some(demuxer) = load_options(location) {
+        all.push(("demuxer-lavf-format", demuxer.to_owned()));
     }
+    loadfile(mpv, &target, how, &all)
+}
+
+/// `loadfile <target> <how> -1 <options>`: `-1` is "no index", and the
+/// options last as long as this one file does.
+pub(crate) fn loadfile(
+    mpv: &Mpv,
+    target: &str,
+    how: &str,
+    options: &[(&str, String)],
+) -> Result<()> {
+    if options.is_empty() {
+        return mpv.command(&["loadfile", target, how]);
+    }
+    mpv.command(&["loadfile", target, how, "-1", &options_text(options)])
+}
+
+/// Per-file options as mpv reads them: `key=value,…`, every value quoted by
+/// its LENGTH (`%5%a,b c`) — a `User-Agent` with a comma in it is ordinary
+/// (741 of iptv-org's), and a bare comma would end the value there.
+#[must_use]
+pub(crate) fn options_text(options: &[(&str, String)]) -> String {
+    options
+        .iter()
+        .map(|(k, v)| format!("{k}=%{}%{v}", v.len()))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub(crate) fn loadable(location: &str) -> String {
@@ -832,131 +851,140 @@ fn location_of(loaded: &str) -> String {
 }
 
 impl Engine {
-    /// The main mpv, made on first need and handed its queue.
+    /// The first voice's mpv, made on first need. Nothing is loaded into it
+    /// until something is asked to play: the queue is ours, and mpv holds
+    /// only the window of it that plays.
     pub(crate) fn main(&mut self, shared: &Shared) -> Result<Arc<Mpv>> {
-        if let Some(m) = &self.mpv {
-            return Ok(m.clone());
+        if let Some(v) = self.voices.first() {
+            return Ok(v.mpv.clone());
         }
-        let mpv = open_mpv(true)?;
-        for (id, name, format) in [
-            (id::PAUSE, "pause", mpv::FORMAT_FLAG),
-            (id::TIME, "time-pos", mpv::FORMAT_DOUBLE),
-            (id::DURATION, "duration", mpv::FORMAT_DOUBLE),
-            (id::VOLUME, "volume", mpv::FORMAT_DOUBLE),
-            (id::MUTE, "mute", mpv::FORMAT_FLAG),
-            (id::SPEED, "speed", mpv::FORMAT_DOUBLE),
-            (id::POS, "playlist-pos", mpv::FORMAT_INT64),
-            (id::PLAYLIST, "playlist", mpv::FORMAT_NONE),
-            (id::TRACKS, "track-list", mpv::FORMAT_NONE),
-            (id::METADATA, "metadata", mpv::FORMAT_NONE),
-            (id::TITLE, "media-title", mpv::FORMAT_STRING),
-            (id::WIDTH, "dwidth", mpv::FORMAT_INT64),
-            (id::HEIGHT, "dheight", mpv::FORMAT_INT64),
-            (id::IDLE, "idle-active", mpv::FORMAT_FLAG),
-        ] {
-            mpv.observe(id, name, format)?;
-        }
-        mpv.set("volume", &self.state.volume.to_string())?;
-        apply_repeat(&mpv, self.state.repeat);
-        // THE QUEUE IT REMEMBERED, loaded without playing.
-        for item in &self.state.queue {
-            load(&mpv, &item.location, "append")?;
-        }
-        self.mpv = Some(mpv.clone());
-        spawn_events(mpv.clone(), shared.clone());
-        let poke = spawn_render(mpv.clone(), None, shared.clone())?;
-        self.keep_poke(None, poke);
+        self.serials += 1;
+        let v = voice::Voice::open(self.serials, shared)?;
+        v.mpv.set("volume", &self.state.volume.to_string())?;
+        apply_repeat(&v.mpv, self.state.repeat);
+        let mpv = v.mpv.clone();
+        self.voices.push(v);
+        self.map_pictures();
         Ok(mpv)
     }
 
     /// Carries out an ask; the answer for the one who asked.
+    ///
+    /// A refusal is also said in the state's troubles: most doors TELL and do
+    /// not wait for the answer, and a refusal nobody hears is the silence the
+    /// protocol promises not to leave.
     pub fn ask(&mut self, ask: Ask, shared: &Shared) -> Say {
         self.dirty = true;
         match self.carry(ask, shared) {
             Ok(()) => Say::Done,
-            Err(e) => {
-                let t = Trouble::NoEngine {
-                    why: format!("{e:#}"),
-                };
+            Err(Refused(t)) => {
                 self.state.troubles = vec![t.clone()];
                 Say::Refused(t)
             }
         }
     }
 
-    fn carry(&mut self, ask: Ask, shared: &Shared) -> Result<()> {
+    fn carry(&mut self, ask: Ask, shared: &Shared) -> Result<(), Refused> {
         match ask {
-            Ask::Watch | Ask::Look | Ask::Preview { .. } => {}
-            Ask::Open { items, replace } => {
-                let mpv = self.main(shared)?;
-                for (n, item) in expanded(items).iter().enumerate() {
-                    let how = if replace && n == 0 {
-                        "replace"
-                    } else if replace {
-                        "append"
-                    } else {
-                        "append-play"
-                    };
-                    load(&mpv, item, how)?;
-                }
-                if replace {
-                    mpv.set("pause", "no")?;
-                }
+            Ask::Watch | Ask::Look | Ask::Queue | Ask::Preview { .. } => {}
+            Ask::Put {
+                what,
+                after,
+                into,
+                play,
+                replace,
+            } => {
+                // RESOLVED HERE only when the asker did not do it first
+                // (`serve_one` does, outside the lock): a folder is a walk of
+                // the disk, and the engine's lock is every door's.
+                let resolved = resolve_all(what);
+                self.put_resolved(resolved, after, into, play, replace, shared)?;
             }
             Ask::Toggle => {
+                self.not_following()?;
                 let mpv = self.main(shared)?;
-                if self.idle {
-                    self.play_current(&mpv)?;
+                if let Some(s) = &self.session {
+                    let on = !s.playing;
+                    self.session_play(on);
+                } else if self.idle {
+                    self.play(&mpv)?;
                 } else {
                     mpv.command(&["cycle", "pause"])?;
+                    self.remember_where();
                 }
             }
             Ask::Play => {
+                self.not_following()?;
                 let mpv = self.main(shared)?;
-                if self.idle {
-                    self.play_current(&mpv)?;
+                if self.session.is_some() {
+                    self.session_play(true);
+                } else if self.idle {
+                    self.play(&mpv)?;
                 } else {
                     mpv.set("pause", "no")?;
                 }
             }
             Ask::Pause => {
-                if let Some(m) = &self.mpv {
+                self.not_following()?;
+                if self.session.is_some() {
+                    self.session_play(false);
+                } else if let Some(m) = self.first_mpv() {
                     m.set("pause", "yes")?;
+                    self.remember_where();
                 }
             }
             Ask::Stop => {
-                if let Some(m) = &self.mpv {
-                    m.command(&["stop", "keep-playlist"])?;
+                if let Some(m) = self.first_mpv() {
+                    self.stop(&m)?;
                 }
             }
-            Ask::Next => self.main(shared)?.command(&["playlist-next", "force"])?,
-            Ask::Previous => self.main(shared)?.command(&["playlist-prev", "force"])?,
-            Ask::Jump { index } => {
+            Ask::Next => {
+                self.not_following()?;
                 let mpv = self.main(shared)?;
-                mpv.command(&["playlist-play-index", &index.to_string()])?;
-                mpv.set("pause", "no")?;
+                self.next(&mpv)?;
             }
-            Ask::Remove { index } => {
-                self.main(shared)?
-                    .command(&["playlist-remove", &index.to_string()])?;
+            Ask::Previous => {
+                self.not_following()?;
+                let mpv = self.main(shared)?;
+                self.previous(&mpv)?;
             }
-            Ask::Move { from, to } => {
-                // mpv's `playlist-move` puts the item BEFORE `to`; moving one
-                // down therefore names the slot after.
-                let target = if to > from { to + 1 } else { to };
-                self.main(shared)?.command(&[
-                    "playlist-move",
-                    &from.to_string(),
-                    &target.to_string(),
-                ])?;
+            Ask::Jump { id } => {
+                self.not_following()?;
+                let mpv = self.main(shared)?;
+                self.jump(&mpv, id)?;
             }
+            Ask::Remove { id } => {
+                let mpv = self.main(shared)?;
+                self.remove(&mpv, id)?;
+            }
+            Ask::Move { id, after, into } => {
+                let place = after.map_or(
+                    ronoctua_player::queue::Place::Start(into),
+                    ronoctua_player::queue::Place::After,
+                );
+                self.queue.move_to(id, place)?;
+                if let Some(m) = self.first_mpv() {
+                    self.refresh_lookahead(&m);
+                }
+            }
+            Ask::Rename { id, name } => self.queue.rename(id, &name)?,
+            Ask::SaveQueue { to, name } => self.save_queue(&to, name)?,
             Ask::Clear => {
-                let mpv = self.main(shared)?;
-                mpv.command(&["stop"])?;
-                mpv.command(&["playlist-clear"])?;
+                if let Some(m) = self.first_mpv() {
+                    self.stop(&m)?;
+                }
+                self.clear();
             }
             Ask::Seek { seconds, relative } => {
-                if let Some(m) = &self.mpv {
+                self.not_following()?;
+                if self.session.is_some() {
+                    let at = if relative {
+                        self.clock_now() + seconds
+                    } else {
+                        seconds
+                    };
+                    self.session_seek(at);
+                } else if let Some(m) = self.first_mpv() {
                     m.command(&[
                         "seek",
                         &seconds.to_string(),
@@ -968,116 +996,147 @@ impl Engine {
             Ask::Volume { percent } => {
                 let p = percent.min(130);
                 self.state.volume = p;
-                if let Some(m) = &self.mpv {
+                if self.session.is_some() {
+                    self.redress()?;
+                } else if let Some(m) = self.first_mpv() {
                     m.set("volume", &p.to_string())?;
                 }
-                self.remember();
+                self.remember_where();
             }
             Ask::Mute => {
-                if let Some(m) = &self.mpv {
+                if self.session.is_some() {
+                    self.state.muted = !self.state.muted;
+                    self.redress()?;
+                } else if let Some(m) = self.first_mpv() {
                     m.command(&["cycle", "mute"])?;
                 }
             }
             Ask::Speed { factor } => {
-                if let Some(m) = &self.mpv {
-                    m.set("speed", &factor.clamp(0.25, 4.0).to_string())?;
+                self.not_following()?;
+                let factor = factor.clamp(0.25, 4.0);
+                let t = self.clock_now();
+                if let Some(s) = self.session.as_mut() {
+                    s.speed = factor;
+                    if let session::Clock::Virtual { .. } = s.clock {
+                        s.clock = session::Clock::Virtual {
+                            at: t,
+                            since: Instant::now(),
+                        };
+                    }
+                    self.state.speed = factor;
+                    self.tick();
+                } else if let Some(m) = self.first_mpv() {
+                    m.set("speed", &factor.to_string())?;
                 }
             }
             Ask::Repeat => {
                 self.state.repeat = self.state.repeat.next();
-                if let Some(m) = &self.mpv {
-                    apply_repeat(m, self.state.repeat);
+                if self.session.is_none()
+                    && let Some(m) = self.first_mpv()
+                {
+                    apply_repeat(&m, self.state.repeat);
+                    self.refresh_lookahead(&m);
                 }
-                self.remember();
+                self.remember_where();
             }
             Ask::Shuffle => {
-                let mpv = self.main(shared)?;
-                self.state.shuffle = !self.state.shuffle;
-                mpv.command(&[if self.state.shuffle {
-                    "playlist-shuffle"
-                } else {
-                    "playlist-unshuffle"
-                }])?;
-            }
-            Ask::AudioTrack { id } => {
-                if let Some(m) = &self.mpv {
-                    m.set(
-                        "aid",
-                        &id.map_or_else(|| "no".to_owned(), |i| i.to_string()),
-                    )?;
+                self.shuffle(!self.state.shuffle);
+                if let Some(m) = self.first_mpv() {
+                    self.refresh_lookahead(&m);
                 }
+                self.remember_where();
             }
-            Ask::SubtitleTrack { id } => {
-                if let Some(m) = &self.mpv {
-                    m.set(
-                        "sid",
-                        &id.map_or_else(|| "no".to_owned(), |i| i.to_string()),
-                    )?;
-                }
-            }
+            Ask::Track { lane, track } => self.choose_track(lane, track)?,
+            Ask::AddLane {
+                source,
+                kind,
+                track,
+                start_seconds,
+                over,
+            } => self.add_lane(&source, kind, track, start_seconds, over)?,
+            Ask::Lane { lane, change } => self.change_lane(lane, change)?,
+            Ask::Arrange { arrangement } => self.arrange(arrangement)?,
+            Ask::SaveSet { to, name } => self.save_set(&to, name)?,
+            // THE AMBIENT SOUNDS, apart: nothing above this reaches them.
+            Ask::Ambient { id, on } => self.ambient(&id, on, shared)?,
+            Ask::AmbientVolume { id, percent } => self.ambient_volume(&id, percent, shared)?,
+            Ask::AmbientSilence => self.ambient_silence(shared)?,
+            Ask::AmbientToggle => self.ambient_toggle(shared)?,
+            // HELD ON ITS OWN CONNECTION by `serve_one`; it never reaches here.
+            Ask::Sinks => {}
+            // ANSWERED BY `serve_one` outside the lock — a sheet may be
+            // read, and the lock is every door's; they never reach here.
+            Ask::Sheet { .. } | Ask::Draft { .. } => {}
+            Ask::Retag {
+                location,
+                stamp,
+                edits,
+            } => self.retag(location, stamp, edits)?,
+            Ask::SaveCover { location, at } => self.save_cover(location, at)?,
+            Ask::Refresh { location } => self.refresh(&location)?,
+            Ask::WriteDraft { id } => self.write_draft(id)?,
+            Ask::DropDraft { id } => self.drop_draft(id)?,
+            Ask::KeepDraft { id } => self.keep_draft(id)?,
+            // THE LOOKUPS AND THE DIRECTORIES: checked here, asked on a
+            // desk's thread.
+            Ask::Find { query } if query.directory().is_some() => self.look(query)?,
+            Ask::Find { query } => self.find(query)?,
+            Ask::Take {
+                desk,
+                candidate,
+                fields,
+                cover,
+                to,
+                replace,
+            } => self.take(desk, candidate, &fields, cover, to, replace)?,
+            Ask::SuggestedCover { candidate } => self.suggested_cover(candidate)?,
+            // ANSWERED BY `serve_one`: a page to the one who asked, a key
+            // tried on the network and a favourite's file written, outside
+            // the lock; they never reach here.
+            Ask::Desk { .. } | Ask::KeyCheck { .. } | Ask::Favourite { .. } => {}
             Ask::Reload => self.prefs = prefs::store().read(),
-            Ask::Follow { item } => {
-                let main = self.main(shared)?;
-                let mpv = open_mpv(false)?;
-                // THE RENDER CONTEXT BEFORE THE FILE, and the start before
-                // the file too: `vo=libmpv` looks for its context when the
-                // video starts, and with none it drops the video for good —
-                // measured, a follower that played and never showed a frame.
-                let index = self.followers.len();
-                let poke = spawn_render(mpv.clone(), Some(index), shared.clone())?;
-                self.keep_poke(Some(index), poke);
-                if let Some(t) = main.float("time-pos") {
-                    let _ = mpv.set("start", &format!("{t:.3}"));
-                }
-                load(&mpv, &item, "replace")?;
-                spawn_quiet_events(mpv.clone());
-                self.followers.push(Follower {
-                    item,
-                    mpv,
-                    drift_ms: 0,
-                });
-                if self.followers.len() == 1 {
-                    spawn_sync(shared.clone());
-                }
-            }
-            Ask::Unfollow { index } => {
-                if index < self.followers.len() {
-                    let f = self.followers.remove(index);
-                    let _ = f.mpv.command(&["quit"]);
-                    // Viewers of the ones after it now point one lower.
-                    self.viewers.retain(|v| v.of != Some(index));
-                    for v in &mut self.viewers {
-                        if let Some(i) = v.of
-                            && i > index
-                        {
-                            v.of = Some(i - 1);
-                        }
-                    }
-                }
-            }
             Ask::Invite => {
-                let code = ronoctua_player::remote::code_of(ronoctua_player::remote::random()?);
+                let code = ronoctua_player::remote::code_of(
+                    ronoctua_player::remote::random().map_err(anyhow::Error::from)?,
+                );
                 self.invite = Some((code, Instant::now()));
             }
             // PAIRING TALKS TO ANOTHER MACHINE, so it is `serve_one`'s, outside
             // the lock; it never reaches here.
             Ask::PairWith { .. } => {}
+            // CLOSING IS `quit`'s, taken before the lock — it ends the
+            // process. Reaching here is a defect, and says so.
+            Ask::Quit => {
+                return Err(anyhow::anyhow!(
+                    "closing the player is `engine::quit`'s, not an ask's"
+                )
+                .into());
+            }
             Ask::Join { host, role } => {
                 let peers = ronoctua_player::remote::peers().read();
                 let Some(peer) = peers.hosts.into_iter().find(|h| h.name == host) else {
-                    anyhow::bail!("{host} is not paired with this machine");
+                    return Err(anyhow::anyhow!("{host} is not paired with this machine").into());
                 };
-                if let Some(f) = self.following.take() {
-                    f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-                // THE QUEUE ASIDE, once: joining a second machine while
-                // following a first keeps the one this machine had.
-                if self.kept.is_none() {
-                    self.kept = Some((
-                        self.state.queue.clone(),
-                        self.state.current,
-                        self.state.position,
-                    ));
+                // WHERE THIS MACHINE WAS, once: joining a second machine while
+                // following a first keeps the place this machine had.
+                let resume = match self.following.take() {
+                    Some(f) => {
+                        f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                        f.resume
+                    }
+                    None => {
+                        let here = (self.state.current, self.state.position);
+                        self.remember_where();
+                        here
+                    }
+                };
+                // WHAT THIS MACHINE PLAYED stops, and the window is not ours
+                // while another machine's lanes play: nothing of the queue
+                // follows mpv until this machine leaves.
+                self.end_session();
+                self.window.clear();
+                if let Some(m) = self.first_mpv() {
+                    let _ = m.set("pause", "yes");
                 }
                 let stop = crate::remote::follow(peer, role, shared.clone());
                 self.following = Some(crate::remote::Following {
@@ -1085,14 +1144,10 @@ impl Engine {
                     role,
                     drift_ms: 0,
                     stop,
+                    resume,
                 });
             }
-            Ask::Leave => {
-                if let Some(f) = self.following.take() {
-                    f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-                self.put_back();
-            }
+            Ask::Leave => self.leave_following(),
             Ask::Forget { name } => {
                 let mut p = ronoctua_player::remote::peers().read();
                 p.hosts.retain(|h| h.name != name);
@@ -1103,32 +1158,42 @@ impl Engine {
         Ok(())
     }
 
-    fn play_current(&mut self, mpv: &Mpv) -> Result<()> {
-        let at = self.state.current.unwrap_or(0);
-        if self.state.queue.is_empty() {
-            return Ok(());
+    /// The first voice's mpv, when there is one.
+    fn first_mpv(&self) -> Option<Arc<Mpv>> {
+        self.voices.first().map(|v| v.mpv.clone())
+    }
+
+    /// Refused while this machine plays another's lanes: what plays is that
+    /// machine's to pause, seek and change.
+    fn not_following(&self) -> Result<(), Refused> {
+        match &self.following {
+            Some(f) => Err(Trouble::Following {
+                host: f.host.clone(),
+            }
+            .into()),
+            None => Ok(()),
         }
-        mpv.command(&["playlist-play-index", &at.to_string()])?;
-        mpv.set("pause", "no")
     }
 
-    /// Keeps what wakes the render thread of `of`'s picture.
-    fn keep_poke(&mut self, of: Option<usize>, poke: mpv::Poke) {
-        self.pokes.retain(|(o, _)| *o != of);
-        self.pokes.push((of, poke));
+    /// Every voice of what plays told its volume, its output and its tracks
+    /// again — the player's volume or mute changed.
+    fn redress(&mut self) -> Result<(), Refused> {
+        let t = self.clock_now();
+        let (lanes, arrangement) = self.lanes_now();
+        let covers = arrangement.unwrap_or_default().covers;
+        self.cast(&lanes, &covers, t)
     }
 
-    /// A new viewer on `stream`, at `width × height` of `of`.
+    /// A new viewer on `stream`, at `width × height` of `lane`'s picture —
+    /// or of the first picture shown. A lane with no picture yet is waited
+    /// for: its frames come when a voice draws it.
     pub fn add_viewer(
         &mut self,
         stream: UnixStream,
         width: u32,
         height: u32,
-        of: Option<usize>,
+        lane: Option<LaneId>,
     ) -> Result<()> {
-        if of.is_some_and(|i| i >= self.followers.len()) {
-            anyhow::bail!("no such participant");
-        }
         let width = (width / 16).max(1) * 16;
         let height = height.max(1);
         let ring = ronoctua_frames::Ring::new("ronoctua-player-view", width, height)?;
@@ -1143,13 +1208,132 @@ impl Engine {
         self.viewers.push(Viewer {
             stream,
             ring,
-            of,
+            lane,
             owed: true,
         });
-        if let Some((_, poke)) = self.pokes.iter().find(|(o, _)| *o == of) {
-            poke.ring();
+        for v in &self.voices {
+            if self.drawn.contains(&(lane, v.serial)) {
+                v.poke.ring();
+            }
         }
         Ok(())
+    }
+
+    /// An event of the voice `serial`: what it measures is kept for its
+    /// lanes, and — for the first voice while a file plays alone — the
+    /// queue's window follows it as before.
+    fn on_voice_event(&mut self, serial: u64, mpv: &Mpv, event: Event) {
+        let Some(k) = self.voices.iter().position(|v| v.serial == serial) else {
+            return;
+        };
+        let mut look_now = false;
+        let mut redraw = false;
+        {
+            let v = &mut self.voices[k];
+            match &event {
+                Event::Property { id, value } => match (*id, value) {
+                    (id::DURATION, Value::Float(d)) => v.duration = length_of_mpv(mpv, Some(*d)),
+                    (id::DURATION, _) => v.duration = None,
+                    (id::WIDTH | id::HEIGHT, _) => {
+                        let w = mpv.text("dwidth").and_then(|x| x.parse().ok());
+                        let h = mpv.text("dheight").and_then(|x| x.parse().ok());
+                        v.size = w.zip(h);
+                        redraw = true;
+                    }
+                    (id::TRACKS, _) => {
+                        v.tracks = voice::tracks_of(mpv);
+                        redraw = true;
+                    }
+                    (id::EOF, Value::Flag(done)) => {
+                        v.eof = *done;
+                        look_now = *done;
+                    }
+                    _ => {}
+                },
+                Event::EndFile {
+                    error: Some(why), ..
+                } => v.failed = Some(why.clone()),
+                Event::FileLoaded => {
+                    v.failed = None;
+                    v.eof = false;
+                    if self.session.is_none() && k == 0 {
+                        v.loaded = mpv.text("path").map(|p| location_of(&p));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Event::Property {
+            id: id::IDLE,
+            value: Value::Flag(idle),
+        } = &event
+            && k == 0
+        {
+            self.idle = *idle;
+        }
+        // A FILE THAT STARTS PLAYING is read before any door asks: its sheet
+        // kept, its cover taken out for MPRIS (`tags.rs`).
+        if matches!(event, Event::FileLoaded)
+            && let Some(location) = mpv.text("path").map(|p| location_of(&p))
+        {
+            self.read_tags_of(&location);
+        }
+        if self.session.is_none() {
+            let read = matches!(
+                event,
+                Event::FileLoaded | Event::Property { id: id::TRACKS, .. }
+            );
+            if k == 0 {
+                self.on_event(mpv, event);
+                // A SUBTITLE FILE opened for this leaf becomes a lane of it
+                // once its own lanes — its tracks — are read.
+                if read {
+                    self.attach_waiting();
+                }
+            }
+            if redraw {
+                self.dirty = true;
+            }
+            return;
+        }
+        // PLAYING TOGETHER: the first voice's tags still name what plays.
+        if k == 0 {
+            match &event {
+                Event::Property {
+                    id: id::METADATA | id::TITLE,
+                    ..
+                } => self.on_event(mpv, event.clone()),
+                Event::FileLoaded => {
+                    self.loaded = mpv.text("path").map(|p| location_of(&p));
+                    self.state.lyrics.clear();
+                    self.state.lyrics_from = None;
+                    self.lyrics_asked = None;
+                }
+                _ => {}
+            }
+        }
+        match &event {
+            Event::FileLoaded => {
+                // WHAT WAS ADDED went with the file before: the voice's
+                // subtitles are given again, once it has one loaded.
+                self.subtitles.reloaded(serial);
+                self.dress_subtitles();
+                self.dirty = true;
+            }
+            Event::EndFile { error: Some(_), .. } => self.dirty = true,
+            Event::Property { id: id::TIME, .. } => self.tick_soon(false),
+            _ => {}
+        }
+        if redraw {
+            self.map_pictures();
+            // ITS TRACKS OR ITS SIZE: what the subtitles over it are read
+            // from and drawn at.
+            self.dress_subtitles();
+            self.dirty = true;
+        }
+        if look_now {
+            self.tick_soon(true);
+        }
     }
 
     fn on_event(&mut self, mpv: &Mpv, event: Event) {
@@ -1163,6 +1347,22 @@ impl Engine {
                         if i {
                             self.state.playing = false;
                             self.state.position = 0.0;
+                            self.loaded = None;
+                            if let Some(v) = self.voices.first_mut() {
+                                v.loaded = None;
+                            }
+                            // THE WINDOW RAN OUT and nobody stopped it: the
+                            // queue decides what comes next, not mpv. Asked of
+                            // mpv as it is NOW — the event is older than any
+                            // load made since, and a stop followed by a load
+                            // leaves one behind.
+                            if !self.window.is_empty()
+                                && !self.stopping
+                                && self.following.is_none()
+                                && mpv.text("idle-active").as_deref() == Some("yes")
+                            {
+                                self.ended(mpv);
+                            }
                         } else {
                             self.state.playing = mpv.text("pause").as_deref() == Some("no");
                         }
@@ -1175,22 +1375,18 @@ impl Engine {
                         }
                     }
                     (id::TIME, _) => self.state.position = 0.0,
-                    (id::DURATION, Value::Float(d)) => self.state.duration = Some(d),
+                    (id::DURATION, Value::Float(d)) => {
+                        self.state.duration = length_of_mpv(mpv, Some(d));
+                    }
                     (id::DURATION, _) => self.state.duration = None,
                     (id::VOLUME, Value::Float(v)) => {
                         self.state.volume = v.round().clamp(0.0, 130.0) as u8;
                     }
                     (id::MUTE, Value::Flag(m)) => self.state.muted = m,
                     (id::SPEED, Value::Float(s)) => self.state.speed = s,
-                    (id::POS, Value::Int(p)) => {
-                        self.state.current = usize::try_from(p).ok();
-                        self.remember();
-                    }
-                    (id::PLAYLIST, _) => {
-                        self.state.queue = playlist_of(mpv);
-                        self.remember();
-                    }
-                    (id::TRACKS, _) => self.state.tracks = tracks_of(mpv),
+                    // WHERE mpv IS IN ITS WINDOW, read again from mpv itself:
+                    // the event may be older than a load made since.
+                    (id::POS | id::PLAYLIST, _) => self.settle(mpv),
                     (id::METADATA, _) => {
                         let tags = metadata_of(mpv);
                         let pick = |keys: &[&str]| {
@@ -1202,16 +1398,17 @@ impl Engine {
                         };
                         self.state.artist = pick(&["artist", "album_artist"]);
                         self.state.album = pick(&["album"]);
+                        // A STREAM SAYS NEW THINGS as it plays — the song on
+                        // the air — and its sheet is those words: every door
+                        // showing it asks again.
+                        if self.loaded.as_deref().is_some_and(|l| l.contains("://")) {
+                            self.state.sheet_generation += 1;
+                        }
                         self.find_lyrics(mpv, &tags);
                         self.ask_for_lyrics(&tags);
                     }
-                    (id::TITLE, Value::Text(t)) => self.state.title = Some(t),
-                    (id::TITLE, _) => self.state.title = None,
-                    (id::WIDTH | id::HEIGHT, _) => {
-                        let w = mpv.text("dwidth").and_then(|v| v.parse().ok());
-                        let h = mpv.text("dheight").and_then(|v| v.parse().ok());
-                        self.state.video = w.zip(h);
-                    }
+                    (id::TITLE, Value::Text(t)) => self.mpv_title = Some(t),
+                    (id::TITLE, _) => self.mpv_title = None,
                     _ => {}
                 }
                 // A POSITION alone is said four times a second; anything else
@@ -1223,13 +1420,21 @@ impl Engine {
             Event::EndFile {
                 error: Some(why), ..
             } => {
+                // SAID NOW, and acted on when mpv goes idle (`queue.rs`,
+                // `ended`): a stream tries its next address, anything else
+                // gives way to the next leaf.
+                self.failed = true;
                 self.state.troubles = vec![Trouble::Unplayable { why }];
                 self.dirty = true;
             }
+            Event::EndFile { .. } => self.failed = false,
             Event::FileLoaded => {
-                if std::mem::take(&mut self.start_once) {
-                    let _ = mpv.set("start", "none");
-                }
+                self.failed = false;
+                self.failures = 0;
+                self.loaded = mpv.text("path").map(|p| location_of(&p));
+                // A STREAM OF A DIRECTORY STARTED — its sound, not its row:
+                // the click it is owed and its place among the recent.
+                self.stream_started();
                 self.state.troubles.clear();
                 self.state.lyrics.clear();
                 self.state.lyrics_from = None;
@@ -1240,8 +1445,11 @@ impl Engine {
                     && let Some(item) = mpv.text("path").map(|p| location_of(&p))
                     && let Some(id) = sponsorblock::video_id(&item)
                 {
-                    let path = sponsorblock::path(&id, &self.prefs.skipped);
-                    self.fetches.push(Fetch::Segments { item, id, path });
+                    self.fetches.push(Fetch::Segments {
+                        item,
+                        id,
+                        categories: self.prefs.skipped.clone(),
+                    });
                 }
                 self.dirty = true;
             }
@@ -1251,10 +1459,7 @@ impl Engine {
 
     /// The location of the item playing.
     fn playing(&self) -> Option<String> {
-        self.state
-            .current
-            .and_then(|i| self.state.queue.get(i))
-            .map(|i| i.location.clone())
+        self.loaded.clone()
     }
 
     /// The fourth source of lyrics, when the other three had none and the
@@ -1278,13 +1483,13 @@ impl Engine {
             return;
         };
         self.lyrics_asked = Some(item.clone());
-        let path = lrclib::path(
-            &artist,
-            &title,
-            self.state.album.as_deref(),
-            self.state.duration,
-        );
-        self.fetches.push(Fetch::Lyrics { item, path });
+        self.fetches.push(Fetch::Lyrics {
+            item,
+            artist,
+            title,
+            album: self.state.album.clone(),
+            duration_seconds: self.state.duration,
+        });
     }
 
     /// The lyrics of what just loaded: a `.lrc` beside it, or its own tag.
@@ -1311,57 +1516,44 @@ impl Engine {
     }
 }
 
+/// Repeat, as far as mpv takes part in it: ONE file looped by mpv itself
+/// (no reload, no gap); the queue's going round is ours (`queue.rs`), so
+/// mpv's own playlist never loops.
 fn apply_repeat(mpv: &Mpv, repeat: Repeat) {
-    let (playlist, file) = match repeat {
-        Repeat::Nothing => ("no", "no"),
-        Repeat::Queue => ("inf", "no"),
-        Repeat::One => ("no", "inf"),
-    };
-    let _ = mpv.set("loop-playlist", playlist);
-    let _ = mpv.set("loop-file", file);
+    let _ = mpv.set("loop-playlist", "no");
+    let _ = mpv.set(
+        "loop-file",
+        if repeat == Repeat::One { "inf" } else { "no" },
+    );
 }
 
-fn playlist_of(mpv: &Mpv) -> Vec<Item> {
-    let Some(json) = mpv.text("playlist") else {
-        return Vec::new();
-    };
-    let Ok(serde_json::Value::Array(entries)) = serde_json::from_str(&json) else {
-        return Vec::new();
-    };
-    entries
-        .iter()
-        .filter_map(|e| {
-            let file = e.get("filename")?.as_str()?;
-            Some(Item {
-                location: location_of(file),
-                title: e.get("title").and_then(|t| t.as_str()).map(str::to_owned),
-            })
-        })
-        .collect()
+/// The length of what `mpv` plays, from the `duration` it just said — or
+/// none, for a LIVE stream.
+///
+/// mpv says a `duration` for a stream from the network that cannot be sought
+/// and whose size the server never said: what has ARRIVED so far, growing
+/// with it. Measured on mpv 0.41 against an endless MP3 over HTTP/1.0 with no
+/// length, the way every Icecast radio sends one: `duration` 0, 3, 6 s as it
+/// played, `file-size` unavailable, `demuxer-via-network` yes, `seekable` and
+/// `partially-seekable` no. Taken as a length, the door drew a bar that was
+/// always full and a clock that said the station ended where it was (the
+/// final battery's `footer-media`: "the stream has a length: 2.53").
+fn length_said(
+    duration: Option<f64>,
+    via_network: Option<&str>,
+    seekable: Option<&str>,
+) -> Option<f64> {
+    let live = via_network == Some("yes") && seekable == Some("no");
+    duration.filter(|_| !live)
 }
 
-fn tracks_of(mpv: &Mpv) -> Vec<Track> {
-    let Some(json) = mpv.text("track-list") else {
-        return Vec::new();
-    };
-    let Ok(serde_json::Value::Array(entries)) = serde_json::from_str(&json) else {
-        return Vec::new();
-    };
-    let text =
-        |e: &serde_json::Value, k: &str| e.get(k).and_then(|v| v.as_str()).map(str::to_owned);
-    entries
-        .iter()
-        .filter_map(|e| {
-            Some(Track {
-                id: e.get("id")?.as_i64()?,
-                kind: text(e, "type")?,
-                title: text(e, "title"),
-                lang: text(e, "lang"),
-                codec: text(e, "codec"),
-                selected: e.get("selected").and_then(serde_json::Value::as_bool) == Some(true),
-            })
-        })
-        .collect()
+/// [`length_said`] of `mpv`, asked now.
+fn length_of_mpv(mpv: &Mpv, duration: Option<f64>) -> Option<f64> {
+    length_said(
+        duration,
+        mpv.text("demuxer-via-network").as_deref(),
+        mpv.text("seekable").as_deref(),
+    )
 }
 
 fn metadata_of(mpv: &Mpv) -> Vec<(String, String)> {
@@ -1376,240 +1568,85 @@ fn metadata_of(mpv: &Mpv) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The main mpv's events, on a thread of their own.
-fn spawn_events(mpv: Arc<Mpv>, shared: Shared) {
-    let _ = std::thread::Builder::new()
-        .name("player-events".into())
-        .spawn(move || {
-            loop {
-                let event = mpv.wait(1.0);
-                if event == Event::Shutdown {
-                    return;
-                }
-                let (lock, bell) = &*shared;
-                let Ok(mut e) = lock.lock() else { return };
-                if event != Event::None {
-                    e.on_event(&mpv, event);
-                }
-                if e.dirty {
-                    e.broadcast();
-                }
-                let fetches = std::mem::take(&mut e.fetches);
-                drop(e);
-                bell.notify_all();
-                for f in fetches {
-                    spawn_fetch(f, shared.clone());
-                }
-            }
-        });
-}
-
-/// Makes one request on a thread of its own, and hands the answer to the
-/// engine if the item it was for is still the one playing.
-fn spawn_fetch(fetch: Fetch, shared: Shared) {
-    let _ = std::thread::Builder::new()
-        .name("player-fetch".into())
-        .spawn(move || {
-            let (host, path) = match &fetch {
-                Fetch::Lyrics { path, .. } => (prefs::LRCLIB_HOST, path.clone()),
-                Fetch::Segments { path, .. } => (prefs::SPONSORBLOCK_HOST, path.clone()),
-            };
-            let body = match get(host, &path) {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::info!(host, error = %e, "nothing came back");
-                    return;
-                }
-            };
-            let (lock, bell) = &*shared;
-            let Ok(mut e) = lock.lock() else { return };
-            match fetch {
-                Fetch::Lyrics { item, .. } => {
-                    if e.playing().as_deref() != Some(item.as_str()) || !e.state.lyrics.is_empty() {
-                        return;
-                    }
-                    if let Some(lines) = lrclib::parse(&body) {
-                        e.state.lyrics = lines;
-                        e.state.lyrics_from = Some(prefs::LRCLIB_HOST.to_owned());
-                        e.broadcast();
-                    }
-                }
-                Fetch::Segments { item, id, .. } => {
-                    if e.playing().as_deref() != Some(item.as_str()) {
-                        return;
-                    }
-                    e.segments = sponsorblock::parse(&body, &id);
-                    e.jumped.clear();
-                    tracing::info!(segments = e.segments.len(), "sponsored segments to skip");
-                }
-            }
-            drop(e);
-            bell.notify_all();
-        });
-}
-
-/// `GET https://<host><path>`: a 200, or nothing. The 404 both services
-/// answer for "nothing known about this" is an ordinary answer, not a fault.
-fn get(host: &str, path: &str) -> Result<String> {
-    let call = ronoctua_http::Call::new("GET", path, host)
-        .with_headers(&[
-            // LRCLIB asks every client to name itself.
-            ("User-Agent", "ronoctua-player"),
-            ("Accept", "application/json"),
-        ])
-        .waiting(ronoctua_http::tls::PATIENCE);
-    let answer = ronoctua_http::tls::over_tls(host, 443, &call)?;
-    if answer.status != 200 {
-        anyhow::bail!("{host} answered {}", answer.status);
-    }
-    Ok(answer.body)
-}
-
-/// A participant's events: drained, so its queue never fills.
-fn spawn_quiet_events(mpv: Arc<Mpv>) {
-    let _ = std::thread::Builder::new()
-        .name("player-follower".into())
-        .spawn(move || while mpv.wait(1.0) != Event::Shutdown {});
-}
-
-/// The render thread of one mpv: when a frame is due, render it once per
-/// size asked and publish it to each viewer of that mpv.
-///
-/// Gives back what wakes it, for the ENGINE to keep: every caller is an
-/// `Engine` method, so the engine's lock is already held — taking it here
-/// hung the player on the first thing it played, which the VM caught.
-fn spawn_render(mpv: Arc<Mpv>, of: Option<usize>, shared: Shared) -> Result<mpv::Poke> {
-    let render = Render::new(mpv)?;
-    let poke = render.poke();
-    std::thread::Builder::new()
-        .name("player-render".into())
-        .spawn(move || {
-            let mut buffers: HashMap<(u32, u32), Aligned> = HashMap::new();
-            loop {
-                let due = render.wait(Duration::from_millis(500));
-                let owed = {
-                    let (lock, _) = &*shared;
-                    lock.lock()
-                        .is_ok_and(|e| e.viewers.iter().any(|v| v.of == of && v.owed))
-                };
-                if !due && !owed {
-                    // A participant that left takes its render thread with it.
-                    let (lock, _) = &*shared;
-                    if let Some(i) = of
-                        && lock.lock().is_ok_and(|e| i >= e.followers.len())
-                    {
-                        return;
-                    }
-                    continue;
-                }
-                let sizes: Vec<(u32, u32)> = {
-                    let (lock, _) = &*shared;
-                    let Ok(e) = lock.lock() else { return };
-                    let mut s: Vec<(u32, u32)> = e
-                        .viewers
-                        .iter()
-                        .filter(|v| v.of == of)
-                        .map(|v| v.ring.size())
-                        .collect();
-                    s.sort_unstable();
-                    s.dedup();
-                    s
-                };
-                if sizes.is_empty() {
-                    // Nobody is looking, and the frame is still taken — the
-                    // renderer would otherwise hold the decoder back.
-                    let one = buffers.entry((16, 16)).or_default();
-                    let _ = render.render(16, 16, one);
-                    continue;
-                }
-                for &(w, h) in &sizes {
-                    let buf = buffers.entry((w, h)).or_default();
-                    if let Err(e) = render.render(w, h, buf) {
-                        tracing::debug!(error = %e, "a frame was not rendered");
-                    }
-                }
-                let (lock, _) = &*shared;
-                let Ok(mut e) = lock.lock() else { return };
-                e.viewers.retain_mut(|v| {
-                    if v.of != of {
-                        return true;
-                    }
-                    let (w, h) = v.ring.size();
-                    let Some(buf) = buffers.get(&(w, h)) else {
-                        return true;
-                    };
-                    let len = w as usize * h as usize * 4;
-                    let Ok(slot) = v.ring.publish(buf.get(len)) else {
-                        return false;
-                    };
-                    v.owed = false;
-                    // ONE BYTE, so a write is whole or nothing; nothing
-                    // written is a viewer that went away.
-                    match v.stream.write(&[slot]) {
-                        Ok(0) => false,
-                        Ok(_) => true,
-                        Err(err) => err.kind() == std::io::ErrorKind::WouldBlock,
-                    }
-                });
-            }
-        })
-        .context("the render thread")?;
-    Ok(poke)
-}
-
-/// Keeps every participant in step with the main mpv.
-fn spawn_sync(shared: Shared) {
-    let _ = std::thread::Builder::new()
-        .name("player-sync".into())
-        .spawn(move || {
-            loop {
-                std::thread::sleep(sync::TICK);
-                let (lock, _) = &*shared;
-                let Ok(mut e) = lock.lock() else { return };
-                if e.followers.is_empty() {
-                    return;
-                }
-                let Some(main) = e.mpv.clone() else { continue };
-                let Some(master) = main.float("time-pos") else {
-                    continue;
-                };
-                let speed = main.float("speed").unwrap_or(1.0);
-                let paused = main.text("pause").as_deref() == Some("yes");
-                for f in &mut e.followers {
-                    let _ = f.mpv.set("pause", if paused { "yes" } else { "no" });
-                    let Some(at) = f.mpv.float("time-pos") else {
-                        continue;
-                    };
-                    f.drift_ms = ((at - master) * 1000.0).round() as i64;
-                    match sync::correct(master, at, speed) {
-                        Correction::Keep => {
-                            let _ = f.mpv.set("speed", &speed.to_string());
-                        }
-                        Correction::Speed(s) => {
-                            let _ = f.mpv.set("speed", &s.to_string());
-                        }
-                        Correction::Seek(to) => {
-                            let _ = f
-                                .mpv
-                                .command(&["seek", &to.to_string(), "absolute", "exact"]);
-                        }
-                    }
-                }
-                e.dirty = true;
-            }
-        });
-}
-
 /// One connection.
 pub fn serve_one(stream: UnixStream, shared: &Shared) {
     let Ok(read_half) = stream.try_clone() else {
         return;
     };
     let mut input = BufReader::new(read_half);
-    let ask: Ask = match wire::read_line(&mut input) {
-        Ok(Some(a)) => a,
-        _ => return,
+    let Ok(Some(line)) = wire::read_raw(&mut input) else {
+        return;
     };
+    // AN ASK THIS PLAYER DOES NOT KNOW is answered, never dropped: a door
+    // newer or older than the daemon hears that the two do not match.
+    let ask: Ask = match serde_json::from_str(&line) {
+        Ok(a) => a,
+        Err(err) => {
+            let mut out = stream;
+            let _ = wire::write_line(
+                &mut out,
+                &Say::Refused(Trouble::NotUnderstood {
+                    why: err.to_string(),
+                }),
+            );
+            return;
+        }
+    };
+    // CLOSING, before the lock, which `quit` takes itself: the farewell goes
+    // to every watcher, and then the answer to the one who asked — which a
+    // door does not wait for (`client::tell_if_running`), so it may find the
+    // stream already gone.
+    if ask == Ask::Quit {
+        quit(shared);
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &Say::Done);
+        return;
+    }
+    // THE OUTPUTS ARE READ while this connection stays open: the door that
+    // shows them holds it, and closing it — or the door going away — lets
+    // go. Nothing is read from it; its end is what is waited for.
+    if ask == Ask::Sinks {
+        hold_sinks(stream, shared);
+        return;
+    }
+    // A SHEET MAY BE READ — programs, seconds at worst — and this connection
+    // waits for it; the lock does not (`tags.rs`). A draft needs the sheet
+    // first, for the value it starts from.
+    if let Ask::Sheet { location } = &ask {
+        let say = tags::sheet_for(location, shared);
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &say);
+        return;
+    }
+    if let Ask::Draft { location, field } = &ask {
+        let say = drafts::open_draft(location, *field, shared);
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &say);
+        return;
+    }
+    // A STAR IS A FILE WRITTEN under a lock of its own: not the engine's
+    // (`directory.rs`).
+    if let Ask::Favourite { kind, id, on } = &ask {
+        let say = directory::favourite(*kind, id, *on, shared);
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &say);
+        let (lock, bell) = &**shared;
+        if let Ok(mut e) = lock.lock()
+            && e.dirty
+        {
+            e.broadcast();
+        }
+        bell.notify_all();
+        return;
+    }
+    // A KEY IS TRIED ON THE NETWORK, and this connection waits for the
+    // service's answer; the lock does not (`desk.rs`).
+    if let Ask::KeyCheck { service } = &ask {
+        let say = desk::key_check(*service, shared);
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &say);
+        return;
+    }
     // PAIRING TALKS TO ANOTHER MACHINE, and a host on the tailnet is given
     // seconds: the engine's lock is not held across it.
     if let Ask::PairWith { to, code } = &ask {
@@ -1628,24 +1665,79 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
         bell.notify_all();
         return;
     }
+    // WHAT IS PUT IS READ FIRST, outside the lock: a folder is a walk of the
+    // disk and a playlist a file to read, and the lock is every door's.
+    let (ask, resolved) = match ask {
+        Ask::Put {
+            what,
+            after,
+            into,
+            play,
+            replace,
+        } => (None, Some((resolve_all(what), after, into, play, replace))),
+        other => (Some(other), None),
+    };
     let (lock, bell) = &**shared;
     let Ok(mut e) = lock.lock() else { return };
+    // A PLAYER ON ITS WAY OUT answers whoever connected before the socket
+    // left the disk with its farewell: a watcher that arrived then would
+    // otherwise hear the stream end, and say "not running" where it should
+    // close.
+    if e.leaving {
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &Say::Farewell);
+        return;
+    }
+    if let Some((resolved, after, into, play, replace)) = resolved {
+        e.dirty = true;
+        let say = match e.put_resolved(resolved, after, into, play, replace, shared) {
+            Ok(_) => Say::Done,
+            Err(Refused(t)) => {
+                e.state.troubles = vec![t.clone()];
+                Say::Refused(t)
+            }
+        };
+        e.broadcast();
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &say);
+        drop(e);
+        bell.notify_all();
+        return;
+    }
+    let Some(ask) = ask else { return };
     match ask {
         Ask::Watch => {
             let mut s = stream;
-            if wire::write_line(&mut s, &Say::State(Box::new(e.state()))).is_ok() {
+            let _ = s.set_write_timeout(Some(WATCHER_PATIENCE));
+            // THE OUTLINE, THEN THE STATE: a door knows the queue's shape
+            // before it reads which leaf of it is current.
+            let outline = Say::Queue(Box::new(e.queue.outline()));
+            if wire::write_line(&mut s, &outline).is_ok()
+                && wire::write_line(&mut s, &Say::State(Box::new(e.state()))).is_ok()
+            {
                 e.watchers.push(s);
             }
+        }
+        Ask::Queue => {
+            let mut out = stream;
+            let _ = wire::write_line(&mut out, &Say::Queue(Box::new(e.queue.outline())));
+        }
+        // A DESK'S PAGE, to the one who asked and never to the watchers.
+        Ask::Desk { kind } => {
+            let mut out = stream;
+            let _ = wire::write_line(&mut out, &Say::Desk(Box::new(e.desk_page(kind))));
         }
         Ask::Look => {
             let mut out = stream;
             let _ = wire::write_line(&mut out, &Say::State(Box::new(e.state())));
         }
-        Ask::Preview { width, height, of } => {
+        Ask::Preview {
+            width,
+            height,
+            lane,
+        } => {
             // A PREVIEW WANTS A PICTURE, so it wants the engine up.
-            if of.is_none()
-                && let Err(err) = e.main(shared)
-            {
+            if let Err(err) = e.main(shared) {
                 let mut out = stream;
                 let _ = wire::write_line(
                     &mut out,
@@ -1655,7 +1747,7 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
                 );
                 return;
             }
-            if let Err(err) = e.add_viewer(stream, width, height, of) {
+            if let Err(err) = e.add_viewer(stream, width, height, lane) {
                 tracing::warn!(error = %err, "a preview was refused");
             }
         }
@@ -1667,6 +1759,36 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
         }
     }
     drop(e);
+    bell.notify_all();
+}
+
+/// Holds the outputs read for as long as `stream` stays open ([`Ask::Sinks`]):
+/// counted in, answered, waited on until the door closes it, counted out.
+fn hold_sinks(stream: UnixStream, shared: &Shared) {
+    let (lock, bell) = &**shared;
+    {
+        let Ok(mut e) = lock.lock() else { return };
+        if e.leaving {
+            let mut out = stream;
+            let _ = wire::write_line(&mut out, &Say::Farewell);
+            return;
+        }
+        e.sinks.holders += 1;
+        e.mind_sinks();
+        e.broadcast();
+    }
+    bell.notify_all();
+    let mut out = stream;
+    if wire::write_line(&mut out, &Say::Done).is_ok() {
+        let mut rest = [0_u8; 64];
+        // UNTIL IT ENDS: a door says nothing more on it.
+        while matches!(out.read(&mut rest), Ok(n) if n > 0) {}
+    }
+    if let Ok(mut e) = lock.lock() {
+        e.sinks.holders = e.sinks.holders.saturating_sub(1);
+        e.mind_sinks();
+        e.broadcast();
+    }
     bell.notify_all();
 }
 
@@ -1686,16 +1808,51 @@ pub fn absolute(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::expanded;
 
-    /// FAILS IF: a list libmpv cannot read reaches it whole, or one it CAN read
-    /// is opened here and loses its laziness.
+    /// FAILS IF: a watcher of a player asked to close is not told so, or
+    /// its stream stays open after the word — a door would wait for a state
+    /// that never comes instead of closing.
+    #[test]
+    fn every_watcher_hears_the_farewell_and_then_nothing() {
+        use std::io::BufReader;
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair().expect("a pair");
+        super::farewell_to(vec![ours]);
+        let mut input = BufReader::new(theirs);
+        let said: Option<super::Say> = super::wire::read_line(&mut input).expect("reads");
+        assert_eq!(said, Some(super::Say::Farewell));
+        let after: Option<super::Say> = super::wire::read_line(&mut input).expect("reads");
+        assert_eq!(after, None, "the stream ends after the farewell");
+    }
+
+    /// FAILS IF: a watcher that stopped reading holds the farewell — and the
+    /// engine's lock it is said under — for as long as it stays stopped: the
+    /// player asked to close would never leave, and every ask behind the
+    /// lock would hang.
+    #[test]
+    fn a_watcher_that_stopped_reading_does_not_hold_the_farewell() {
+        use std::io::Write as _;
+        let (mut ours, theirs) = std::os::unix::net::UnixStream::pair().expect("a pair");
+        // ITS BUFFER FULL, as a door stopped for a while leaves it.
+        ours.set_nonblocking(true).expect("nonblocking");
+        let chunk = [b'x'; 4096];
+        while ours.write(&chunk).is_ok() {}
+        ours.set_nonblocking(false).expect("blocking again");
+        let began = std::time::Instant::now();
+        super::farewell_to(vec![ours]);
+        assert!(
+            began.elapsed() < super::WATCHER_PATIENCE * 3,
+            "the farewell waited {:?} for a watcher that does not read",
+            began.elapsed()
+        );
+        drop(theirs);
+    }
+
     /// FAILS IF: a name only libgme reads reaches libmpv without the demuxer
     /// named, and is refused as an unrecognized format — or the option
     /// leaks onto a file that libmpv finds on its own.
     #[test]
     fn the_music_of_consoles_names_its_demuxer() {
-        let gme = Some("demuxer-lavf-format=libgme");
+        let gme = Some("libgme");
         assert_eq!(super::load_options("/m/tune.vgm"), gme);
         assert_eq!(super::load_options("/m/Zelda.SPC"), gme);
         assert_eq!(
@@ -1706,35 +1863,21 @@ mod tests {
         assert_eq!(super::load_options("/m/tune.sid"), None);
     }
 
+    /// FAILS IF: a stream from the network that cannot be sought is given
+    /// the length of what has arrived (mpv's growing `duration`), or a file
+    /// or a seekable stream loses its length — or an unknown answer from mpv
+    /// is taken for "live".
     #[test]
-    fn the_lists_libmpv_does_not_know_are_opened_here() {
-        let dir = std::env::temp_dir().join(format!("ronoctua-expand-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let xspf = dir.join("l.xspf");
-        std::fs::write(
-            &xspf,
-            "<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\"><trackList>\
-             <track><location>one.flac</location></track>\
-             <track><location>http://192.0.2.1/two.ogg</location></track>\
-             </trackList></playlist>",
-        )
-        .unwrap();
-        let m3u = dir.join("l.m3u").to_string_lossy().into_owned();
-        let broken = dir.join("missing.asx").to_string_lossy().into_owned();
-        let out = expanded(vec![
-            xspf.to_string_lossy().into_owned(),
-            m3u.clone(),
-            broken.clone(),
-        ]);
-        std::fs::remove_dir_all(&dir).unwrap();
+    fn a_live_stream_has_no_length() {
+        use super::length_said;
+        assert_eq!(length_said(Some(2.53), Some("yes"), Some("no")), None);
+        assert_eq!(length_said(Some(30.0), Some("no"), Some("yes")), Some(30.0));
         assert_eq!(
-            out,
-            vec![
-                dir.join("one.flac").to_string_lossy().into_owned(),
-                "http://192.0.2.1/two.ogg".to_owned(),
-                m3u,
-                broken,
-            ]
+            length_said(Some(600.0), Some("yes"), Some("yes")),
+            Some(600.0)
         );
+        assert_eq!(length_said(Some(30.0), None, None), Some(30.0));
+        assert_eq!(length_said(Some(30.0), Some("no"), Some("no")), Some(30.0));
+        assert_eq!(length_said(None, Some("no"), Some("yes")), None);
     }
 }

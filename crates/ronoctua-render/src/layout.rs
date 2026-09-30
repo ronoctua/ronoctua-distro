@@ -337,6 +337,16 @@ pub fn wrap(text: &str, width: u16, ceiling: usize) -> Vec<String> {
     for raw in text.lines() {
         let mut line = String::new();
         for word in raw.split_whitespace() {
+            // A WORD LONGER THAN THE LINE AFTER OTHER WORDS starts a line of
+            // its own and is cut like the first: set down whole beside them,
+            // it ran off the surface's edge and was clipped there — a path in
+            // a question read `/tmp/…-ronoctua-` and the rest of it was gone.
+            if !line.is_empty() && usize::from(self::width(word)) > width {
+                out.push(std::mem::take(&mut line));
+                if out.len() >= ceiling {
+                    return out;
+                }
+            }
             if line.is_empty() && usize::from(self::width(word)) > width {
                 // WORD LONGER THAN THE LINE: split it into pieces the size of the
                 // line. By CLUSTER, and not by character: this is a cut, and a
@@ -1034,6 +1044,19 @@ mod tests {
         // And the Latin case, unchanged: it is where one cluster is one cell.
         let latin = wrap("abcdefg", 3, 99);
         assert_eq!(latin, vec!["abc", "def", "g"]);
+    }
+
+    /// FAILS IF: a word longer than the line that comes AFTER other words is
+    /// set down whole, running past the line's end — where the surface clips
+    /// it — instead of starting a line of its own and being cut like one
+    /// that comes first.
+    #[test]
+    fn a_long_word_after_others_is_cut_too() {
+        let out = wrap("is in /abcdefghij over it?", 8, 99);
+        assert_eq!(out, vec!["is in", "/abcdefg", "hij over", "it?"]);
+        for l in &out {
+            assert!(width(l) <= 8, "{l} is wider than the line");
+        }
     }
 
     #[test]

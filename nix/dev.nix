@@ -56,6 +56,7 @@
   exiftool,
   poppler-utils,
   catdoc,
+  yt-dlp,
   playerTools,
   # The software centre's programs, from `nix/software-tools.nix` — the table
   # the installed system's units read.
@@ -64,6 +65,9 @@
   reloadApp,
   singleFooter,
   rustToolchain,
+  # Where cargo writes (nix/cargo-dirs.nix): the loop fills in what its caller
+  # did not export.
+  cargoDirs,
   # The editor the manager sends text to. It is a parameter and not an
   # `option_env!` for the reason `nix/rust.nix` writes out: baked into the
   # binary, its store path is a reference no profile switch can remove.
@@ -1200,6 +1204,11 @@ let
 " (
         lib.mapAttrsToList (name: path: "export ${name}=${lib.escapeShellArg path}") playerTools
       )}
+      # AND YT-DLP BY ITS PATH, as the player's unit names it
+      # (`nix/modules/player.nix`): the loop's player lists a YouTube playlist
+      # through it (`ronoctua_ytdlp::flat`), and mpv's own hook finds it the
+      # same way.
+      export RONOCTUA_YT_DLP="${yt-dlp}/bin/yt-dlp"
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
       # AND WHAT THE SIDEBAR STARTS WITH — the same two files the installed
       # system resolves, for the same reason: there is no NixOS here to read an
@@ -1267,8 +1276,9 @@ let
       if [ -f "$root_dir/Cargo.toml" ] && [ -d "$root_dir/crates" ]; then
         # OUTSIDE the tree. With `target/` inside, every evaluation of the flake copies
         # gigabytes into the store — it cost 793 GB to find out. See AGENTS.md.
-        export CARGO_TARGET_DIR="''${CARGO_TARGET_DIR:-''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/target}"
-        mkdir -p "$CARGO_TARGET_DIR"
+        # The directories are `nix/cargo-dirs.nix`'s; what the caller already
+        # exported (the devshell's, the session's) is kept.
+        ${cargoDirs.fallback}
         # EVERYTHING THE BUILD BAKES — see `bakedExports` in this file's `let`.
         ${bakedExports}
         # WHICH BINARY THE FOOTER IS, and it starts as the store's.

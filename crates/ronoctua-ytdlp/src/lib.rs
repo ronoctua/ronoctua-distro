@@ -1,11 +1,88 @@
-//! yt-dlp's flags that are about the DEVICE, not the person — one place for
-//! the transfer queue and the player.
+//! Every yt-dlp command line this system runs — one place for the transfer
+//! queue and the player.
 //!
 //! The queue downloads and the player plays, and both ask YouTube through
 //! yt-dlp. What makes an anonymous request work today — a PO token minted on
 //! demand — is the same for both, so it lives here; who the person is (the
 //! cookies, a pasted token) stays with the queue, which is the only one that
 //! ever asks as someone.
+//!
+//! And WHERE the program is ([`program`], [`installed`]) — every caller asks
+//! here, so the unit's variable is read in one place — and the two things the
+//! player lists without downloading: a playlist, flat ([`flat`]), and a search
+//! for what is live now ([`search_lives`]).
+
+mod address;
+mod listing;
+mod program;
+mod run;
+
+pub use address::{escape, is_address, listing_address};
+pub use listing::{
+    DEADLINE, FLAT_MOST, Flat, FlatEntry, LIVE_FILTER, LIVES_HOST, LIVES_MOST, Live, MOST_BYTES,
+    WORDS_MOST, flat, flat_arguments, flat_up_to, lives_address, lives_arguments, parse_flat,
+    parse_lives, search_lives,
+};
+pub use program::{VARIABLE, installed, installed_of, program, program_of};
+
+/// Why a listing did not answer, as a closed set.
+///
+/// No sentence here: the words are the door's, one per variant, through
+/// [`Trouble::id`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Trouble {
+    /// This installation has no yt-dlp (the reduced profile).
+    Absent,
+    /// yt-dlp could not be started.
+    Unstartable,
+    /// It did not answer inside [`DEADLINE`], and was stopped.
+    Slow,
+    /// It ended with a failure: no network, a removed list, an address it
+    /// does not know.
+    Failed,
+    /// It answered something that is not the JSON asked for.
+    Garbled,
+    /// It answered more than [`MOST_BYTES`].
+    TooLarge,
+    /// The address is not a plain web address.
+    NotAnAddress,
+    /// The address is one video, not a list.
+    NotAList,
+    /// There are no words to search for.
+    NothingToAsk,
+}
+
+impl Trouble {
+    /// Every trouble, for a test that walks the words.
+    pub const ALL: [Self; 9] = [
+        Self::Absent,
+        Self::Unstartable,
+        Self::Slow,
+        Self::Failed,
+        Self::Garbled,
+        Self::TooLarge,
+        Self::NotAnAddress,
+        Self::NotAList,
+        Self::NothingToAsk,
+    ];
+
+    /// Its kebab-case name, the suffix of the key a door says it with.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Unstartable => "unstartable",
+            Self::Slow => "slow",
+            Self::Failed => "failed",
+            Self::Garbled => "garbled",
+            Self::TooLarge => "too-large",
+            Self::NotAnAddress => "not-an-address",
+            Self::NotAList => "not-a-list",
+            Self::NothingToAsk => "nothing-to-ask",
+        }
+    }
+}
 
 /// The PO token minter, when this installation has one.
 ///
@@ -79,5 +156,15 @@ mod tests {
         assert!(pot_flags_of(None, Some("/y/bin/deno")).is_empty());
         assert!(pot_flags_of(Some(""), Some("")).is_empty());
         assert!(pot_flags_of(None, None).is_empty());
+    }
+
+    #[test]
+    fn a_troubles_id_is_its_serde_name() {
+        for t in Trouble::ALL {
+            assert_eq!(
+                serde_json::to_string(&t).unwrap(),
+                format!("\"{}\"", t.id())
+            );
+        }
     }
 }

@@ -21,7 +21,9 @@
 let
   cfg = config.ronoctua.player;
 
-  # THE SOUNDS ONLY THE DECODERS OPEN, which freedesktop has no type for.
+  # THE SOUNDS ONLY THE DECODERS OPEN, which freedesktop has no type for, the
+  # player's own two files (`own`: `.rset` and `.rqueue`), and the subtitle
+  # files it lays over a film (`subtitles`).
   ours = import ../../assets/player-types.nix;
 
   # EVERY TYPE THE PLAYER OPENS, by name — a desktop entry cannot say
@@ -61,11 +63,14 @@ let
         [
           "  <mime-type type=\"${f.mime}\">"
           "    <sub-class-of type=\"${f.under}\"/>"
-          "    <generic-icon name=\"audio-x-generic\"/>"
+          # A SUBTITLE FILE IS WORDS to a program that knows nothing of it.
+          "    <generic-icon name=\"${
+                if builtins.elem f ours.subtitles.invented then "text-x-generic" else "audio-x-generic"
+              }\"/>"
         ]
         ++ map (g: "    <glob pattern=\"${g}\"/>") f.globs
         ++ [ "  </mime-type>" ]
-      ) ours.families
+      ) (ours.families ++ ours.own ++ ours.subtitles.invented)
       ++ [ "</mime-info>" ]
     )
   );
@@ -161,7 +166,13 @@ in
       after = [ "graphical-session.target" ];
       wantedBy = [ "graphical-session.target" ];
       environment =
-        import ../player-tools.nix { inherit pkgs; }
+        import ../player-tools.nix {
+          inherit pkgs;
+          # MATROSKA'S TAGS WRITTEN only where the media profile is on: its
+          # tools pull Qt, which only that profile already carries
+          # (`profile-minimal-closes` proves the other one stays without).
+          matroska = config.ronoctua.media.enable;
+        }
         # YT-DLP ONLY WHERE THE MEDIA PROFILE IS ON, for the queue's reason:
         # a path here is a reference, and it would drag yt-dlp into the
         # minimal profile through this unit.
@@ -180,6 +191,23 @@ in
         // lib.optionalAttrs (config.ronoctua.transfers.poToken == "on-demand") {
           RONOCTUA_POT_HOME = "${ronoctua.potProvider}/server";
           RONOCTUA_DENO = lib.getExe pkgs.deno;
+        }
+        # THE AMBIENT SOUNDS (`nix/ambience.nix`): the loops and the index the
+        # daemon reads, ~42 MiB, with the player and never without it. Named
+        # only where the flake has them — their originals are a Release asset
+        # (`ambience-v1`), and until it is published a player has none and
+        # says so on screen (`Trouble::NoAmbience`), never a silent list.
+        // lib.optionalAttrs (ronoctua ? ambience) {
+          RONOCTUA_AMBIENCE = "${ronoctua.ambience}";
+        }
+        # THE WORLD, for the directories' globe (`engine/directory.rs`): where
+        # each country's name goes on a map, so a radio or TV page arrives
+        # with its marks placed and a door only draws them. The same table
+        # the doors draw the globe with, read at run time as they read it
+        # (`atlas-is-at-run-time`) — and without it every row is said to have
+        # no place on the map, never placed at a guess.
+        // lib.optionalAttrs (ronoctua ? atlas) {
+          RONOCTUA_ATLAS = "${ronoctua.atlas}/world.atlas";
         };
       serviceConfig = {
         ExecStart = "${ronoctua.player}/bin/ronoctua-player";

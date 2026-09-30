@@ -621,6 +621,7 @@ impl Lifeline {
             g.config.format,
             self.scale,
             tokens::text::size(),
+            self.texts.language(),
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),

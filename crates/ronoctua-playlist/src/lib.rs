@@ -21,7 +21,18 @@
 //!
 //! It does not `stat` the entries. Resolving one is arithmetic on a `Path`;
 //! asking the disk about N of them is N syscalls for a panel, and whether a
-//! file is there is a truth the row tells when somebody plays it.
+//! file is there is a truth the row tells when somebody plays it. The one
+//! exception is [`own`]'s fallback for a moved folder, and even there the
+//! question is asked through a function the CALLER hands in.
+//!
+//! # Our own two files
+//!
+//! [`own`] reads and writes `.rset` (media played together, with their
+//! settings) and `.rqueue` (a queue: files, sets, named playlists and
+//! streams). They live here, beside the other spellings, so the preview reads
+//! them for free and the daemon links nothing new to save one.
+
+pub mod own;
 
 use std::path::{Path, PathBuf};
 
@@ -71,6 +82,10 @@ pub enum Kind {
     /// Microsoft's XML one, whose tag names are CASE-INSENSITIVE and whose
     /// durations are a clock.
     Asx,
+    /// One of our own two, `.rset` or `.rqueue` ([`own`]), listed flat the way
+    /// the preview lists the others. [`kind_by_name`] never answers it: the
+    /// player asks [`own::kind_by_name`], because a set is not a list.
+    Own,
 }
 
 /// Where an entry points.
@@ -188,6 +203,52 @@ pub fn kind_by_name(path: &Path) -> Option<Kind> {
 /// [`Trouble::Unreadable`] when the file cannot be read, and
 /// [`Trouble::Empty`] when it names nothing.
 pub fn read(path: &Path, kind: Kind) -> Result<List, Trouble> {
+    read_titled(path, kind).map(|(list, _)| list)
+}
+
+/// [`read`], and the name the list gives ITSELF ([`title_of`]).
+///
+/// For the player, which makes a playlist node of a list and names the node
+/// after it — an XSPF's `<title>`, an M3U's `#PLAYLIST:` — rather than after
+/// the file.
+///
+/// # Errors
+///
+/// As [`read`].
+pub fn read_titled(path: &Path, kind: Kind) -> Result<(List, Option<String>), Trouble> {
+    if kind == Kind::Own {
+        // OURS ARE JSON with a ceiling of their own, and the reader is `own`'s.
+        let read = own::read(path).map_err(|_| Trouble::Unreadable)?;
+        return list_of_own(&read).map(|list| (list, None));
+    }
+    let text = read_text(path)?;
+    let folder = path.parent().unwrap_or(Path::new("."));
+    let list = parse_text(&text, kind, Base::Folder(folder))?;
+    Ok((list, title_of(&text, kind)))
+}
+
+/// One of our files, read, as the flat [`List`] the preview draws: a set is
+/// one row, a queue what it plays ([`own::Own::listing`]).
+///
+/// # Errors
+///
+/// [`Trouble::Empty`] when it plays nothing.
+pub fn list_of_own(read: &own::Own) -> Result<List, Trouble> {
+    let mut entries = read.listing();
+    if entries.is_empty() {
+        return Err(Trouble::Empty);
+    }
+    let cut = entries.len() >= ENTRY_CEILING;
+    entries.truncate(ENTRY_CEILING);
+    Ok(List {
+        kind: Kind::Own,
+        entries,
+        cut,
+    })
+}
+
+/// At most [`BYTE_CEILING`] of a list on disk, as text.
+fn read_text(path: &Path) -> Result<String, Trouble> {
     use std::io::Read as _;
     let mut file = std::fs::File::open(path).map_err(|_| Trouble::Unreadable)?;
     let mut raw = Vec::new();
@@ -197,14 +258,90 @@ pub fn read(path: &Path, kind: Kind) -> Result<List, Trouble> {
         .map_err(|_| Trouble::Unreadable)?;
     // LOSSY, because a playlist is a list of NAMES and a name is bytes: a
     // stray Latin-1 accent in one line should not lose the other forty.
-    let text = String::from_utf8_lossy(&raw);
-    let folder = path.parent().unwrap_or(Path::new("."));
+    Ok(String::from_utf8_lossy(&raw).into_owned())
+}
 
+/// The name a list gives itself, when it gives one.
+///
+/// An XSPF's `<title>` and an ASX's `<title>` (children of the list itself,
+/// never a track's), and the extended M3U's `#PLAYLIST:` line. A PLS has no
+/// such field. Trimmed; an empty one is none.
+#[must_use]
+pub fn title_of(text: &str, kind: Kind) -> Option<String> {
+    let text = within_the_ceiling(text);
+    let found = match kind {
+        Kind::M3u => text.lines().find_map(|line| {
+            line.trim_end_matches('\r')
+                .trim()
+                .strip_prefix("#PLAYLIST:")
+                .map(ToOwned::to_owned)
+        }),
+        Kind::Xspf | Kind::Asx => {
+            // Through the depth guard, as every list's entries are.
+            let doc = ronoctua_xml::parse(text, ronoctua_xml::roxmltree::ParsingOptions::default())
+                .ok()?;
+            let root = doc.root_element();
+            root.children()
+                .find(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("title"))
+                .and_then(|c| c.text())
+                .map(ToOwned::to_owned)
+        }
+        Kind::Pls | Kind::Own => None,
+    };
+    found.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty())
+}
+
+/// What a relative name in a list is relative TO.
+///
+/// # Two answers, because a list comes from two places
+///
+/// A list on this disk names files beside it, and `01.flac` means
+/// `<its folder>/01.flac`. A list fetched from a radio's site names addresses
+/// beside IT — `stream.mp3` in `https://radio.example/listen.pls` is
+/// `https://radio.example/stream.mp3` — and must never name a file on this
+/// machine: a `file://` in a list somebody else's server wrote is refused, or a
+/// web page could make the player open `~/.ssh/id_ed25519` as audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base<'a> {
+    /// The folder of a list read from this disk.
+    Folder(&'a Path),
+    /// The address a list was fetched from.
+    Address(&'a str),
+}
+
+impl<'a> From<&'a Path> for Base<'a> {
+    fn from(folder: &'a Path) -> Self {
+        Self::Folder(folder)
+    }
+}
+
+/// A list that is already text, read with the grammar `kind` names.
+///
+/// For the daemon, which fetches a radio's `.pls` itself (bounded, through
+/// the one HTTP crate) and hands the text here: the network stays out of this
+/// crate, and the four grammars stay in it. [`read`] is this, after the file
+/// is read.
+///
+/// Past [`BYTE_CEILING`] the text is not read — the same bound a file gets.
+///
+/// # Errors
+///
+/// [`Trouble::Empty`] when it names nothing.
+pub fn parse_text(text: &str, kind: Kind, base: Base<'_>) -> Result<List, Trouble> {
+    let text = within_the_ceiling(text);
     let mut found = match kind {
-        Kind::M3u => from_m3u(&text, folder),
-        Kind::Pls => from_pls(&text, folder),
-        Kind::Xspf => from_xspf(&text, folder),
-        Kind::Asx => from_asx(&text, folder),
+        Kind::M3u => from_m3u(text, base),
+        Kind::Pls => from_pls(text, base),
+        Kind::Xspf => from_xspf(text, base),
+        Kind::Asx => from_asx(text, base),
+        // OURS, from this disk only: a list fetched from somebody else's
+        // server never names one of our files here.
+        Kind::Own => match base {
+            Base::Folder(folder) => own::parse(text.as_bytes(), folder, &|_| true)
+                .map(|own| own.listing())
+                .unwrap_or_default(),
+            Base::Address(_) => Vec::new(),
+        },
     };
     let cut = found.len() > ENTRY_CEILING;
     found.truncate(ENTRY_CEILING);
@@ -218,6 +355,37 @@ pub fn read(path: &Path, kind: Kind) -> Result<List, Trouble> {
         entries: found,
         cut,
     })
+}
+
+/// The first [`BYTE_CEILING`] bytes, cut where a character ends.
+fn within_the_ceiling(text: &str) -> &str {
+    let most = usize::try_from(BYTE_CEILING).unwrap_or(usize::MAX);
+    if text.len() <= most {
+        return text;
+    }
+    let mut end = most;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// Is this `.m3u8` a STREAM's own index rather than a list of things?
+///
+/// # Why the player has to ask
+///
+/// The two share an extension. An HLS playlist is what a live channel or a
+/// segmented video IS — its lines name two-second pieces of one medium, and
+/// opening it as a list would queue a thousand fragments. libav's HLS reader
+/// is what plays it, as one medium. Every HLS file carries `#EXT-X-` tags
+/// (`#EXT-X-TARGETDURATION` in a media playlist, `#EXT-X-STREAM-INF` in a
+/// master one), and a list of songs has none, so their presence is the
+/// answer.
+#[must_use]
+pub fn is_hls(text: &str) -> bool {
+    within_the_ceiling(text)
+        .lines()
+        .any(|line| line.trim_start().starts_with("#EXT-X-"))
 }
 
 /// Where a name in a playlist points.
@@ -235,27 +403,82 @@ pub fn read(path: &Path, kind: Kind) -> Result<List, Trouble> {
 ///
 /// What they must not do is arrive silently, which is why [`Entry::written`]
 /// keeps what the file said and the row shows that.
-fn points_at(written: &str, folder: &Path) -> Where {
+fn points_at(written: &str, base: Base<'_>) -> Where {
     let written = written.trim();
     if written.is_empty() {
         return Where::Refused;
     }
     // A SCHEME IS A SCHEME. `file://` is a local path spelled long and is
     // decoded; everything else is somewhere this crate does not go.
-    if let Some((scheme, rest)) = written.split_once("://")
-        && !scheme.is_empty()
-        && scheme.chars().next().is_some_and(char::is_alphabetic)
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
-    {
+    if let Some(scheme) = scheme_of(written) {
         if scheme.eq_ignore_ascii_case("file") {
+            let Base::Folder(folder) = base else {
+                // A LIST FROM SOMEBODY ELSE'S SERVER NAMES NOTHING HERE.
+                return Where::Refused;
+            };
+            let rest = &written[scheme.len() + 3..];
             let decoded = percent_decoded(rest);
             return local(&decoded, folder);
         }
+        if written.contains(['\0', '\n', '\r']) {
+            return Where::Refused;
+        }
         return Where::Remote(written.to_owned());
     }
-    local(&percent_decoded(written), folder)
+    match base {
+        Base::Folder(folder) => local(&percent_decoded(written), folder),
+        Base::Address(address) => beside_the_address(written, address),
+    }
+}
+
+/// The scheme of `text` when it is written `<scheme>://…`.
+pub(crate) fn scheme_of(text: &str) -> Option<&str> {
+    let (scheme, _) = text.split_once("://")?;
+    (!scheme.is_empty()
+        && scheme.chars().next().is_some_and(char::is_alphabetic)
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')))
+    .then_some(scheme)
+}
+
+/// A relative name in a list fetched from `address`, as an address.
+///
+/// String arithmetic and not a URL parser: the three spellings a list uses
+/// are `//host/x` (the list's own scheme), `/x` (the list's own host) and `x`
+/// (the list's own folder), and each is one cut of the address. `..` is left
+/// in, for the server to answer, as a browser does.
+fn beside_the_address(written: &str, address: &str) -> Where {
+    if written.contains(['\0', '\n', '\r']) {
+        return Where::Refused;
+    }
+    let Some(scheme) = scheme_of(address) else {
+        return Where::Refused;
+    };
+    let after_scheme = scheme.len() + 3;
+    // THE HOST ends where the path, the query or the fragment starts.
+    let host_end = address[after_scheme..]
+        .find(['/', '?', '#'])
+        .map_or(address.len(), |n| after_scheme + n);
+    if written.starts_with("//") {
+        return Where::Remote(format!("{scheme}:{written}"));
+    }
+    if written.starts_with('/') {
+        return Where::Remote(format!("{}{written}", &address[..host_end]));
+    }
+    // THE FOLDER: the path without its query and its last piece.
+    let path_end = address[host_end..]
+        .find(['?', '#'])
+        .map_or(address.len(), |n| host_end + n);
+    let folder = match address[host_end..path_end].rfind('/') {
+        Some(n) => &address[..=host_end + n],
+        None => &address[..host_end],
+    };
+    if folder.ends_with('/') {
+        Where::Remote(format!("{folder}{written}"))
+    } else {
+        Where::Remote(format!("{folder}/{written}"))
+    }
 }
 
 /// A name that is not a URL, resolved against the playlist's own folder.
@@ -275,7 +498,7 @@ fn local(name: &str, folder: &Path) -> Where {
 }
 
 /// `%20` becomes a space, and a broken escape stays as it was written.
-fn percent_decoded(text: &str) -> String {
+pub(crate) fn percent_decoded(text: &str) -> String {
     if !text.contains('%') {
         return text.to_owned();
     }
@@ -308,7 +531,7 @@ fn declared(text: &str) -> Option<f64> {
 }
 
 /// The plain list: a name a line, with an optional `#EXTINF:` above each.
-fn from_m3u(text: &str, folder: &Path) -> Vec<Entry> {
+fn from_m3u(text: &str, base: Base<'_>) -> Vec<Entry> {
     let mut out = Vec::new();
     let mut title = None;
     let mut seconds = None;
@@ -332,7 +555,7 @@ fn from_m3u(text: &str, folder: &Path) -> Vec<Entry> {
             continue;
         }
         out.push(Entry {
-            at: points_at(line, folder),
+            at: points_at(line, base),
             title: title.take(),
             seconds: seconds.take(),
             written: line.to_owned(),
@@ -342,7 +565,7 @@ fn from_m3u(text: &str, folder: &Path) -> Vec<Entry> {
 }
 
 /// The ini list, whose fields are joined by a NUMBER rather than by order.
-fn from_pls(text: &str, folder: &Path) -> Vec<Entry> {
+fn from_pls(text: &str, base: Base<'_>) -> Vec<Entry> {
     // BY THE NUMBER IN THE KEY, because `File2=` may be written before
     // `File1=` and a `Title3=` may have no `File3=` at all.
     let mut found: Vec<(u32, String, Option<String>, Option<f64>)> = Vec::new();
@@ -381,7 +604,7 @@ fn from_pls(text: &str, folder: &Path) -> Vec<Entry> {
         .into_iter()
         .filter(|(_, file, ..)| !file.is_empty())
         .map(|(_, file, title, seconds)| Entry {
-            at: points_at(&file, folder),
+            at: points_at(&file, base),
             title,
             seconds,
             written: file,
@@ -390,8 +613,11 @@ fn from_pls(text: &str, folder: &Path) -> Vec<Entry> {
 }
 
 /// The XML list, whose durations are in MILLISECONDS.
-fn from_xspf(text: &str, folder: &Path) -> Vec<Entry> {
-    let Ok(doc) = roxmltree::Document::parse(text) else {
+fn from_xspf(text: &str, base: Base<'_>) -> Vec<Entry> {
+    // Through the depth guard: `roxmltree` recurses once per level, and a
+    // list a radio's server sends is a text anyone could have written.
+    let Ok(doc) = ronoctua_xml::parse(text, ronoctua_xml::roxmltree::ParsingOptions::default())
+    else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -411,7 +637,7 @@ fn from_xspf(text: &str, folder: &Path) -> Vec<Entry> {
             continue;
         };
         out.push(Entry {
-            at: points_at(location, folder),
+            at: points_at(location, base),
             title: child("title").map(ToOwned::to_owned),
             // MILLISECONDS, which is this format's one unit trap: everything
             // else in this file speaks seconds.
@@ -437,11 +663,14 @@ fn from_xspf(text: &str, folder: &Path) -> Vec<Entry> {
 /// What it deliberately does not read is `<entryref href=…>`, which names
 /// another playlist by URL: fetching it is the network, and there is none
 /// here. It is skipped the way an unreadable line of an `.m3u` is.
-fn from_asx(text: &str, folder: &Path) -> Vec<Entry> {
-    let Ok(doc) = roxmltree::Document::parse(text) else {
+fn from_asx(text: &str, base: Base<'_>) -> Vec<Entry> {
+    let Ok(doc) = ronoctua_xml::parse(text, ronoctua_xml::roxmltree::ParsingOptions::default())
+    else {
         return Vec::new();
     };
-    let named = |n: &roxmltree::Node, name: &str| n.tag_name().name().eq_ignore_ascii_case(name);
+    let named = |n: &ronoctua_xml::roxmltree::Node, name: &str| {
+        n.tag_name().name().eq_ignore_ascii_case(name)
+    };
     let mut out = Vec::new();
     for entry in doc
         .descendants()
@@ -460,7 +689,7 @@ fn from_asx(text: &str, folder: &Path) -> Vec<Entry> {
             continue;
         }
         out.push(Entry {
-            at: points_at(href, folder),
+            at: points_at(href, base),
             title: child("title")
                 .and_then(|t| t.text())
                 .map(str::trim)
@@ -505,7 +734,8 @@ fn on_the_clock(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Entry, Kind, Where, from_asx, from_m3u, from_pls, from_xspf, kind_by_name, on_the_clock,
+        Base, Entry, Kind, Trouble, Where, from_asx, from_m3u, from_pls, from_xspf, is_hls,
+        kind_by_name, on_the_clock, parse_text,
     };
     use std::path::{Path, PathBuf};
 
@@ -539,7 +769,7 @@ mod tests {
                     sample-aud.ogg\n\
                     \n\
                     /elsewhere/absolute.wav\n";
-        let out = from_m3u(text, folder());
+        let out = from_m3u(text, folder().into());
         assert_eq!(out.len(), 4, "{out:#?}");
 
         assert_eq!(out[0].title.as_deref(), Some("sample (mp3)"));
@@ -591,7 +821,7 @@ mod tests {
                     TITLE1=first\n\
                     length1=132\n\
                     Version=2\n";
-        let out = from_pls(text, folder());
+        let out = from_pls(text, folder().into());
         assert_eq!(out.len(), 2, "{out:#?}");
         // SORTED BY THE NUMBER, not by where the lines sat.
         assert_eq!(out[0].title.as_deref(), Some("first"));
@@ -604,7 +834,7 @@ mod tests {
         assert_eq!(at(&out[1]), Some(&PathBuf::from("/elsewhere/two.wav")));
 
         // A `Title` WITH NO `File` IS NOT AN ENTRY.
-        let orphan = from_pls("[playlist]\nTitle7=nothing points here\n", folder());
+        let orphan = from_pls("[playlist]\nTitle7=nothing points here\n", folder().into());
         assert!(orphan.is_empty(), "{orphan:#?}");
     }
 
@@ -630,7 +860,7 @@ mod tests {
                 <track><title>no location at all</title></track>
               </trackList>
             </playlist>"#;
-        let out = from_xspf(text, folder());
+        let out = from_xspf(text, folder().into());
         assert_eq!(out.len(), 3, "a track with no location became an entry");
 
         // MILLISECONDS. Every other format here says seconds.
@@ -663,7 +893,7 @@ mod tests {
              http://192.0.2.1/three.mp3\n\
              ftp://host/four.mp3\n\
              file:///five.wav\n",
-            folder(),
+            folder().into(),
         );
         assert_eq!(
             at(&out[0]),
@@ -684,7 +914,7 @@ mod tests {
         assert_eq!(at(&out[5]), Some(&PathBuf::from("/five.wav")));
 
         // A NUL IS NOT A NAME.
-        let bad = from_m3u("one\u{0}two.mp3\n", folder());
+        let bad = from_m3u("one\u{0}two.mp3\n", folder().into());
         assert_eq!(bad[0].at, Where::Refused);
     }
 
@@ -708,7 +938,7 @@ mod tests {
             "  <entry><ref/></entry>\n",
             "</ASX>\n",
         );
-        let out = from_asx(text, folder());
+        let out = from_asx(text, folder().into());
         assert_eq!(out.len(), 2, "{out:?}");
         assert_eq!(out[0].at, Where::Local(folder().join("one.mp3")));
         assert_eq!(out[0].title.as_deref(), Some("First"));
@@ -744,7 +974,10 @@ mod tests {
     fn what_the_list_did_not_declare_is_asked_about_within_a_bound() {
         let bare = super::List {
             kind: Kind::M3u,
-            entries: from_m3u("one.mp3\nhttp://192.0.2.1/two.mp3\nthree.flac\n", folder()),
+            entries: from_m3u(
+                "one.mp3\nhttp://192.0.2.1/two.mp3\nthree.flac\n",
+                folder().into(),
+            ),
             cut: false,
         };
         // THE LOCAL ONES, and never the remote one.
@@ -753,7 +986,7 @@ mod tests {
         // AND WHAT THE LIST ALREADY SAID IS NOT ASKED AGAIN.
         let told = super::List {
             kind: Kind::M3u,
-            entries: from_m3u("#EXTINF:132,a\none.mp3\ntwo.flac\n", folder()),
+            entries: from_m3u("#EXTINF:132,a\none.mp3\ntwo.flac\n", folder().into()),
             cut: false,
         };
         assert_eq!(told.untimed(), vec![1], "a declared length was asked about");
@@ -761,7 +994,7 @@ mod tests {
         // AND A LONG LIST COSTS A BOUNDED NUMBER OF THEM.
         let many = super::List {
             kind: Kind::M3u,
-            entries: from_m3u(&"x.mp3\n".repeat(500), folder()),
+            entries: from_m3u(&"x.mp3\n".repeat(500), folder().into()),
             cut: false,
         };
         assert_eq!(many.untimed().len(), super::TIMED_CEILING);
@@ -771,7 +1004,10 @@ mod tests {
     /// is which.
     #[test]
     fn only_the_local_entries_are_playable_and_they_keep_their_row() {
-        let out = from_m3u("one.mp3\nhttp://192.0.2.1/two.mp3\nthree.flac\n", folder());
+        let out = from_m3u(
+            "one.mp3\nhttp://192.0.2.1/two.mp3\nthree.flac\n",
+            folder().into(),
+        );
         let list = super::List {
             kind: Kind::M3u,
             entries: out,
@@ -792,5 +1028,171 @@ mod tests {
         assert_eq!(kind_by_name(Path::new("b.asx")), Some(Kind::Asx));
         assert_eq!(kind_by_name(Path::new("b.flac")), None);
         assert_eq!(kind_by_name(Path::new("xspf")), None);
+    }
+
+    /// FAILS IF: a list fetched from a radio's site stops resolving its
+    /// relative names against the ADDRESS, or starts naming this machine's
+    /// files.
+    ///
+    /// The three relative spellings a server writes are each one cut of the
+    /// address; `file://` from somebody else's server is refused, or a web
+    /// page could make the player open a private file as audio.
+    #[test]
+    fn a_fetched_list_names_addresses_beside_its_own_and_never_a_file_here() {
+        let text = "[playlist]\n\
+                    File1=http://ice.example/live.mp3\n\
+                    File2=backup.aac\n\
+                    File3=/other/path.ogg\n\
+                    File4=//cdn.example/x.mp3\n\
+                    File5=file:///home/somebody/.ssh/id_ed25519\n";
+        let list = parse_text(
+            text,
+            Kind::Pls,
+            Base::Address("https://radio.example/listen/tune.pls?session=9#top"),
+        )
+        .expect("a list");
+        let at: Vec<&Where> = list.entries.iter().map(|e| &e.at).collect();
+        assert_eq!(
+            at,
+            vec![
+                &Where::Remote("http://ice.example/live.mp3".to_owned()),
+                &Where::Remote("https://radio.example/listen/backup.aac".to_owned()),
+                &Where::Remote("https://radio.example/other/path.ogg".to_owned()),
+                &Where::Remote("https://cdn.example/x.mp3".to_owned()),
+                &Where::Refused,
+            ]
+        );
+        // A HOST WITH NO PATH still has a folder: its root.
+        let bare = parse_text(
+            "one.mp3\n",
+            Kind::M3u,
+            Base::Address("http://radio.example"),
+        )
+        .expect("a list");
+        assert_eq!(
+            bare.entries[0].at,
+            Where::Remote("http://radio.example/one.mp3".to_owned())
+        );
+    }
+
+    /// FAILS IF: an XML list nested past the depth guard reaches the parser.
+    ///
+    /// `roxmltree` recurses once per level: a hundred thousand `<a>` fit
+    /// under the byte ceiling and, parsed, abort the process (the player
+    /// daemon for a radio's list, the shell for a preview) — on this test's
+    /// own small stack too.
+    #[test]
+    fn a_list_nested_past_the_guard_is_nothing_and_not_a_crash() {
+        let depth = 100_000;
+        for (kind, head, tail) in [
+            (
+                Kind::Xspf,
+                "<playlist><trackList><track><location>one.ogg</location></track>",
+                "</trackList></playlist>",
+            ),
+            (
+                Kind::Asx,
+                "<asx><entry><ref href=\"one.ogg\"/></entry>",
+                "</asx>",
+            ),
+        ] {
+            let mut text = String::from(head);
+            text.push_str(&"<a>".repeat(depth));
+            text.push_str(&"</a>".repeat(depth));
+            text.push_str(tail);
+            assert_eq!(
+                parse_text(&text, kind, Base::Address("https://radio.example/l")),
+                Err(Trouble::Empty),
+                "{kind:?}"
+            );
+            let shallow = format!("{head}{tail}");
+            assert_eq!(
+                parse_text(&shallow, kind, Base::Address("https://radio.example/l"))
+                    .map(|l| l.entries.len()),
+                Ok(1),
+                "{kind:?} at a sane depth"
+            );
+        }
+    }
+
+    /// FAILS IF: text handed in is read differently from the same text in a
+    /// file, or a list of comments stops being "nothing in it".
+    #[test]
+    fn text_is_read_the_way_the_file_is() {
+        let list = parse_text(
+            "#EXTINF:12,one\none.mp3\n",
+            Kind::M3u,
+            Base::Folder(folder()),
+        )
+        .expect("a list");
+        assert_eq!(list.entries[0].at, Where::Local(folder().join("one.mp3")));
+        assert_eq!(list.entries[0].seconds, Some(12.0));
+        assert_eq!(
+            parse_text("#EXTM3U\n# nothing\n", Kind::M3u, Base::Folder(folder())),
+            Err(Trouble::Empty)
+        );
+    }
+
+    /// FAILS IF: a stream's own index is taken for a list of songs, or a
+    /// list of songs for a stream.
+    ///
+    /// An HLS index names two-second pieces of ONE medium; queued as a list
+    /// it would be a thousand fragments.
+    /// FAILS IF: a list's own name is lost, a track's title is taken for
+    /// the list's, or an empty name is kept as a name.
+    #[test]
+    fn a_list_names_itself_and_a_track_does_not_name_it() {
+        use super::title_of;
+        let xspf = "<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\
+                    <title> Road trip </title><trackList>\
+                    <track><title>One</title><location>a.flac</location></track>\
+                    </trackList></playlist>";
+        assert_eq!(title_of(xspf, Kind::Xspf).as_deref(), Some("Road trip"));
+        let untitled = "<playlist xmlns=\"http://xspf.org/ns/0/\"><trackList>\
+                        <track><title>One</title><location>a.flac</location></track>\
+                        </trackList></playlist>";
+        assert_eq!(title_of(untitled, Kind::Xspf), None);
+        let asx = "<ASX version=\"3.0\"><TITLE>Evening</TITLE>\
+                   <ENTRY><TITLE>x</TITLE><REF HREF=\"a.mp3\"/></ENTRY></ASX>";
+        assert_eq!(title_of(asx, Kind::Asx).as_deref(), Some("Evening"));
+        let m3u = "#EXTM3U\r\n#PLAYLIST:Morning\r\n#EXTINF:1,x\r\na.flac\r\n";
+        assert_eq!(title_of(m3u, Kind::M3u).as_deref(), Some("Morning"));
+        assert_eq!(title_of("#EXTM3U\n#PLAYLIST:  \na.flac\n", Kind::M3u), None);
+        assert_eq!(title_of("[playlist]\nFile1=a.mp3\n", Kind::Pls), None);
+    }
+
+    /// FAILS IF: one of our files is listed from a list somebody else's
+    /// server sent, or not listed from one on this disk.
+    #[test]
+    fn our_own_files_are_listed_from_this_disk_only() {
+        let queue = r#"{"format":"ronoctua-queue","version":1,"entries":[
+            {"single":{"location":"a.flac"}},{"stream":{"url":"https://r.example/x"}}]}"#;
+        let list = parse_text(queue, Kind::Own, Base::Folder(folder())).expect("listed");
+        assert_eq!(list.kind, Kind::Own);
+        assert_eq!(list.entries.len(), 2);
+        assert_eq!(
+            at(&list.entries[0]),
+            Some(&PathBuf::from("/music/album/a.flac"))
+        );
+        assert_eq!(
+            parse_text(
+                queue,
+                Kind::Own,
+                Base::Address("https://x.example/q.rqueue")
+            ),
+            Err(Trouble::Empty)
+        );
+    }
+
+    #[test]
+    fn a_stream_index_is_told_from_a_list_of_songs() {
+        assert!(is_hls(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:9.9,\nseg0.ts\n"
+        ));
+        assert!(is_hls(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nlow/index.m3u8\n"
+        ));
+        assert!(!is_hls("#EXTM3U\n#EXTINF:132,a song\none.mp3\n"));
+        assert!(!is_hls(""));
     }
 }

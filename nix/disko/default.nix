@@ -140,6 +140,8 @@
                       "noatime"
                     ];
                   };
+                  # Whatever snapshots land here may never be OF `/nix` or of a
+                  # cache: `nix/modules/filesystem.nix` refuses such a target.
                   "@snapshots" = {
                     mountpoint = "/.snapshots";
                     mountOptions = [

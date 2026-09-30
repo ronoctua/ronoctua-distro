@@ -264,7 +264,10 @@ command -v btop >/dev/null 2>&1 && alias top='btop'
 if [ -n "${IS_NIXOS:-}" ]; then
     alias nrs='sudo nixos-rebuild switch --flake'
     alias nrt='sudo nixos-rebuild test --flake'
-    alias ngc='sudo nix-collect-garbage --delete-older-than 30d'
+    # The system's old generations by count (the newest, the running and the
+    # booted stay; no other profile is touched), then the garbage. Never
+    # `--delete-older-than` as root: that deletes every profile's history.
+    alias ngc='sudo systemctl start ronoctua-system-generations.service && sudo nix-collect-garbage'
     alias nfu='nix flake update'
 fi
 

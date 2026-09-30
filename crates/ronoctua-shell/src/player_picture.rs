@@ -26,27 +26,50 @@ type Slot = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
 /// One picture: the size its thread should ask for, and what it received.
 pub struct Picture {
-    /// Which video: `None` the main one, `Some(i)` the i-th follower.
-    pub of: Option<usize>,
+    /// Whose picture: `None` the first one shown, `Some(lane)` that lane's.
+    pub of: Option<ronoctua_player::own::LaneId>,
     wanted: Arc<Mutex<(u32, u32)>>,
     slot: Slot,
     alive: Arc<AtomicBool>,
     /// The newest frame taken from the thread.
     pub frame: Option<ronoctua_render::image::Rgba>,
-    /// Whether that frame is already on the GPU, under [`Picture::key`].
+    /// Whether that frame is already on the GPU, under [`Picture::key`] —
+    /// on every screen that drew it.
     pub uploaded: bool,
 }
 
+/// The screen a window and the column put in their pictures' keys while
+/// they do not know which screen their one surface is on — before the
+/// compositor names it, or in a photograph given none: each draws on ONE
+/// surface of its own, and its key names that surface rather than a screen.
+pub const THIS_SURFACE: &str = "surface";
+
 impl Picture {
-    /// The texture's key: the picture, whose content moves every frame.
+    /// Which of the pictures it is, in a key: `main`, or `lane-<id>` for a
+    /// lane's own — by its id, which a lane keeps for the set's life.
     #[must_use]
-    pub fn key(&self) -> String {
-        format!("player:picture:{}", self.of.map_or(0, |i| i + 1))
+    pub fn lane(&self) -> String {
+        self.of
+            .map_or_else(|| "main".to_owned(), |lane| format!("lane-{}", lane.0))
+    }
+
+    /// The texture's key: the picture — whose content moves every frame —
+    /// and the screen it is drawn on, `player:picture:{lane}:{output}`. A
+    /// footer draws the same lane on every screen it is on, and the layout
+    /// will send each screen its own lanes: one key a lane a screen is what
+    /// that routing needs, and what keeps one screen's texture off another's.
+    #[must_use]
+    pub fn key(&self, output: &str) -> String {
+        format!("player:picture:{}:{output}", self.lane())
     }
 
     /// A picture and its thread, which pings `k` down `ping` on every frame.
     #[must_use]
-    pub fn start(of: Option<usize>, k: usize, ping: channel::Sender<usize>) -> Self {
+    pub fn start(
+        of: Option<ronoctua_player::own::LaneId>,
+        k: usize,
+        ping: channel::Sender<usize>,
+    ) -> Self {
         let wanted: Arc<Mutex<(u32, u32)>> = Arc::default();
         let slot: Slot = Arc::default();
         let alive = Arc::new(AtomicBool::new(true));
@@ -105,6 +128,25 @@ impl Picture {
             slot,
             alive,
             frame: None,
+            uploaded: false,
+        }
+    }
+
+    /// A picture with NO THREAD, showing `frame` — which stands in for the
+    /// daemon's: a photograph's (`crate::photograph`), where there is no
+    /// daemon to ask. Its size is still asked ([`Picture::want`]), and
+    /// nothing reads it.
+    #[must_use]
+    pub fn still(
+        of: Option<ronoctua_player::own::LaneId>,
+        frame: Option<ronoctua_render::image::Rgba>,
+    ) -> Self {
+        Self {
+            of,
+            wanted: Arc::default(),
+            slot: Arc::default(),
+            alive: Arc::new(AtomicBool::new(false)),
+            frame,
             uploaded: false,
         }
     }

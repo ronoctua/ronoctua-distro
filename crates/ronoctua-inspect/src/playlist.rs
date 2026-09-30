@@ -19,15 +19,20 @@ use crate::key;
 
 /// Which types are a list of things to play rather than one of them.
 ///
-/// The five the pinned database knows, and `application/xspf+xml`, which lives
-/// outside the `audio` branch and is a playlist all the same.
-pub const TYPES: [&str; 6] = [
+/// The five the pinned database knows, `application/xspf+xml`, which lives
+/// outside the `audio` branch and is a playlist all the same, and the
+/// player's own two (`assets/player-types.nix`, `own`): a `.rset` — media
+/// played together — and a `.rqueue`, a queue. Both are JSON underneath, and
+/// what a person wants to see of one is what it plays, not its braces.
+pub const TYPES: [&str; 8] = [
     "audio/x-mpegurl",
     "application/vnd.apple.mpegurl",
     "audio/x-scpls",
     "application/xspf+xml",
     "audio/x-ms-asx",
     "audio/x-iriver-pla",
+    "application/x-ronoctua-set+json",
+    "application/x-ronoctua-queue+json",
 ];
 
 /// The two spellings this reader claims and does NOT open.
@@ -54,6 +59,7 @@ fn kind_of(mime: &str) -> Option<Kind> {
         "audio/x-scpls" => Some(Kind::Pls),
         "application/xspf+xml" => Some(Kind::Xspf),
         "audio/x-ms-asx" => Some(Kind::Asx),
+        "application/x-ronoctua-set+json" | "application/x-ronoctua-queue+json" => Some(Kind::Own),
         _ => None,
     }
 }
@@ -92,6 +98,9 @@ pub fn of(path: &Path, mime: &str) -> Option<Result<List, Refusal>> {
         );
         return Some(Err(Refusal::Unsupported(key::PREVIEW_PLAYLIST_UNREAD)));
     };
+    if kind == Kind::Own {
+        return Some(own(path));
+    }
     Some(
         ronoctua_playlist::read(path, kind).map_err(|trouble| match trouble {
             ronoctua_playlist::Trouble::Unreadable => Refusal::Unreadable,
@@ -100,10 +109,62 @@ pub fn of(path: &Path, mime: &str) -> Option<Result<List, Refusal>> {
     )
 }
 
+/// One of the player's own files, listed: a set as one row, a queue as what
+/// it plays, flat.
+///
+/// Its refusals are its own, because they are different facts: a file that
+/// is not one of ours (or is ours and broken) may be damaged, one a NEWER
+/// player wrote is intact and this reader is too old for it.
+fn own(path: &Path) -> Result<List, Refusal> {
+    use ronoctua_playlist::own::{self, OWN_BYTE_CEILING};
+    let read = own::read(path).map_err(|refusal| match refusal {
+        own::Refusal::Unreadable => Refusal::Unreadable,
+        own::Refusal::TooLarge => Refusal::TooBig(OWN_BYTE_CEILING),
+        own::Refusal::NotOurs | own::Refusal::Damaged => Refusal::Failed,
+        own::Refusal::Newer { .. } => Refusal::Unsupported(key::PREVIEW_OWN_NEWER),
+    })?;
+    ronoctua_playlist::list_of_own(&read).map_err(|_| Refusal::Empty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_a_playlist, of};
     use std::path::Path;
+
+    /// FAILS IF: the player's own files stop being listed as what they play,
+    /// or a queue from a newer player is called damaged.
+    #[test]
+    fn the_players_own_files_are_listed_and_a_newer_one_says_so() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-own-preview-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a folder");
+        let queue = dir.join("evening.rqueue");
+        std::fs::write(
+            &queue,
+            r#"{"format":"ronoctua-queue","version":1,"entries":[
+                {"playlist":{"name":"P","entries":[{"single":{"location":"a.flac"}},
+                {"single":{"location":"b.flac"}}]}}]}"#,
+        )
+        .expect("written");
+        let listed = of(&queue, "application/x-ronoctua-queue+json")
+            .expect("claimed")
+            .expect("listed");
+        assert_eq!(listed.entries.len(), 2);
+        let newer = dir.join("later.rqueue");
+        std::fs::write(&newer, r#"{"format":"ronoctua-queue","version":99}"#).expect("written");
+        assert!(matches!(
+            of(&newer, "application/x-ronoctua-queue+json"),
+            Some(Err(crate::Refusal::Unsupported(
+                crate::key::PREVIEW_OWN_NEWER
+            )))
+        ));
+        let not_ours = dir.join("x.rset");
+        std::fs::write(&not_ours, "{}").expect("written");
+        assert!(matches!(
+            of(&not_ours, "application/x-ronoctua-set+json"),
+            Some(Err(crate::Refusal::Failed))
+        ));
+        std::fs::remove_dir_all(&dir).expect("cleaned");
+    }
 
     /// FAILS IF: a type this reader cannot open is answered with an empty list
     /// rather than a sentence.
@@ -122,13 +183,15 @@ mod tests {
         // AND A FILE THAT IS NOT A PLAYLIST GETS NO OPINION AT ALL.
         assert!(of(nowhere, "audio/mpeg").is_none());
         assert!(of(nowhere, "image/png").is_none());
-        // THE FOUR THAT ARE READ reach the reader, and fail on the file
+        // THE ONES THAT ARE READ reach the reader, and fail on the file
         // rather than on the spelling.
         for kind in [
             "audio/x-mpegurl",
             "audio/x-scpls",
             "application/xspf+xml",
             "audio/x-ms-asx",
+            "application/x-ronoctua-set+json",
+            "application/x-ronoctua-queue+json",
         ] {
             assert!(matches!(
                 of(nowhere, kind),

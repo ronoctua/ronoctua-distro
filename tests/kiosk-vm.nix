@@ -117,8 +117,9 @@ let
     print(data.decode().strip())
   '';
 
-  # NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF (`tests/compositor-xvfb.nix`).
-  brainPrefs = pkgs.writeText "brain.json" ''{"tasks":{"system-update":{"enabled":false}}}'';
+  # NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF, NOR MAKES ROOM ON ITS
+  # DISK (`tests/compositor-xvfb.nix`).
+  brainPrefs = pkgs.writeText "brain.json" ''{"tasks":{"system-update":{"enabled":false},"disk-space":{"enabled":false}}}'';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-kiosk";

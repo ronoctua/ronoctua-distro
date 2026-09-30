@@ -22,7 +22,11 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_player_engine=info".into()),
+                // THE BINARY'S OWN NAME is what its modules log under
+                // (`ronoctua_player::engine`, `::mpris`, `::remote`) — the
+                // package's name matched nothing, and the daemon said no
+                // more than its warnings.
+                .unwrap_or_else(|_| "ronoctua_player=info".into()),
         )
         .init();
 
@@ -34,13 +38,19 @@ fn main() -> Result<()> {
         .collect();
 
     let path = wire::socket_path()?;
+    // OPENED FROM OUTSIDE, what is named plays now, right after what played,
+    // and the queue is kept (`Ask::Put`'s rule).
+    let put = |items: Vec<String>| wire::Ask::Put {
+        what: items.into_iter().map(wire::Thing::Location).collect(),
+        after: None,
+        into: None,
+        play: true,
+        replace: false,
+    };
     // A socket that answers is another player: hand it the items and leave.
     if std::os::unix::net::UnixStream::connect(&path).is_ok() {
         if !items.is_empty() {
-            ronoctua_player::client::tell(&wire::Ask::Open {
-                items,
-                replace: true,
-            })?;
+            ronoctua_player::client::tell(&put(items))?;
             return Ok(());
         }
         anyhow::bail!("a player is already listening at {}", path.display());
@@ -51,16 +61,13 @@ fn main() -> Result<()> {
 
     engine::forget_old_decodes();
     let shared: engine::Shared = Arc::new((Mutex::new(engine::Engine::new()), Condvar::new()));
+    if let Ok(mut e) = shared.0.lock() {
+        e.set_shared(&shared);
+    }
     if !items.is_empty() {
         let (lock, _) = &*shared;
         if let Ok(mut e) = lock.lock() {
-            let _ = e.ask(
-                wire::Ask::Open {
-                    items,
-                    replace: true,
-                },
-                &shared,
-            );
+            let _ = e.ask(put(items), &shared);
         }
     }
 

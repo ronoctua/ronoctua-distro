@@ -147,6 +147,23 @@ rec {
   # means something arrived that this prelude does not know about, which is
   # worth refusing rather than guessing between.
   #
+  # UNLESS THE COMPOSITOR WAS ASKED FOR MORE OUTPUTS. `start_compositor(…,
+  # outputs=2)` sets `WLR_X11_OUTPUTS`, and the X11 backend then opens one X
+  # window per output — two children of the root, both at `+0+0`, the second
+  # on top. So the count that is owed is the count that was ASKED, remembered
+  # by `start_compositor`, and anything else is still refused: a caller that
+  # asked for one output keeps the refusal it had. With several, the windows
+  # are told apart by their X id, which grows in the order the X server made
+  # them — the backend's order of creation, NOT the compositor's order on its
+  # screen: measured with two, the compositor put `X11-2` at x=0 and `X11-1`
+  # at x=1024, so `output=0` is not "the one on the left", and which output
+  # name each X id carries was not measured either. `output=` past the count
+  # is refused with a sentence. A test that photographs two outputs moves the
+  # second off the first (`xdotool windowmove`); the Xvfb screen is 1600 wide
+  # and a window starts 1024, so it overlaps unless it is also resized
+  # (`xdotool windowsize`, which the backend reads as the output's new mode).
+  # Neither is done here yet (`docs/PENDING.md`, 0.00031).
+  #
   # `windows_now` — it asks `get_tree` and counts in Python rather than
   # running `ronoctua-contract`, for two reasons. The contract binary is a
   # CONFORMANCE probe that exercises what it checks: its `asks` pass turns an
@@ -191,6 +208,8 @@ rec {
     # `windows_now`. `None` until then, so asking before one is up fails with
     # a name rather than with a path made of the word "None".
     _compositor_package = None
+    # HOW MANY OUTPUTS it was asked for, which is how many X windows it owes.
+    _compositor_outputs = 1
 
 
     def start_xvfb(brain=False):
@@ -207,10 +226,15 @@ rec {
         # A machine under test has no business rebuilding its own system, so it
         # is told not to. `brain=True` is for the one test that photographs the
         # brain's line and therefore needs it to speak.
+        #
+        # Nor making room on its disk: a small test disk crosses the floor
+        # easily, and the relief's collection of the store would take the
+        # paths a test registered and never rooted.
         machine.succeed("mkdir -p /root/.config/ronoctua")
         machine.succeed(
             "printf '%s' "
-            f"'{{\"tasks\":{{\"system-update\":{{\"enabled\":{str(brain).lower()}}}}}}}'"
+            f"'{{\"tasks\":{{\"system-update\":{{\"enabled\":{str(brain).lower()}}},"
+            "\"disk-space\":{\"enabled\":false}}}'"
             " > /root/.config/ronoctua/brain.json"
         )
         machine.succeed(
@@ -232,8 +256,11 @@ rec {
         machine.succeed("rm -f /run/user/0/wayland-* /run/user/0/scroll-ipc.*.sock")
 
 
-    def start_compositor(unit, package, display="wayland-1", config="${configCompositor}"):
+    def start_compositor(unit, package, display="wayland-1", config="${configCompositor}", outputs=1):
         """Bring the compositor up on the X11 backend over Xvfb, and await it.
+
+        `outputs` is how many screens it has: one X window each
+        (`WLR_X11_OUTPUTS`), picked by `output=` in the helpers below.
 
         `config` defaults to the minimal one above. A test passes its own when
         what it is proving IS a piece of the configuration — `terminal-vm` adds
@@ -249,14 +276,16 @@ rec {
         # prelude takes no compositor of its own — asking for one would be a
         # second way to name the build that is running, and the two could
         # differ. This is the build that was started.
-        global _compositor_package
+        global _compositor_package, _compositor_outputs
         _compositor_package = package
+        _compositor_outputs = outputs
 
         sock = f"/run/user/0/scroll-ipc.0.{unit}.sock"
         machine.succeed(
             f"systemd-run --unit={unit} ${env} "
             "--setenv=DISPLAY=:99 "
             "--setenv=WLR_BACKENDS=x11 "
+            f"--setenv=WLR_X11_OUTPUTS={outputs} "
             f"--setenv=SCROLLSOCK={sock} "
             f"--setenv=SWAYSOCK={sock} "
             "--setenv=PATH=${pkgs.bash}/bin "
@@ -279,10 +308,11 @@ rec {
             )
 
 
-    def _the_compositors_window():
-        """The one child of the X root, as `(id, w, h, x, y)`.
+    def _the_compositors_window(output=0):
+        """The X window of one output, as `(id, w, h, x, y)`.
 
-        BY BEING THE ONLY ONE, never by its title, and a second child is
+        BY BEING THE ONLY CHILD of the X root (or one of exactly as many as
+        outputs were asked for), never by its title; any other count is
         refused rather than guessed between. The argument is in the Nix
         comment above this string.
         """
@@ -301,24 +331,31 @@ rec {
             raise AssertionError(
                 f"the compositor's window is not mapped in X:\n{tree_out}"
             )
-        if len(found) > 1:
+        if len(found) != _compositor_outputs:
             raise AssertionError(
-                "more than one window is mapped on :99, so which one is the "
+                f"{len(found)} windows are mapped on :99 for "
+                f"{_compositor_outputs} output(s), so which one is the "
                 f"compositor's is a guess:\n{tree_out}"
             )
-        return found[0]
+        if not 0 <= output < _compositor_outputs:
+            raise AssertionError(
+                f"output={output} was asked of a compositor started with "
+                f"{_compositor_outputs} output(s); they are counted from 0, in "
+                "the order the backend made their X windows"
+            )
+        return sorted(found, key=lambda w: int(w[0], 16))[output]
 
 
-    def compositor_geometry():
+    def compositor_geometry(output=0):
         """Where the compositor's window sits on the X root: (w, h, x, y).
 
         Discovered, not assumed: the X window has a size of its own, and
         assuming it fills the screen puts the footer's crop outside of it.
         """
-        return _the_compositors_window()[1:]
+        return _the_compositors_window(output)[1:]
 
 
-    def focus_compositor():
+    def focus_compositor(output=0):
         """Give X INPUT FOCUS to the compositor's window.
 
         With no window manager nobody calls `XSetInputFocus`, so the focus
@@ -326,7 +363,7 @@ rec {
         no error, no log, nowhere. Doing it by hand is the equivalent of
         clicking on the window.
         """
-        which = _the_compositors_window()[0]
+        which = _the_compositors_window(output)[0]
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool windowfocus {which}")
         return which
 

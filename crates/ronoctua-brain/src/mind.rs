@@ -221,6 +221,14 @@ pub struct Mind {
     /// and a queue of notices on it would be a second notification system next
     /// to the one this repository already has (invariant 14).
     pub notice: Option<crate::task::Notice>,
+    /// The last relief of the disk that ran for real, if any since the brain
+    /// started.
+    ///
+    /// A FACT AND NOT A MESSAGE: the footer turns a new one into the line
+    /// under the minibuffer, in the person's language, and a rehearsal never
+    /// lands here — it changed nothing, and "room made" about it would be a
+    /// lie.
+    pub relieved: Option<crate::task::Relieved>,
 }
 
 impl Mind {
@@ -366,6 +374,31 @@ impl Shared {
         self.rang(state);
     }
 
+    /// Puts a task at the HEAD of the queue — moving it there if it was
+    /// already waiting further back.
+    ///
+    /// # Why a second door into the queue
+    ///
+    /// Because the runner only ever looks at the head, and the head can be a
+    /// task the gate is holding: a nightly sweep waiting for the memory to
+    /// calm down. Queued behind it, a relief of the disk would be held by the
+    /// same busy machine it exists to rescue. Only a task the gate may not
+    /// hold comes in this way (`Task::gated`), so it jumps nothing that was
+    /// ready to run.
+    pub fn queue_first(&self, task: &str) {
+        let mut state = self.locked();
+        let mind = &mut state.mind;
+        if mind.running == task || mind.queue.first().is_some_and(|q| q == task) {
+            return;
+        }
+        mind.queue.retain(|q| q != task);
+        mind.queue.insert(0, task.to_owned());
+        if let Some(row) = mind.task_mut(task) {
+            row.standing = Standing::Queued;
+        }
+        self.rang(state);
+    }
+
     /// Takes a task out of the queue. `true` when it was there.
     pub fn unqueue(&self, task: &str) -> bool {
         let mut state = self.locked();
@@ -476,6 +509,34 @@ mod tests {
         let (mind, _) = shared.snapshot();
         assert_eq!(mind.queue, vec!["one".to_owned()]);
         assert_eq!(mind.task("one").map(|t| t.standing), Some(Standing::Queued));
+    }
+
+    #[test]
+    fn a_task_the_gate_may_not_hold_goes_to_the_head_of_the_queue() {
+        // THE DEFECT THIS CATCHES: the runner looks only at the head, so a
+        // relief appended behind a sweep the gate is holding would wait for
+        // the same busy machine it exists to rescue.
+        let shared = two_tasks();
+        shared.queue_up("one");
+        shared.queue_up("two");
+        shared.queue_first("two");
+        assert_eq!(
+            shared.snapshot().0.queue,
+            vec!["two".to_owned(), "one".to_owned()]
+        );
+        // AND ONCE AT THE HEAD, asking again changes nothing and rings nobody.
+        let (_, before) = shared.snapshot();
+        shared.queue_first("two");
+        let (mind, after) = shared.snapshot();
+        assert_eq!(mind.queue, vec!["two".to_owned(), "one".to_owned()]);
+        assert_eq!(before, after, "a no-op woke every reader");
+        // NOR DOES ONE THAT IS RUNNING queue behind itself.
+        shared.change(|m| {
+            m.queue.clear();
+            m.running = "two".to_owned();
+        });
+        shared.queue_first("two");
+        assert!(shared.snapshot().0.queue.is_empty());
     }
 
     #[test]

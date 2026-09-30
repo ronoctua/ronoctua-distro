@@ -199,6 +199,8 @@ mod tests {
                 // a gate with a hole in it.
                 cpu_stall: None,
                 on_battery: Some(false),
+                disk_free_per_mille: Some(87),
+                disk_short: Some(false),
             },
             tasks: vec![TaskState {
                 kind: crate::task::Kind::Routine,
@@ -245,6 +247,12 @@ mod tests {
             prefs: Prefs::default(),
             rehearsing: None,
             postponed: None,
+            relieved: Some(crate::task::Relieved {
+                at: 1_700_000_030,
+                freed_bytes: 12_345_678_901,
+                free_per_mille: 87,
+                short: true,
+            }),
         }
     }
 

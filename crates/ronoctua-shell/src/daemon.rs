@@ -59,7 +59,29 @@ use smithay_client_toolkit::reexports::calloop::channel::Sender;
 ///
 /// There is no compositor on this session, or it refused the connection.
 pub fn open_the_compositor() -> anyhow::Result<Box<dyn ronoctua_compositor::Compositor>> {
+    about_to_act("the compositor, opened");
     ronoctua_scroll::Scroll::open()
+}
+
+/// The machine is about to be ACTED ON: the person's own compositor opened,
+/// their player's daemon asked, a window of theirs started or ended.
+///
+/// Under `cargo test` that is a defect, and it FAILS RIGHT HERE, before
+/// acting. A test that reaches one of these is a door built detached that
+/// lost its outbox (`player_window::Reach`) — and the act would land on
+/// the machine the tests run on: a play pressed in a test paused the
+/// person's film, and a stage opened in one started the test binary again
+/// as `player maximized`, which libtest reads as a filter that matches the
+/// very test that started it. Everywhere else it does nothing.
+///
+/// `tests-do-not-touch-the-machine` finds a program a test names; this
+/// finds the path a test takes, whatever it names.
+#[inline]
+pub fn about_to_act(on: &str) {
+    #[cfg(test)]
+    panic!("a test reached the machine: {on}");
+    #[cfg(not(test))]
+    let _ = on;
 }
 
 pub fn listen_to_the_compositor(channel: Sender<Event>) -> bool {

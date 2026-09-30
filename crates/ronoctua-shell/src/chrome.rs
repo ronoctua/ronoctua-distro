@@ -2868,6 +2868,16 @@ pub const fn from_the_edge(columns: u16, cells: u16) -> u16 {
         .saturating_sub(cells)
 }
 
+/// Where cell `column` of a run anchored to the border BEGINS, in logical
+/// pixels from the left — THE RENDERER'S OWN FUNCTION for `Span::edge`
+/// ([`ronoctua_render::from_the_border`], which `Text::prepare` places every
+/// edge run by), for whoever has to put something BETWEEN two such runs: a
+/// change there moves the runs and this together.
+#[must_use]
+pub fn edge_x(width_px: f32, columns: u16, column: u16) -> f32 {
+    ronoctua_render::from_the_border(width_px, columns, column.min(columns), cell_width())
+}
+
 /// Which cell the pointer is over, COUNTED FROM THE BORDER — the reading that
 /// answers for a run placed by [`from_the_edge`].
 ///
@@ -3001,14 +3011,6 @@ pub const fn held(
     }
 }
 
-/// HOW MANY LINES ONE NOTE MAY WRAP TO.
-///
-/// A bound on WORK and not on prose: [`ronoctua_render::layout::wrap`] walks
-/// the whole string whatever happens, and this is what stops a sentence
-/// somebody pastes into a `.ftl` from becoming a page. Eight is more than any
-/// of these needs at the narrowest width a footer's region is ever drawn at.
-pub const SENTENCE_LINES: usize = 8;
-
 /// A NOTE, BROKEN INTO THE LINES IT TAKES.
 ///
 /// # Why it is one function and not eight
@@ -3027,6 +3029,14 @@ pub const SENTENCE_LINES: usize = 8;
 /// read its configuration…"*. This is the function that pays them, so that no
 /// view can wrap by one rule and cut by another.
 ///
+/// # And it never loses a line
+///
+/// It used to stop at eight lines, "a bound on work": the ninth line of a
+/// note — the end of a sentence in the small column, where the consequence
+/// is — vanished with no ellipsis, which is a cut with the mark taken off.
+/// A NOTE WRAPS WHOLE, and a page that runs past its door scrolls; the work
+/// is bounded by the words the note has, which `wrap` walks either way.
+///
 /// # And it never answers with nothing
 ///
 /// `wrap` walks `text.lines()`, and an empty string has none — so it would
@@ -3035,7 +3045,7 @@ pub const SENTENCE_LINES: usize = 8;
 /// sometimes not there is a cursor that sometimes lands on its neighbour.
 #[must_use]
 pub fn note_lines(text: &str, room: u16) -> Vec<String> {
-    let mut out = ronoctua_render::layout::wrap(text, room, SENTENCE_LINES);
+    let mut out = ronoctua_render::layout::wrap(text, room, usize::MAX);
     if out.is_empty() {
         out.push(String::new());
     }
@@ -3344,6 +3354,308 @@ pub fn field_pair(
     out
 }
 
+/// Where the values of ONE SECTION of `label: value` rows begin, when the
+/// section is laid out whole ([`aligned_pair`]) — the player's pages.
+///
+/// # One column a section, and no label cut
+///
+/// [`field_pair`] places each row on its own: a label longer than the column
+/// pushes its value, and where the column is clamped to half a narrow row a
+/// section of long labels becomes a zigzag of values, each cut at the row's
+/// end. A section laid out whole knows every row, and can do better: its
+/// values begin after its widest label and the two cells of air, so each
+/// label is read whole and every value of the section is in one column —
+/// never before [`value_column`], the column every other view has at this
+/// width, and never so far along that the section's widest value is cut.
+/// Where the row cannot hold both, the labels give way: they WRAP onto the
+/// lines under their row ([`aligned_pair`]), and the values stay whole.
+///
+/// `pairs` is each row's `(label's first cell, label cells, value cells)`.
+/// EVERY label counts, the ones with nothing beside them today included: on a
+/// page of choices the value is "in use" on one row, and a column measured
+/// from that row alone moved every time another was chosen. A row with no
+/// value still has the whole row for its label.
+#[must_use]
+pub fn section_column(left: u16, room: u16, pairs: &[(u16, u16, u16)]) -> u16 {
+    let floor = value_column(left, room);
+    let fit = pairs
+        .iter()
+        .map(|(at, label, _)| at + label + 2)
+        .max()
+        .unwrap_or(floor);
+    let widest = pairs.iter().map(|(_, _, value)| *value).max().unwrap_or(0);
+    let most = (left + room).saturating_sub(widest);
+    fit.min(most).max(floor)
+}
+
+/// The lines of one row of a section laid out whole ([`section_column`]), in
+/// the colours of its [`Kind`]: the label from `left`, WRAPPED in the room
+/// before `column` and never cut, and the value at `column`, cut only where
+/// it runs past `end`. The first line carries the value; each line after it
+/// is the rest of the label, in the label's tone. An empty value gives the
+/// label the whole row, wrapped the same way.
+#[must_use]
+pub fn aligned_pair(
+    left: u16,
+    column: u16,
+    end: u16,
+    label: &str,
+    value: &str,
+    kind: Kind,
+    focused: bool,
+) -> Vec<Vec<crate::files::Field>> {
+    let (label_colour, value_colour) = kind.tones(focused);
+    let piece = |at: u16, text: String, color: tokens::Color| crate::files::Field {
+        at,
+        text,
+        color,
+        hit: crate::files::Hit::Nothing,
+        explain: None,
+        ink: crate::files::Ink::Grid,
+    };
+    // TWO CELLS OF AIR before the value, as `field_pair` keeps.
+    let room = if value.is_empty() {
+        end.saturating_sub(left)
+    } else {
+        column.saturating_sub(left + 2)
+    };
+    // AN EMPTY PIECE IS NOT A PIECE, as in `field_pair`: a line with no label
+    // is a line with nothing on it but, perhaps, the value.
+    let mut lines: Vec<Vec<crate::files::Field>> = note_lines(label, room.max(1))
+        .into_iter()
+        .map(|line| {
+            if line.is_empty() {
+                Vec::new()
+            } else {
+                vec![piece(left, line, label_colour)]
+            }
+        })
+        .collect();
+    let value = ronoctua_render::layout::elide_end(value, end.saturating_sub(column));
+    if !value.is_empty()
+        && let Some(first) = lines.first_mut()
+    {
+        first.push(piece(column, value, value_colour));
+    }
+    lines
+}
+
+/// A SUBTITLE LANE'S CHIP (`player_rows::Chip`): the ground of
+/// `subtitle.edge` its glyph is drawn on, for a chip whose first cell's left
+/// edge is `left` and whose line's top is `top`, `line` tall — the ONE
+/// drawing every door paints under a lane's colour.
+///
+/// The glyph sits in the chip's middle cell and fills it (a Material drawing
+/// is one cell of ink at the body size, `icon::ink_across`), so the ground
+/// is that cell and half a cell more on each side — the same air left and
+/// right of the drawing — and `space.player.chipAir` short of the line at the
+/// top and the foot, so two chips on two lines never touch. All of it lies
+/// inside the chip's `space.player.chipCells`, which is what a click on it
+/// takes: nothing drawn here is outside the control.
+#[must_use]
+pub fn chip(left: f32, top: f32, cell: f32, line: f32) -> ronoctua_render::quad::Quad {
+    let air = f32::from(tokens::space::PLAYER_CHIPAIR);
+    let cells = f32::from(tokens::space::PLAYER_CHIPCELLS);
+    ronoctua_render::quad::Quad {
+        x: left + cell / 2.0,
+        y: top + air,
+        width: (cells - 1.0) * cell,
+        height: (line - 2.0 * air).max(0.0),
+        color: tokens::color::SUBTITLE_EDGE,
+    }
+}
+
+/// A TRACK across a line — the player's time bar, its volume: a rule three
+/// times a rule's weight in the middle of the line whose top is `top` and
+/// which is `line` tall, `left` to `right`, and the share `filled` of it in
+/// the colour it comes with. One drawing for every door that has one, so the
+/// window's time bar, its volume and the footer's panel are one weight.
+#[must_use]
+pub fn track_bar(
+    left: f32,
+    right: f32,
+    top: f32,
+    line: f32,
+    filled: Option<(f32, tokens::Color)>,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let thickness = f32::from(tokens::space::RULE_THICKNESS).max(1.0) * 3.0;
+    let y = top + (line - thickness) / 2.0;
+    let width = (right - left).max(0.0);
+    let mut out = vec![ronoctua_render::quad::Quad {
+        x: left,
+        y,
+        width,
+        height: thickness,
+        color: tokens::color::RULE_DEFAULT,
+    }];
+    if let Some((share, color)) = filled {
+        out.push(ronoctua_render::quad::Quad {
+            x: left,
+            y,
+            width: width * share.clamp(0.0, 1.0),
+            height: thickness,
+            color,
+        });
+    }
+    out
+}
+
+/// THE TIME BAR: a [`track_bar`], and the share already `played` in the
+/// accent. The window's, the footer's panel's and a deck of one lane's
+/// (`crate::player_timeline`) — one drawing.
+#[must_use]
+pub fn time_bar(
+    left: f32,
+    right: f32,
+    top: f32,
+    line: f32,
+    played: Option<f32>,
+) -> Vec<ronoctua_render::quad::Quad> {
+    track_bar(
+        left,
+        right,
+        top,
+        line,
+        played.map(|p| (p, tokens::color::STATE_ACCENT)),
+    )
+}
+
+/// A LANE'S BAND on its track (`crate::player_timeline`): from `from` to
+/// `to`, `space.player.laneBand` thick and set in the middle of the line
+/// whose top is `top` and which is `line` tall — the track's own middle, so
+/// the band lies ON the track. In the colour of its kind, or of a lane that
+/// is off, or of the ghost of one being dragged; the deck says which.
+#[must_use]
+pub fn lane_band(
+    from: f32,
+    to: f32,
+    top: f32,
+    line: f32,
+    color: tokens::Color,
+) -> ronoctua_render::quad::Quad {
+    let thickness = f32::from(tokens::space::PLAYER_LANEBAND).min(line);
+    ronoctua_render::quad::Quad {
+        x: from,
+        y: top + (line - thickness) / 2.0,
+        width: (to - from).max(0.0),
+        height: thickness,
+        color,
+    }
+}
+
+/// THE GHOST of a lane's band being dragged: where it would land if let go,
+/// `space.player.ghostBand` thick and set in the middle of the line — ON the
+/// band, and thinner than it, so the band's own ends still show round it and
+/// the ghost's show past it. In `player.lane.held`.
+#[must_use]
+pub fn lane_ghost(from: f32, to: f32, top: f32, line: f32) -> ronoctua_render::quad::Quad {
+    let thickness = f32::from(tokens::space::PLAYER_GHOSTBAND)
+        .max(1.0)
+        .min(line);
+    ronoctua_render::quad::Quad {
+        x: from,
+        y: top + (line - thickness) / 2.0,
+        width: (to - from).max(0.0),
+        height: thickness,
+        color: tokens::color::PLAYER_LANE_HELD,
+    }
+}
+
+/// THE PLAYHEAD: the one vertical line of "now" across every lane of a deck,
+/// `space.player.playhead` wide and CENTRED on `x` — so the line a press
+/// within half a cell of `x` grabs is the line drawn there — from `top` to
+/// `bottom`.
+///
+/// # Why its own colour and not the lit divider
+///
+/// [`divider_lit`] already means "this section has the keyboard", and one
+/// logical pixel of it is the quietest mark this system draws. The playhead
+/// is the loudest line of the deck and means something else, so it is a
+/// role of its own (`player.playhead`).
+///
+/// `bottom` is a pixel the caller took from [`Frame::y_of`], for the reason
+/// [`divider`] asks for the bottom: a count of lines times a line height
+/// lands short of where the last line ends.
+#[must_use]
+pub fn playhead(x_px: f32, top_px: f32, bottom_px: f32) -> ronoctua_render::quad::Quad {
+    let width = f32::from(tokens::space::PLAYER_PLAYHEAD).max(1.0);
+    ronoctua_render::quad::Quad {
+        x: x_px - width / 2.0,
+        y: top_px,
+        width,
+        height: (bottom_px - top_px).max(0.0),
+        color: tokens::color::PLAYER_PLAYHEAD,
+    }
+}
+
+/// How high a tick of a deck's ruler rises from the line's foot:
+/// `space.player.tickQuarters` quarters of the line — and how high the
+/// playhead rises on the ruler, so it never crosses the times written above
+/// the ticks.
+#[must_use]
+pub fn tick_rise(line: f32) -> f32 {
+    (line * f32::from(tokens::space::PLAYER_TICKQUARTERS) / 4.0)
+        .max(1.0)
+        .min(line)
+}
+
+/// A TICK of a deck's time ruler: a short mark at `x`, rising
+/// [`tick_rise`] from the line's foot — under the time it names, which is
+/// written from the same cell. A rule's weight, so it reads as a graduation
+/// and never as the playhead.
+#[must_use]
+pub fn tick(x_px: f32, top: f32, line: f32) -> ronoctua_render::quad::Quad {
+    let tall = tick_rise(line);
+    ronoctua_render::quad::Quad {
+        x: x_px,
+        y: top + line - tall,
+        width: f32::from(tokens::space::RULE_THICKNESS),
+        height: tall,
+        color: tokens::color::RULE_DEFAULT,
+    }
+}
+
+/// A PICTURE'S PLACE on the Layout page's schematic (`ronoctua_player::
+/// arrange::place` over a small rectangle): a flat tile, and the lit one —
+/// the picture whose row the cursor is on — in the accent. No border, no
+/// radius and no text on it (invariant 15): the air between two tiles
+/// (`space.player.tileGap`) is what tells them apart.
+///
+/// NOT REACHED YET: the Layout page draws it once the daemon sends the
+/// arrangement (the second protocol).
+#[must_use]
+#[allow(dead_code)]
+pub fn tile(rect: Rect, lit: bool) -> ronoctua_render::quad::Quad {
+    let (x, y, width, height) = rect;
+    ronoctua_render::quad::Quad {
+        x,
+        y,
+        width: width.max(0.0),
+        height: height.max(0.0),
+        color: if lit {
+            tokens::color::PLAYER_TILE_LIT
+        } else {
+            tokens::color::PLAYER_TILE
+        },
+    }
+}
+
+/// A BAR'S THUMB as a rectangle painted — [`band_bar`]'s second answer, in
+/// the tone every thumb of this shell wears. The pure layouts that place a
+/// bar over a band (`crate::player_timeline`) hand the rectangle here rather
+/// than assembling the quad themselves.
+#[must_use]
+pub fn thumb(rect: Rect) -> ronoctua_render::quad::Quad {
+    let (x, y, width, height) = rect;
+    ronoctua_render::quad::Quad {
+        x,
+        y,
+        width,
+        height,
+        color: tokens::color::RULE_STRONG,
+    }
+}
+
 /// What colour a syntax role is drawn in.
 ///
 /// # Why the map lives HERE, and why there is one of it
@@ -3459,10 +3771,11 @@ mod meter_tests {
 mod tests {
     use super::{
         BAR_CELLS, FIELDS_LEAD, Frame, INSET, Kind, Piece, Register, SHELF_PAD, SHELF_ROOM,
-        at_the_edge, cell_width, clock_exact, clock_text, content_left_px, date_long, field_pair,
-        from_the_edge, hint_marks, hint_of, hint_sentence, hint_spans, key_text, list_bar,
-        list_offset_at, list_scroll, lit, on_the_band, on_the_list_bar, sentence, shelf_bar,
-        shelf_box, shelf_ground, split_at_the_modifier, value_column,
+        aligned_pair, at_the_edge, cell_width, clock_exact, clock_text, content_left_px, date_long,
+        field_pair, from_the_edge, hint_marks, hint_of, hint_sentence, hint_spans, key_text,
+        list_bar, list_offset_at, list_scroll, lit, on_the_band, on_the_list_bar, section_column,
+        sentence, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier, track_bar,
+        value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -3476,6 +3789,19 @@ mod tests {
         } else {
             Piece::prose(text)
         }
+    }
+
+    /// FAILS IF: a note loses a line — the ninth, the fortieth — instead of
+    /// wrapping whole: the end of a sentence is where its consequence is,
+    /// and a line dropped with no ellipsis is a cut with the mark taken off.
+    #[test]
+    fn a_note_never_loses_a_line() {
+        let words: Vec<String> = (1..=120).map(|n| format!("w{n}")).collect();
+        let text = words.join(" ");
+        let lines = super::note_lines(&text, 10);
+        assert!(lines.len() > 8, "{} lines", lines.len());
+        let back: Vec<&str> = lines.iter().flat_map(|l| l.split_whitespace()).collect();
+        assert_eq!(back, words, "a word of the note is gone");
     }
 
     /// A KEY NO CLICK CAN PRESS reads as one, and nobody chose that: `laid`
@@ -4270,6 +4596,139 @@ mod tests {
             assert!(ends <= 2 + 40, "a field ran to {ends} in a row of 40");
         }
         assert_eq!(fields.len(), 2, "the value disappeared: {fields:?}");
+    }
+
+    /// FAILS IF: a section laid out whole cuts one of its labels while its
+    /// values could move, moves its values before the column every other view
+    /// has, or so far along that its widest value is cut — or leaves out a
+    /// label whose value is empty now, and moves when another row is chosen.
+    #[test]
+    fn a_section_s_values_begin_after_its_widest_label() {
+        let floor = value_column(1, 80);
+        // SHORT LABELS: the column every view has.
+        assert_eq!(section_column(1, 80, &[(1, 6, 4), (1, 9, 20)]), floor);
+        // A LONG ONE moves the whole section, a nested one measured from its
+        // own first cell.
+        assert_eq!(section_column(1, 80, &[(1, 6, 4), (3, 40, 3)]), 3 + 40 + 2);
+        // NEVER SO FAR THAT THE WIDEST VALUE IS CUT.
+        assert_eq!(section_column(1, 80, &[(1, 70, 12)]), 1 + 80 - 12);
+        // AND NEVER BEFORE THE FLOOR, whatever the values ask.
+        assert_eq!(section_column(1, 30, &[(1, 20, 28)]), value_column(1, 30));
+        // A LABEL WITH NOTHING BESIDE IT TODAY counts too: on a page of
+        // choices, the value is on the one in use.
+        assert_eq!(section_column(1, 80, &[(1, 6, 4), (1, 40, 0)]), 1 + 40 + 2);
+    }
+
+    /// FAILS IF: a label of a section laid out whole is cut instead of
+    /// wrapped, a line of it runs into the value's column, the value leaves
+    /// the first line, or is cut while it fits.
+    #[test]
+    fn an_aligned_label_wraps_and_its_value_stays_whole() {
+        let label = "Talk inside a music video clip, off topic";
+        let lines = aligned_pair(3, 21, 31, label, "off", Kind::Setting, false);
+        assert!(lines.len() > 1, "{lines:?}");
+        let words: Vec<String> = lines
+            .iter()
+            .flat_map(|l| l.iter().filter(|f| f.at == 3).map(|f| f.text.clone()))
+            .collect();
+        assert_eq!(words.join(" "), label, "the label was cut");
+        for f in lines.iter().flatten().filter(|f| f.at == 3) {
+            assert!(
+                f.at + ronoctua_render::layout::width(&f.text) + 2 <= 21,
+                "{f:?} runs into the value"
+            );
+        }
+        let value: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(i, l)| l.iter().filter(|f| f.at == 21).map(move |f| (i, f)))
+            .collect();
+        assert_eq!(value.len(), 1);
+        assert_eq!((value[0].0, value[0].1.text.as_str()), (0, "off"));
+        // NO VALUE: the label has the whole row.
+        let alone = aligned_pair(
+            1,
+            15,
+            31,
+            "Close the player everywhere",
+            "",
+            Kind::Setting,
+            false,
+        );
+        assert_eq!(alone.len(), 1);
+    }
+
+    /// FAILS IF: a track stops being one weight in every door — the rule's,
+    /// three times — or its filled share runs past it.
+    #[test]
+    fn a_track_is_a_rule_three_times_and_filled_inside_it() {
+        let q = track_bar(
+            10.0,
+            110.0,
+            40.0,
+            26.0,
+            Some((1.5, tokens::color::STATE_ACCENT)),
+        );
+        let weight = f32::from(tokens::space::RULE_THICKNESS).max(1.0) * 3.0;
+        assert_eq!(q.len(), 2);
+        assert!((q[0].height - weight).abs() < f32::EPSILON);
+        assert!((q[1].width - 100.0).abs() < f32::EPSILON, "{q:?}");
+        assert_eq!(track_bar(10.0, 110.0, 40.0, 26.0, None).len(), 1);
+    }
+
+    /// FAILS IF: a lane's band stops lying ON its track — the same middle of
+    /// the line, thicker than it — or the playhead stops being centred on the
+    /// x it is given, which is the x a press within half a cell takes.
+    #[test]
+    fn a_band_lies_on_its_track_and_the_playhead_is_centred_on_now() {
+        let track = &track_bar(10.0, 110.0, 40.0, 26.0, None)[0];
+        let band = super::lane_band(30.0, 70.0, 40.0, 26.0, tokens::color::PLAYER_LANE_VIDEO);
+        let middle = |q: &ronoctua_render::quad::Quad| q.y + q.height / 2.0;
+        assert!(
+            (middle(track) - middle(&band)).abs() < 0.01,
+            "{track:?} {band:?}"
+        );
+        assert!(
+            band.height > track.height,
+            "a band as thin as its track is the track"
+        );
+        assert!((band.x - 30.0).abs() < f32::EPSILON && (band.width - 40.0).abs() < f32::EPSILON);
+        // A BAND GIVEN BACKWARDS is nothing, never a negative rectangle.
+        assert!(
+            super::lane_band(70.0, 30.0, 40.0, 26.0, tokens::color::PLAYER_LANE_VIDEO).width == 0.0
+        );
+
+        let head = super::playhead(100.0, 5.0, 205.0);
+        assert!((head.x + head.width / 2.0 - 100.0).abs() < 0.01, "{head:?}");
+        assert!((head.y - 5.0).abs() < f32::EPSILON && (head.height - 200.0).abs() < f32::EPSILON);
+        assert_eq!(head.color, tokens::color::PLAYER_PLAYHEAD);
+    }
+
+    /// FAILS IF: the lit tile is drawn like the others, or the time bar's
+    /// played share stops being the accent a track is filled with.
+    #[test]
+    fn a_lit_tile_and_the_played_time_wear_their_own_tones() {
+        let rect = (1.0, 2.0, 30.0, 20.0);
+        assert_eq!(super::tile(rect, false).color, tokens::color::PLAYER_TILE);
+        assert_eq!(
+            super::tile(rect, true).color,
+            tokens::color::PLAYER_TILE_LIT
+        );
+        assert_ne!(tokens::color::PLAYER_TILE, tokens::color::PLAYER_TILE_LIT);
+        let played = super::time_bar(10.0, 110.0, 40.0, 26.0, Some(0.5));
+        assert_eq!(
+            played,
+            track_bar(
+                10.0,
+                110.0,
+                40.0,
+                26.0,
+                Some((0.5, tokens::color::STATE_ACCENT))
+            )
+        );
+        // THE TICK stands on the line's foot, under the time it names.
+        let t = super::tick(50.0, 40.0, 26.0);
+        assert!((t.y + t.height - 66.0).abs() < 0.01 && (t.x - 50.0).abs() < f32::EPSILON);
     }
 
     /// FAILS IF: a written-out date loses its month, its second, or the

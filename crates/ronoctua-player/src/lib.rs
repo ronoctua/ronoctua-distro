@@ -11,12 +11,43 @@
 
 #![deny(unsafe_code)]
 
+pub mod ambience;
+pub mod arrange;
 pub mod client;
 pub mod decoders;
-pub mod lrclib;
+pub mod find;
+pub mod limit;
 pub mod lyrics;
 pub mod prefs;
+pub mod queue;
 pub mod remote;
-pub mod sponsorblock;
+pub mod session;
+pub mod subtitles;
 pub mod sync;
+pub mod tongues;
 pub mod wire;
+
+/// Sets, lanes, arrangements, streams and our two file formats — the
+/// playlist crate's, named here so a door that links the player needs no
+/// second path to them.
+pub use ronoctua_playlist::own;
+
+/// Why yt-dlp could not list a playlist — the closed set
+/// `wire::Trouble::Listing` carries, named here for the same reason.
+pub use ronoctua_ytdlp::Trouble as Listing;
+
+/// The player's name on the session bus for MPRIS:
+/// `org.mpris.MediaPlayer2.<instance>`, so the nested loop's player and the
+/// installed one are two players on the bus and not a fight over one name.
+///
+/// HERE, in the crate both sides link: the daemon takes the name, and a door
+/// that finds an OLDER daemon closes it through it (`client::quit_by_mpris`) —
+/// the one way out every player ever built answers, since an old one may not
+/// know the socket's `quit`.
+#[must_use]
+pub fn mpris_name() -> String {
+    format!(
+        "org.mpris.MediaPlayer2.{}",
+        ronoctua_xdg::name().replace('-', "_")
+    )
+}

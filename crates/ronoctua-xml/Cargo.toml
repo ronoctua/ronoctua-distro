@@ -1,0 +1,18 @@
+[package]
+name = "ronoctua-xml"
+description = "XML from outside, parsed only after its nesting is measured: the stack-overflow guard every reader of a file or an answer shares."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The reader, and nothing else. It is already in every program that links
+# this: the playlist crate, the player's subtitles and the tags engine all
+# read XML with it, and they read it through here so the guard in front of it
+# is written once.
+[dependencies]
+roxmltree = "0.21"
+
+[lints]
+workspace = true

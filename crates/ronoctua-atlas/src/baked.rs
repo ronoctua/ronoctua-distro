@@ -137,6 +137,12 @@ pub enum Kind {
     /// The attribution text, carried inside the file so a copy of it is never
     /// separated from its licence.
     Credits,
+    /// Where each country's NAME goes on a map — one point per ISO code.
+    ///
+    /// Section 7, and `VERSION` did not move for it: a reader that does not
+    /// know a section skips it (see [`Atlas::open`]), so an older binary reads
+    /// a newer table exactly as before.
+    Anchors,
 }
 
 impl Kind {
@@ -148,6 +154,7 @@ impl Kind {
             4 => Some(Self::Places),
             5 => Some(Self::Catalogue),
             6 => Some(Self::Credits),
+            7 => Some(Self::Anchors),
             _ => None,
         }
     }
@@ -166,7 +173,12 @@ pub struct Atlas<'a> {
     places: &'a [u8],
     catalogue: &'a [u8],
     credits: &'a str,
+    anchors: &'a [u8],
 }
+
+/// How many bytes one anchor takes: the ISO code, then a quantised longitude
+/// and latitude.
+pub(crate) const ANCHOR_BYTES: usize = 6;
 
 /// A reader over a slice, little-endian, that refuses to walk off the end.
 pub(crate) struct Cursor<'a> {
@@ -243,6 +255,7 @@ impl<'a> Atlas<'a> {
             places: &[],
             catalogue: &[],
             credits: "",
+            anchors: &[],
         };
         for _ in 0..sections {
             let kind = c.u16().ok_or(Trouble::Truncated)?;
@@ -259,6 +272,7 @@ impl<'a> Atlas<'a> {
                 Some(Kind::Places) => out.places = slice,
                 Some(Kind::Catalogue) => out.catalogue = slice,
                 Some(Kind::Credits) => out.credits = core::str::from_utf8(slice).unwrap_or(""),
+                Some(Kind::Anchors) => out.anchors = slice,
                 // A SECTION THIS READER DOES NOT KNOW IS SKIPPED, not refused:
                 // the table is what makes a newer bake readable by an older
                 // binary, and refusing would throw that away for nothing.
@@ -293,6 +307,12 @@ impl<'a> Atlas<'a> {
 
     pub(crate) const fn places_bytes(&self) -> &'a [u8] {
         self.places
+    }
+
+    /// The anchors section: `u16 n`, then `n` records of [`ANCHOR_BYTES`],
+    /// sorted by ISO code. EMPTY in a table baked before it existed.
+    pub(crate) const fn anchors_bytes(&self) -> &'a [u8] {
+        self.anchors
     }
 
     /// Every region of the catalogue, downloadable or not.

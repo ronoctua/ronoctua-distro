@@ -66,7 +66,9 @@ let
             # opens. Left to the binary's own default it would read
             # `$XDG_CACHE_HOME` from the environment, and a unit whose sandbox
             # and whose walk disagree about which directory that is would fail
-            # in a way that reads as a bug in the walk.
+            # in a way that reads as a bug in the walk. On btrfs `%C` is a
+            # subvolume of its own (`nix/modules/filesystem.nix`), so the walk's
+            # one device is the whole cache.
             "--root %C"
             # THE REPORT THE BRAIN WATCHES. `%t` is the user's runtime
             # directory, which is where `ronoctua_brain::runner::reports_dir`
@@ -78,6 +80,10 @@ let
             # whole patience had gone by.
             "--report %t/ronoctua-brain/${report}"
             "--days ${toString cfg.keepDays}"
+            # THE ROOTS, ASKED OF NIX by store path. An entry holding a GC root
+            # — a `nix develop --profile` link under the cache — is kept, and
+            # without an answer every directory holding a link is.
+            "--nix-store ${config.nix.package}/bin/nix-store"
           ]
           # AND ONLY THE REAL ONE ACTS. The binary rehearses by default, so the
           # word that deletes files is written once, in a unit, where a person
@@ -107,9 +113,20 @@ let
         ProtectSystem = "strict";
         ProtectHome = "read-only";
         ReadWritePaths = [
-          "%C"
+          # `-`: a person with no `~/.cache` yet has nothing to sweep, and a
+          # path that is not there would fail the unit before it starts.
+          "-%C"
           "%t/ronoctua-brain"
         ];
+        # AND THE REPORT'S DIRECTORY EXISTS BEFORE THE SANDBOX IS BUILT. A
+        # `ReadWritePaths` naming a path that is not there fails the unit with
+        # 226/NAMESPACE before the program starts (measured with a transient
+        # unit), and nothing else made `%t/ronoctua-brain` but the update's
+        # script — so on a session where no update had run yet, the sweep never
+        # started and the brain waited out its whole patience. `Preserve`
+        # because three units and the update share it, and the brain reads it.
+        RuntimeDirectory = "ronoctua-brain";
+        RuntimeDirectoryPreserve = "yes";
         PrivateDevices = true;
         NoNewPrivileges = true;
         RestrictSUIDSGID = true;
@@ -117,7 +134,9 @@ let
         ProtectControlGroups = true;
         RestrictNamespaces = true;
         SystemCallFilter = [ "@system-service" ];
-        # It opens no socket at all.
+        # NO NETWORK. The one socket it reaches is the Nix daemon's, a Unix
+        # socket on the filesystem, which `nix-store --gc --print-roots` asks
+        # which links are roots — and a network namespace does not hide those.
         PrivateNetwork = true;
         RestrictAddressFamilies = [ "AF_UNIX" ];
       };
@@ -160,6 +179,9 @@ let
           "%S"
           "%t/ronoctua-brain"
         ];
+        # The sweep's reason, above.
+        RuntimeDirectory = "ronoctua-brain";
+        RuntimeDirectoryPreserve = "yes";
         PrivateDevices = true;
         NoNewPrivileges = true;
         RestrictSUIDSGID = true;
@@ -207,40 +229,67 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.enable && config.ronoctua.brain.enable) {
-    # TWO UNITS AND NOT A FLAG. The second walks and counts and deletes nothing,
-    # which is what `m e` on the brain's page asks for — and it earns its keep
-    # here more than it does for the update: *"how much would this take?"* is
-    # exactly the question one wants answered before letting something delete a
-    # hundred and fifty gibibytes. A flag crossing from the brain would be a
-    # flag somebody else could cross with.
-    systemd.user.services.ronoctua-cache-sweep-rehearsal = sweepUnit {
-      what = "rehearse sweeping cached files — deletes nothing";
-      report = "cache-sweep-rehearsal.json";
-      execute = false;
-    };
+  config = lib.mkMerge [
+    # EVERY PROJECT'S INTERMEDIATES LEAVE EVERY TREE — on every machine, and
+    # whether the sweep runs or not: this is about where a build lands, not
+    # about who cleans it.
+    #
+    # `cargo` in any directory puts `deps/`, fingerprints and incremental state
+    # — nearly all of a build's bytes — under `./target`, beside the source,
+    # where no cache rule sees them and a backup or a snapshot copies them.
+    # `CARGO_BUILD_BUILD_DIR` sends them under the cache, one directory per
+    # workspace by cargo's own `{workspace-path-hash}`, named after the
+    # compiler (nix/cargo-dirs.nix). Each project keeps its `./target` for
+    # what a person runs; `CARGO_TARGET_DIR` stays unset here on purpose, and
+    # the reason is written in that file.
+    #
+    # TWICE, because two things start programs. `sessionVariables` reaches
+    # login shells, the console and ssh (pam_env and `/etc/profile`);
+    # `environment.d` reaches the user manager, and so every unit and every
+    # scope the footer opens — a terminal, an editor, rust-analyzer. It is the
+    # route NixOS itself takes for `PATH` (`50-systemd-path.conf`).
+    {
+      environment.sessionVariables.CARGO_BUILD_BUILD_DIR = ronoctua.cargoDirs.session.build;
+      environment.etc."environment.d/60-ronoctua-cargo.conf".text = ''
+        CARGO_BUILD_BUILD_DIR="${ronoctua.cargoDirs.session.build}"
+      '';
+    }
 
-    systemd.user.services.ronoctua-cache-sweep = sweepUnit {
-      what = "sweep cached files nothing has used";
-      report = "cache-sweep.json";
-      execute = true;
-    };
+    (lib.mkIf (cfg.enable && config.ronoctua.brain.enable) {
+      # TWO UNITS AND NOT A FLAG. The second walks and counts and deletes nothing,
+      # which is what `m e` on the brain's page asks for — and it earns its keep
+      # here more than it does for the update: *"how much would this take?"* is
+      # exactly the question one wants answered before letting something delete a
+      # hundred and fifty gibibytes. A flag crossing from the brain would be a
+      # flag somebody else could cross with.
+      systemd.user.services.ronoctua-cache-sweep-rehearsal = sweepUnit {
+        what = "rehearse sweeping cached files — deletes nothing";
+        report = "cache-sweep-rehearsal.json";
+        execute = false;
+      };
 
-    # AND THE TRASH, which is NOT a cache — what is in there is the only copy,
-    # which is why it has its own binary, its own number (four days, not forty)
-    # and its own writable path. The two live in one module because they are the
-    # same question asked of two directories: what may the machine throw away by
-    # itself, and after how long.
-    systemd.user.services.ronoctua-empty-trash-rehearsal = trashUnit {
-      what = "rehearse emptying the trash — deletes nothing";
-      report = "trash-expire-rehearsal.json";
-      execute = false;
-    };
+      systemd.user.services.ronoctua-cache-sweep = sweepUnit {
+        what = "sweep cached files nothing has used";
+        report = "cache-sweep.json";
+        execute = true;
+      };
 
-    systemd.user.services.ronoctua-empty-trash = trashUnit {
-      what = "empty the trash of what has been in it long enough";
-      report = "trash-expire.json";
-      execute = true;
-    };
-  };
+      # AND THE TRASH, which is NOT a cache — what is in there is the only copy,
+      # which is why it has its own binary, its own number (four days, not forty)
+      # and its own writable path. The two live in one module because they are the
+      # same question asked of two directories: what may the machine throw away by
+      # itself, and after how long.
+      systemd.user.services.ronoctua-empty-trash-rehearsal = trashUnit {
+        what = "rehearse emptying the trash — deletes nothing";
+        report = "trash-expire-rehearsal.json";
+        execute = false;
+      };
+
+      systemd.user.services.ronoctua-empty-trash = trashUnit {
+        what = "empty the trash of what has been in it long enough";
+        report = "trash-expire.json";
+        execute = true;
+      };
+    })
+  ];
 }

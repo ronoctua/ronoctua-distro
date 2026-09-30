@@ -776,6 +776,46 @@ mod tests {
         assert!(shown.contains('…'), "a long answer was not cut: {shown}");
     }
 
+    /// FAILS IF: a question as wide as a narrow door pushes what is typed
+    /// past the line's cut — a header is cut at its end, and the small
+    /// column showed "The folder to save the set in…" and nothing of the
+    /// path being typed: the question is cut instead, and what is typed
+    /// keeps its end in sight on the first line, in either language.
+    #[test]
+    fn a_long_question_gives_way_to_what_is_typed() {
+        use ronoctua_render::layout::width;
+        for language in ["en-GB", "pt-BR"] {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let mut m = super::Minibuffer::default();
+            m.request_with(
+                "player-save-set-folder",
+                false,
+                Some("/home/someone/Music/sets"),
+            );
+            let line = m.line().expect("a question on the line");
+            for columns in [24_u16, 30, 36] {
+                let pieces = crate::door::list::question_pieces(line, &texts, columns);
+                let usable = columns - crate::fold::WIDTH;
+                let (asked, typed) = (&pieces[0].text, &pieces[1].text);
+                assert!(
+                    width(asked) + width(typed) <= usable,
+                    "{language} at {columns}: {asked:?} + {typed:?} past {usable}"
+                );
+                assert!(
+                    typed.ends_with("sets"),
+                    "{language} at {columns}: {typed:?}"
+                );
+                assert!(
+                    width(asked) > 2,
+                    "{language} at {columns}: no question left"
+                );
+            }
+            // A WIDE DOOR keeps the question whole.
+            let pieces = crate::door::list::question_pieces(line, &texts, 120);
+            assert!(!pieces[0].text.contains('…'), "{:?}", pieces[0].text);
+        }
+    }
+
     /// The Wi-Fi password must NOT appear on the minibuffer's line.
     ///
     /// # The defect this test locks out

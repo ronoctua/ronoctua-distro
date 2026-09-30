@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 import sys
 import zipfile
@@ -98,12 +99,18 @@ def dedupe(ring: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return out
 
 
-def feature_bytes(head: bytes, rings: list[list[tuple[float, float]]]) -> bytes | None:
+def quantised_of(rings: list[list[tuple[float, float]]]) -> list[list[tuple[int, int]]]:
+    """The rings on the reader's grid, as the table stores them."""
     quantised = []
     for ring in rings:
         q = dedupe([(lon_to(lon), lat_to(lat)) for lon, lat in ring])
         if len(q) >= 3:
             quantised.append(q)
+    return quantised
+
+
+def feature_bytes(head: bytes, rings: list[list[tuple[float, float]]]) -> bytes | None:
+    quantised = quantised_of(rings)
     if not quantised:
         return None
     xs = [x for ring in quantised for x, _ in ring]
@@ -133,10 +140,25 @@ def name_of(props: dict, *keys: str) -> str:
     return ""
 
 
-def countries(path: Path) -> tuple[bytes, dict[str, int]]:
+def number(props: dict, key: str) -> float | None:
+    v = props.get(key)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    return None
+
+
+def countries(path: Path) -> tuple[bytes, dict[str, int], dict[str, tuple[int, int]]]:
     doc = json.loads(path.read_text(encoding="utf-8"))
     out: list[bytes] = []
+    # EVERY FEATURE ON THE GRID, in the order the reader walks them: an anchor
+    # is proved against these, exactly as `lookup::country_at` will ask.
+    shapes: list[list[list[tuple[int, int]]]] = []
     by_iso: dict[str, int] = {}
+    # WHERE EACH COUNTRY'S NAME GOES: Natural Earth's own label point, chosen
+    # by hand to sit inside the land it names. A code met twice (a country and
+    # its overseas part) keeps the point with the LOWEST rank, which is the
+    # one Natural Earth draws first.
+    anchors: dict[str, tuple[float, float, float, int]] = {}
     for item in doc.get("features", []):
         props = item.get("properties") or {}
         english = name_of(props, "NAME_EN", "NAME", "ADMIN")
@@ -149,14 +171,133 @@ def countries(path: Path) -> tuple[bytes, dict[str, int]]:
         if len(iso) != 2 or not iso.isalpha():
             iso = "??"
         head = iso.encode("ascii") + short(english) + short(portuguese)
-        packed = feature_bytes(head, rings_of(item.get("geometry") or {}))
+        rings = rings_of(item.get("geometry") or {})
+        packed = feature_bytes(head, rings)
         if packed is None:
             continue
         by_iso.setdefault(iso, len(out))
         out.append(packed)
+        shapes.append(quantised_of(rings))
+        lon, lat = number(props, "LABEL_X"), number(props, "LABEL_Y")
+        rank = number(props, "LABELRANK")
+        if iso != "??" and lon is not None and lat is not None:
+            if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+                sys.exit(f"ERROR: {iso}'s label point ({lat}, {lon}) is off the planet")
+            rank = rank if rank is not None else 99.0
+            if iso not in anchors or rank < anchors[iso][2]:
+                anchors[iso] = (lon, lat, rank, len(shapes) - 1)
     if not out:
         sys.exit("ERROR: no country came out of the countries file")
-    return section(out), by_iso
+    return section(out), by_iso, on_land(anchors, shapes)
+
+
+def crossings_inside(rings: list[list[tuple[int, int]]], x: float, y: float) -> bool:
+    """The reader's even-odd rule (`lookup::inside`), on the grid: a ray east
+    from the point, half-open at the vertices."""
+    n = 0
+    for ring in rings:
+        for i, (ax, ay) in enumerate(ring):
+            bx, by = ring[(i + 1) % len(ring)]
+            if (ay > y) == (by > y):
+                continue
+            if x < ax + (y - ay) / (by - ay) * (bx - ax):
+                n += 1
+    return n % 2 == 1
+
+
+def firmly_inside(rings: list[list[tuple[int, int]]], x: int, y: int) -> bool:
+    """Inside, and a third of a step inside in every direction: a point on an
+    edge would be decided by how the reader rounds it."""
+    return all(crossings_inside(rings, x + dx, y + dy) for dx, dy in ((0, 0), (0.33, 0.33), (-0.33, 0.33), (0.33, -0.33), (-0.33, -0.33)))
+
+
+def on_land(anchors: dict[str, tuple[float, float, float, int]], shapes: list[list[list[tuple[int, int]]]]) -> dict[str, tuple[int, int]]:
+    """Each country's anchor on the grid, ON ITS OWN LAND.
+
+    Natural Earth's label point is where a map writes the NAME, and a name is
+    sometimes better written beside a country than on it. Measured on the
+    pinned file, eleven are not on their own land on the grid: New Zealand's
+    is in the sea off Taranaki; seven small island countries' are beside their
+    islands (AG, GQ, GS, IO, ST, TT, VC); and three countries only a few grid
+    steps wide have theirs where the grid gives the point to the neighbour the
+    reader meets first, or to the water (MC, MO, VA — Monaco's moves 0.3 km,
+    the Vatican's 1.8). A mark is not a name — it stands for the country, and a press on it asks
+    the country the point is in. So where the label point is not inside the
+    country's own rings on the grid — or is inside another country the reader
+    meets first —, the anchor is the nearest grid point that is, found row by
+    row outward from the label point. A country with no such point keeps the
+    label point, and says so on the build's log.
+    """
+    boxes = [
+        (min(x for r in rings for x, _ in r), min(y for r in rings for _, y in r),
+         max(x for r in rings for x, _ in r), max(y for r in rings for _, y in r))
+        for rings in shapes
+    ]
+
+    def first_at(x: int, y: int) -> int | None:
+        for i, rings in enumerate(shapes):
+            x0, y0, x1, y1 = boxes[i]
+            if x0 <= x <= x1 and y0 <= y <= y1 and crossings_inside(rings, x, y):
+                return i
+        return None
+
+    def ours(i: int, x: int, y: int) -> bool:
+        return firmly_inside(shapes[i], x, y) and first_at(x, y) == i
+
+    lon_step, lat_step = 360.0 / STEPS, 180.0 / STEPS
+    out: dict[str, tuple[int, int]] = {}
+    for iso, (lon, lat, _, i) in sorted(anchors.items()):
+        lx, ly = lon_to(lon), lat_to(lat)
+        if ours(i, lx, ly):
+            out[iso] = (lx, ly)
+            continue
+        across = math.cos(math.radians(lat)) * lon_step / lat_step
+        x0, y0, x1, y1 = boxes[i]
+        best: tuple[float, int, int] | None = None
+        for dy in sorted(range(y0 - ly, y1 - ly + 1), key=abs):
+            if best is not None and abs(dy) > best[0]:
+                break
+            y = ly + dy
+            xs = sorted(
+                ax + (y - ay) / (by - ay) * (bx - ax)
+                for ring in shapes[i]
+                for k, (ax, ay) in enumerate(ring)
+                for bx, by in [ring[(k + 1) % len(ring)]]
+                if (ay > y) != (by > y)
+            )
+            for a, b in zip(xs[0::2], xs[1::2]):
+                lo, hi = math.ceil(a + 0.5), math.floor(b - 0.5)
+                if lo > hi:
+                    continue
+                x = min(max(lx, lo), hi)
+                far = math.hypot((x - lx) * across, dy)
+                if (best is None or far < best[0]) and ours(i, x, y):
+                    best = (far, x, y)
+        if best is None:
+            print(f"atlas: {iso} has no grid point on its own land; its anchor stays the label point")
+            out[iso] = (lx, ly)
+        else:
+            print(f"atlas: {iso}'s label point is not on its land; anchored {best[0] * lat_step * 111.32:.1f} km from it")
+            out[iso] = (best[1], best[2])
+    return out
+
+
+def anchors_section(anchors: dict[str, tuple[int, int]]) -> bytes:
+    """`u16 n`, then `n` × (ISO code, `i16` lon, `i16` lat), SORTED by code.
+
+    Sorted because the reader finds a code by binary search
+    (`lookup::anchor_of`): an unsorted section would answer "not here" for
+    codes that are.
+    """
+    # A COUNTRY FILE WITH NO LABEL POINTS is a file whose columns moved, and a
+    # table without anchors would put every mark of the player's globe nowhere.
+    if len(anchors) < 100:
+        sys.exit(f"ERROR: only {len(anchors)} countries have a label point; did LABEL_X move?")
+    out = bytearray(struct.pack("<H", len(anchors)))
+    for iso in sorted(anchors):
+        x, y = anchors[iso]
+        out += iso.encode("ascii") + struct.pack("<hh", x, y)
+    return bytes(out)
 
 
 def regions(path: Path, by_iso: dict[str, int]) -> bytes:
@@ -323,7 +464,7 @@ def main() -> None:
     ap.add_argument("--credits", required=True)
     args = ap.parse_args()
 
-    body, by_iso = countries(Path(args.countries))
+    body, by_iso, anchors = countries(Path(args.countries))
     parts = [
         (1, body),
         (2, regions(Path(args.regions), by_iso)),
@@ -331,6 +472,10 @@ def main() -> None:
         (4, places(Path(args.places), Path(args.admin1))),
         (5, catalogue(Path(args.catalogue))),
         (6, args.credits.encode("utf-8")),
+        # SECTION SEVEN, and the version stays two: `Atlas::open` skips a
+        # section it does not know, so an older reader reads this table as it
+        # read the last one.
+        (7, anchors_section(anchors)),
     ]
 
     head = 16 + len(parts) * 12

@@ -8,9 +8,11 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    Point, Tongue, Trouble,
+    Ink, Mark, Marks, Point, Pose, Tongue, Trouble,
     baked::{Atlas, CELLS_LAT, CELLS_LON, MAGIC, VERSION, cell_of, lat_to, lon_to},
-    lookup::{address, place_near},
+    framing,
+    lookup::{address, anchor_of, country_name, place_near},
+    placed, project, tier,
 };
 
 /// A length-prefixed string.
@@ -127,6 +129,22 @@ fn atlas_of(parts: &[(u16, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// The anchors section: sorted by code, as the generator writes it.
+fn anchors(list: &[(&[u8; 2], f32, f32)]) -> Vec<u8> {
+    let mut sorted = list.to_vec();
+    sorted.sort_by_key(|(iso, _, _)| **iso);
+    let mut out = u16::try_from(sorted.len())
+        .expect("few anchors")
+        .to_le_bytes()
+        .to_vec();
+    for (iso, lat, lon) in sorted {
+        out.extend_from_slice(iso);
+        out.extend_from_slice(&lon_to(lon).to_le_bytes());
+        out.extend_from_slice(&lat_to(lat).to_le_bytes());
+    }
+    out
+}
+
 /// A square country, a square region inside it, and two places.
 fn world() -> Vec<u8> {
     let square: &[(f32, f32)] = &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
@@ -144,7 +162,24 @@ fn world() -> Vec<u8> {
         (3, section(&[])),
         (4, places(&[(2.0, 2.0, "Near"), (40.0, 40.0, "Far")])),
         (6, b"GeoNames (CC BY 4.0)".to_vec()),
+        (
+            7,
+            anchors(&[
+                (b"ZZ", -30.0, 120.0),
+                (b"XY", 5.0, 5.0),
+                (b"AA", 60.0, -100.0),
+            ]),
+        ),
     ])
+}
+
+/// The same world as a table baked before the anchors existed.
+fn world_before_anchors() -> Vec<u8> {
+    let square: &[(f32, f32)] = &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    let mut head = b"XY".to_vec();
+    head.extend_from_slice(&short("Squareland"));
+    head.extend_from_slice(&short("Squareland (other tongue)"));
+    atlas_of(&[(1, section(&[feature(&head, &[square])]))])
 }
 
 /// FAILS IF: something that is not a baked atlas is read as one.
@@ -282,4 +317,293 @@ fn the_arithmetic_without_std_is_good_enough_to_draw_with() {
         "atan2 gave {a}"
     );
     assert!((crate::atan2(0.0, -1.0) - core::f32::consts::PI).abs() < 1e-3);
+}
+
+/// FAILS IF: a country's label point is not found by its code, or a name is
+/// not found in the tongue asked.
+#[test]
+fn an_anchor_and_a_name_are_found_by_the_code() {
+    let bytes = world();
+    let atlas = Atlas::open(&bytes).expect("an atlas");
+    let at = anchor_of(&atlas, *b"XY").expect("XY is anchored");
+    assert!(
+        (at.lat - 5.0).abs() < 0.01 && (at.lon - 5.0).abs() < 0.01,
+        "{at:?}"
+    );
+    // BOTH ENDS of the binary search.
+    let first = anchor_of(&atlas, *b"AA").expect("AA");
+    assert!((first.lon + 100.0).abs() < 0.01);
+    let last = anchor_of(&atlas, *b"ZZ").expect("ZZ");
+    assert!((last.lat + 30.0).abs() < 0.01);
+    assert_eq!(anchor_of(&atlas, *b"QQ"), None);
+
+    assert_eq!(
+        country_name(&atlas, *b"XY", Tongue::English).as_deref(),
+        Some("Squareland")
+    );
+    assert_eq!(
+        country_name(&atlas, *b"XY", Tongue::Portuguese).as_deref(),
+        Some("Squareland (other tongue)")
+    );
+    assert_eq!(country_name(&atlas, *b"QQ", Tongue::English), None);
+    assert_eq!(country_name(&atlas, *b"??", Tongue::English), None);
+
+    // AN OLDER TABLE has no anchors, and answers nothing rather than failing.
+    let old = world_before_anchors();
+    let atlas = Atlas::open(&old).expect("an older atlas still opens");
+    assert_eq!(anchor_of(&atlas, *b"XY"), None);
+    assert!(country_name(&atlas, *b"XY", Tongue::English).is_some());
+}
+
+const RADII: [f32; 4] = [2.5, 3.5, 5.0, 7.0];
+
+fn marks(all: &[Mark]) -> Marks<'_> {
+    Marks {
+        all,
+        merge_px: 16.0,
+        radii: RADII,
+        lit: None,
+    }
+}
+
+fn mark(id: u32, lat: f32, lon: f32, weight: u32) -> Mark {
+    Mark {
+        at: Point { lat, lon },
+        id,
+        weight,
+    }
+}
+
+const BOX: (f32, f32) = (400.0, 300.0);
+
+fn facing(lat: f32, lon: f32) -> Pose {
+    Pose {
+        centre: Point { lat, lon },
+        zoom: Pose::WORLD,
+    }
+}
+
+/// FAILS IF: a mark on the far side of the planet is drawn, or grabbed.
+#[test]
+fn a_mark_round_the_back_is_not_placed() {
+    let all = [
+        mark(1, 0.0, 0.0, 1),
+        mark(2, 0.0, 180.0, 50),
+        mark(3, 10.0, 170.0, 1),
+    ];
+    let out = placed(&marks(&all), facing(0.0, 0.0), BOX);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert_eq!(out[0].members, [1]);
+    // THE CENTRE OF THE BOX is where the point the globe faces lands.
+    assert!((out[0].at.0 - 200.0).abs() < 0.5 && (out[0].at.1 - 150.0).abs() < 0.5);
+}
+
+/// FAILS IF: two marks closer than the merge are drawn as two, or the group
+/// forgets one of them.
+#[test]
+fn marks_closer_than_the_merge_are_one_and_count_both() {
+    // A degree apart: under three pixels at the world's zoom.
+    let all = [
+        mark(7, 10.0, 10.0, 3),
+        mark(9, 11.0, 11.0, 5),
+        mark(4, -40.0, -40.0, 1),
+    ];
+    let out = placed(&marks(&all), facing(0.0, 0.0), BOX);
+    assert_eq!(out.len(), 2, "{out:?}");
+    let pair = out.iter().find(|p| p.members.len() == 2).expect("a pair");
+    assert_eq!(pair.weight, 8);
+    // THE HEAVIEST MEMBER FIRST, and the group sits on it.
+    assert_eq!(pair.members, [9, 7]);
+    assert!((pair.centre.lat - 11.0).abs() < 1e-4);
+    assert_eq!(pair.radius, RADII[tier(8)]);
+    let alone = out
+        .iter()
+        .find(|p| p.members == [4])
+        .expect("the far one alone");
+    assert_eq!(alone.radius, RADII[0]);
+
+    // AND APART, when the globe is near enough to tell them apart — about a
+    // hundred pixels, with the far one off the picture.
+    let near = Pose {
+        centre: Point {
+            lat: 10.5,
+            lon: 10.5,
+        },
+        zoom: Pose::LOCAL,
+    };
+    let out = placed(&marks(&all), near, BOX);
+    assert_eq!(out.len(), 2, "{out:?}");
+    assert!(out.iter().all(|p| p.members.len() == 1), "{out:?}");
+}
+
+/// FAILS IF: the same marks, given in another order, make other groups.
+#[test]
+fn clustering_does_not_depend_on_the_order_given() {
+    let mut all: Vec<Mark> = (0..60_u32)
+        .map(|n| {
+            #[allow(clippy::cast_precision_loss)]
+            let f = n as f32;
+            mark(
+                n,
+                (f * 7.3) % 50.0 - 25.0,
+                (f * 13.7) % 100.0 - 50.0,
+                n % 7 + 1,
+            )
+        })
+        .collect();
+    let first = placed(&marks(&all), facing(0.0, 0.0), BOX);
+    assert!(
+        first.len() > 1 && first.len() < all.len(),
+        "{}",
+        first.len()
+    );
+    all.reverse();
+    assert_eq!(placed(&marks(&all), facing(0.0, 0.0), BOX), first);
+    // A SHUFFLE with no randomness: every seventh, from each start.
+    let shuffled: Vec<Mark> = (0..7)
+        .flat_map(|s| all.iter().skip(s).step_by(7).copied())
+        .collect();
+    assert_eq!(shuffled.len(), all.len());
+    assert_eq!(placed(&marks(&shuffled), facing(0.0, 0.0), BOX), first);
+}
+
+/// FAILS IF: the size stops saying "more here", or grows without end.
+#[test]
+fn a_tier_grows_with_the_count_and_stops() {
+    assert_eq!(tier(0), 0);
+    assert_eq!(tier(1), 0);
+    assert_eq!(tier(2), 1);
+    assert_eq!(tier(9), 1);
+    assert_eq!(tier(10), 2);
+    assert_eq!(tier(99), 2);
+    assert_eq!(tier(100), 3);
+    assert_eq!(tier(u32::MAX), 3);
+}
+
+/// FAILS IF: framing a group leaves one of its members off the picture, or
+/// in the air left around it.
+#[test]
+fn a_group_is_framed_whole() {
+    let air = 12.0;
+    let groups: [&[Point]; 3] = [
+        &[
+            Point {
+                lat: -23.5,
+                lon: -46.6,
+            },
+            Point {
+                lat: -22.9,
+                lon: -43.2,
+            },
+            Point {
+                lat: -15.8,
+                lon: -47.9,
+            },
+        ],
+        // ACROSS THE DATE LINE, where a middle taken in degrees is the other
+        // side of the planet.
+        &[
+            Point {
+                lat: 64.8,
+                lon: -147.7,
+            },
+            Point {
+                lat: 55.0,
+                lon: 160.0,
+            },
+        ],
+        &[
+            Point {
+                lat: 51.5,
+                lon: -0.1,
+            },
+            Point {
+                lat: 48.9,
+                lon: 2.35,
+            },
+        ],
+    ];
+    for points in groups {
+        let pose = framing(points, BOX, air);
+        assert!(pose.zoom > Pose::WORLD, "{pose:?}");
+        let all: Vec<Mark> = points
+            .iter()
+            .enumerate()
+            .map(|(n, p)| mark(u32::try_from(n).expect("few"), p.lat, p.lon, 1))
+            .collect();
+        let apart = Marks {
+            merge_px: 0.0,
+            ..marks(&all)
+        };
+        let out = placed(&apart, pose, BOX);
+        assert_eq!(out.len(), points.len(), "{pose:?} {out:?}");
+        for p in &out {
+            assert!(
+                p.at.0 >= air - 0.5
+                    && p.at.0 <= BOX.0 - air + 0.5
+                    && p.at.1 >= air - 0.5
+                    && p.at.1 <= BOX.1 - air + 0.5,
+                "{p:?} outside the air of {BOX:?} at {pose:?}"
+            );
+        }
+    }
+    // ONE POINT is the country's zoom, and none is the world.
+    let one = Point { lat: 1.0, lon: 2.0 };
+    assert_eq!(framing(&[one], BOX, air), Pose::on(one));
+    assert_eq!(framing(&[], BOX, air).zoom, Pose::WORLD);
+    // MORE THAN THE VISIBLE HALF cannot all be shown: the whole world.
+    let opposite = [
+        Point { lat: 0.0, lon: 0.0 },
+        Point {
+            lat: 0.0,
+            lon: 180.0,
+        },
+    ];
+    assert_eq!(framing(&opposite, BOX, air).zoom, Pose::WORLD);
+    let around = [
+        Point { lat: 0.0, lon: 0.0 },
+        Point {
+            lat: 0.0,
+            lon: 120.0,
+        },
+        Point {
+            lat: 0.0,
+            lon: -120.0,
+        },
+    ];
+    assert_eq!(framing(&around, BOX, air).zoom, Pose::WORLD);
+}
+
+/// FAILS IF: the picture's marks and the marks it is grabbed by differ, or
+/// the lit group is not the one drawn chosen.
+#[test]
+fn the_drawing_paints_the_marks_it_answers_with() {
+    let bytes = world();
+    let atlas = Atlas::open(&bytes).expect("an atlas");
+    let all = [mark(1, 5.0, 5.0, 1), mark(2, -30.0, 40.0, 120)];
+    let lit = Marks {
+        lit: Some(1),
+        ..marks(&all)
+    };
+    let pose = facing(0.0, 0.0);
+    let drawing = project(&atlas, pose, None, BOX, &[], 3.0, &lit);
+    assert_eq!(drawing.marks, placed(&lit, pose, BOX));
+    assert_eq!(drawing.marks.len(), 2);
+    // THE LIT ONE LAST, so nothing is painted over it.
+    assert_eq!(drawing.marks[1].members, [1]);
+    let chosen = drawing
+        .shapes
+        .iter()
+        .filter(|s| s.ink == Ink::Chosen)
+        .count();
+    let dots = drawing.shapes.iter().filter(|s| s.ink == Ink::Dot).count();
+    assert_eq!((chosen, dots), (1, 1));
+
+    let bare = project(&atlas, pose, None, BOX, &[], 3.0, &Marks::NONE);
+    assert!(bare.marks.is_empty());
+    assert!(
+        bare.shapes
+            .iter()
+            .all(|s| s.ink != Ink::Chosen && s.ink != Ink::Dot)
+    );
 }

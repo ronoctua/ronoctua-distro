@@ -136,6 +136,13 @@ Ausência não é erro: o instalador e o resgate seguem com as quatro embutidas 
 diz quantas subiram, para uma tela poder dizer que a interface está reduzida em vez de mostrar
 caixinhas.
 
+**O renderizador nasce na língua da interface.** O locale é o que escolhe, entre as quatro faces
+Han, se 直 sai japonês ou chinês. Ele começava num padrão e só uma TROCA de língua o movia
+(`Text::set_locale`): toda porta, o rodapé e a linha de vida desenhavam o Han da primeira língua do
+jeito do padrão até alguém escolher uma língua de novo — só a foto (`photograph`) acertava, porque
+chamava `set_locale` ao nascer. Agora `Text::new` recebe o locale como recebe a escala: quem cria
+um renderizador diz a língua dele, e esquecer é erro de compilação, não uma tela que difere da foto.
+
 **Duas medições que viraram desenho.** A primeira: pôr `Noto Sans Symbols 2` na cauda comum fez
 ele responder por `U+1F550` ANTES da face de emoji — o relógio voltou a sair monocromático, que é
 exatamente o defeito que o `strip-emoji.py` existe para impedir, chegando por outra porta. A face
@@ -162,8 +169,13 @@ aparece, e entra do tamanho do problema:
   `webpki-roots`. Raiz embutida envelhece DENTRO do binário, e o dia em que uma expira o sintoma é
   toda busca falhando numa máquina cujo navegador está bem. Sem o arquivo, o crate diz uma vez e
   não busca nada — feature que não funciona, e não certificado ignorado.
-- **Sem redirecionamento, proxy, keep-alive, compressão, cookie ou autenticação.** Dois hosts
-  respondem um `GET` com JSON e `Connection: close`.
+- **Sem proxy, keep-alive, cookie ou autenticação.** Dois hosts respondiam um `GET` com JSON e
+  `Connection: close`. Redirecionamento e gzip vieram depois, quando a central de programas e as
+  buscas do player os pediram, e moram num módulo só (`ronoctua_http::web`): no máximo cinco
+  saltos, só `https` (um redirecionamento para `http` é recusado; o primeiro endereço `http` de
+  `commons.wikimedia.org` e `coverartarchive.org` é pedido direto em `https`), e o gzip inflado
+  com teto na SAÍDA. Qualquer outra codificação num 2xx é recusada; numa recusa (4xx, 5xx) o
+  corpo cai e o status continua sendo a resposta.
 - **O decodificador de `chunked` não é novo**: é o do `ronoctua-tunnel`, e é por isso que a
   dependência aponta para lá. Ela lê estranho pelo nome e certo pelo conteúdo — a alternativa era
   um segundo decodificador, e o primeiro existe porque uma fronteira de chunk no meio de um
@@ -239,9 +251,11 @@ O detalhe cruel: `nix/rust.nix` **já filtrava** via `lib.fileset`, e filtrava b
 roda sobre `src`, e `src = ./.` **já é** o store path com os GB dentro. Filtrar depois economiza
 recompilação, não disco.
 
-A correção é manter build fora da árvore (`CARGO_TARGET_DIR`). A guarda é o check `lean-tree`,
-que mede `self` e falha acima de 20 MB — e tem fixture negativo. Sem o check, a correção se perderia
-no primeiro `cargo build` fora do devshell, e o custo é invisível até o disco encher.
+A correção é manter build fora da árvore: onde o cargo escreve é o `nix/cargo-dirs.nix` (veja "Os
+builds do cargo" na seção do disco). A guarda é o check `lean-tree`, que mede `self` e falha acima
+do teto — e tem fixture negativo. Ele só vê o que o git rastreia: um `target/` ignorado nunca chega a
+ele, e é a sessão, que manda os intermediários de todo projeto para o cache, que cobre o `cargo`
+rodado fora do devshell. O custo é invisível até o disco encher.
 
 #### E a terceira vez foi pelo AMBIENTE, não pela árvore
 
@@ -1256,6 +1270,38 @@ Duas coisas ele não desenha, e **diz** em vez de fingir: `Command::Svg`, que pr
 pixmap que a janela guarda, e qualquer tela que dependa do host responder ao buffer — uma leitura de
 discos, uma fila, uma amostra de memória. Esses buffers saem com a tela vazia, que é o retrato
 honesto do que eles têm.
+
+**E porta nativa não é buffer.** O `render-png` é um binário à parte que empresta dois módulos
+puros, e a janela e a coluna do player puxam o shell inteiro. Por isso a câmera das portas mora
+DENTRO do binário — `ronoctua-shell photograph`, que o `nix run .#png -- --door …` chama —, e quatro
+decisões a seguram:
+
+- **A porta é a de produção, desligada** (`door::Detached`). O `Ui` está numa conexão que ninguém
+  serve, a coluna é a de produção em volta do player, e a tecla e o clique descem pelos caminhos da
+  porta (`typed_into`, `pointer_into`, `act_into`). O quadro sai de `door::compose`, a função que o
+  `Door::paint` chama; só muda onde os pixels caem — uma textura lida de volta pelo `offscreen`,
+  como no `render-png`. Um fotógrafo com pintor próprio seria a segunda aritmética que o
+  `render-png` existe para recusar.
+- **O player não tem por onde agir.** Tudo o que sai da porta — perguntar ao daemon, gravar as
+  preferências, parear, abrir a janela do palco, perguntar ao compositor, a thread de cada imagem — é
+  método de um campo só (`player_window::Reach`), e o braço `Kept` guarda em vez de agir; a foto
+  imprime o que teria feito. Antes eram seis `if` sobre um `Option`, e uma sétima chamada passaria
+  por fora dos seis: um clique numa foto pausaria o filme da pessoa. Sob `cargo test`,
+  `daemon::about_to_act` derruba o teste antes do ato — sem ele, um palco aberto num teste subia o
+  binário de teste de novo como `player maximized`, e o libtest lê isso como um filtro que casa o
+  próprio teste.
+- **O daemon responde pela caminhada.** O `--state` é uma resposta do socket a `{"ask":"look"}`, na
+  grafia do daemon, e não um segundo formato inventado para a ferramenta. Ele vale na ordem em que
+  aparece: antes de qualquer passo é o estado inicial, depois de um clique é a resposta a ele. O
+  quadro de vídeo, que chega por memfd, vira uma imagem parada (`--frame`).
+- **A mesma foto em toda máquina.** Tema, página, tamanho do texto, forma da data e preferências do
+  player são os pedidos ou os padrões, nunca os arquivos da pessoa; o navegador de arquivos lista
+  `--places`, e uma caminhada que o abre sem isso é recusada. O relógio só anda entre passos: dois
+  cliques são um duplo porque a caminhada diz `double`, e não porque a máquina foi rápida. O que não
+  caberia na foto — uma imagem parada que nenhuma imagem usou, uma célula fora da superfície, um
+  tamanho dito duas vezes — é recusado com uma frase.
+
+O `png-tool-draws` abaixo ainda não passa pelo `--door`.
 
 **E o comando tem check** (`png-tool-draws`), porque ferramenta que ninguém confere é ferramenta que
 para de funcionar calada, e a descoberta acontece no dia em que se precisa dela. Ele não se contenta
@@ -3793,6 +3839,25 @@ enquanto a porta segura a encanação: são dois empréstimos de coisas diferent
 **O toque veio de graça, e esse era o teste da base.** Um dedo é tocado pelo mesmo código de
 ponteiro de um mouse, com uma mão própria (`door::touch::Fingers`); nenhuma janela escreveu uma
 linha sobre toque, e toda janela futura o terá.
+
+#### Toda porta sabe a sua tela
+
+A `Ui` de toda porta guarda as telas que a conexão dela descreve (`door::screens::Screens`): o
+conector do `wl_output` versão 4 (`eDP-1`), a descrição e o output, mantidos por `new_output`,
+`update_output` e `output_destroyed`, e em quais delas a superfície está, pelo `enter` e `leave` da
+própria superfície. É protocolo do núcleo (inv. 3) e nenhuma pergunta ao compositor no laço. A
+janela ouve `Content::screens_changed`; `Ui::screen_named` substitui o `Door::output_named`. Uma
+porta que não sabe o nome da tela em que está conta como TODAS as telas, porque o que é roteado a uma
+tela e some porque o compositor demorou a dizer onde a janela está é um defeito sem sintoma.
+
+A coluna sabe a sua tela antes da superfície, pelo espaço de trabalho, e diz ao inquilino
+(`Tenant::placed_on`) cada vez que ela muda: depois do nascimento (o construtor, ou o `detached` de
+uma fotografia), `Column::now_on` é o único lugar em que o `shown_on` muda e o único que avisa. A
+coluna que NASCE numa tela deve o aviso (`placement_owed`): o construtor não tem `Ui` e o primeiro
+`place` a acha onde é querida (`Step::Stay`), então ela avisa na primeira volta do laço ou no
+primeiro quadro, o que vier antes. A fotografia não avisa: a tela dela não tem conector, e não
+saber conta como todas. O rodapé guarda o conector em cada `Screen`, lido quando a saída é descrita, e é dele que
+saem a chave da imagem do player, a borda da tela coberta e a tela do ponteiro.
 
 #### Toda janela digita o que o rodapé digita
 
@@ -6756,9 +6821,12 @@ mão: banda fixa deixa o trilho do polegar (`Section::visible`) mais curto que o
 ARRASTO divide pelo painel (`Room::panel`), então pegar a barra num arquivo com globo a jogava para
 longe do cursor; e a figura custava seis das doze linhas do rodapé enquanto o arquivo estivesse sob
 o cursor. Rolando, ela devolve as linhas, e foi isso que aposentou o `C-g` — a tecla que existia
-para comprar essas linhas de volta. **A figura ENCOLHE em vez de escorregar para fora**, porque
-nada neste renderizador recorta: imagem meio fora do painel é desenhada POR CIMA da listagem, não
-cortada. A porta recebe `globe_rows − offset` linhas e o `Area::centre` encaixa o que há nelas.
+para comprar essas linhas de volta. **A figura é CORTADA no topo, nunca encolhida.** Nada neste
+renderizador recorta uma imagem, e uma imagem meio fora do painel seria desenhada POR CIMA da
+listagem; então a thread projeta o globo INTEIRO e pinta só o que sobra abaixo das linhas que
+rolaram (`Sight::from`, `painted`), com o ponto e as marcas subindo junto. Encolher — reprojetar o
+globo na caixa menor — mudaria o que ele MOSTRA a cada linha rolada. O corte está na chave da
+textura: sem ele, um globo rolado uma linha receberia de volta a figura da linha de antes.
 
 **E `globe_lines` pergunta ao SUJEITO, nunca ao desenho.** Por uma rodada ele perguntou se o
 componente estava APONTADO, e isso é um impasse sem sintoma: quem aponta o componente é a porta,
@@ -6766,13 +6834,52 @@ quando `globe_px` devolve uma caixa, e `globe_px` recusa caixa de menos de duas 
 → nenhuma caixa → ninguém aponta → zero linhas, para sempre, em toda máquina. A tela mostrava uma
 foto com coordenada e um painel de fatos comuns, que se lê como arquivo sem coordenada.
 
-#### A chave da textura tem QUATRO partes
+#### A chave da textura tem CINCO partes
 
-Dono, assunto, tamanho e tema. Sem o dono, duas vistas com a mesma coordenada no mesmo tamanho e
-tema resolvem para UMA chave, e como as duas reescrevem a textura a cada quadro elas piscam entre
-duas poses sem nada em log nenhum. Por isso o `Owner` nasce com a segunda variante antes de ela ser
-alcançada — e a era do desenho é POR DONO (`[AtomicU64; GLOBES_AT_ONCE]`), senão arrastar um globo
-cancelaria o quadro do outro para sempre.
+Dono, assunto, tamanho, o corte do topo e tema. Sem o dono,
+duas vistas com a mesma coordenada no mesmo tamanho e tema resolvem para UMA chave, e como as duas
+reescrevem a textura a cada quadro elas piscam entre duas poses sem nada em log nenhum. Por isso o
+`Owner` nasce com a variante antes de ela ser alcançada (`Atlas`, e agora `Player`) — e a era do
+desenho é POR DONO (`[AtomicU64; GLOBES_AT_ONCE]`), senão arrastar um globo cancelaria o quadro do
+outro para sempre. A pose, o conjunto de marcas e a marca acesa são pintados DENTRO da figura e
+ficam FORA da chave, de propósito: o globo é figura que se move, e as duas portas o sobem a cada
+quadro sob a mesma chave, como um filme. Uma chave por grupo aceso seria uma textura nova do
+tamanho do globo a cada grupo que o ponteiro cruza, e passado o teto do renderer o `dump` jogaria
+fora toda textura que o quadro não segura — as miniaturas e os ícones fora da tela junto.
+
+#### As marcas: grupos pela distância na tela, pegos onde foram pintados
+
+O player põe marcas num globo (países e estações; a cidade de um canal de TV ainda fica na âncora do
+país) e o atlas as agrupa pela distância na tela (`atlas.markMerge`), com o raio pela faixa do total
+(`atlas.markTier1..4`). A vista entrega um `MarkSet` com uma `generation` que ela muda a cada
+conjunto novo; o quadro que volta da thread traz os grupos já nos pixels da figura cortada — como o
+ponto da coordenada — e a geração de que são. `Globe::mark_at` acha o centro mais próximo dentro do
+disco e de `atlas.markSlack`, lendo os mesmos números da pintura, e recusa um quadro de outra
+geração: os ids do conjunto novo nunca pegam um grupo do velho. O lugar do grupo aceso é procurado
+na thread, uma vez por grupo.
+
+**O player é o segundo chamador (`crate::player_globe`).** As páginas de rádios e de TVs do mundo e
+as listas de estações e de canais desenham o globo com as marcas que o daemon já posicionou: a
+vista monta o `MarkSet` da página (uma geração por lista, por resposta da mesa e por recorte), diz
+qual grupo acende — o que está sob o ponteiro, senão o da linha do cursor — e ENQUADRA uma vez
+quando as marcas chegam: a página do mundo inteiro, uma lista nas marcas dela. Uma porta sem thread
+(a foto, o teste) desenha no lugar pela mesma função da thread (`Globe::drawn_here`). O globo do
+player conta como uma figura a mais no teto do renderer (`image::PLAYER_GLOBE`): na janela ele fica
+nas linhas ao lado da faixa dos filmes, nunca no lugar dela.
+
+**A âncora de um país fica sobre a própria terra, e isso foi medido.** A âncora é o ponto de rótulo
+do Natural Earth, e em onze países ele está fora do país na grade: é onde um mapa escreve o NOME. O
+da Nova Zelândia fica no mar ao largo de Taranaki; os de sete países de ilhas pequenas ficam ao lado
+das ilhas (AG, GQ, GS, IO, ST, TT, VC); e três países de poucos passos da grade têm o ponto onde a
+grade o dá ao vizinho que o leitor encontra primeiro, ou à água (MC, MO, VA — o de Mônaco anda
+0,3 km, o do Vaticano 1,8). Uma marca
+representa o país, e o clique nela pergunta o país em que o ponto está; então o gerador
+(`gen-atlas.py`, `on_land`) leva esse ponto ao ponto da grade mais próximo que o leitor acha dentro
+dos anéis do próprio país, e o `every_anchor_is_inside_its_own_country` cobra na tabela assada.
+A âncora mora na tabela assada, numa seção própria (`Anchors`: código, longitude e latitude, em
+ordem de código), lida por `anchor_of` e `country_name`; a versão da tabela continua 2, porque um
+leitor antigo pula a seção que não conhece. O gerador tira o ponto do `LABEL_X`/`LABEL_Y` do Natural
+Earth já pinado e recusa a tabela com menos de cem âncoras ou com um ponto fora do planeta.
 
 ### As ruas por região — um pacote, uma fila, e um leitor que recusa
 
@@ -7477,6 +7584,20 @@ cento e cinquenta colunas de `modo avião`, com nada no meio. `chrome::field_pai
 valor começa numa COLUNA (`space.view.labelCells`) — o que faz das cinco uma lista de definições:
 o olho desce uma coluna em vez de ziguezaguear. É a mesma regra que o `chrome::rule` e o
 `chrome::divider` já tinham estabelecido para separador.
+
+**Uma seção escrita inteira tem uma coluna só, e rótulo nenhum cortado.** O `field_pair` coloca
+cada linha sozinha: numa porta estreita, onde a coluna é a metade da linha, cada rótulo longo
+empurrava o próprio valor, e os valores viravam um ziguezague cortado na borda (`desligad…`, `de…`).
+Quem escreve a seção inteira de uma vez — as páginas do player, em duas passadas
+(`player_rows::Builder::build`) — mede antes: os valores da seção começam depois do rótulo mais
+largo e das duas células de ar (`chrome::section_column`), nunca antes da coluna de toda outra
+vista nessa largura e nunca tão longe que o valor mais largo seja cortado; onde a linha não
+comporta os dois, o rótulo QUEBRA nas linhas de baixo (`chrome::aligned_pair`), que continuam a
+dele: o cursor não para nelas, e um clique nelas é na linha (`Row::continues`, `Row::owner`). Uma
+primeira tentativa mudou o próprio `field_pair` (um nome nunca empurra, cortado na coluna) e
+alcançou as dezessete vistas que o chamam: na de energia, `fechar a tampa, na tomada` e `fechar a
+tampa, no dock` viravam o mesmo `fechar a tampa, n…`. O `field_pair` voltou à regra de sempre, e
+levar a regra da seção a outras vistas é decisão do dono.
 
 **Fato e controle eram desenhados idênticos.** A diferença ia ser um glifo na frente, e o dono
 RECUSOU a marca: sobrou o TOM — `text.label-acts` no rótulo e `text.primary` no valor de quem
@@ -8571,6 +8692,310 @@ fechado.
 O `effects_from` do runtime não tinha braço para `"save"`. O editor emitia `Effect::Save`, o host do
 buffer sabia tratá-lo, e entre os dois o efeito caía em "efeito desconhecido" — um `warn` num log que
 ninguém lê. `SPC m s` parecia uma tecla que não faz nada. Uma linha, e um teste que a segura.
+
+### O disco se cuida sozinho — o piso do Nix, as gerações por contagem e os snapshots
+
+Pedido do dono (2026-09-28): o disco se resolve "sem precisar de intervenções minhas", em todo
+computador que instalar a distro, e nada pode apagar o que o Nix da pessoa usa — com UMA exceção,
+concedida por nome: um limite por contagem nas gerações do SISTEMA, que sempre guarda a atual, a em
+execução e a do boot. Todo tamanho é porcentagem do disco de quem instala — o piso e a meta com um
+teto em GiB, como o journald faz com os dele —, e os números moram em `assets/cache.nix`; o cérebro
+lê os mesmos pelo `nix/cache.nix`, que recusa o build quando uma relação entre eles se quebra (piso
+abaixo da meta, e os tetos na mesma ordem; teto do cargo dentro do que a meta deixa; N ≥ 2).
+
+#### O que quebrava a garantia
+
+Três coisas com cara de faxina: o `nix.gc` semanal com `--delete-older-than 30d` (em `base.nix`), o
+`generations` do painel de memória (o mesmo comando) e o passo `nix-profile-history` da
+atualização, ligado. Como root, `--delete-older-than` apaga as gerações antigas de TODO perfil em
+`/nix/var/nix/profiles`, `per-user` inclusive — o histórico do Nix da própria pessoa. O timer saiu (a
+coleta da atualização é a semanal, e o piso cobre os dias entre elas); o passo da pessoa vem
+desligado (a limpeza continua na vista de programas, como ato dela); o painel e o `ngc` do shell
+chamam a aparagem.
+
+#### O piso é o do próprio Nix
+
+`min-free` e `max-free` fazem cada build e cada download coletar lixo — só lixo, nunca geração nem
+nada com raiz — quando o disco cai abaixo do piso, até a meta. O valor depende do disco, então não
+cabe no `nix.conf` gerado: uma unidade de boot (`ronoctua-store-floor`, antes do `nix-daemon` e
+querida por ele) mede o sistema de arquivos do `/nix/store` e escreve `/run/ronoctua-store/free.conf`,
+que o `nix.conf` inclui por último (`extraOptions` vem depois de `nix.settings`, e o último vence).
+
+O arquivo sai `0644` e por rename porque o Nix **pula sem aviso** um `!include` que não consegue ler
+(`configuration.cc` engole o erro de leitura; conferido na 2.34.8): um modo errado não é erro em
+lugar nenhum, é uma máquina sem piso. Ausente também não é erro — é assim antes da unidade rodar e no
+sandbox em que o nixpkgs valida o `nix.conf`.
+
+**Porcentagem com teto.** Sem ele, dez por cento de um disco de 8 TB são 800 GB: um disco cheio
+sobretudo dos arquivos da pessoa estaria "sem espaço" com centenas de gigabytes livres, o Nix
+coletaria a cada build e o cérebro abriria espaço de hora em hora para nada. O piso é
+`min(diskFloorPercent, diskFloorCapGiB)` e a meta `min(diskGoalPercent, diskGoalCapGiB)`, no piso do
+Nix, no do cérebro e na meta da folga — a mesma conta nos três.
+
+#### As gerações do sistema, por contagem — e o menu de boot cabe nela
+
+`ronoctua-system-generations` guarda as N mais novas (`systemGenerations`, cinco: com atualização
+semanal, cerca do mês que os 30 dias guardavam), a atual do perfil, a em execução, a do boot, a de
+onde a última troca SAIU e toda geração que o menu de boot lista, e apaga os links das outras
+gerações do perfil do sistema — de nenhum outro. O perfil é argumento só para o fixture provar o
+programa, e ele recusa qualquer um que não se chame `system` ou esteja sob `per-user` ou
+`system-profiles`. N ≥ 2 porque o rollback do console de resgate vai para a anterior.
+
+- **Especialização.** Dar boot ou trocar para uma especialização deixa `/run/booted-system`
+  apontando para o toplevel dela, que nenhum `system-N-link` resolve; cada geração é comparada
+  também com `system-N-link/specialisation/*`.
+- **A de onde a troca saiu.** Quem voltou para a 3 porque da 4 à 8 estão quebradas, e depois teve a
+  atualização semanal construindo a 9, perderia a 3 na mesma troca que saiu dela: nada a guardava
+  (não era a atual, a em execução nem a do boot). Um trecho de ativação grava
+  `/run/ronoctua-generations/previous-system` enquanto `/run/current-system` ainda aponta para o
+  sistema que sai — a ativação só troca esse link no último passo —, e a aparagem guarda o que ele
+  aponta. No boot `/run` é novo e não há nada a gravar.
+- **O menu.** Todo loader habilitado lista no máximo N gerações (`configurationLimit` ou
+  `maxGenerations` em `mkDefault N`, e uma asserção por loader — systemd-boot, grub, extlinux,
+  limine, rEFInd e o lanzaboote, se importado); um loader que ninguém sabe limitar
+  (`generationsDir`, `initScript`, o `external` sem o lanzaboote) é recusado na avaliação. O
+  construtor do menu usa as L mais novas e remove o resto, e com L ≤ N toda entrada está entre as
+  guardadas. Quando a instalação do loader falha e o perfil avança mesmo assim, o menu fica para
+  trás; por isso a aparagem lê os pontos de montagem de boot (`/boot`, a ESP, o XBOOTLDR, os
+  `mirroredBoots`) e guarda a geração cujo número está no nome de uma entrada
+  (`nixos-generation-7.conf`, a UKI do lanzaboote) ou cujo toplevel está no texto de um menu (grub,
+  extlinux, limine, rEFInd). Menu ilegível ou ausente não lista nada: vale a contagem.
+
+Ele **nunca** roda `switch-to-configuration`: o switch pega `/run/nixos/switch-to-configuration.lock`
+sem esperar, e uma unidade automática que o rodasse mataria o `nixos-rebuild` de alguém no meio.
+
+**Duas unidades, um programa.** `ronoctua-system-generations.service` é a que o passo
+`old-generations` da atualização (antes da coleta), o painel de memória e o `ngc` iniciam, e cuja
+falha eles veem. `ronoctua-system-generations-at-activation.service` roda o mesmo no boot e a cada
+`switch` — o switch reinicia os targets ativos, e um `oneshot` sem `RemainAfterExit` que o
+`multi-user.target` quer roda de novo, depois do loader instalado —, mas com `-` no `ExecStart`: o
+switch sai com 4 quando uma unidade que ele iniciou falhou, o `nixos-rebuild` chama a troca inteira
+de falha, e o passo `system-rebuild` da atualização pararia a sequência por causa de uma aparagem,
+semana após semana, com o sistema novo rodando. Falhas antigas não contam (o switch faz
+`reset-failed` no começo). E sem dependências padrão: um target espera toda unidade que ele quer e
+que as tenha, e o boot esperaria uma aparagem em prioridade ociosa. Nenhuma das duas tem
+`RemainAfterExit`: com ele, o `systemctl start` da atualização não faria nada. N é contagem, não
+fatia do disco: num disco de 128 GB cinco closures podem passar de 60 GB, e o piso não apaga geração.
+
+Os logs de build envelhecem por `e /nix/var/log/nix/drvs - - - 30d` (`buildLogDays`), limpos pelo
+`systemd-tmpfiles-clean.timer` que o nixpkgs já tem. Com `noatime`, a idade é a da escrita.
+
+#### O btrfs: nenhum snapshot guarda o store, e o `~/.cache` é um subvolume
+
+Snapshots de uma raiz que contém `/nix` seguram tudo o que a coleta libera, e a maior parte de um
+disco pode sumir assim sem que nada diga. No layout da distro `@nix` é subvolume de topo, e um snapshot de
+`@root` nunca o contém; `nix/modules/filesystem.nix` mantém isso para o que uma máquina acrescentar.
+Alvo de snapper ou btrbk em `/nix` (ou abaixo), num `.cache`, ou em `/` onde `/nix` não é montagem
+própria é recusado na avaliação; o btrbk nomeia subvolumes como o topo os vê (`@nix`), e o `subvol=`
+do `fileSystems` diz qual montagem cada um é.
+
+Cada usuário normal ganha `ronoctua-cache-subvolume-<nome>`, antes do
+`systemd-user-sessions.service` — que é o que deixa entrar o getty, o gerenciador de login e todo
+gerente de usuário —, que faz do `~/.cache` um subvolume próprio. Com as dependências padrão e não
+antes do `sysinit.target`: uma home montada tarde (pela rede, por um dispositivo lento) seria um
+ciclo de ordem no boot. Snapshot não desce em subvolume aninhado, então os de `/home` deixam
+de carregar o que a varredura apaga, e a raiz da varredura é um dispositivo só. O `~/.cache` que falta
+vira subvolume direto; o que existe é copiado com `cp -a --reflink=always` para um subvolume ao lado
+e trocado por `mv --exchange`, que é atômico — o boot seguinte termina ou desfaz uma troca
+interrompida olhando qual dos dois é o subvolume (inode 256). `always` e nunca `auto`: uma cópia que
+não fosse reflink escreveria o cache inteiro de novo, no boot, num disco que pode ser a razão de isto
+existir. Arquivo NOCOW não aceita reflink, e aí o cache fica diretório, dito no journal. A MUDANÇA
+só acontece durante o boot (`systemctl is-system-running` diz `starting`): no `switch` que traz a
+unidade, alguém está logado ou vai estar, e copiar um cache dentro do switch é um switch parado;
+fazer subvolume de um `~/.cache` que falta não move nada e acontece a qualquer hora. Uma tentativa
+deixa um bilhete ANTES de começar (`/var/lib/ronoctua-cache-subvolume/<nome>`), que só o sucesso
+tira: a que falhou, ou que foi cortada pelo limite de 10 minutos ou por falta de energia, não é
+tentada de novo por `keepDays` — sem isso, a causa (o arquivo NOCOW, o disco cheio demais para os
+metadados da cópia) continuaria lá, e todo boot pagaria a cópia antes do login. Link, montagem e
+subvolume dentro ficam como estão.
+
+`dynamic_reclaim` e `periodic_reclaim` (kernel ≥ 6.11, só dados) devolvem ao espaço não alocado os
+block groups quase vazios, o que um `btrfs balance` manual fazia — sem root, sem polkit, na escala do
+chunk de cada máquina. Num kernel mais velho o glob da linha `w` não casa e ela não escreve nada; por
+isso não há asserção de versão. O scrub mensal do nixpkgs, um por sistema de arquivos, é o único
+relógio: bit rot não tem evento. Os três só existem onde `ronoctua.filesystem.btrfs` é verdade
+(derivado de `fileSystems`); a regra dos snapshots vale em toda máquina.
+
+#### Os builds do cargo: fora de toda árvore, enxutos, e só o que se lê de novo fica no store
+
+**Onde o cargo escreve** mora num lugar só, `nix/cargo-dirs.nix`:
+`<cache>/cargo-target/rustc-<versão>/target` para o que o cargo promove (os binários, por hard link)
+e `<cache>/cargo-target/rustc-<versão>/build/{workspace-path-hash}` para o resto — `deps/`,
+fingerprints, estado incremental, quase todos os bytes. O `build.build-dir` é estável desde o 1.91, e
+o template vira dois níveis por workspace (medido: `build/ab/cdef…`, com o `CACHEDIR.TAG` na raiz
+deles). A versão no caminho faz um compilador novo começar um diretório novo em vez de
+recompilar por cima do velho, e o velho vira uma unidade que a varredura leva inteira; o nome é
+`cargo-target` e não `cargo` porque há quem aponte o `CARGO_HOME` para `~/.cache/cargo`.
+
+A **sessão** de toda máquina (`nix/modules/cache.nix`, sem depender da varredura) define só o
+`CARGO_BUILD_BUILD_DIR`, duas vezes: `sessionVariables` para login, console e ssh, e
+`environment.d/60-ronoctua-cargo.conf` para o gerente de usuário, que é quem abre terminal, editor e
+rust-analyzer. O `CARGO_TARGET_DIR` fica de fora de propósito: ele não tem template, então seria um
+diretório só para todo projeto da máquina — vence o `build.target-dir` de cada um, um `cargo clean`
+em qualquer lugar esvazia os binários de todos, e dois projetos com um binário de mesmo nome se
+sobrescrevem. Cada projeto guarda o próprio `./target`, que fica pequeno. **Este repositório**
+exporta as duas (o devshell sempre; o `.#dev` só o que o chamador não exportou), porque o `./target`
+dele estaria dentro da árvore do flake e o laço procura o rodapé em `$CARGO_TARGET_DIR/loop/`. O
+`.#dev` testa com `if` e não com `${VAR:-…}`: a `}` do template fecha a expansão, e uma variável que
+já existia saía com uma `}` a mais.
+
+**O `[profile.dev]`** é o de todo `cargo` local, nunca do Nix (as derivações pedem `release` ou
+`loop`): `line-tables-only` nos nossos crates, nada nas dependências. O binário de teste do shell
+passou de 716 MiB (631 de `.debug_*`) para 134 MiB (54), e um `cargo test -p ronoctua-shell
+--no-run` do zero ocupa 3,8 GB de diretório de build. Sem `split-debuginfo`:
+com só as tabelas de linha, o que sobra é quase todo `.debug_line`, que o DWARF separado deixa no
+binário de qualquer jeito. O `release` perdeu o `debug = 1`: o fixup do stdenv roda `strip -S` no
+`bin/` (o log de todo build do workspace diz isso), então ele nunca chegou a máquina nenhuma e só
+engordava a camada de dependências e atrasava o link com LTO; o `.symtab` sobrevive ao `-S`, e o
+`perf` continua nomeando funções. Cobra `cargo-dev-profile-is-lean`, que também recusa um
+`CARGO_PROFILE_*` no devshell e um `.cargo/config*` na árvore — os dois vencem o manifesto.
+
+**Só a camada fica no store.** O crane arquiva o `target/` inteiro no `$out` de toda derivação que
+não é `buildPackage`. Nas camadas de dependências (`buildDepsOnly`, que força isso) é o produto; nos
+testes, no clippy e no formatador eram gigabytes por edição que ninguém lia, cada um com um link para
+a camada do `loop`. Os três têm `doInstallCargoArtifacts = false` — o `$out` continua existindo,
+porque a instalação padrão do crane é `mkdir -p $out` —, e `leaf-builds-keep-no-artifacts` recusa a
+derivação nova que vier com o padrão (um `cargoTest` ou um `cargoNextest`; o `cargoDoc` já vem
+desligado). O `deps-layer-is-lean` recusa um `CARGO_*_DIR` numa camada ou em quem a usa: a camada
+chega como `./target`, e com o diretório mudado o cargo não olha lá e recompila tudo, calado.
+
+**As camadas em uso têm raiz; as velhas, não.** Nada instalado as referencia, então a coleta as
+leva, e agora a coleta acontece sozinha. O `ronoctua-keep-sources` (`nix/kept-sources.nix`) segura
+a camada que ESTA avaliação construiria quando ela já está no store — nunca é motivo para
+compilar. A raiz leva o nome do caminho que segura (`layer-release-<hash>…`, `sources-<hash>…`), não
+só o da camada: o diretório é da pessoa, e todo checkout deste repositório roda o mesmo script
+nele, então uma raiz por nome seria tomada pelo último checkout que rodou — um worktree com outro
+lockfile soltaria as 483 crates compiladas do checkout principal, e a coleta do piso, durante o
+build do próprio worktree, as levaria. Cada execução renova as suas (`touch -h`), e uma raiz que
+nenhum checkout renovou em `oldCompilerDays` é solta: é assim que a camada de um lockfile antigo
+morre. Roda no `.#dev`, no `.#quick` depois do build e nas baterias depois
+da fase 1. As fases 1 e 2 da bateria constroem com `--out-link` no diretório de trabalho dela, que o
+`trap` apaga: o que elas pagaram fica com raiz enquanto a bateria dura, e nem um minuto a mais.
+
+#### Quando o disco aperta: o cérebro abre espaço, na hora
+
+O piso do Nix só age enquanto algo compila, e só no store; um disco cheio por qualquer outra coisa —
+o cargo, antes de tudo — fica cheio até alguém ver. Quem vê é o cérebro: o pulso de cada tique já lê
+o `statvfs` do sistema de arquivos do `/nix/store` e do da home (`Pulse::disk_short`: algum deles
+abaixo do próprio piso, porcentagem com teto; `Pulse::disk_free_per_mille`, o mais cheio, é o que a
+tela diz). Nada avisa um processo que um disco está enchendo — o inotify fala de arquivos, não de
+capacidade —, então o evento é o tique que já existe, sem relógio novo.
+
+A tarefa `disk-space` (`tasks/space.rs`) nunca vence pelo calendário: a linha dela diz "quando falta
+disco". Ela entra por `Task::wanted_now` — abaixo do piso, e se o último INÍCIO foi há mais de
+`reliefGapMinutes`, ensaio incluído (o runner guarda quando cada tarefa começou; o diário, onde
+ensaio não é execução, não sabe, e o cérebro do `.#dev`, que só ensaia, disparava a folga a cada
+tique) — e é a única que `Task::gated` tira do portão: a máquina está mais ocupada justamente
+enquanto um build enche o disco, e uma folga que esperasse a memória acalmar esperaria o disco
+lotar. Pelo mesmo motivo ela entra na CABEÇA da fila (`Shared::queue_first`): o runner só olha a
+cabeça, e atrás de uma varredura retida pelo portão ela ficaria retida também. Roda em prioridade
+ociosa, então ceder é trabalho do escalonador, não de um bloqueio.
+
+**Uma folga que deixou o disco curto não se repete.** Quando o que enche o disco é da pessoa —
+arquivos, programas, cinco closures do sistema —, nada mais sai sem ela, e uma folga por hora
+andaria o cache e coletaria o store à toa, dizendo "continua sem espaço" a cada vez. Depois de uma
+assim, a seguinte espera, além do intervalo, o disco encher MAIS do que ela o deixou: só então há
+algo novo para liberar.
+
+O trabalho é `ronoctua-disk-relief` (crate da varredura, unidade de usuário em
+`nix/modules/space.nix`, o sandbox dela copiado da varredura, com `-%C` para uma pessoa sem
+`~/.cache` ainda), em dois passos, e os números chegam como argumentos da mesma tabela de onde o
+piso do cérebro é compilado — por isso não há opção para eles, nem interruptor para a folga (quem
+a desliga é a página do cérebro; um segundo interruptor deixaria a tarefa pedindo uma unidade que
+não existe, de hora em hora):
+
+- **`cargo-builds`**, só quando o sistema de arquivos do CACHE está abaixo da meta — onde `/nix` e
+  a home são dois, um store cheio não fica mais folgado recompilando as crates de alguém: o
+  diretório inteiro de um compilador que ninguém usa, depois de `oldCompilerDays` — nunca o mais
+  recente nem o da sessão (`--keep-compiler`), e só um diretório com o nome de compilador
+  (`--compiler-prefix`, de `cargo-dirs.nix`) — e, enquanto todas as árvores do cargo sob o cache
+  pesarem mais que `cargoCeilingPercent` do disco, unidades. Uma unidade é o que um
+  `.fingerprint/<nome>-<hash>` nomeia — as entradas de `deps/`, `build/` e `examples/` com o mesmo
+  hash (medido no 1.97: 768 fingerprints, toda saída nomeada por uma) — ou um diretório de
+  `incremental/`. O fingerprint sai PRIMEIRO: o cargo reconstrói a unidade sem fingerprint, e uma
+  remoção interrompida nunca deixa um fingerprint abonando saída que sumiu.
+- **`store-garbage`**: `nix-store --gc --max-freed <meta − livre>`, pelo daemon, como a pessoa — só
+  lixo, até a meta e não além, para o próximo build não baixar de novo o que acabou de sair.
+
+**O que sai primeiro.** Com `noatime`, a idade de um arquivo é a da escrita: uma dependência
+compilada há um ano e ligada em todo build desde então parece ter um ano, e levá-la a recompila —
+e o cargo recompila tudo o que depende de uma saída mais nova que ele, então uma unidade velha pode
+custar o workspace inteiro. Saem primeiro, então, o que ninguém lê de novo: a unidade que um build
+POSTERIOR da mesma crate e do mesmo tipo (`lib-serde`, `run-build-script-…`) substituiu — um dia ou
+mais mais nova, que um build escreve suas unidades em minutos —, a saída que nenhum fingerprint
+nomeia e o estado incremental; depois o resto, da compilada há mais tempo para a mais recente.
+
+**Só sob a trava do próprio cargo, em qualquer layout.** Nada sai de uma árvore do cargo sem que a
+folga segure, exclusiva e sem esperar (`File::try_lock`), TODA trava que o cargo deixa em qualquer
+lugar dela (`.cargo-lock`, `.cargo-build-lock`, `.cargo-artifact-lock`) — entenda ela o layout ou
+não: o `target/<triplo>` do layout dividido tem as suas e nenhum fingerprint, e é uma árvore em que
+um build pode estar escrevendo. Medido no 1.97: segurar qualquer uma das três faz um `cargo build`
+imprimir "Blocking waiting for file lock" e esperar. Trava tomada, ou que nem pôde ser tentada,
+deixa a árvore inteira (e o compilador inteiro). Unidade por unidade só num perfil que ela entende
+(`.fingerprint/`, `deps/` e `.cargo-build-lock`, a trava do build inteiro desde o 1.96); o resto só
+sai INTEIRO, e só depois de `oldCompilerDays` sem ninguém tocar. O ensaio solta cada trava assim
+que a tentou: não apaga nada, então não tem build nenhum a segurar, e um `cargo build` da pessoa
+não espera uma pergunta. As árvores são achadas pelo `CACHEDIR.TAG` que o cargo escreve (a
+assinatura sozinha é da convenção, de muitos programas; a linha "created by cargo" é dele), até
+oito níveis abaixo do cache: a da distro fica no quinto.
+
+**`--cargo-root` é do cache ou nada.** Absoluto, sem `..`, dentro de `--root` e no mesmo sistema de
+arquivos, e dele só sai o que tem nome de compilador: uma execução à mão com `--cargo-root
+~/projetos` ofereceria todo projeto parado há uma semana à regra do compilador.
+
+**Raiz do Nix nunca sai com a pasta.** Um `nix develop --profile` deixa `…/devshell-profile-1-link`
+dentro do `~/.cache`, apontando para o closure inteiro do ambiente. A varredura por entrada levaria
+a pasta depois de 40 dias parada, e a coleta seguinte levaria o closure. As duas varreduras
+perguntam ao Nix (`nix-store --gc --print-roots`, pelo caminho no store) e comparam o
+`(st_dev, st_ino)` do próprio link, lido sem segui-lo — o mesmo por qualquer caminho que se chegue
+a ele; o Nix 2.34 imprime o link entre aspas, como o C++ escreve um `std::filesystem::path`. Sem
+resposta, toda pasta com um link fica. **E uma resposta que ela não sabe ler não é resposta**: uma
+linha num formato que o parser não conhece, ou uma lista sem raiz nenhuma (toda máquina tem ao
+menos o perfil do sistema), é `Roots::Unknown`, com a frase do porquê no journal — senão um Nix que
+mudasse o formato desligaria a guarda calado, com "0 com raiz do Nix" dito como fato. O formato é
+provado contra o `nix-store` fixado, num store próprio no diretório de build, pelo teste
+`the_pinned_nix_prints_roots_this_reads` (a derivação `tests` passa `RONOCTUA_NIX_STORE`).
+
+**Todo link tem idade.** As raízes são perguntadas uma vez, antes da caminhada; um
+`nix build -o ~/.cache/p/result` feito durante ela não está em resposta nenhuma. Por isso link e
+socket contam pela própria data (lida sem seguir): um link feito agora deixa a pasta jovem.
+
+**Montagem por bind não é diretório.** "Nunca sai do sistema de arquivos" comparava `st_dev`, e um
+bind do mesmo sistema de arquivos (`/persist/x` sobre `~/.cache/x`) mantém o número: levar a pasta
+inteira apagaria o que o `/persist` guarda. O kernel diz onde começa uma montagem
+(`STATX_ATTR_MOUNT_ROOT`, desde o 5.8), e uma dentro é recusada como outro dispositivo.
+
+**Olhar não é usar.** Ler o `CACHEDIR.TAG` movia o atime dele (num sistema de arquivos com
+`relatime`), e toda árvore passava a ter um segundo de idade: o teste de um compilador parado havia
+dez dias o viu ficar. A tag é aberta com `O_NOATIME` (recusado num arquivo de outro dono, que então
+é lido normalmente e só pode parecer mais novo).
+
+**O diretório do relatório existe antes do sandbox.** As unidades que o cérebro dispara abrem
+`%t/ronoctua-brain` com `ReadWritePaths`, e um caminho que não existe derruba a unidade com
+226/NAMESPACE antes do programa rodar (medido com uma unidade transiente). Só o script da
+atualização o criava, então numa sessão em que nenhuma atualização tinha rodado a varredura e o lixo
+nem começavam, e o cérebro esperava a paciência inteira. As três unidades declaram
+`RuntimeDirectory = "ronoctua-brain"` com `Preserve`, e o `the-brain-reads-what-the-units-write`
+cobra uma por unidade que escreve ali.
+
+**O que a pessoa ouve.** A tarefa mede antes e depois e põe um `Relieved` no `Mind` (o maior ganho
+entre os sistemas de arquivos, o quanto sobra no mais cheio, e se algum continua abaixo do piso); o
+rodapé o transforma no evento `disk-relieved` ("espaço aberto no disco: 12,3 GB liberados") ou
+`disk-still-short` — este o único evento do catálogo sem `auto-read`, porque o que falta liberar é
+decisão da pessoa, e dito UMA vez por aperto: outra folga que acha o mesmo não o repete, só uma que
+abriu espaço antes. O primeiro `Mind` que o rodapé vê é a base, e um ensaio nunca chega ali. O btrfs
+devolve o espaço quando a transação fecha, não quando o arquivo sai; a folga pede `syncfs` aos dois
+sistemas de arquivos antes de dizer que terminou, senão "liberado" sairia menor e "continua sem
+espaço" seria dito de um disco que não está.
+
+**O que ela precisa.** Uma sessão gráfica: o cérebro roda numa. Uma máquina em que ninguém entra
+graficamente fica com o piso do Nix durante os builds e a aparagem a cada ativação, e nada que ande
+um cache. As máquinas dos testes de VM desligam a tarefa (`disk-space` no `brain.json`, ao lado do
+`system-update`): um disco de teste pequeno cruza o piso fácil, e a coleta levaria os caminhos que um
+teste registrou e não enraizou.
+
+Ensaio num disco de 1,9 TB, sem apagar nada: o cache fica acima da meta e nada é levado; forçando a
+meta a 99% e o teto a 1%, 13 173 unidades, 76,8 GiB, de 95,8 GiB até 19,0 GiB, em 5 s.
 
 ### Um arquivo de swap, e o offset dele
 
@@ -9906,6 +10331,8 @@ carregavam e DOIS eram teclados. O filtro é o alfabeto, como o próprio keyd fa
 
 ### O player — `LEADER p`, um processo, e a coluna à direita
 
+#### Um processo, o libmpv e os decodificadores
+
 **Por que um daemon.** O dono pediu o mesmo vídeo no rodapé e numa janela com UM áudio, vários
 vídeos presos a um áudio, e duas máquinas tocando juntas. As três coisas são a mesma: um relógio
 mestre e vistas que o seguem. Um processo por vista seria N decodificações e N áudios que se
@@ -9925,25 +10352,299 @@ tinha (40 bytes contra 48; funcionava porque o libmpv zera a struct antes de a e
 **Por que o motor é outro crate.** Uma feature `engine` no `ronoctua-player` não basta: o workspace
 unifica features, e o shell passaria a linkar o libmpv no dia em que o daemon fosse compilado ao
 lado. `ronoctua-player` é o cliente, o protocolo e as regras puras; `ronoctua-player-engine` é o
-binário, o único que cita o libmpv, e é extraído (`rust.player`) como o estúdio.
+binário, o único que cita o libmpv, e é extraído (`rust.player`) como o estúdio. Dentro dele, cada
+coisa de que o daemon é dono é um módulo de `engine/` — as vozes (`voice`), a sessão de faixas
+(`session`), a janela da fila no mpv (`queue`), o que se faz do que chega (`resolve`), os
+decodificadores (`decode`), as saídas de som (`sinks`), as legendas e os sons ambientes, as
+etiquetas e os rascunhos (`tags`, `drafts`), as buscas (`lookups`, `desk`, `fetch`) e os diretórios
+(`directory`) —, e o `engine.rs` ficou com o soquete, a trava e o despacho dos pedidos.
 
 **O que só o DeaDBeeF abria.** Um decodificador de linha de comando por família, escrevendo WAV (ou
-PCM cru) num cano que o mpv lê por um protocolo nosso (`ronoctua-decode://`, `mpv_stream_cb_add_ro`).
-Duas medições: todo WAV escrito em cano diz tamanho ZERO — o escritor não pode voltar para corrigir
-—, e o leitor do ffmpeg acredita e chama o primeiro pacote de corrompido; por isso o cabeçalho é
-reescrito na fronteira (`decoders::endless`), mantendo o formato do decodificador (o do sidplayfp é
-MONO). E o libsndfile não abre FIFO para escrever WAV, então o `fluidsynth` sai em RAW no stdout.
-O AdPlug não existe no nixpkgs e é empacotado aqui (`nix/adplug.nix`). Ficaram de fora: o `uade` é
-unfree, o `sacd` e os PSF não têm decodificador no nixpkgs (`docs/PENDING.md`).
+PCM cru) num cano que o mpv lê por um protocolo nosso (`ronoctua-decode://`,
+`mpv_stream_cb_add_ro`). Duas medições: todo WAV escrito em cano diz tamanho ZERO — o escritor não
+pode voltar para corrigir —, e o leitor do ffmpeg acredita e chama o primeiro pacote de corrompido;
+por isso o cabeçalho é reescrito na fronteira (`decoders::endless`), mantendo o formato do
+decodificador (o do sidplayfp é MONO). E o libsndfile não abre FIFO para escrever WAV, então o
+`fluidsynth` sai em RAW no stdout. O AdPlug não existe no nixpkgs e é empacotado aqui
+(`nix/adplug.nix`). O `uade`, a música do Amiga, é o único decodificador não livre, e entra PELO
+NOME: um nixpkgs próprio cujo predicado admite só ele, então a tabela (`nix/player-tools.nix`) nunca
+pede `allowUnfree` e nenhum outro pacote não livre chega por ela. Os rips de console (PSF, PSF2,
+USF, GSF, 2SF, NCSF, SSF) vão pelo `zxtune`, e o Super Audio CD pelo `sacd`.
 
-**A coluna.** Uma superfície layer-shell ancorada em cima, à direita e embaixo, com zona exclusiva
-da própria largura: as janelas encolhem, nada é coberto. A zona de uma superfície é recortada do
-que as superfícies criadas ANTES dela deixaram — é assim que o compositor arranja a camada —, então
-a coluna termina onde a área do rodapé começa e nunca estreita a modeline, o minibuffer nem a faixa.
-A ordem é a armadilha: um rodapé que sobe DEPOIS da coluna seria arranjado depois dela e
-estreitado; por isso ele, na partida, derruba e levanta de novo uma coluna que já esteja de pé,
-no espaço e no tamanho que ela tinha. Uma por espaço de trabalho, e a base é de todas (veja "As
-colunas").
+**O que o libgme lê precisa do demuxer nomeado.** O ffmpeg reconhece VGM, NSF, SPC e os irmãos com
+uma nota de sondagem de 25, e o libmpv exige 26; sem nome, todos terminavam em "formato não
+reconhecido". Baixar o limiar para todo arquivo deixaria um palpite fraco ganhar noutro lugar, então
+o nome vai só para essas extensões, nas opções do `loadfile`.
+
+**O perfil mínimo não leva o player, e a razão é um número.** libmpv sobre `ffmpeg-full` é um
+fecho de 1 487 MiB e os decodificadores mais 670 — 1 682 MiB juntos, quase tudo alcance do próprio
+`ffmpeg-full` (python, samba, opencv, flite, qtbase). Um sistema mínimo já não tem mpv nem VLC; o
+player segue a mídia na tabela do perfil, e uma linha o liga. Sem ele, as teclas dizem que ele não
+está instalado — "não responde, sobe sozinho" seria uma frase falsa ali.
+
+#### A fila é uma árvore nossa, e o mpv toca uma janela dela
+
+**A fila é do daemon, e é uma árvore.** A fila (`ronoctua_player::queue`) guarda arquivos,
+conjuntos, playlists com nome e streams, e cada entrada tem um `EntryId` que o daemon nunca reusa:
+o id da faixa no MPRIS, o cursor de uma porta e "tocar esta" sobrevivem a mover, e a playlist que
+um XSPF, uma pasta ou uma lista do YouTube trazia continua com o nome dela — achatada na playlist do
+mpv, ela o perdia. O que toca depois, com repetir e aleatório (uma permutação que começa pela
+atual), é resposta da árvore, nunca do mpv. Os tetos — 10 000 folhas e quatro níveis, mais os de
+cada conjunto — são recusas com o número, e uma recusa deixa a fila exatamente como estava.
+
+**O mpv toca duas entradas dela.** Áudio sem lacuna entre dois arquivos só existe dentro da
+playlist do mpv (`gapless-audio`, `prefetch-playlist=yes`), então ele recebe a folha que toca e a
+seguinte, e nada mais. Cada entrada do mpv é reconhecida pelo id que o próprio mpv dá a ela, e todo
+evento é conferido com a playlist dele como ela está AGORA: um evento pode ser mais velho que um
+`loadfile` feito depois, e "a fila acabou" só vale com o `idle-active` relido. As opções de um
+arquivo — início, `referrer`, `user-agent` — vão no `loadfile` dele, com o comprimento na frente
+(`%len%`, porque um `user-agent` pode ter vírgula): o `start` global passava para o arquivo
+seguinte. Stream não tem seguinte no mpv: um endereço que falha passa ao próximo relé, e só com
+todos falhando a frase é dita. Se o mpv abre sozinho uma entrada como lista (uma lista dentro de
+lista, um arquivo compactado), ela vira uma playlist do que ele achou, com o mesmo id.
+
+**O que o daemon faz do que recebe.** Pasta vira playlist com o nome dela (subpastas primeiro,
+depois as mídias pelo nome; ocultos, capas, cue sheets e listas ficam de fora, e pasta por link
+simbólico não é seguida). Lista local — m3u, pls, XSPF, ASX — vira playlist com o nome que ela dá a
+si mesma (`<title>`, `#PLAYLIST:`), senão o do arquivo; `.m3u8` com `#EXT-X-` é uma mídia só (HLS);
+lista de rádio num servidor vira UM stream com os relés dela; lista do YouTube vira playlist dos
+endereços dos vídeos (`ronoctua_ytdlp::flat`), nunca dos endereços resolvidos, que expiram. O
+disco é lido antes da trava do motor; a rede, numa thread (`player-resolve`), com um marcador no
+lugar que já tem o id e que tocar espera. Quem abre de fora — o gerenciador, o
+`ronoctua-shell play`, o `OpenUri` do MPRIS — põe logo depois do que toca e toca, como o `P` da
+página de arquivos. As listas são lidas pelo MESMO leitor da prévia do gerenciador
+(`ronoctua-playlist`): o daemon não pode linkar o `ronoctua-inspect`, que traz todo decodificador
+da prévia, e dois leitores seriam duas respostas sobre o que uma lista contém; e o XML delas passa
+pela guarda de profundidade (`ronoctua_xml::parse`, veja "Grafo de crates").
+
+**A fila sobrevive ao daemon.** Ela é gravada em `queue.rqueue` (o formato do player, abaixo) toda
+vez que a forma dela muda, e o `player.json` guarda o caminho da folha atual NA ÁRVORE, a posição, o
+volume, repetir e aleatório — por evento (troca de folha, pausa, parada, volume, fechar), nunca por
+relógio. O id não é gravado: um caminho na árvore continua valendo quando o próximo daemon dá ids
+novos. A versão 1 (a fila plana e um índice) é importada uma vez.
+
+**O nome de uma entrada.** Um arquivo é o título que uma lista ou quem o pôs deu a ele, senão o
+nome do arquivo; uma playlist, o nome dela; um conjunto, o nome salvo, senão o do `.rset` de onde
+veio, senão todas as fontes distintas juntas (`queue::together`), cortadas por grafema na largura —
+nunca o nome de um arquivo só quando tocam vários. O conector é da porta, por chave
+(`player-set-joiner`); onde o próprio daemon diz o nome — o título no MPRIS, uma lista que o mpv
+expandiu — ele junta com ` + `, um sinal e não uma palavra de língua nenhuma.
+
+**Os arquivos são do player, e a pasta vai inteira ao daemon.** O player lista a própria biblioteca
+(`LEADER p l`, uma página da vista) em vez de mandar a pessoa ao gerenciador: começa na pasta de
+música, gira para vídeos e clipes musicais (a décima primeira pasta do `nix/user-dirs.nix`), e só
+mostra o que toca — o critério é UM (`player_browse::glyph_if_played`). Uma pasta vai ao daemon
+como UM endereço, e é ele que a caminha e a faz uma playlist com o nome dela (a fila é uma árvore:
+uma pasta achatada em arquivos deste lado perdia o nome); a porta só confere, antes de mandar, que
+há algo nela para tocar, e diz se não há. `P` toca AGORA, logo depois do que toca, e a fila fica —
+como um arquivo aberto de fora; recomeçar a fila é só o "abrir fila" do próprio player.
+
+**A fila é uma árvore na porta também** (`player_queue`). Uma playlist com nome guarda entradas, e
+um conjunto guarda faixas; os dois são GRUPOS, a linha encabeçada por um triângulo (`md-menu_right`,
+`md-menu_down` — não os chevrons da gaveta, que abrem uma LINHA para baixo) que um clique vira na
+hora: é um controle, e não a primeira metade de um duplo clique. `TAB` vira o grupo sob o cursor, `→`
+abre e `←` fecha. **`C-↑` e `C-↓` movem a entrada sob o cursor — um arquivo, uma playlist, um
+conjunto — uma casa entre as irmãs** (`player-earlier`, `player-later`, `Where::OnAnEntry`; decisão
+do dono, 2026-09-29): as setas puras andam nas linhas e, num grupo, o dobram, então mover um GRUPO
+precisava de outra tecla, e a mesma serve a toda entrada — as setas de lado numa folha deixaram de
+movê-la. A tecla é lida pela notação inteira antes da seta pura (`player::press_of_key`), nas duas
+portas; o `RCtrl ↑↓` da gaveta é o Ctrl da DIREITA, e continua dela. A linha do cursor leva no fim
+um `↑` e um `↓` que fazem o mesmo para o ponteiro (invariante 19), e nunca os triângulos, que a
+linha de um grupo já leva na cabeça. O número de
+uma entrada diz o grupo em que está (`3.2.`): numerada por nível, `4.` de uma playlist ficava logo
+acima de `4.` da fila. O
+que o grupo guarda recua `view.nestCells` por nível, e os nomes abaixo de um grupo começam depois do
+nome dele, mesmo num nível sem grupos. Qual grupo está aberto é da VISTA, por id: como a pessoa
+deixou, e — um que ninguém tocou — aberto enquanto o que toca está nele. O que toca ENTRANDO num
+grupo o abre — só entrando: uma playlist fechada enquanto toca não abre de novo a cada faixa —, e o
+cursor segue a linha em que estava, porque as linhas que abrem acima dele levavam o `RET` a outra
+entrada; sair dele nunca o fecha, senão a fila andando tirava de baixo do cursor a linha em que
+ele estava. Um grupo fechado com o que toca dentro veste o tom do que toca. Um conjunto que toca mostra as faixas dele sob a linha, cada uma pelo glifo do tipo; um
+que não toca diz quantas tem — o estado só traz as faixas do que toca. O nome de um conjunto que
+ninguém nomeou é TODAS as fontes dele juntas (`player-set-joiner`), cortado por grafema na largura
+da linha; nunca o de um arquivo só. E toda linha é a entrada pelo id: o esboço chega inteiro a cada
+mudança de forma e a porta põe o cursor de volta na entrada, onde quer que ela tenha ido
+(`View::outline_heard`, o mesmo caminho nas duas portas).
+
+#### Duas mensagens inteiras, e o resto a pedido
+
+**O daemon manda duas mensagens, cada uma inteira** (decisão do dono, 2026-09-28): o `State`,
+pequeno, a cada evento — a posição no máximo quatro vezes por segundo —, e o `Queue`, o contorno da
+fila (id, nome, tipo, filhos e quantas faixas tem cada conjunto), só quando a forma dela muda e a
+quem pede (`queue`). As faixas de um conjunto dentro da fila fariam cada movimento de um volume
+reenviar a fila inteira; por isso as faixas e a disposição do que toca vão no `State`, e a fila leva
+só a forma. Um observador recebe o contorno e depois o estado, e o estado diz de que revisão da fila
+ele é (`revision`). O contorno sai sempre antes do estado que vai com ele, e a porta guarda o último
+de cada um.
+
+**O que é grande ou raro é pedido, nunca transmitido.** A folha de um arquivo (etiquetas, fluxos,
+capítulos), a página de uma busca ou de um diretório e o caminho de um rascunho vão só para a
+conexão que pediu (`Say::Sheet`, `Say::Desk`, `Say::Draft`); o `State` leva a geração de cada uma
+(`sheet_generation`, `desks[].generation`), e a porta que mostra aquilo pede de novo quando ela
+anda. Quase nenhuma porta mostra a folha, e uma página de trinta filmes a cada quarto de segundo
+seria o estado inteiro de novo.
+
+**Recusa, nunca silêncio.** Um pedido que o daemon não entende recebe `not-understood`; antes era
+silêncio, e uma porta nova falando com um daemon velho não sabia que não tinha sido ouvida. Toda
+recusa vai também para `State.troubles`, porque a maioria das portas manda sem esperar resposta.
+Cada `Trouble` é uma frase da porta, uma por variante, e passar de um teto é `too-many{what, most}`,
+com o número.
+
+**Uma linha, uma escrita.** O daemon monta a linha inteira e a escreve de uma vez. Serializada
+direto no socket, cada token era uma escrita; o socket Unix conta o custo de cada uma no buffer, e
+uma porta que parou de ler por um instante recebia meia linha, cortada pelo prazo de escrita. A
+linha de um broadcast é serializada uma vez para todos os observadores.
+
+**Uma porta mais nova que o daemon o troca, perguntando.** O `State` diz a versão do protocolo
+(`protocol`, hoje 2); um estado sem ela, ou mais velho, faz a home dizer que o player é antigo e
+oferecer reiniciá-lo, com o "não" primeiro. Reiniciar é o `Quit` do MPRIS — o único jeito de fechar
+um daemon que talvez não conheça o `quit` do soquete, e que todo daemon antigo responde —, esperar o
+soquete parar de responder (no máximo 3 s) e subir o daemon de novo pela unidade
+(`client::restart`), numa thread.
+
+#### `.rset` e `.rqueue`
+
+**Um conjunto e uma fila são arquivos do player** (decisão do dono, 2026-09-28): `.rset` guarda
+mídias tocadas juntas e os ajustes delas (as faixas, a disposição), `.rqueue` guarda uma fila —
+conjuntos, playlists, arquivos e endereços. São JSON com `format` e `version`: o `format` separa
+"não é nosso" de "é nosso e está danificado", e a versão recusa, com frase, um arquivo escrito por
+um player mais novo. Campo desconhecido é ignorado; valor fora da faixa é recusado, nunca corrigido
+— o escritor arruma o conjunto antes (`Set::tidy`) para nunca escrever o que o leitor recusa.
+Caminho dentro da pasta do arquivo é gravado relativo (a pasta pode mudar de disco); o resto é
+absoluto, e um absoluto que sumiu é procurado pelo mesmo nome ao lado do arquivo. Um stream nunca
+aponta para um arquivo local: uma fila mandada a outra máquina não pode nomear um arquivo privado.
+Um conjunto que entra na fila é conferido contra os tetos da sessão, e um `.rqueue` com um conjunto
+de vinte faixas é recusado inteiro. Aberto de fora, um `.rqueue` entra como UMA playlist; só o
+"Abrir fila" do player o faz a fila (`put` com `replace`).
+
+**Os dois tipos são nossos na base de MIME** (`assets/player-types.nix`, lista `own`:
+`application/x-ronoctua-set+json` e `application/x-ronoctua-queue+json`, sob `application/json`):
+o gerenciador os mostra com o glifo de lista, a prévia os lê pelo mesmo leitor
+(`ronoctua_playlist::own`) e o player é quem os abre. O `playlist-formats-are-total` lê a lista
+`own` como lê as outras.
+
+**Salvar e abrir são perguntas na linha da porta, e só "abrir fila" substitui a fila.** Salvar o
+conjunto pergunta o nome — com o nome do que toca já na linha, que mudar começa do que é — e depois a
+pasta, com a de música; um arquivo que já está lá só é regravado depois de uma pergunta com o
+"não" primeiro, e um nome que não pode ser de arquivo ou uma pasta que não existe são recusados numa
+frase. Salvar a fila é igual, sem nome de partida. Abrir é uma página dos arquivos com outro
+propósito (`Purpose::Open`), que lista só `.rset` e `.rqueue` (`player_browse::Wanted`): um CONJUNTO
+toca agora, logo depois do que toca, a fila mantida; uma FILA toma o lugar da fila, e com a fila
+cheia pergunta antes, o "não" primeiro — é o único lugar em que o player substitui a fila. Renomear
+pergunta com o nome atual na linha, pela linha "Renomear…" (o que toca) ou por `r` numa entrada; a
+resposta vazia ou igual ao nome não muda nada. As respostas voltam a `View::answered`, que sabe do
+que a pergunta era (`Typing`) e entrega o resto a `player_question::answered_saying` — um caminho
+nas duas portas. A página de tocar junto (`Purpose::Lane`) lista também as legendas, que tocam sobre
+uma imagem e nunca sozinhas na fila, e deixa as listas de fora, que não são faixa.
+
+#### Faixas, vozes e o relógio
+
+**Faixas e vozes.** O que toca são faixas (`Lane`): uma imagem, um som, legendas, cada uma com a
+fonte, a trilha dela, um início no relógio do conjunto, um trecho da fonte (`from`/`until`),
+volume, mudo, telas e saída — as grandezas com a unidade no nome (`start_seconds`,
+`volume_percent`). Uma voz é um mpv: a imagem e o som de UMA fonte a partir de UM início e de um
+trecho só (`session::voices`). Imagem e som da mesma fonte, juntos no tempo, dividem uma voz; o
+segundo idioma do mesmo arquivo é outra voz, porque um mpv manda uma trilha de áudio a um destino
+só. Legenda não tem voz: é desenhada na voz da imagem. Toda voz é aberta do mesmo jeito — com som e
+com contexto de render —, e a que não toca som recebe `aid=no`; assim qualquer voz pega qualquer
+parte, e a que já tem a fonte aberta a mantém: um filme que vira conjunto continua tocando onde
+estava, e mover uma faixa no tempo nunca recarrega nada. Cada voz tem a própria thread de render e
+a de eventos, que param pela flag dela — nunca por um índice numa lista que muda —, e é encerrada
+FORA da trava do motor (as duas threads pegam a trava; juntá-las sob ela esperaria para sempre),
+com o contexto de render liberado antes do mpv, como a libmpv exige.
+
+**Os tetos.** 16 faixas, 6 legendas por imagem, 8 vozes e 6 imagens (`PICTURES_MOST`: vídeos
+ligados e sons cuja capa aparece). O cenário do dono — três vídeos, dois sons e seis legendas —
+cabe; passar é recusa com o número. Várias imagens em alta resolução custam CPU, porque o render é
+por software, e o teto de imagens é o que protege a máquina.
+
+**Um arquivo sozinho já é faixas.** Sozinho, um arquivo tem faixas implícitas — 1 a imagem (se ele
+tem uma que não é capa), 2 o som, 3 as legendas —, cada uma com a trilha que o mpv escolheu.
+Escolher outra trilha, ou ligar e desligar uma faixa, o mantém sozinho: é escolha do próprio mpv.
+Qualquer outra mudança o faz conjunto, com o MESMO `EntryId` e sem parar de tocar. Um stream da
+rede toca sozinho: os relés e os cabeçalhos dele não são de uma faixa. (A porta: "As mídias do
+arquivo são páginas", abaixo.)
+
+**O relógio.** O primeiro som ligado que está tocando marca o tempo; sem som, um relógio do próprio
+motor, que espera as vozes carregarem antes de andar. Um som só assume o tempo quando pousou onde o
+relógio está (a menos de 120 ms): um som ainda a caminho puxaria todas as outras vozes para onde
+ele estava. Uma voz é mandada para onde deve estar enquanto assenta (4 s depois de carregar ou de
+um seek) e empurrada depois disso: a imagem em 5%, o som em 2% — o mpv mantém o tom esticando o som,
+e 5% se ouvem —, e um som mais de 400 ms fora pula. Medido no mpv pinado (saída nula): um som 300 ms
+atrás volta em 14 s; uma imagem, em 6 s; um som 600 ms fora pula e pousa a menos de ~60 ms. Uma
+faixa antes do início fica parada no primeiro quadro, e depois do fim, no último (`keep-open`); uma
+faixa no fim não marca mais o tempo — o fim é onde ela parou, um quadro antes da duração —, e o
+conjunto termina com a última imagem ou som. Uma thread de relógio só existe enquanto é preciso:
+duas vozes, uma faixa esperando o início, ou o relógio do motor andando; uma voz sozinha avança o
+conjunto pelos próprios eventos de posição. A thread acorda no início da próxima faixa, não um tick
+depois.
+
+**Nada é aberto pelo nome.** `sub-auto=no` e `audio-file-auto=no`, na fila e nos sons ambientes:
+uma legenda ou um som é uma faixa que a pessoa vê e escolheu, nunca um arquivo que o mpv achou ao
+lado do filme. Medido: com `fuzzy`, `long1.flac` ao lado de `long.mp4` virou o som do filme, e uma
+máquina que o seguia pelo endereço não tinha essa trilha e tocou silêncio.
+
+**A página de uma faixa** (`player_lane`, `PageId::Lane`) abre com `RET` na linha da faixa, onde
+quer que ela esteja — a linha do tempo, a página das legendas, tocar junto, as faixas de um conjunto
+na fila — e com o SEGUNDO clique na banda ou no nome dela num deck. Ela tem o que a faixa é e está
+fazendo, o arquivo, o NOME dela (`RET` pergunta digitado, a linha abrindo com o nome de agora;
+esvaziado, ela volta ao do arquivo — a regra do nome de uma entrada da fila; `LaneChange::Title`),
+se ela toca (um interruptor), QUANDO ELA COMEÇA no relógio do conjunto (`←`/`→` meio
+segundo; `RET` pergunta digitado, a linha abrindo com o início de agora — `m:ss`, `h:mm:ss`,
+segundos, ou `+1,5`/`-0.3` a partir de onde está, com qualquer das duas marcas decimais
+(`player_timeline::parse_start`) —, e o que não é tempo é recusado numa frase que o cita), ONDE ELA
+PARA no próprio arquivo ("o fim", ou o tempo em que foi cortada: `←`/`→` meio segundo a partir do fim
+do arquivo, que o player diz em `LaneState::duration_seconds`, e passar do fim a devolve ao fim;
+`RET` pergunta digitado, relativo a onde para agora; um fim antes de onde ela começa no arquivo é
+recusado numa frase; `d` devolve o fim — `LaneChange::Trim`), o volume
+próprio e o mudo de um SOM (uma imagem não soa: a voz dela recebe `aid=no`, e legenda não tem som),
+se a imagem de uma faixa — a de um filme, ou a capa de um som — aparece entre as imagens (o arranjo
+INTEIRO vai com a faixa entrando ou saindo de `hidden`, ou de `covers`, `Ask::Arrange`), onde ficam
+as linhas de uma legenda e SOBRE QUAL IMAGEM ela fica (um anel dos filmes do que toca,
+`LaneChange::Over`; com um filme só, a linha é um fato), e "Tirar", que fecha a página de volta na
+linha que a abriu. As três linhas — nome, fim, imagem — eram mudanças que o protocolo já tinha e
+porta nenhuma oferecia (decisão do dono, 2026-09-29). O início se
+escreve com o décimo de segundo depois da marca decimal da língua (`0:12,5`), a forma que a pergunta
+lê de volta. Depois vêm PARA ONDE ELA VAI:
+
+- **As telas de uma imagem** (a de um filme, ou a capa de um som): um interruptor para todas as
+  telas e um para cada tela que a porta conhece pelo nome (`View::screens`, que a porta diz — a
+  vista não conhece saída nenhuma), a embutida dita assim (`ronoctua_display::connector::is_internal`)
+  e as outras pela descrição e o conector, porque dois monitores do mesmo modelo são duas linhas.
+  Desligar "todas" deixa a imagem na tela em que a porta está; desligar uma tela de "todas" deixa as
+  outras que a porta conhece. A última tela não é tirada, e isso é dito (`player-screen-last`): uma
+  imagem em nenhuma tela é uma imagem escondida, e o interruptor dela é outro. Uma tela para onde a
+  imagem vai que não está conectada aparece como "não conectada", nunca some: ela volta com o cabo.
+  Uma porta que não sabe o nome de nenhuma tela diz isso. Legenda não tem telas: ela vai sobre a
+  imagem dela.
+- **A saída de um som**: a padrão da máquina e uma linha por saída que o daemon lê (`State::sinks`),
+  com o glifo e a palavra do tipo (fone, alto-falantes, Bluetooth, outra) e "em uso" na escolhida;
+  `RET` manda a faixa para lá (`LaneChange::Sink`). Uma saída escolhida que sumiu fica, dita "não
+  está lá" — o som toca na padrão enquanto isso —, e sem nenhuma lida a página diz que só a padrão
+  é conhecida. O daemon só lê as saídas enquanto alguém segura a conexão `Ask::Sinks`
+  (`client::hold_sinks`), e a porta segura só enquanto uma linha delas está NA TELA
+  (`player_lane::sinks_in_sight`, pelas linhas desenhadas e a rolagem): `player::SinksHeld` é uma
+  thread que conecta e lê a conexão até uma das pontas soltar — a porta, largando a garra, desliga a
+  conexão; o player, saindo, a fecha —, e largá-la solta o `pw-dump` do daemon. Conectar é dela,
+  nunca do laço. Uma garra cuja conexão acabou diz isso (`SinksHeld::ended`), e o próximo estado que
+  chega a larga para a porta segurar de novo: um player reiniciado nunca soube da garra antiga. A
+  barra da coluna e a coluna estacionada não mostram linha nenhuma de saída, e largam. Uma saída é
+  dita pelo nome que o servidor de som dá para pessoas, o de agora ou o último que a porta viu
+  (`player::sink_label`) — `bluez_output.…` é o nome dele, não o da pessoa —, e duas do mesmo nome
+  ganham um número.
+
+#### Saídas de som
+
+**Cada faixa de som vai à saída dela.** A lista vem do `ronoctua-audio`, a única fronteira com o
+PipeWire, e só enquanto alguém precisa dela: uma porta que a mostra segura uma conexão aberta
+(`sinks`), e uma faixa com saída própria precisa saber quando ela some. Soltar a assinatura mata o
+`pw-dump` na hora. A faixa guarda a saída pelo `node.name`, e o mpv recebe
+`audio-device=pipewire/<node.name>` — sem `ao=`: o nome do dispositivo já escolhe o driver. Se a
+saída some, a faixa toca na padrão e isso é dito uma vez; quando a saída volta, a faixa volta para
+ela. O player não mede a latência de um fone Bluetooth: a diferença para uma caixa se acerta
+movendo o início da faixa.
+
+#### Outras máquinas
 
 **Remoto: por que a tailnet e por que um código.** A tailnet já é cifrada e já autentica máquina a
 máquina; o daemon escuta só nos endereços dela e recusa conexão fora das faixas dela mesmo assim.
@@ -9955,10 +10656,304 @@ locais — com uma janela de quatro segundos depois de cada carga em que quem se
 empurrar, porque a carga pela tailnet atrasa ~0,7 s e um empurrão de 5% levaria catorze segundos
 para pagar isso. Medido entre duas instâncias pela tailnet real: ±70 ms desde o primeiro segundo.
 
-**Letra e patrocínio nascem desligados.** Os dois contam a um estranho o que está tocando. O
-SponsorBlock é perguntado pelo PREFIXO de quatro dígitos do SHA-256 do id — a forma que o próprio
-serviço recomenda —, e o SHA-256 foi escrito aqui (vetores da especificação no teste) em vez de uma
-dependência para um uso só.
+**Outras máquinas, faixa por faixa.** O `Moment` leva as faixas do que toca; cada arquivo é servido
+em `/media/<folha>/<faixa>` só enquanto aquela folha toca, e duas faixas do mesmo arquivo dividem o
+caminho da primeira: um download e uma voz do outro lado. O papel escolhe as faixas — tela: imagens
+e legendas; alto-falante: sons —, e as saídas e telas de quem é seguido nunca viajam. As legendas
+de arquivo vêm inteiras (poucos KB) e são mescladas deste lado, como as daqui; uma trilha de dentro
+do filme da outra máquina só o mpv tem aberta, e aparece sozinha. Seguir é uma sessão de faixas no
+relógio da outra máquina: a fila de quem segue não é tocada, e ao sair a folha dela volta, pausada
+onde estava. Enquanto segue, pausar, buscar, pular e mudar faixas é recusado com frase
+(`following`): quem decide é a outra máquina. As duas precisam falar a versão 2.
+
+#### Fechar em todo lugar
+
+**Fechar em todo lugar** (`player-quit`, `LEADER p q`, e uma linha da vista que pergunta antes, com
+o "não" desenhado primeiro e o cursor nascendo nele). O daemon recebe `Ask::Quit`: lembra a fila (a
+desta máquina, se ela seguia outra), para o som, diz `Say::Farewell` a todo observador e fecha a
+conexão, fecha as de imagem, tira o soquete do disco, responde `done` e sai com SUCESSO 200 ms
+depois — o `Restart=on-failure` da unidade não o traz de volta. Sai por `_exit` (`mpv::leave_now`),
+e não pelo `exit` da biblioteca C, que roda os `atexit` e os destrutores C++ com as threads do
+libmpv ainda vivas: um que caísse ali seria uma falha, e a unidade traria de volta o player que
+acabara de fechar. A saída é armada ANTES da despedida e espera por ela no máximo 5 s, e toda
+escrita a um observador tem 1 s de paciência (`WATCHER_PATIENCE`): uma porta parada que não lê mais
+segurava a trava do motor — e todo pedido atrás dela — para sempre. Depois da despedida nada mais
+grava a fila: o `stop` que cala o som move o lugar do mpv nela, e o arquivo acordaria sem ela. A
+despedida também cala os sons ambientes, para no meio uma gravação de etiquetas (o rascunho sai e o
+arquivo fica como estava), apaga os rascunhos do editor e encerra as buscas e os diretórios. O MPRIS
+`Quit` faz o mesmo. Do lado das portas:
+
+- **O relógio da porta distingue despedida de sumiço** (`client::Heard`: `State`, `Farewell`,
+  `Gone`, lidos por `player::hearing`). Toda porta fecha na despedida — a vista do rodapé, a
+  janela, a janela de palco e a coluna — e NENHUMA fecha no sumiço: um player que caiu é um player
+  que a porta diz não estar rodando, e ninguém o fechou de propósito.
+- **Fechar nunca liga o player para desligá-lo, nem espera por ele.** `player::tell_if_running`
+  escreve só a quem escuta (`client::tell_if_running`) e não lê a resposta: fechar e reler as
+  preferências são os dois pedidos que o player não recusa, e o laço do rodapé esperava até 3 s
+  por um player ocupado. Gravar uma preferência pede `reload` do mesmo jeito — as linhas das
+  preferências existem sem player, e mudar uma depois de fechar em todo lugar o trazia de volta. O
+  `client::preview` parou de chamar o `ensure`: a thread de uma imagem pergunta de novo a cada
+  segundo, e trazia de volta um player que alguém acabara de fechar. E o `client::ensure` pede a
+  unidade DUAS vezes: o soquete sai do disco antes de o processo sair, e um pedido nesse meio
+  encontrava a unidade ainda ativa, não fazia nada, e a porta esperava um player que ninguém subia.
+- **Sem daemon rodando, fechar ainda fecha as portas.** O rodapé (`Footer::player_quit`) fecha a
+  vista e encerra as portas que são processos — a coluna (`right_column::end`), a janela de palco
+  (`player_stage::end`) e toda outra janela, `player::end_the_doors`. Janela não tem slot, e são
+  quantas a pessoa abrir, então cada uma guarda `player-window-<pid>.pid` enquanto está aberta
+  (`player_stage::WindowSlot`, em volta da porta; a foto nunca o escreve), e o fim confere a linha
+  de comando antes de acreditar no pid. Uma janela ou a coluna que fecha o player avisa o daemon
+  ela mesma (se ele roda), encerra ela mesma as outras portas — sem rodapé, elas vão também —,
+  entrega a mesma ordem ao rodapé, para a vista dele, e sai.
+
+#### A marca da modeline
+
+**A marca da modeline é um PAR: tocar/pausar e próximo, num segmento só.** O layout tira um
+segmento removível INTEIRO, então dois glifos num segmento nunca se separam numa linha estreita;
+dois segmentos no mesmo degrau se separariam (o empate vai para o último declarado) e os dois do
+`segmentGap` entre eles leriam como marcas sem relação. O primeiro glifo diz o que o clique FAZ,
+como o botão do transporte: pausa enquanto toca, toca enquanto está pausado (decisão do dono,
+2026-09-28; antes dizia o estado). Entre os glifos, uma célula de ar
+(`space.modeline.bondGap`) que não é de nenhum. Uma função pura, `player_mark::zone_at`, diz que
+glifo está em cada célula do segmento, e os três leitores a leem: a pintura (um run por glifo, cada
+um no tamanho de cromo dele — `glyph_and_text` dimensiona só um glifo à FRENTE, e o segundo sairia
+no tamanho do texto), o clique e o hover. Em tocar/pausar, o esquerdo alterna (`p t`) e o direito
+LEVANTA a coluna (`player-column raise`, nunca o alternar do `p c`); em próximo, o esquerdo avança
+(`p n`) e o direito abre o player no rodapé (`p p`). Sob o ponteiro, o primeiro diz o que toca e o
+segundo o que vem — o que o próprio player diz que toca depois (`State::next`, que já sabe do
+aleatório e do repetir; a frase diz "na ordem embaralhada" com o aleatório ligado), um conjunto sem
+nome dito pelas fontes dele juntas nesta língua, e que próximo para o player no último item. Uma marca que chega ou sai ao lado move o par sob um ponteiro PARADO, e nenhum
+movimento vem dizer isso: depois do quadro, o segmento sob o último ponto do ponteiro é lido de
+novo (`Footer::modeline_moved_under_the_pointer`), e um segundo quadro sai só se mudou — uma
+rodada, porque ela lê a tabela que o próprio quadro pôs.
+
+**O par da modeline com só o ambiente.** Sem nada da fila carregado — nenhuma folha atual, nenhuma
+máquina seguida — e com um som ligado (`player::only_ambience`), o par aparece e é do ambiente: o
+tocar/pausar pausa e retoma os sons, e o glifo diz qual (`player::toggle_ask`: `ambient-toggle`, o
+mesmo que `LEADER p t`, o `SPC` da vista e o botão do transporte pedem); o próximo não tem para onde
+ir, então é desenhado no tom de uma tecla que nenhum clique aperta, não pega clique e diz por quê
+sob o ponteiro (`player_mark::inert`, a resposta que a pintura, o clique e a frase leem). As mesmas
+células, as mesmas zonas. Com uma folha atual, mesmo parada, o par é da fila: um clique nunca pausa
+a chuva no lugar de tocar a música. As teclas de mídia falam com o player pelo MPRIS, que só vira a
+fila, e nunca chegam ao ambiente.
+
+#### As três portas e a pilha de páginas
+
+**As três portas fazem as mesmas coisas.** O rodapé, a janela e a coluna leem a mesma `View`, e o
+que uma porta tinha e a outra não foi fechado nos dois sentidos:
+
+- **Digitar é da porta onde se está.** O caminho ou endereço, o vídeo a seguir e o pareamento são
+  uma `player_question::Question` que a vista entrega à porta: o rodapé pergunta no minibuffer, a janela e a
+  coluna na linha do próprio cabeçalho (`Ui::ask`), e a vista continua aberta embaixo — o rodapé
+  fechava a vista para perguntar e perdia a pasta e o propósito dos arquivos. A resposta vai a UMA
+  função (`player_question::answered`), qualquer que seja a porta, e colar na pergunta vale nas duas. O
+  pareamento são duas perguntas: o nome da outra máquina, e depois o código, mascarado — o código
+  não entra em log nem em `argv`, e o `Debug` do pedido não o escreve (`player_machines::Code`); o nome
+  fica com a PORTA entre as duas perguntas (`player_machines::Pairing`), porque `player-pair` também
+  é pedido pelo nome (`LEADER :`), sem vista aberta. O código vai numa thread
+  (`player_machines::pair_then`), nas duas portas: o player só responde
+  depois de a outra máquina responder, o que pode passar dos três segundos que toda outra ordem
+  espera — o laço ficava parado por eles, e a espera vencida dizia "o player não está rodando"
+  enquanto o pareamento seguia. A espera agora é a do pareamento, e vencê-la tem frase própria
+  (`player-pair-no-answer`).
+- **Todo pedido vai numa fila, na ordem em que foi feito** (`player::tell_then`). O player atende
+  cada conexão numa thread, atrás de um lock que não é por ordem de chegada: uma thread por pedido
+  deixava uma busca arrastada pela barra cair num lugar anterior ao último, e duas coisas postas na
+  fila trocarem de lugar. Então cada processo tem UM contador (`tell_in_order`) que manda um pedido
+  por vez e espera a palavra dele antes do próximo, acha o player uma vez e só o procura de novo
+  quando a conexão falha. Um valor dito de novo antes da vez dele — a posição, um volume — é dito uma
+  vez, o mais novo (`supersedes`): um arrasto são sessenta pedidos por segundo. O `Put` tem fila
+  própria, porque o player anda na pasta antes de responder, fora do lock, e uma pausa apertada nesse
+  meio não espera a caminhada; dois `Put` continuam na ordem. Um `Put` ou um salvamento esperam um
+  minuto; sem resposta nesse tempo, o player ainda está trabalhando (`Told::Working`) e nada é dito
+  — "o player não está rodando" seria falso —, e uma despedida como resposta não é pedido aceito. Um
+  player mais antigo fecha a conexão sem palavra diante de um pedido que não entende
+  (`Told::Unheard`), e a porta cuja home já avisa isso diz a mesma coisa, não que ele não roda.
+- **A posição e o volume são barras nas linhas**, nas duas portas: apertar põe o valor ali e
+  segurar arrasta (`player_rows::slider_at` e `player_rows::slid`, a aritmética da barra de tempo
+  da janela).
+  A barra é o começo do valor que `chrome::aligned_pair` posicionou, lida de volta do campo — é pega
+  onde foi desenhada —, e numa porta estreita ela cede as células para o tempo ser lido inteiro: um
+  `12:…` lê como uma hora errada.
+- **Parar é uma tecla da vista** (`s`), a mesma do botão da janela.
+- **O rodapé tem uma coluna de mídia** (`player_media`). A região é larga e baixa, então o painel
+  vai à direita das linhas, na largura da coluna nos três tamanhos dela — 72, 48 ou 32 células, o
+  mais largo que deixa às linhas pelo menos a largura dele —, com a última célula para a barra da
+  região (`player_media::footer_panel`, função só da largura: as linhas são dispostas no que sobra,
+  e perguntar a altura da região de volta seria o rodapé perguntando a si mesmo). Ele existe
+  enquanto algo está CARREGADO, e não só enquanto um vídeo toca: a imagem — um filme, ou a capa que
+  o mpv decodifica como uma —, e sem quadro um CARTÃO DE TÍTULO, o que toca em palavras
+  (`text.secondary`) no meio do lugar da imagem, sobre o chão da própria região — nunca sobre
+  `surface.backdrop`, que não leva texto. No pé do painel ficam uma linha do transporte e a barra de
+  tempo, as duas linhas da janela nesta porta: os botões são postos por `player_media::buttons` e a
+  barra por `player_media::Track`, o quadro GUARDA o que pôs (`Footer::player_drawn`, ao lado do
+  `modeline_placed`), e a pintura, o clique, o arrasto e o realce leem a mesma resposta
+  (`panel_glyphs`, `panel_button_at`, `panel_track_at`). O botão sob o ponteiro se explica na linha
+  de mensagem, nunca numa linha da região, que sairia de baixo da mão que perguntou; e um quadro que
+  MOVE os botões (o glifo das mídias vem e vai com o arquivo) relê o botão sob uma mão parada, como
+  o par da modeline, senão ela acendia um e o clique levava o vizinho. Ao lado das linhas o painel
+  guarda as linhas da imagem em TODA página — 16:9 na largura dele, mais o pé
+  (`player_media::panel_lines`), a região completada por linhas vazias até isso, sob o teto: a
+  região tinha a altura das linhas, e uma página de duas linhas deixava o filme sem nenhuma. Abaixo de 32
+  células livres o painel não cabe, e a home diz isso sob "Agora", com a tecla que mostra a imagem
+  sozinha (`player-panel-no-room`) — uma recusa é uma frase; antes ele sumia em silêncio abaixo de
+  97 colunas. Cada tela desenha as imagens roteadas a ELA (`player_media::placed_on_screen`), e o
+  rodapé guarda uma imagem por faixa para todas — as faixas roteadas a alguma das telas dele
+  (`player_media::lanes_shown`) —, pedida uma vez e desenhada onde vai. As chaves das texturas são
+  `player:picture:lane-{faixa}:{conector}` (`Picture::key`): a textura de uma tela nunca é a de
+  outra. A thread de quadros é a mesma da janela (`player_picture`), e só existe enquanto o painel
+  mostra uma imagem.
+- **`o` é o palco do rodapé, e o filme passa dos dois tetos.** A região vira o painel — a imagem, ou
+  o cartão, com o transporte e a barra no pé —, as linhas somem e continuam respondendo às teclas, e
+  `Esc` as devolve. O palco pode levar o rodapé inteiro a `expansion.playerStagePct` (70%) da tela, e
+  o `maxLines` não o limita: quinze linhas de filme são uma tira (decisão do dono, 2026-09-28). Quem
+  lê é o `expansion_ceiling`, a partir do campo GUARDADO `player_only`, nunca do que a região
+  contém. Um clique na imagem toca ou pausa e o duplo clique a põe na tela inteira. Tela inteira e
+  canto continuam sendo da janela, aberta já assim: uma faixa da tela não enche a tela nem flutua,
+  que é a regra da coluna.
+- **Toda porta troca a si mesma pela outra** (`player-swap`, a tecla `w`): o último botão do
+  transporte da janela (desenhado como a coluna) e da coluna (desenhado como a janela), o último da
+  barra, o último do painel do rodapé — que diz a frase dele, `player-swap-footer`: dali ela abre a
+  janela no lugar da vista — e, só enquanto o painel não está de pé (nada carregado), o glifo da
+  janela no título "Agora", como o de esvaziar a fila está no título da fila: os dois ao mesmo tempo
+  eram um botão desenhado duas vezes. A janela pede ao rodapé que LEVANTE a coluna
+  (`player-column raise`, `player::RAISE`: nunca o alternar, que fecharia uma coluna já de pé) e
+  fecha; uma janela de palco faz o mesmo, e fechar é o que fecha o palco; a coluna pede a janela e
+  fecha; o rodapé fecha a vista e abre a janela. A porta que troca fecha SÓ QUANDO O RODAPÉ ACEITOU
+  a ordem (`Ui::hand_over`): com a linha de vida no lugar dele, ela fica e diz `door-no-footer` —
+  nunca uma porta que some sem nada no lugar. As linhas "Abrir a coluna" e "Abrir numa janela"
+  saíram da vista: o glifo de trocar e as teclas da líder fazem isso, e o ponteiro alcança a coluna
+  pelo botão direito no par da modeline. A porta que troca é quem sabe qual é, então a vista devolve
+  `Errand::Swap` e cada porta o executa; o que um botão faz sai de uma função só,
+  `player_transport::button_errand`, lida pelo transporte, pela barra e pelo título.
+
+**A vista é uma pilha de páginas** (`player_page`). Embaixo fica a home, que nunca sai; uma linha
+que abre uma página a empilha (`Target::Go`), e `Esc` desempilha uma e põe o cursor de volta na
+linha que a abriu PELA IDENTIDADE (o `spot` da linha): um estado que chegou no meio e moveu as
+linhas da home — uma seção que apareceu acima — não tira o cursor do lugar. Só da home o `Esc`
+fecha a porta, e uma pergunta aberta responde "não" a ele antes de tudo. As três portas guiam a
+mesma `View`, e a janela e a coluna ensinam o `Esc` primeiro, clicável, como o rodapé
+(`chrome::with_the_way_back`): um ponteiro que entra numa página e não sai dela é um ponteiro
+preso.
+
+- **A home diz o que é verdade agora, e nada que explique.** Na ordem: Agora (problemas, o que toca,
+  estado, posição, volume, velocidade, repetir, aleatório; sem a linha do álbum, que é metadado),
+  Mídias do arquivo (só quando o arquivo oferece escolha), Letra (só quando há, e uma linha Origem
+  depois de ar dizendo de onde veio em palavras — `file`, `tag` e o host viravam "Letra de file", e
+  escrito apagado sob as linhas lia como o último verso), Fila, Ouvir e assistir (Arquivos, e Sons
+  ambientes com o que soa agora — o nome de um, quantos, ou "em pausa") e Recursos variados (Tocar junto, Salvar conjunto…, Salvar fila…, Abrir conjunto ou fila, Renomear…,
+  Internet, Outras máquinas, Fechar o player em todo lugar). O que
+  uma página é e por que existe é dito NA página: Internet, Outras máquinas e Tocar junto guardam as
+  frases que a home tinha (`home_has_no_about_text`). A única frase da home é a recusa do rodapé sem
+  espaço para a imagem, porque é o que é verdade desta porta agora, e o cursor fica na linha dele
+  quando ela vem ou vai.
+- **Uma chave por página**, `player-page-<id>`: a linha que abre diz ela, e a página tem ela por
+  título (`PageId::key`). Duas palavras para um lugar eram o que o censo do
+  `labels-of-a-view-are-distinct` achava assim que as páginas eram desenhadas.
+- **Uma página cujo assunto sumiu fica, e diz** (`player-page-gone`): Tocar junto precisa de algo
+  tocando, cujas faixas ela mostra. Sem player respondendo, a página diz isso, como a home.
+- **Arquivos planos, nunca um diretório `player/`.** Nove checks leem os fontes do shell a um nível
+  de profundidade (`glob("*.rs")`), e um diretório passaria em todos sem ser lido. As páginas moram
+  ao lado: `player_rows` (a linha e o construtor), `player_page`, `player_home`, `player_internet`,
+  `player_machines`, `player_question`, `player_tracks`, `player_subtitles` (a página das legendas),
+  `player_ambience` (os sons ambientes e os créditos), `player_lane` (a página de uma faixa),
+  `player_media` e `player_transport`. Por isso o censo de uma vista, nos dois
+  checks que tratam a vista como um arquivo (`labels-of-a-view-are-distinct` e
+  `the-cursor-is-a-colour`), é o arquivo com `struct View` MAIS os irmãos `<vista>_*.rs` sem vista
+  própria que escrevem as linhas dela (o `Builder` pelo nome, como quer que seja escrito, ou `impl
+  View`); lido sozinho, `player.rs` não desenhava rótulo nenhum das páginas.
+- **`LEADER p m` abre a página das máquinas** (`player-machines`) e o pareamento é só pelo nome;
+  **`LEADER p j`** (`player-together`) é a pergunta do que tocar junto, que era `p f`: uma faixa do
+  tipo que o nome do arquivo diz (`player_browse::lane_kind_of`). Uma página
+  aberta PELO NOME (um comando, `f`) volta, no `Esc`, à linha dela na página de baixo, e não a onde o
+  cursor calhava estar; e uma página que já está na pilha é revisitada, não empilhada de novo —
+  `p m` e `k` alternados empilhavam as mesmas duas sem fim.
+- **Digitar é escolher.** O que tocar junto, digitado na página que o escolhe, fecha a página
+  e diz o que foi feito, como o clique num arquivo; e um caminho digitado para tocar ou pôr na fila
+  diz a frase que a escolha diria (`player_question::answered_saying`, `View::answer_came`).
+- **Onde as linhas não são desenhadas** — o palco da janela e da coluna, o `o` do rodapé, a barra —
+  uma tecla que age na linha do cursor não age numa linha que ninguém vê: as linhas voltam e a tecla
+  é gasta nisso; uma que ABRE algo (`k`, o glifo das mídias, `f`, `c`, os comandos de página) traz
+  as linhas e abre ali; e as de todo lugar agem (`Press::unseen`, a resposta que as três leem).
+  Antes, o glifo das mídias no palco empilhava uma página atrás da imagem, e as setas seguintes
+  trocavam o som às cegas. Uma janela aberta PARA o palco não tem linhas a devolver (sair dele a
+  fecha), e diz onde elas estão (`player-stage-has-no-rows`). Na barra, `Esc` fecha a coluna
+  sobre qualquer página.
+- **O consentimento nomeia o host no RÓTULO** (`Letras do lrclib.net`, `Pular trechos patrocinados
+  (sponsor.ajay.app)`): um rótulo quebra e nunca é cortado nestas páginas, e o host no valor saía
+  `desligado (lrc…` na coluna pequena.
+- **As mídias do arquivo são páginas** (`player_tracks`, `player_subtitles`): Som, Imagem e
+  Legendas, cada faixa uma linha pelo nome dela entre as outras do tipo — duas que se leriam iguais
+  ganham o codec e depois o número (`player::track_name`): lado a lado numa página, três `eng` eram
+  três escolhas que ninguém distingue —, e a que está em uso diz isso no valor. A home só oferece um
+  tipo de que haja mais de um — dois sons, duas imagens, uma legenda (que se desliga) —, e a linha
+  da home abre a página no `RET` e gira a faixa em uso nas setas, o anel que sempre foi. CAPA não
+  conta como imagem (`albumart`, que o mpv lista como faixa de vídeo: a embutida, o `cover.jpg` ao
+  lado, o anexo do Matroska): o daemon a diz como capa e a porta a deixa de fora
+  (`player_tracks::of_kind`), senão todo álbum oferecia duas imagens. As LEGENDAS são oferecidas
+  sempre que há uma imagem, com ou sem trilha própria: a página delas é também de onde vêm as de
+  fora (abaixo). O que toca são FAIXAS, e um arquivo sozinho já é as dele: escolher pede à faixa do
+  tipo a trilha escolhida (`Ask::Track`) — a imagem também, desde que o player toca faixas —, e o
+  arquivo continua um arquivo só. Uma trilha que nada toca leva no fim da linha
+  o glifo de TOCAR TAMBÉM (`md-layers_plus`, e `a` na linha): uma faixa só dela, do mesmo arquivo,
+  ao lado da que está em uso (`Ask::AddLane` com a trilha) — a segunda língua num outro fone, um
+  segundo ângulo, uma segunda legenda —, e o arquivo vira conjunto sem sair do lugar na fila; a que
+  outra faixa já toca diz "também toca". `k` e o glifo das mídias no transporte
+  (`md-layers_outline`) existem com qualquer escolha (`TrackKind::with_a_choice`). Eles abrem o
+  primeiro tipo com escolha, e numa dessas páginas o próximo, NO LUGAR dela: o
+  `Esc` volta a de onde o `k` foi apertado, e não por cada tipo que ele andou. O transporte tem
+  ONZE botões, e na coluna pequena eles cabem sem folga: um décimo segundo é uma decisão sobre o
+  que sai.
+
+**A imagem sozinha é um palco, e os controles são dela só enquanto há atividade.** Fora do palco a
+faixa da imagem é um tom de superfície, e o quadro é pedido na proporção do vídeo para que ela
+apareça; no palco a imagem toma a superfície e o preto é a tarja do próprio player. O transporte
+volta por cima a cada gesto e sai sozinho, mas nunca sob a mão — um controle que some sob o ponteiro
+que ia apertá-lo é um controle que ninguém aperta — e escondido ele não é alvo de nada.
+
+#### A coluna do player
+
+**A coluna.** Uma superfície layer-shell ancorada em cima, à direita e embaixo, com zona exclusiva
+da própria largura: as janelas encolhem, nada é coberto. A zona de uma superfície é recortada do
+que as superfícies criadas ANTES dela deixaram — é assim que o compositor arranja a camada —, então
+a coluna termina onde a área do rodapé começa e nunca estreita a modeline, o minibuffer nem a faixa.
+A ordem é a armadilha: um rodapé que sobe DEPOIS da coluna seria arranjado depois dela e
+estreitado; por isso ele, na partida, derruba e levanta de novo uma coluna que já esteja de pé,
+no espaço e no tamanho que ela tinha. Uma por espaço de trabalho, e a base é de todas (veja "As
+colunas").
+
+**A coluna e a tecla alternam, e "está de pé?" é uma pergunta sobre a COLUNA, não sobre um
+número.** O `column-player.pid` sobrevive a uma coluna morta sem `Drop` (morta a
+sinal, ou levada com a sessão), e o número dele volta a outro processo; perguntar só "o PID vive?"
+fazia o interruptor mandar `TERM` a quem o herdou, responder "fechei" e não abrir nada. Por isso a
+linha de comando é lida: este programa, aberto como a coluna do player (`column`, `column player`,
+com o que mais a abertura disser). `LEADER p c` fecha a coluna quando ela está NESTE espaço, e a
+traz para cá quando está em outro.
+
+**A coluna pede ao compositor que avise as janelas, porque o commit que a mapeia não avisa.** A
+zona exclusiva só conta com a superfície mapeada, e o commit do primeiro quadro re-arranja as janelas
+sem mandar o arranjo — só manda quem também muda estado de layer. Repetir a zona não conta: o
+wlroots ignora um valor igual ao que já tem. Sem patch (invariante 3), o que resta é o IPC, onde todo
+comando termina mandando o que está pendente: um `nop`, pedido quando o primeiro quadro é MOSTRADO
+(o frame callback pedido nele) — só então a zona foi contada. Um `sync` depois de apresentar corria
+com o driver, que pode fazer o commit numa thread própria. E a prova é a JANELA receber uma largura NOVA
+depois da coluna, comparada com a de ANTES dela: comparada com a primeira de todas, o teste passava
+com o defeito.
+
+**A barra traz o volume.** Anterior, tocar/pausar e próximo; uma linha de ar; mais alto, mudo e mais
+baixo (`md-volume_plus`, o alto-falante e `md-volume_minus`, um desenho em três estados); uma linha
+de ar; e trocar de porta. O passo do volume é um só, `player_transport::stepped_volume`, o mesmo do
+`-`/`=` da vista, dos botões da barra e das setas na linha do volume. Sem estado, não há passo
+(`player_transport::volume_step`): um volume chutado de nada era mandado e o player o guardava — quem estava a
+20% e apertou "mais baixo" antes do primeiro estado tocava a seguir a 95%. A porta diz que o player
+não responde.
+
+**Na barra, o player é um controle remoto:** anterior, tocar/pausar e próximo, um por linha, uma
+linha de ar e o mudo. Cada um é pego na linha inteira e acende sob o ponteiro, a roda é o volume, e
+nenhuma frase os explica (decisão do dono). O resto da vista — linhas, mensagem, palco — fica
+guardado e volta quando a coluna alarga. Nos outros três tamanhos o player adapta: o transporte
+desenha os botões que cabem inteiros, e a imagem toma a fatia do tamanho (`Size::picture_lines`).
+
+#### Que arquivo o player abre, e o MPRIS
 
 **Que arquivo o player abre, e por que a lista é LIDA e não escrita.** A entrada `.desktop` tem de
 nomear tipo por tipo — ela não pode dizer `audio/*` —, e a primeira forma era uma lista à mão com 51
@@ -9979,106 +10974,786 @@ coisa (`.iso`, `.gsf`, `.stc`, `.asc`…) ou que é de outra coisa lá fora (`.c
 genoma, `.mib` é SNMP) e toda extensão de duas letras ficam só no decodificador: o player toca quando
 recebe, e não toma dos outros. A lista do que saiu e por quê está no topo do arquivo.
 
-**XSPF e ASX são abertos pelo daemon.** O libmpv lê `.m3u` e `.pls` sozinho, e preguiçosamente — a
-entrada vira item quando a fila chega nela, que é também como um HLS toca —, mas não conhece os dois
-em XML: recebe um e termina na hora, como se nada tivesse sido pedido. O daemon os lê com o MESMO
-leitor da prévia do gerenciador, que por isso desceu para um crate próprio (`ronoctua-playlist`,
-só um leitor de XML ao lado): o daemon não pode linkar o `ronoctua-inspect`, que traz todo
-decodificador da prévia, e dois leitores seriam duas respostas sobre o que uma lista contém.
+Dois grupos entraram depois. Os formatos do próprio player (`own`, veja ".rset e .rqueue") e as
+legendas: os oito tipos do freedesktop (`subtitles.known`) e os que a base não tem
+(`subtitles.invented`: TTML/DFXP, SBV, JACOSub, PJS, AQTitle, SCC, srv3, json3, o `.sup` do PGS e
+o `.idx` do VobSub; o `.sub` dele já é o `*.sub` dos tipos do freedesktop). Pela mesma regra,
+`.stl`, `.usf`, `.ssf`, `.rt` e `.txt` não são reivindicados — lá fora eles nomeiam outras coisas
+com a mesma frequência — e só são lidos como legenda quando acrescentados a um filme, onde o
+conteúdo decide (veja "Legendas"). O `.lrc` também fica de fora: é a letra ao lado de uma música,
+que o player já mostra quando ela toca, e reivindicá-lo tiraria arquivos de letra do editor de
+texto para uma recusa.
 
-**Os arquivos são do player, e a pasta é aberta pelo shell.** O player lista a própria biblioteca
-(`LEADER p l`, um nível da vista) em vez de mandar a pessoa ao gerenciador: começa na pasta de
-música, gira para vídeos e clipes musicais (a décima primeira pasta do `nix/user-dirs.nix`), e só
-mostra o que toca — o critério é UM (`player_browse::glyph_if_played`) e responde também à pergunta de caminho
-e ao `ronoctua-shell play`, porque uma pasta que tocasse o que a listagem não mostrou seria duas
-respostas à mesma pergunta. Uma pasta vira arquivos DESTE lado do soquete: o libmpv aceitaria um
-diretório e enfileiraria figuras e texto junto, e um arquivo que só um decodificador nosso lê
-chegaria a ele pelo caminho e não pelo protocolo do decodificador. A caminhada não segue link para
-pasta (um link para cima não acaba) e tem teto de profundidade e de arquivos.
+**O MPRIS é a especificação inteira, menos `Playlists`.** A `TrackList` são as folhas da fila na
+ordem da árvore, e o id de uma faixa é o `EntryId` dela (`/br/ronoctua/player/track/<id>`): ele
+sobrevive a mover, e `GoTo`, `RemoveTrack` e `AddTrack` (depois de uma faixa, ou primeiro com
+`NoTrack`) agem pelo id. Toda mudança de forma da fila sai como `TrackListReplaced`. O `OpenUri` é o
+`put` que toca, como abrir de fora. O título de um conjunto nunca é o de um arquivo só: são as
+fontes juntas por ` + `. A capa (`mpris:artUrl`) é a que o daemon tirou do arquivo para o cache
+(veja "Metadados"); a imagem ao lado do arquivo só quando não há outra. Os sons ambientes não
+aparecem — não são faixa, e as teclas de mídia são da fila. `Playlists` fica de fora: um `.rqueue` é
+um arquivo da pessoa, onde ela o pôs, e o player não mantém uma biblioteca deles para listar. `Quit`
+é o mesmo caminho do `quit` do soquete (`engine::quit`, em "Fechar em todo lugar"); quem traz o
+player de volta é o próximo pedido, porque o `client::ensure` pede a unidade ao systemd quando
+ninguém responde e o daemon não mora ao lado do shell.
 
-**O MPRIS é a especificação inteira, menos `Playlists`.** A fila é a `TrackList`, e o id de uma
-faixa é o LUGAR dela na fila: ids estáveis pediriam uma identidade por item que o motor não tem, e a
-especificação aceita ids que mudam desde que toda mudança da fila saia como `TrackListReplaced` —
-que é o que sai. `Playlists` é para quem guarda listas SALVAS, e este player tem uma fila e o disco.
-`Quit` para e sai de verdade; quem o traz de volta é o próximo pedido, porque o `client::ensure`
-pede a unidade ao systemd quando ninguém responde e o daemon não mora ao lado do shell.
+#### Legendas
 
-**A marca da modeline e a tecla alternam a coluna, e "está de pé?" é uma pergunta sobre a COLUNA,
-não sobre um número.** O `column-player.pid` sobrevive a uma coluna morta sem `Drop` (morta a
-sinal, ou levada com a sessão), e o número dele volta a outro processo; perguntar só "o PID vive?"
-fazia o interruptor mandar `TERM` a quem o herdou, responder "fechei" e não abrir nada. Por isso a
-linha de comando é lida: este programa, aberto como a coluna do player (`column`, `column player`,
-com o que mais a abertura disser). A marca fecha a coluna quando ela está NESTE espaço, e a traz
-para cá quando está em outro.
+**O conteúdo decide o formato.** A extensão engana demais: `.sub` é MicroDVD, SubViewer, MPsub ou o
+fluxo de imagens do VobSub; `.txt` é TMPlayer ou VPlayer; `.stl` é o binário da EBU, o texto da
+Spruce ou um modelo 3D. O `sniff` lê o arquivo, cada formato vota com as linhas que reconhece, e a
+extensão só desempata. O charset segue a ordem da certeza — marca de ordem de bytes, UTF-16 sem
+marca (pelos bytes zero), UTF-8 válido e, por fim, o palpite do chardetng —, e a página pode dizer
+que foi palpite. Um SAMI com várias línguas mostra a primeira que diz algo.
 
-**A coluna pede ao compositor que avise as janelas, porque o commit que a mapeia não avisa.** A
-zona exclusiva só conta com a superfície mapeada, e o commit do primeiro quadro re-arranja as janelas
-sem mandar o arranjo — só manda quem também muda estado de layer. Repetir a zona não conta: o
-wlroots ignora um valor igual ao que já tem. Sem patch (invariante 3), o que resta é o IPC, onde todo
-comando termina mandando o que está pendente: um `nop`, pedido quando o primeiro quadro é MOSTRADO
-(o frame callback pedido nele) — só então a zona foi contada. Um `sync` depois de apresentar corria
-com o driver, que pode fazer o commit numa thread própria. E a prova é a JANELA receber uma largura NOVA
-depois da coluna, comparada com a de ANTES dela: comparada com a primeira de todas, o teste passava
-com o defeito.
+**Leitores próprios, e a cauda pelo ffmpeg.** Lemos SRT, WebVTT, ASS/SSA, SAMI, MicroDVD, MPL2,
+SubViewer, TMPlayer, SBV, TTML/DFXP/IMSC, EBU STL, o timed text do YouTube (srv3, json3) e LRC;
+TMPlayer, SBV, TTML e EBU STL o ffmpeg 8.1.2 não lê. JACOSub, PJS, AQTitle, RealText, VPlayer,
+MPsub, SCC, Spruce STL e MCC, e toda trilha de texto de dentro de um filme (`-map 0:s:<n>`), passam
+pelo ffmpeg, que devolve ASS — no máximo 8 MiB e 30 s; passar de um é recusa com o número. Ler a
+trilha de dentro de um filme custa ler o filme inteiro, então o que foi lido fica guardado pelo
+carimbo (arquivo, tamanho, data, trilha), dentro do teto de `assets/cache.nix`
+(`playerSubtitlesMib`); e um ASS de dentro do próprio filme, sozinho, é mostrado pelo mpv sem ler
+nada.
 
-**As três portas fazem as mesmas coisas.** O rodapé, a janela e a coluna leem a mesma `View`, e o
-que uma porta tinha e a outra não foi fechado nos dois sentidos:
+**A pilha é nossa, não da libass.** A libass separa falas que se sobrepõem, mas não na ordem das
+faixas: o que já está na tela fica parado e só o que entra agora é empurrado (libass 0.17.4,
+`fix_collisions`), camadas diferentes nunca colidem, e `\pos`/`\move` desligam a colisão. Por isso
+a mescla corta a linha do tempo onde muda o conjunto de falas visíveis e dá a cada fala o seu
+`MarginV`: embaixo, a faixa 1 junto da borda e cada faixa seguinte acima das de baixo; em cima, ao
+contrário. A altura é a contagem de linhas, e a própria mescla quebra as linhas longas, por igual
+(`WrapStyle: 2`), para que a conta dela seja a conta que a libass desenha. Medido com a libass
+pinada: a faixa 2 que fala primeiro sobe quando a faixa 1 entra.
 
-- **Digitar é da porta onde se está.** O caminho ou endereço, o vídeo a seguir e o pareamento são
-  uma `player::Question` que a vista entrega à porta: o rodapé pergunta no minibuffer, a janela e a
-  coluna na linha do próprio cabeçalho (`Ui::ask`), e a vista continua aberta embaixo — o rodapé
-  fechava a vista para perguntar e perdia a pasta e o propósito dos arquivos. A resposta vai a UMA
-  função (`player::answered`), qualquer que seja a porta, e colar na pergunta vale nas duas. O
-  pareamento são duas perguntas: o nome da outra máquina, e depois o código, mascarado — o código
-  não entra em log nem em `argv`, e o `Debug` do pedido não o escreve (`player::Code`); o nome fica
-  com a PORTA entre as duas perguntas (`player::Pairing`), porque `LEADER p m` pergunta sem vista
-  aberta. O código vai numa thread (`player::pair_then`), nas duas portas: o player só responde
-  depois de a outra máquina responder, o que pode passar dos três segundos que toda outra ordem
-  espera — o laço ficava parado por eles, e a espera vencida dizia "o player não está rodando"
-  enquanto o pareamento seguia. A espera agora é a do pareamento, e vencê-la tem frase própria
-  (`player-pair-no-answer`).
-- **A posição e o volume são barras nas linhas**, nas duas portas: apertar põe o valor ali e
-  segurar arrasta (`player::slider_at` e `player::slid`, a aritmética da barra de tempo da janela).
-  A barra é o começo do valor que `chrome::field_pair` posicionou, lida de volta do campo — é pega
-  onde foi desenhada.
-- **Parar é uma tecla da vista** (`s`), a mesma do botão da janela.
-- **O rodapé mostra a imagem.** A região é larga e baixa, então a imagem vai à direita das linhas,
-  na largura da coluna média (`space.column.medium`), com a última célula para a barra da região
-  (`player::footer_panel`, função só da largura: as linhas são dispostas no que sobra, e perguntar a
-  altura da região de volta seria o rodapé perguntando a si mesmo). A thread de quadros é a mesma da
-  janela (`player_picture`), e só existe enquanto a vista mostra uma imagem. `o` é o palco do
-  rodapé — a imagem toma a região, as linhas somem e continuam respondendo às teclas, `Esc` as
-  devolve —, um clique na imagem toca ou pausa e o duplo clique a põe na tela inteira. Tela inteira e
-  canto continuam sendo da janela, aberta já assim: uma faixa da tela não enche a tela nem flutua,
-  que é a regra da coluna.
+**Uma mescla por imagem, fora da trava.** Cada voz que mostra uma imagem recebe UM script ASS com
+todas as faixas de palavras sobre ela, cada uma na sua cor, empilhadas na ordem das faixas. Ler um
+arquivo, convertê-lo e mesclar seis faixas não acontece sob a trava do motor: a trava entrega um
+plano à thread `player-subtitles` e aplica a resposta, e um plano que mudou no meio faz da resposta
+velha uma que ninguém aplica. O script vai para
+`$XDG_RUNTIME_DIR/ronoctua-player-subs/<voz>.ass` e entra com `sub-add … select` ANTES de o anterior
+sair (`sub-remove`): trocar faixas nunca deixa a imagem sem legenda. Enquanto isso a faixa diz
+`preparing`. O início e o trecho de cada faixa entram na mescla, no relógio da fonte da imagem.
 
-**A imagem sozinha é um palco, e os controles são dela só enquanto há atividade.** Fora do palco a
-faixa da imagem é um tom de superfície, e o quadro é pedido na proporção do vídeo para que ela
-apareça; no palco a imagem toma a superfície e o preto é a tarja do próprio player. O transporte
-volta por cima a cada gesto e sai sozinho, mas nunca sob a mão — um controle que some sob o ponteiro
-que ia apertá-lo é um controle que ninguém aperta — e escondido ele não é alvo de nada.
+**O que cada faixa guarda na pilha.** O diálogo veste a cor da faixa (a cor que o arquivo deu a um
+trecho só vale para a faixa sozinha), com itálico, negrito e sublinhado. Os letreiros de um ASS
+(`\pos`, `\move`, desenhos) ficam onde o arquivo pôs, escalados para a resolução da mescla, numa
+camada acima do diálogo. Só o topo é pedido de uma fala: o pé é onde todo formato põe o que não diz
+nada, então quem manda ali é a faixa.
 
-**O perfil mínimo não leva o player, e a razão é um número.** libmpv sobre `ffmpeg-full` é um
-fecho de 1 487 MiB e os decodificadores mais 670 — 1 682 MiB juntos, quase tudo alcance do próprio
-`ffmpeg-full` (python, samba, opencv, flite, qtbase). Um sistema mínimo já não tem mpv nem VLC; o
-player segue a mídia na tabela do perfil, e uma linha o liga. Sem ele, as teclas dizem que ele não
-está instalado — "não responde, sobe sozinho" seria uma frase falsa ali.
+**O que o mpv mostra sozinho.** Uma faixa ASS sozinha é mostrada inteira, com a tipografia dela.
+Legenda de imagem (PGS, VobSub) vai para a trilha secundária, uma de cada vez e nas cores dela, e
+enquanto ela existe as faixas de palavras sobem para a banda de cima. Legenda na rede (um endereço,
+ou a trilha de um filme que toca pela rede) só o mpv tem aberta: aparece sozinha, e entre outras é
+recusada com a frase. Texto nunca vai para a trilha secundária.
 
-**As colunas são um slot por espaço de trabalho, e o inquilino é uma variante**
-(`right_column::Tenant`): quem toma um espaço encerra quem estava nele. O invariante 14 fala da
-BORDA, não do player; escrita como o arquivo do player, a regra valeria só para ele, e a próxima
-coisa que quisesse a borda traria um segundo arquivo — duas colunas lado a lado.
+**As cores das faixas.** `subtitle.lane-one` a `lane-six` e `subtitle.edge` são resolvidas contra
+uma imagem escura fixa (L 0,25), nunca contra o cromo: seis matizes em arcos de ΔE iguais a partir
+do amarelo da faixa 1, todos com Lc 75 sobre a imagem, e a borda preta. São iguais em todo tema e em
+toda página — o daemon não sabe o tema e desenha sem porta aberta (`ronoctua-tokens` no motor) —, e
+os portões medem a distância entre as faixas e o contraste de cada uma sobre a borda. A POSIÇÃO de
+uma faixa decide a cor, e o chip é o único lugar do cromo em que ela aparece (abaixo).
 
-**Na barra, o player é um controle remoto:** anterior, tocar/pausar e próximo, um por linha, uma
-linha de ar e o mudo. Cada um é pego na linha inteira e acende sob o ponteiro, a roda é o volume, e
-nenhuma frase os explica (decisão do dono). O resto da vista — linhas, mensagem, palco — fica
-guardado e volta quando a coluna alarga. Nos outros três tamanhos o player adapta: o transporte
-desenha os botões que cabem inteiros, e a imagem toma a fatia do tamanho (`Size::picture_lines`).
+**Abrir uma legenda de fora.** Uma legenda aberta pelo gerenciador, pelo `ronoctua-shell play` ou
+pelo MPRIS vai sobre o filme da fila que tem o nome dela (o mesmo nome, ou o nome e uma marca:
+`filme.pt-BR.srt`), senão sobre o que toca, senão sobre o filme ao lado que tem o nome dela — que
+então entra e toca; senão é recusada com a frase. Uma legenda nunca é um item da fila, e nunca
+recomeça a fila.
 
-**O que o libgme lê precisa do demuxer nomeado.** O ffmpeg reconhece VGM, NSF, SPC e os irmãos com
-uma nota de sondagem de 25, e o libmpv exige 26; sem nome, todos terminavam em "formato não
-reconhecido". Baixar o limiar para todo arquivo deixaria um palpite fraco ganhar noutro lugar, então
-o nome vai só para essas extensões, nas opções do `loadfile`.
+**Os tetos.** 16 MiB e 200 000 falas por arquivo; seis faixas por imagem (a sétima é recusada) e uma
+legenda de imagem; no máximo 16 falas ao mesmo tempo na tela; XML com mais de 48 níveis recusado
+antes de ser lido (`ronoctua_xml`). Cada recusa diz o número.
+
+**A página das legendas são as faixas sobre a imagem** (`player_subtitles`, `LEADER p u` e `u`).
+Até seis legendas ficam sobre uma imagem ao mesmo tempo, e cada uma é uma linha: o chip da cor dela,
+a língua como o arquivo a diz e o nome, e o que ela está fazendo — embaixo ou em cima da imagem,
+escondida, esperando, se preparando, ou recusada com a frase do player embaixo (a sétima, uma
+segunda legenda de imagem, uma legenda da rede entre outras). Um ASS mostrado junto de outra
+legenda diz que perde os próprios estilos. Um clique no chip ou `v` mostra ou esconde a faixa,
+`←`/`→` a trocam de banda (`LaneChange::Stack`, um anel de dois), `d` a tira, e `RET` — o segundo
+clique na linha — abre a página da faixa. Abaixo: "Adicionar arquivo de legenda" (os arquivos,
+abertos na pasta do filme, `Purpose::Subtitle`: toda extensão de legenda e também as genéricas, um
+`.txt` do TMPlayer — escolher é o que o torna legenda), "Buscar na internet", que diz na linha e no
+`RET` que ainda não existe no player, "Ao lado do arquivo" (os arquivos da pasta do filme com o
+nome dele, `subtitles::named_after`, lidos uma vez por filme e de novo quando a página abre — as
+linhas são construídas várias vezes por quadro —, e numa thread: a porta que tem laço entrega à
+vista um `player_subtitles::Wake`, que a acorda quando a lista chega, e a pasta de um filme numa
+montagem de rede não congela o rodapé; sem laço — a fotografia, um teste — ela é lida ali) e "Dentro do arquivo" (as trilhas do filme, como as
+outras mídias do arquivo). A sétima sobre uma imagem é recusada ANTES de ser mandada, com a frase
+que o player diria. A língua aparece como o código que o arquivo diz: ainda não há tabela de nomes
+de línguas no player, e um nome adivinhado seria uma palavra que o arquivo não disse.
+
+**A cor de uma faixa de legenda só aparece num chip.** As seis cores são medidas contra uma imagem
+escura fixa e contra a borda preta que toda legenda veste (`subtitle.edge`), nunca contra uma página:
+num tema claro o amarelo da primeira sumiria. Por isso a porta desenha a cor de uma faixa só dentro
+de um chip cujo fundo é essa borda (`player_rows::Chip`, `chrome::chip`) — uma amostra de como a
+faixa aparece sobre o filme. O chip ocupa as `space.player.chipCells` primeiras células da linha,
+com o glifo na do meio; o fundo vai meia célula além do glifo de cada lado (o glifo Material ocupa
+uma célula de tinta, `icon::ink_across`), então o ar é igual dos dois lados, e fica
+`space.player.chipAir` longe das bordas da linha. Todo pixel do fundo está dentro do controle que o
+clique pega. A cor vem da POSIÇÃO da faixa entre as legendas da mesma imagem
+(`session::subtitle_slot`), a mesma com que o daemon pinta: esconder uma não repinta as outras.
+
+#### A linha do tempo
+
+**A linha do tempo é UMA geometria, lida pela pintura e pelo ponteiro** (`player_timeline`, pura).
+`lay` recebe as faixas, o comprimento de cada fonte, o do conjunto, o relógio e o espaço, e devolve
+um `Deck`: uma régua de tempo e uma linha por faixa, todas no MESMO trilho, então o playhead é um x
+só em todas; `Deck::quads` desenha (bandas, fantasma, marcas da régua, medidores, playhead, barra) e
+`Deck::hit` responde o clique pelos mesmos números. Uma faixa só É a barra de tempo de hoje, com o
+mudo e o volume onde a janela sempre os teve; a coluna pequena guarda o glifo, a banda e o mudo; uma
+faixa ao vivo corre até o fim do trilho; mais faixas que o espaço rolam sob UMA barra. As cores são
+papéis próprios (`player.lane.*`, `player.playhead`, `player.tile*`) sobre famílias que toda semente
+já tem — imagem azul, som verde, legenda roxa, como em todo editor —, medidas antes de virar portão
+(a dupla mais próxima, azul e verde no `flashbang`, a 0,079). Só um SOM tem mudo e medidor na linha
+dele: uma imagem não toca som (`aid=no`) e legenda não tem, e um mudo que não responde seria um
+controle desenhado à toa.
+
+**Onde o deck é desenhado.** Na janela fora do palco e na coluna grande, média e pequena, um BLOCO
+sob o transporte, no lugar da barra de tempo (`Layout::deck` linhas a partir de `Layout::bar`): as
+faixas de um CONJUNTO — o que o esboço da fila diz que a entrada atual é —, no máximo
+`space.player.deckLanes` e nunca mais de um quarto das linhas da superfície, o resto rolando sob uma
+barra que é controle (a trilha gravada com `canvas.bar`, a roda sobre ela rola). Um arquivo sozinho
+é uma faixa: as faixas implícitas dele (imagem, som, legenda) são um arquivo num relógio, e o deck
+dele é a barra de sempre (`player_timeline::set_lanes`). No palco — só a imagem, a tela inteira, o
+canto — e na página da linha do tempo, a barra global e nada mais. No rodapé, que não tem transporte
+sob o qual pôr um bloco, as faixas de um conjunto são as primeiras linhas do "Agora", no lugar da
+posição (`View::deck_in_now`); e a página **Linha do tempo** (`t`, `LEADER p i`, a linha em Recursos
+variados) mostra TODAS as faixas em todas as portas, a de um arquivo sozinho inclusive — mover o
+início do som é como se acerta um som atrasado num fone sem fio —, cada uma uma linha. Como linhas,
+o deck é montado UMA vez com as linhas (`player_rows::DeckRow`, um `Rc<Deck>` que as linhas dividem);
+a porta pinta as formas sob as palavras, cada sequência de linhas de uma vez para o playhead ser um
+traço só, e pega o clique pelo mesmo deck (`player_rows::deck_at`, a gêmea de `slider_at`). O
+teclado anda nelas: a régua é a posição (as setas buscam), a linha de uma faixa é a faixa — `←`/`→`
+movem o início meio segundo (em qualquer linha de faixa, a de tocar junto e a de um conjunto na fila
+também), `RET` abre a página dela, `d` a tira, `v` a mostra ou esconde. Sem nome — a coluna
+pequena —, o cursor é o glifo.
+
+**Um gesto só, em todas as portas** (`Deck::press`, `Grip`). O clique diz o que pedir agora e o que
+o ponteiro segura até soltar, com a geometria em que foi apertado, para o arrasto seguir o trilho em
+que começou seja o que for que o próximo estado desenhe. O glifo liga e desliga a faixa, o mudo dela
+a silencia, o nome a escolhe (o segundo clique abre a página dela); o trilho busca ali e o arrasto segue buscando; o playhead é
+pego onde está e busca enquanto é arrastado; os medidores — o da faixa e o do player na régua — vão
+aonde o clique cai. A banda é SEGURADA e nada é pedido: passado `DRAG_SLACK_CELLS` ela vira arrasto e
+deixa um fantasma onde cairia (`Deck::holding`, o mesmo cálculo de `lay`), e só ao soltar pede o
+início novo, nunca antes do primeiro segundo; solta onde foi apertada, é um clique — um tremor da mão
+que empurrasse uma faixa um quadro seria um gesto que ninguém fez. **O clique na banda segue a
+invariante 19** (`Act::Choose`; decisão do dono, 2026-09-29): o primeiro ESCOLHE a faixa e o segundo
+abre a página dela, como em toda linha — e o nome no bloco também. Numa linha de deck, escolher é o
+cursor vir à linha (`View::band_clicked`; a banda não leva o cursor no aperto, só ao soltar, senão o
+primeiro clique já seria o segundo); no bloco sob o transporte, que não tem cursor, a faixa escolhida
+veste a cor do cursor (`Player::deck_chosen`, o `focused` de `Deck::words`) e o segundo clique nela
+abre a página. Antes, um clique só na banda abria a página enquanto o nome pedia dois. `Esc`
+cancela o arrasto antes de tudo: a banda fica onde estava e soltar não pede nada. A folga que separa o
+clique do arrasto é `space.player.dragSlack`, duas células — a do `sweepSlack`, pela mesma mão que
+treme —, e o fantasma é desenhado nos segundos que o trilho mostrava quando a banda foi apertada
+(`Held::span`): um deck sem duração conhecida alarga enquanto toca, e o fantasma fugia da mão. A
+roda sobre o bloco é um volume — o da faixa sob ela, quando soa, e o do player na régua; sobre uma
+faixa que não soa não há volume, e ela rola as faixas; sobre as LINHAS do deck ela rola a lista,
+porque uma página maior que a porta precisa rolar e um deck que prendesse a roda seria a prateleira
+que parou a página. Sob o ponteiro, o glifo acende no tom de uma tecla sob o ponteiro
+(`text.subtle.lit.key`, o da linha de controle das colunas) — nunca no do cursor, que numa faixa sem
+nome é o glifo — e a linha 0 da janela (a mensagem do rodapé) diz o que o controle faz, com o nome da
+faixa na frente (`player_timeline::hover_sentence`): a coluna pequena desenha a faixa só pelo glifo. Uma linha
+de deck é figura: nenhuma faixa de hover acende atrás dela. O playhead anda com cada estado que chega
+(evento, não relógio).
+
+#### Cada imagem na sua tela
+
+**Cada porta compõe a SUA tela** (`player_layout::tiles_on`). Um conjunto pode mandar um filme a uma
+tela e outro à outra, e a capa às duas (`Lane::screens`), então nenhuma porta mostra "as imagens":
+cada uma pergunta quais faixas estão roteadas à tela em que está — a janela pela tela em que a
+superfície entrou (`Ui::screens`, do `wl_output` e do `enter`), a coluna pela tela do espaço dela
+(`Tenant::placed_on`, que vem antes do `enter`), cada superfície do rodapé pela própria — e só
+essas. Uma faixa é imagem quando o daemon diz que ela tem uma agora (`LaneState::picture`: um filme
+ligado, ou a capa de um som que a pessoa quer ver); a ordem e o que está escondido são do arranjo.
+Uma porta que não sabe a tela mostra todas: uma imagem sumida porque o compositor demorou a dar
+nome a uma saída seria um defeito sem sintoma além de uma faixa vazia. Todas são postas por
+`arrange::place` na forma do arranjo, cada uma no próprio formato, e a porta desenha e pega o
+clique nos lugares que essa função deu (`Player::placed`); a faixa da imagem tem a altura que a
+forma pede (`arrange::natural_aspect`), sob o mesmo teto de antes. Cada imagem é pedida ao daemon
+PELA FAIXA (`Ask::Preview { lane }`) e a thread dela fica enquanto a faixa aparece ali: mudar a
+ordem não reabre nada.
+
+**Mostrar em cada tela** (`M`, `player-every-screen`, a linha em Recursos variados). Uma janela por
+tela para onde alguma imagem vai — `ronoctua-shell player maximized --screen <conector>` —, cada uma
+posta em tela cheia NA SAÍDA DELA (`xdg_toplevel.set_fullscreen(Some(output))`, o argumento do
+próprio xdg-shell: nenhum protocolo novo) e compondo o que é roteado ali; ela espera a conexão
+descrever aquela saída pelo nome antes de pedir a tela cheia. Cada janela segura um slot próprio,
+`player-stage@<conector>.pid`, e apertar de novo acha todas pelos slots e as fecha
+(`player_stage::everywhere`); o conector só vira nome de arquivo se for um nome seguro. Quem abre
+escreve o slot com o pid do filho na hora — a janela escreve o mesmo pid quando sobe, e um segundo
+aperto antes disso abria outra rodada —, e cada filho é esperado numa thread, senão virava zumbi do
+rodapé. Sem escopo, como a janela de palco e a coluna: o pid é o slot, e o `systemd-run --scope` só
+vira o programa depois de uma ida e volta. Com uma tela só não há o que espalhar, e isso é dito;
+sem nenhuma imagem roteada, também; uma porta que não sabe o nome de nenhuma tela diz isso, e não
+que há uma só. A decisão é pura
+(`everywhere_plan`), e as telas são as que a PORTA conhece — o rodapé as dele, a janela e a coluna
+as do `wl_output` —, nunca uma pergunta ao compositor.
+
+#### A disposição
+
+**A disposição é uma conta só** (`arrange::place`, pura), e toda porta que põe imagens lê a mesma:
+a faixa de imagem da janela e da coluna, o palco, o pip e o painel do rodapé. Sete formas —
+Automática, Uma, Lado a lado, Empilhadas, Grade, Tira e Canto; a Automática é a melhor das três do
+meio pelo que mostra —, e cada retângulo tem o formato da própria imagem, nunca espremido. Quando
+falta espaço acima do piso, saem as ÚLTIMAS da ordem, e a primeira fica sempre. O Canto é a única
+forma em que imagens se sobrepõem: as outras ficam sobre a primeira, no canto de baixo à direita,
+sem sombra — um quadro dentro do quadro. Um teste de propriedade passa todas as formas por uma a
+oito imagens, sete proporções e sete áreas: dentro da área, sem sobreposição (menos o Canto), o ar
+mantido, nada abaixo do piso.
+
+**Um teto de imagens, contado dos dois lados.** Um conjunto mostra no máximo `PICTURES_MOST` (6)
+imagens, e cada uma é uma textura do quadro. O renderizador não conhece player nenhum, então conta
+as dele por um número próprio (`image::PLAYER_PICTURES`, no `CEILING`); o shell, que liga os dois,
+não compila se eles se separarem (`player_layout`), e nenhuma porta pede mais que isso. O que passa
+do teto do renderizador é descartado sem erro em lugar nenhum — é o número deste recurso que
+falharia calado (`files-panels-have-two-pictures`).
+
+**A página Disposição** (`player_layout`, `PageId::Layout`, `y`, `LEADER p y` e a linha em Recursos
+variados, que diz a forma). A FORMA é um anel — as sete de `Form`, cada uma com o glifo dela, o
+Automático com `md-view_compact` — que as setas e o `RET` giram. Embaixo, um ESQUEMA desenha onde
+cada imagem vai nessa forma, um ladrilho cada (`chrome::tile`), sem palavra nenhuma, numa caixa no
+formato de uma tela; o ladrilho da imagem cuja linha tem o cursor acende (`Builder::light_schematic`,
+porque as linhas das imagens vêm depois do esquema). O esquema é posto UMA vez com as linhas, pela
+mesma `arrange::place` das portas, na caixa em que ESTA porta põe as imagens e com o piso dela
+(`View::pictures_room`, dito pela porta): o desenho é o que a porta mostra. Uma imagem que a forma
+deixaria menor que o piso (`space.player.tileFloor`) fica fora da porta — não tem ladrilho, a linha
+dela diz "sem espaço" e uma frase embaixo diz por quê (`player_layout::left_out`); escolher o
+canto numa coluna pequena não fazia nada visível. Sem caixa conhecida, o esquema mostra todas, sem
+piso. Cada porta o pinta
+sobre as linhas dele, cortado ao que está na tela (`Schematic::quads`, `player_rows::SchematicRow`);
+é figura, sem faixa de hover. Os ladrilhos que se sobrepõem — o canto — ganham um anel do chão
+antes, o ar que `place` guarda em volta deles. Depois, uma linha por imagem que pode aparecer — todo
+filme ligado e todo som cuja capa pode — na ordem em que são postas: `RET` mostra ou esconde (a capa
+de um som), `←`/`→` a movem uma casa, e o `◀` e o `▶` no fim da linha fazem o mesmo para o ponteiro
+(invariante 19). As setas têm células próprias: o valor e o rótulo são dispostos no que sobra, e a
+coluna dos valores da seção abre espaço para elas, com uma célula de ar — numa coluna estreita o
+valor corria por baixo delas, e depois foi cortado para dar lugar (`pair_with_controls`). Toda
+mudança manda o arranjo INTEIRO (`Ask::Arrange`). Seguindo outra máquina, o arranjo é o dela, e a
+página diz isso numa frase.
+
+#### Sons ambientes
+
+**Só gravações, e só as ouvidas.** Os sons ambientes são gravações de verdade — chuva, trovoada,
+água —, cada uma aprovada de ouvido pelo dono, sob CC0 ou domínio público; um som novo só entra
+assim (a lista começou com três). `assets/ambience.nix` é a lista; `nix/ambience.nix` recusa na
+avaliação uma licença que não seja essas duas, o nome de um gerador (`anoisesrc`, `sine`,
+`aevalsrc`, `anullsrc`, `lavfi`) em qualquer campo e um original que não seja um nome de arquivo;
+no build, um original cujo sha256 não é o aprovado. Os originais (695 MiB) são o asset de Release
+`ambience-v1`, empacotado por `nix run .#ambience-release`, e o sistema carrega só os laços
+(42 MiB), com o player.
+
+**A emenda é medida, não escolhida de ouvido.** A janela de cada gravação é a que o `ebur128`
+mostra com as duas pontas no mesmo fundo e nenhum evento perto delas. O fim da janela é cruzado no
+começo em igual potência (ruído com ruído mantém o nível), o ganho leva ao alvo de loudness só como
+ganho — o `loudnorm` que cairia em compressão é recusado, porque achataria o trovão —, e o laço sai
+em FLAC 48 kHz: o Opus esquece o pre-skip a cada volta e toca ~6,5 ms de decodificador aquecendo. O
+build recusa uma emenda que se ouve (um buraco abaixo do mais baixo do próprio laço, silêncio, um
+degrau que a gravação não dá de um segundo para o outro, um trovão dentro do cruzamento) e grava
+cada medida no `index.json`.
+
+**O mpv dá a volta sozinho.** Cada laço é tocado três vezes pelo mpv pinado, pelas três rotas, e
+comparado amostra por amostra com o laço emendado: `loop-file` e a janela de duas entradas devolvem
+o laço idêntico; `amovie=…:loop=0` perde 4 608 amostras (96 ms, um quadro de FLAC) a cada volta.
+Fica o `loop-file`, que é exato e não pede nada ao motor, e o build recusa um `route` que não seja
+exato. O que o build não vê é o aparelho: `--ao=pcm` não tem relógio.
+
+**Ao lado da fila, e fora dela.** Um mpv por som ligado (`audio-client-name=ronoctua-ambience`, sem
+scripts, sem controle de mídia), até `atOnce` ao mesmo tempo. Parar, próximo, as teclas de mídia,
+o volume do player e o MPRIS são da fila e nunca chegam a eles; um som para quando é desligado, com
+"silenciar todos" ou quando o player fecha. Escolher toca na hora, para sempre. O volume de cada som
+é lembrado; que um som estava ligado, nunca — o player que sobe não toca nada sozinho.
+
+**Até o Release existir, a máquina diz que não tem.** A unidade só recebe `RONOCTUA_AMBIENCE` quando
+o flake tem os laços (`ronoctua ? ambience`), e sem ele o player diz `no-ambience` em vez de uma
+página vazia.
+
+**Os sons ambientes são uma página, ao lado da fila** (`player_ambience`, `LEADER p e`, e a linha em
+Ouvir e assistir). Uma linha por som: o glifo do grupo dele (`ambience-*`; um grupo sem glifo veste
+a onda), o nome (`player-ambience-<id>`, e um som sem nome nesta porta é dito como um, nunca pelo id
+cru) e o volume próprio como barra, com o volume enquanto soa, ou "desligado", ou "em pausa". A barra
+é de `space.player.soundBar`, mais curta que a do volume do player: três lado a lado com a barra
+inteira espremiam os nomes num toco na coluna. Os sons ficam sob o título do grupo deles
+(`player-ambience-group-<grupo>`, `Builder::heading_within`), que não abre seção: os valores
+continuam numa coluna só, e toda barra da página tem o mesmo tamanho, medido pela palavra mais longa
+que uma linha pode dizer — "desligado" tirava uma célula da barra da linha dele. `RET` — e o segundo clique — liga ou desliga, e ligado
+toca na hora; `←`/`→` e a barra mudam o volume, ligado ou não, que o player guarda. Um som além do
+`at_once` da máquina é recusado antes de ser mandado. Enquanto algum soa, uma linha os pausa todos
+(`ambient-toggle`) e outra silencia todos. Os créditos são uma página: quem gravou, a licença e onde
+foi publicado, cada um uma frase que quebra e nunca é cortada — um autor ou um endereço cortado na
+largura de uma coluna não é crédito. Sem sons na máquina, a página diz por quê, como o player diz.
+
+#### Metadados
+
+**A folha: ler tudo, e o que falta dito.** `ronoctua-tags` é a única fronteira com as etiquetas e as
+capas de um arquivo de mídia. A folha junta quatro leitores, cada um opcional: o lofty (as etiquetas
+dos formatos que ele conhece), o ffprobe (fluxos, capítulos, fatos técnicos), o exiftool (tudo, só
+para ver) e o `mkvextract`/`mkvmerge` do Matroska — só para um Matroska: um FLAC nunca pergunta a
+eles, nem diz que faltam. Um programa que falta vira uma linha que diz qual, nunca uma folha menor
+calada, e os campos comuns do tipo aparecem sempre, em branco inclusive. A leitura é do daemon, numa
+thread própria (`player-sheet`), nunca sob a trava; as últimas oito folhas ficam guardadas pelo
+carimbo do arquivo, e um arquivo que começa a tocar é lido antes de alguém pedir. A folha vai só a
+quem pede (veja "Duas mensagens inteiras").
+
+**O palpite do lofty não é lei.** Sem assinatura conhecida, o lofty procura um sincronismo de
+MPEG/AAC no primeiro kilobyte e acha um dentro de um Matroska (e um MP3 dentro de um Ogg Theora);
+acreditado, ele poria uma etiqueta ID3 na frente do arquivo. Um palpite que não começa o arquivo só
+vale confirmado pelo ffprobe; senão decide o formato do ffprobe, e depois a extensão.
+
+**Nunca escrever no lugar, e uma escrita por vez.** O mpv pode estar tocando o arquivo. Toda
+escrita vai para `.<nome>.ronoctua-<pid>.part` na mesma pasta — clonada por reflink onde o sistema
+de arquivos clona, copiada onde não, com o espaço conferido antes — e termina num `rename`; o mpv
+segue no inode antigo e não é recarregado (sem lacuna), e a próxima carga lê o novo. O carimbo
+(`len`, `mtime`, `ino`) com que a folha foi lida é conferido no começo e de novo antes do `rename`:
+um arquivo mudado desde então é recusado, nunca sobrescrito. Arquivo com outros nomes (hard link),
+de outro dono, marcado só-leitura ou em pasta sem escrita é recusado com frase. As escritas vão
+para UMA thread (`player-retag`), uma de cada vez — o rascunho leva o nome do arquivo e do processo,
+e duas escritas do mesmo arquivo dividiriam um —, e o andamento e o fim estão em `State.retag`.
+
+**O rascunho é relido.** O lofty 0.25.4 trunca um arquivo cuja etiqueta termina o arquivo quando
+ela encolhe — um FLAC sem quadros depois dos metadados virou 24 bytes —, e o arquivo quebrado ainda
+abre. Por isso todo rascunho é lido de volta (`native::verify`): cada campo, cada etiqueta nomeada,
+cada imagem, as etiquetas que ninguém tocou e, no FLAC, os bytes depois dos metadados. Um rascunho
+que não confere é jogado fora e o arquivo fica como estava. E o lofty genérico perde o que não tem
+nome para ele (uma chave Vorbis desconhecida, o `COMM:iTunNORM` do iTunes): o crate edita as
+etiquetas concretas, e os campos leem e escrevem só o item sem descrição.
+
+**Quem escreve o quê.** O lofty para os formatos dele, até 512 MiB, porque ele reescreve com o resto
+do arquivo na memória (o MP4, inteiro) — acima disso a folha diz que é grande demais; o
+`mkvpropedit` para Matroska, lendo antes todas as etiquetas globais, porque `--tags global:`
+substitui todas; o remux (`ffmpeg -map 0 -c copy`) só onde o muxer guarda tudo (hoje, Ogg com
+vídeo). AVI, TS, FLV e ASF são recusados pelo nome: o remux deles perderia o índice, os PIDs ou as
+chaves da Apple. As ferramentas do Matroska só entram na unidade com `ronoctua.media.enable`
+(`nix/player-tools.nix`, `matroska`): o `mkvtoolnix-cli` traz o Qt, 560 MiB sozinho e +32,5 MiB
+onde o perfil completo já tem o qtbase. Sem elas a folha de um Matroska é lida pelo ffprobe e diz
+que não pode ser gravada, nomeando o programa que falta.
+
+**Toda etiqueta, pelo próprio nome.** Uma linha de Todas as etiquetas que o formato grava é gravada
+pelo nome dela (`Edit::SetTag`, `RemoveTag`), e um nome vale inteiro: todo valor que ele tinha
+naquela etiqueta (um Vorbis que diz ARTIST duas vezes) dá lugar ao digitado. Cada escritor tem o seu
+caminho: o lofty pelo item concreto — os nomes crus do Vorbis, do APE e do RIFF; no ID3v2 o quadro
+pelo id, o `TXXX` pela descrição, e um `COMM` ou `USLT` com descrição à parte do campo
+(`COMM:iTunNORM` é uma linha dela); no MP4 o átomo, ou o freeform `----:<mean>:<nome>` —; o Matroska
+pela mesma leitura e troca dos campos (`--tags global:`), só as etiquetas do arquivo inteiro e cada
+uma sozinha, porque a de uma faixa, a aninhada e a que tem filhas perderiam o resto na troca; e o
+remux pelo `-metadata` do ffmpeg, no contêiner (nos dois lugares, como um campo) ou no fluxo que o
+ffprobe disse. Um nome passa pela gramática da etiqueta (`ronoctua_tags::tag_name`, pura, que a
+porta pergunta antes de mandar e o escritor de novo): uma palavra digitada para um MP3 vira
+`TXXX:<palavra>`, para um MP4 o freeform do iTunes, e um nome listado volta como foi — senão a linha
+dele gravaria outra etiqueta. O que não se grava diz por quê, cada um na frase dele: o que o
+exiftool e o ffprobe leem para mostrar muda pela etiqueta que espelham; o número da faixa e do disco
+(`TRCK`, `trkn`) muda pelo campo, porque um texto digitado não cabe num número e num total; dado que
+não é texto; a etiqueta de uma faixa do Matroska; e, num contêiner que nada grava, o motivo do
+contêiner. "Acrescentar uma etiqueta" vai para a etiqueta principal do arquivo (`Sheet::adding`: o
+formato primário do lofty, as globais do Matroska, o contêiner do remux), ou diz por que o arquivo
+não aceita nenhuma.
+
+**O que segue um arquivo regravado.** Quando uma folha nova substitui a que se tinha — gravada
+aqui, relida com `refresh`, ou achada mudada quando o arquivo toca de novo —, o que o player diz
+dele segue: um item da fila que tinha o título ANTIGO como nome recebe o novo (um nome que a pessoa
+ou uma lista deu é deles e fica), o título, o artista, o álbum e a letra do estado enquanto ele
+toca, o MPRIS com eles, e `sheet_generation`.
+
+**A capa, e o cache do player.** Uma imagem dentro de um FLAC não é endereço que um ouvinte abra;
+então a capa de cada arquivo lido é tirada para o cache do player
+(`$XDG_CACHE_HOME/ronoctua/player`), com o hash do arquivo, do carimbo e do lugar da imagem por
+nome: um arquivo regravado tem nome novo, e o velho envelhece até sair. A varredura do `~/.cache`
+leva entradas inteiras da raiz, e `~/.cache/ronoctua` é tocado todo dia, então nada dentro dele
+seria varrido: a pasta `player` tem teto próprio (`playerMib` em `assets/cache.nix`) e é escrita só
+pelo daemon — depois de cada escrita sai o arquivo lido há mais tempo, e a leitura grava o horário
+de acesso de propósito (numa montagem `noatime` ele não mudaria sozinho). As capas e as listas dos
+diretórios dividem essa pasta e esse teto.
+
+**Um endereço tem folha só de leitura.** Nada nesta máquina tem os bytes de um rádio: a folha dele
+é o que ele diz enquanto toca — as palavras ICY (`icy-title` é a música no ar, `icy-name` a
+estação) ou as etiquetas de um arquivo atrás de um endereço, como o mpv as leu —, com as mesmas
+linhas de uma folha de arquivo, todas dizendo que não podem mudar. Cada coisa nova que o stream diz
+faz `sheet_generation` andar.
+
+**Campos de várias linhas no editor, e a pergunta sobrevive à porta.** Letra, comentário e
+descrição são editados num arquivo do daemon em `$XDG_RUNTIME_DIR/ronoctua-player-drafts` (pasta
+0700, arquivo 0600 antes de qualquer byte), que ele vigia com inotify — evento, não relógio: a
+thread só existe enquanto há rascunho aberto, e tirar o último remove a vigia, o que a acorda para
+sair. Salvo com um valor diferente do arquivo, o rascunho aparece em `State.drafts`, e qualquer
+porta pergunta "gravar isto?", com o "não" primeiro: a porta que abriu o editor pode já não
+existir. A gravação é recusada se o campo mudou no arquivo desde que o rascunho nasceu (outro campo
+mudado não importa).
+
+**Os metadados são a última seção da home, e a folha é pedida pela porta** (`player_metadata`, plano
+P7; `LEADER p d` volta à home com o cursor na seção). O estado leva só `sheet_generation`; a porta
+que mostra a seção pede a folha do arquivo mostrado (`client::sheet`, a um player que RODA — nunca
+um iniciado para isso) quando a geração ou o arquivo mudam, numa thread que deixa a resposta onde a
+vista a pega e acorda a porta (`Meta::look`, o padrão do `Beside` das legendas). Uma porta sem laço
+— a fotografia (`--sheet`), um teste — recebe a folha (`Meta::given`) e não pergunta a ninguém.
+Enquanto a nova não chega, a folha velha do mesmo arquivo continua na tela; sem nenhuma, a seção diz
+que lê. Uma que não veio a tempo (`client::SHEET_PATIENCE`, um disco lento) não troca a velha nem diz
+"não roda": é contada e pedida de novo nos próximos assentos, até três vezes por geração, e sem folha
+velha a seção diz que ainda lê (`Got::Slow`). Com o player ido (`Hearing::Shows(None)`) a porta
+esquece o que tinha dele — folhas, mesas, pedidos (`View::player_gone`): um player que volta conta
+gerações e candidatos do zero, e uma página guardada com o mesmo número seria a do outro. Com várias
+fontes tocando, um anel ("Do arquivo") escolhe qual.
+
+- **Todo campo comum, sempre, em branco inclusive** (`Field::common`): um campo vazio diz
+  `player-tag-empty` no registro da resposta e age como os outros. `RET` (o segundo clique) pergunta
+  um campo de uma linha na linha da porta, SEGURANDO o valor de agora (`Question.initial`, uma
+  pergunta por campo — `ask-player-tag-<campo>` —, que o rodapé devolve à vista por
+  `player_metadata::asks`); nada digitado, ou o mesmo valor, é deixa-pra-lá; número, data e ISRC são
+  conferidos na porta (`Field::check`) e recusados numa frase antes de qualquer pedido. `d` apaga
+  depois de uma pergunta, "não" primeiro; num campo em branco diz que não há o que apagar. O valor
+  vem INTEIRO, quebrado na coluna dele (`Builder::pair_whole`, também nos Fluxos e em Todas as
+  etiquetas): "ver todos os metadados" não cabe num título cortado em "The Lighthous…". Um campo de
+  VÁRIAS linhas — letra, comentário, descrição — mostra a primeira linha depois de quantas tem ("3
+  linhas · …") e abre a PÁGINA DELE (`PageId::Field`): o texto inteiro, verso a verso, e a linha
+  "Editar no editor" — ou por que o arquivo não aceita. Ela abre no EDITOR: `Ask::Draft`, e o daemon
+  responde onde escreveu o rascunho (`Told::Draft`, pelo mesmo contador de pedidos em ordem), que a
+  porta abre (`files::editor_command`). Salvo com valor novo, o estado diz (`State::drafts`) e
+  QUALQUER porta pergunta se grava, "não" primeiro, com o texto que gravaria sob as respostas — a
+  porta que abriu o editor pode já não existir. O "não" (e `Esc`) é AINDA NÃO (`Ask::KeepDraft`): o
+  rascunho fica aberto e a pergunta volta quando ele for salvo de novo — salvar no meio da escrita é
+  como se usa um editor, e jogar fora o rascunho era perder o texto sem aviso. Jogar fora é `d` no
+  campo enquanto o rascunho está aberto, depois de uma pergunta própria (`Ask::DropDraft`). A
+  pergunta sai de toda porta quando o rascunho deixa de estar salvo ou aberto — outra porta
+  respondeu —, em vez de ficar na tela esperando uma resposta sobre nada.
+- **Um campo que o arquivo não aceita é um fato**, desenhado como fato, e `RET` diz por quê; quando
+  um motivo vale para todos (um endereço, o Matroska sem as ferramentas), ele é dito uma vez sob o
+  título. O andamento e o fim da última gravação do arquivo mostrado vêm de `State::retag` (a
+  porcentagem, as que esperam, gravado, capa salva, ou a recusa na frase dela).
+- **A capa é uma imagem das linhas.** O daemon guarda a capa de cada arquivo lido no cache dele e
+  nomeia o arquivo na folha (`Sheet::cover_file`); a porta o decodifica na mesma thread que buscou a
+  folha, até `space.player.coverPx` no lado maior, e o desenha sobre `space.player.coverLines`
+  linhas próprias (`player_rows::CoverRow`), na proporção dele, a partir da primeira célula das
+  linhas e com `space.files.pictureAir` de ar acima e abaixo — uma imagem não encosta na linha de
+  cima nem na de baixo. Rolada pela metade, a parte que a rolagem tirou sai da imagem também, sob uma
+  chave própria (`player_metadata::cover_place`, a conta que a janela e o rodapé pintam). A linha da
+  capa abre a página dela: outra imagem dos arquivos (abertos na pasta do arquivo,
+  `Purpose::Cover`, só imagens), salvar ao lado do arquivo, ou tirar depois de uma pergunta.
+- **Todas as etiquetas, cada uma agindo.** Toda linha que o arquivo aceita age como um campo: `RET`
+  pergunta o valor na linha da porta SEGURANDO o de agora quando ele cabe inteiro — uma linha, o
+  único valor do nome —, e vazia, com a pergunta que diz que substitui tudo
+  (`player-tag-value-all`), quando não cabe (várias linhas, um valor cortado, um nome com dois
+  valores); `d` tira depois de uma pergunta, "não" primeiro, que diz quantos valores saem. Uma linha
+  que o arquivo não aceita é um fato e `RET` diz por quê; um motivo que vale para um grupo inteiro
+  (o exiftool, as etiquetas de uma faixa do Matroska) é dito uma vez sob o título dele, e um que
+  vale para a página, uma vez — não de novo sob "Acrescentar uma etiqueta", que o disse. Essa linha
+  vem primeiro, com o nome da etiqueta para onde vai: pergunta o nome e depois o valor, e um nome
+  que a etiqueta não aceita é recusado numa frase que diz a regra dela (letras sem `=` no Vorbis,
+  quatro caracteres no RIFF…); um nome que já existe pergunta o valor como quem substitui tudo.
+- **Técnico, e as páginas.** Os fatos técnicos são só leitura, cada um na unidade dele (a duração
+  como relógio, taxas com a marca decimal da língua); Fluxos, Capítulos e Todas as etiquetas abrem
+  páginas, a última agrupada por quem leu cada etiqueta (lofty por formato, o Matroska por alvo, o
+  ffprobe pelo contêiner ou pelo fluxo, o exiftool pelo grupo, e o que um stream diz de si). O que
+  não pôde ser lido é dito no fim, e "Ler de novo" pede `Ask::Refresh`. A linha Sugestões abre a
+  página delas e diz o que o daemon está fazendo por este arquivo ou quantas achou.
+
+#### Buscas online
+
+**Letra e patrocínio nascem desligados.** Os dois contam a um estranho o que está tocando. O
+SponsorBlock é perguntado pelo PREFIXO de quatro dígitos do SHA-256 do id — a forma que o próprio
+serviço recomenda —, e o SHA-256 foi escrito à mão (`ronoctua_lookup::sponsorblock`, com os vetores
+da especificação no teste) em vez de uma dependência para um uso só.
+
+**As buscas são um crate, e são do daemon.** `ronoctua-lookup` é a única fronteira com LRCLIB,
+SponsorBlock, MusicBrainz, Cover Art Archive, Wikidata, TMDB, OpenSubtitles e SubDL. Cada serviço
+devolve valores tipados ou uma recusa `{serviço, porquê}` de um conjunto fechado, e a frase é da
+porta. Os módulos são puros sobre um `Net`: o do daemon espera o passo do host e pede pela web; o
+dos testes é uma lista de respostas escritas à mão que registra cada pedido — é assim que se prova o
+endereço e os cabeçalhos sem soquete. Quem pergunta é o daemon, nunca uma porta: o MusicBrainz
+aceita um pedido por segundo por ENDEREÇO e responde 503 acima disso, e três portas seriam três
+limitadores. O passo é um estático por host (MusicBrainz 1 s, os outros 250 ms), e quem pede
+reserva o próximo horário livre: dois pedidos juntos nunca levam o mesmo.
+
+**Uma mesa por tipo de busca, e a página sobrevive à porta.** Sugestões de etiquetas, legendas e
+letras são mesas (`Desk`), cada uma com uma thread que nasce na primeira busca. A busca ganha um
+número quando é pedida, e o que ela acha só vale enquanto o número ainda é o da mesa: uma busca nova
+SUBSTITUI a que está andando, que para entre dois pedidos. Uma busca feita no rodapé é a página que
+a janela encontra.
+
+**Consentimento é um toque numa linha que nomeia o host.** Nada busca sozinho, a não ser as duas
+chaves que já buscavam (letras automáticas e SponsorBlock), nascidas desligadas. Cada serviço tem o
+seu consentimento em `player.json` (`consented`), nascido vazio; a linha que busca nomeia os hosts
+do serviço, e apertá-la é o consentimento: a porta grava e só então pede. O daemon lê o arquivo na
+hora de perguntar — nunca uma cópia da partida — e recusa um serviço não permitido com `off{host}`,
+sem mandar nada; o teste `nothing_reaches_the_network_until_somebody_says_so` cobre todo serviço.
+
+**As chaves são arquivos da pessoa, privados desde o primeiro byte.** `player-keys/` na raiz de
+configuração da instância (o `.#dev` tem as suas), pasta `0700`, cada arquivo criado `0600` antes
+do primeiro byte e renomeado por cima do anterior; a porta grava, o daemon lê na hora de usar. A
+chave é um `Secret`: não imprime, não serializa, e vai num cabeçalho — `Bearer` para o TMDB,
+`Api-Key` para o OpenSubtitles. O SubDL só aceita a chave na query string: ela entra só no
+transporte, nunca no endereço que um log ou um `Debug` mostra, e a página diz que o SubDL a vê nos
+registros dele. Colar uma chave é testá-la (`key-check`): o OpenSubtitles pela chave e, com uma
+conta, pelo login e pela cota do dia; o TMDB pelo token de leitura (uma chave v3 é recusada na
+hora, porque ela só funciona na query string); o SubDL por uma busca de um resultado. O login do
+OpenSubtitles vive só na memória do daemon, é reaproveitado e refeito uma vez quando o serviço
+recusa o token; o host que o login indica só recebe a chave se for do `opensubtitles.com`. A mesma
+escrita privada passou a guardar as máquinas pareadas (`remote::keep`), que antes gravava e só
+depois fazia `chmod` — o arquivo ficava legível entre as duas chamadas.
+
+**Não há fonte de legenda sem chave.** Decisão do dono (2026-09-28): as legendas vêm do
+OpenSubtitles (a chave, e se a pessoa quiser a conta, que dá mais downloads por dia; a página diz
+quantos restam) e do SubDL (chave grátis). A fonte sem chave que existia, o Podnapisi, está fora do
+ar — o domínio não resolve desde junho de 2026 —, e nenhuma outra sem chave pôde ser verificada: sem
+chave, a API do OpenSubtitles responde 403. O leitor do Podnapisi fica pronto e desligado
+(`podnapisi::AWAKE`): acordá-lo é virar a constante e conferir o formato, que nunca foi documentado
+nem pôde ser medido. A página de busca diz que a busca pede a chave da pessoa, em vez de parecer
+funcionar.
+
+**Uma legenda baixada nunca apaga outra.** Ela é salva como `<filme>.<língua>.<ext>` ao lado do
+filme, em UTF-8 (legenda é o último lugar onde vivem code pages antigas); os mesmos bytes são o
+mesmo arquivo, e bytes diferentes ganham `.2`…`.9`. Uma pasta que não aceita escrita manda a
+legenda para `$XDG_DATA_HOME/…/player/subtitles/<hash do filme>/` — dado, não cache, porque um
+conjunto salvo a nomeia. Se o filme toca, ela vira faixa na hora, sobre a imagem que é aquele
+filme.
+
+**Uma letra ao lado da música só substitui outra com a pessoa dizendo.** Salvar ao lado com um
+`.lrc` já lá é recusado com `exists`, na hora, para a porta perguntar ("não" primeiro) e mandar de
+novo com `replace`. A letra também pode ir para a etiqueta.
+
+**Não há tradução de letras.** Decisão do dono (2026-09-28): letras são as originais, buscadas e
+baixadas em qualquer língua; nem tradução automática, nem por chave. A pesquisa mostrou o que havia:
+o LRCLIB não tem traduções nem campo de língua; o endpoint de traduções do NetEase é não oficial e
+traduz quase sempre para chinês; o Musixmatch só as dá em planos pagos; Genius e LyricsTranslate não
+têm API para o texto. O que cobriria qualquer música seria tradução de máquina — com a chave da
+pessoa num serviço, ou modelos offline pinados no build, que custam closure —, e é isso que ficou
+de fora. A página de letras diz: uma fonte (LRCLIB), sem campo de língua e sem tradução.
+
+**Filmes: o que vem sem chave, e o que pede o token.** O Wikidata dá, sem chave, título, data,
+direção, gênero e língua original de um filme, e quase nunca um pôster (pôster não é livre, e por
+isso raramente está no Commons); sinopse e pôster vêm do TMDB, com o token de leitura da pessoa, e a
+página diz isso. As sugestões de música vêm do MusicBrainz — pelo id que o arquivo já tem, senão
+por busca — e a capa do Cover Art Archive, três pedidos em três hosts. Nada busca sozinho: sugerir
+é uma busca que a pessoa aperta, e gravar é escolher campo a campo, com o valor de agora discreto ao
+lado.
+
+**As línguas do conteúdo são uma tabela** (`assets/tongues.nix`). Não são as línguas da interface:
+são aquelas em que se busca legenda e em que um fluxo é marcado. Cada linha tem o código deste
+sistema (`pt-BR`), o ISO 639-1 e 639-2/B e o código de cada serviço — o SubDL escreve `BR_PT` e
+`ZH_BG`, e o `PT` dele é o português europeu. O gerador recusa código duplicado, forma errada e
+língua em que nenhum serviço busca. A busca padrão é a língua da interface, depois o inglês.
+
+**As buscas na rede, nas portas (P8).** As páginas que perguntam à rede pelo que toca — sugestões
+de etiquetas, legendas, letras — e a página Internet, que diz o que pergunta e guarda as chaves:
+
+- **O daemon pergunta; a porta mostra a mesa.** Toda busca é do daemon (`find::Desk`: um limitador
+  por host para a máquina inteira, e uma página que sobrevive à porta — o que se buscou no rodapé é
+  o que a janela acha). A porta guarda a última página de cada mesa (`player_find::Found`) e, quando
+  a geração dela anda no `State::desks` enquanto uma página a mostra, pede a nova FORA do laço e é
+  acordada quando ela chega — a forma da folha (`Meta::look`). Uma porta sem laço (foto, teste)
+  recebe a página (`Found::given`, `photograph --desk`) e não pergunta nada. Uma página é sobre o
+  arquivo da busca: mostrada só enquanto é o arquivo que a página mostra (`Found::page_for`).
+- **Pressionar a linha que nomeia os hosts é o consentimento.** A linha que busca diz a quem
+  pergunta ("Perguntar a musicbrainz.org, coverartarchive.org"), e sob ela, enquanto não foram
+  permitidos, que pressionar permite. O pressionar vira `Errand::Let`: os serviços gravados no
+  `player.json` MESCLADOS com o que está no disco (`store().parsed()`: um arquivo que não é lido é
+  recusado com frase, nunca sobrescrito) e só DEPOIS a busca, que o daemon checa lendo o arquivo na
+  hora. As chaves da página Internet seguem a mesma regra: `Errand::Keep` leva SÓ o interruptor
+  virado (`player::Switch`), deitado sobre o arquivo como está no disco — nunca a cópia inteira que a
+  porta leu ao abrir, que devolvia um consentimento retirado noutra porta. A cópia da vista é o que
+  ela MOSTRA: o `player.json` é vigiado (`player_internet::Watched`, a mesma vigia das chaves
+  guardadas e dos favoritos) e relido quando muda, e relido também depois de toda escrita desta
+  porta — uma recusada não fica na tela como feita (`View::errand_carried`). Uma busca recusada por um host não permitido diz isso e ganha a linha "Permitir {host} e
+  perguntar de novo", que permite só aquele e repete a busca da mesa. A foto guarda o que teria
+  permitido ("would have let the player ask: …").
+- **Sugestões.** Um anel de quem sugere — MusicBrainz para uma música, Wikidata para um filme (o
+  tipo da folha escolhe o primeiro), TMDB — e o Wikidata diz antes que o pôster só vem com o TMDB e
+  o token. O TMDB sem token não pergunta: diz que precisa da chave e leva à página Internet.
+  Resultados achados por outro que não o do anel dizem de onde vieram. Uma mesa que voltou sem página
+  (sem player, sem resposta a tempo) é esquecida e pedida de novo no próximo assento, sem acordar a
+  porta (um player ausente seria perguntado em laço). Cada sugestão é uma linha com
+  o NOME (título e artista, dado) na linha inteira e, embaixo e recuado, o que se diz dela (álbum,
+  data, ou "lendo os detalhes…"): `Builder::pair_under`, porque uma coluna de valores espremia o
+  nome até um toco cortado no meio da palavra numa porta estreita.
+- **A página de uma sugestão.** Uma linha por campo que ela traz: o liga/desliga na cabeça (um
+  glifo que o clique vira na hora, como `RET` e as setas), o campo, o valor SUGERIDO inteiro — ele
+  quebra na coluna dele e nunca é cortado — e, sob ele no registro apagado, "agora: …" com o que o
+  arquivo diz. Um campo que o arquivo já diz igual é um fato que diz isso, sem liga/desliga. O
+  liga/desliga nasce ligado para um campo em branco e desligado para um preenchido; a capa, ligada
+  só num arquivo sem capa. "Gravar n campos" pede `Ask::Take` com exatamente o que está ligado e
+  difere do arquivo, e a gravação se diz como toda gravação dos metadados (`State::retag`).
+- **As duas capas, uma geometria.** A sugerida fica ao lado da do arquivo: a largura das linhas
+  dividida em caixas iguais, `space.player.coverGap` células entre elas, cada imagem posta na caixa
+  pela conta de toda capa (`cover_place`), e as caixas tão altas quanto a imagem mais alta nelas (no
+  máximo `coverLines`) — numa coluna estreita um quadrado enche a largura antes da altura, e sobrava
+  ar entre as capas e as legendas "Sugerida"/"Atual". Uma caixa cuja imagem não chegou guarda o
+  lugar. A capa sugerida é buscada pelo daemon quando a página abre (`Ask::SuggestedCover`), no
+  tamanho de uma porta (500 px no Cover Art Archive; tirar a sugestão busca a de 1200), e fica no
+  diretório de runtime (`preview-<n>`) enquanto a página for a da mesa: uma busca nova a apaga. A
+  recusa desse pedido é dita no lugar de "Buscando a capa…". A textura vai sob o arquivo E o carimbo
+  dele (hora e tamanho): o `preview-<n>` recomeça do 1 num player reiniciado, e uma textura nunca é
+  tirada pela chave. As duas capas são contadas no teto de imagens do quadro
+  (`ronoctua_render::image::PLAYER_COVERS`), e `Builder::pictures` não põe mais que isso.
+- **Buscar legendas** (Mais recursos, só com vídeo; e a linha da página das legendas). Diz o
+  limite primeiro: sem a chave do OpenSubtitles ou do SubDL não há busca, e a página leva à
+  Internet. As línguas são a da interface e o inglês, cada uma pelo NOME (`tongue-<código>`, nunca o
+  código); a linha "Escolher as línguas" abre a página delas (`PageId::Languages`): toda língua da
+  tabela, pelo nome e em ordem de nome, ligada ou desligada — o ponteiro alcança todas —, e uma linha
+  para digitar uma pelo código ou pelo nome. Na busca, o × no fim da linha (ou `d`) tira — nunca a
+  última, que não tem ×; `RET` no nome só diz como se tira. Uma língua que duas linhas da tabela
+  dividem (`pt`, `por`, `zh`) é dita sem região (`tongues::name_key`, `SHARED`, gerado de
+  `assets/tongues.nix`): um fluxo marcado `por` é português, e chamá-lo de brasileiro seria palpite.
+  Os fluxos do arquivo dizem a língua assim também. Só os serviços com chave são perguntados. Os achados vêm por
+  língua, os sincronizados para este arquivo (a impressão do OpenSubtitles) primeiro e marcados,
+  com downloads, "para surdos", "tradução automática" e o serviço sob o nome; os downloads
+  restantes do dia são uma linha. Escolher um o baixa ao lado do filme e o põe sobre a imagem, e a
+  linha diz onde foi salvo.
+- **Buscar letras.** Uma fonte (LRCLIB), sem campo de língua e sem tradução, dito no topo. Um anel
+  diz para onde vão (um `.lrc` ao lado da música, ou a letra da própria música); ao lado, onde já há
+  um `.lrc`, a página pergunta antes, com o "não" primeiro, e só então manda `replace` (o daemon
+  recusa com `Exists` quem não perguntou).
+- **A página Internet.** Três seções: o que pergunta sozinho (letras automáticas, SponsorBlock e as
+  categorias), o que pergunta quando se pressiona — um liga/desliga por serviço (MusicBrainz com o
+  Cover Art Archive, que as buscas dele nomeiam juntos) e por diretório, com os hosts NUMA LINHA SÓ
+  DELES sob o nome: um host cortado no meio numa porta estreita não nomeava ninguém —, e as chaves
+  da pessoa, cada uma dizendo SE está guardada, nunca o quê, e a que host vai. `RET` pergunta numa
+  linha mascarada (a conta: o usuário, e depois a senha mascarada); o que se digita é guardado no
+  arquivo privado dela (`ronoctua_lookup::keys`, `0600` desde o primeiro byte, sincronizado antes do
+  `rename`), o serviço que a linha nomeia é permitido, e guardar e testar vão numa thread PRÓPRIA —
+  nunca no laço, que um disco lento não pode segurar, nem na do contador de pedidos, que um pause não
+  pode esperar pelos segundos de um serviço —, e a porta diz se guardou e se o serviço aceitou. As
+  chaves guardadas são vigiadas: guardada numa porta, a outra a vê. `d` esquece, depois de uma
+  pergunta com o "não" primeiro; sobre uma que não está guardada, diz que não há o que esquecer. A
+  linha do LRCLIB diz "permitido, pela chave acima" enquanto as letras automáticas o perguntam
+  sozinhas, e desligá-la desliga as duas. O nome de usuário da conta não vai ao log do rodapé
+  (`player_question::unlogged`). A foto guarda QUAL chave teria guardado,
+  nunca a chave.
+
+#### Rádios, TVs e canais por tema
+
+**Rádios, TVs e o Internet Archive são um crate** (`ronoctua-broadcast`). radio-browser, iptv-org e
+archive.org são diretórios públicos, sem chave. Cada um vira valores tipados (estação, canal, item)
+ou uma recusa `{diretório, porquê}` de um conjunto fechado; a frase é da porta. Os módulos são puros
+sobre um `Net`, e nada ali cria thread nem lê relógio: quem chama é um trabalhador do daemon, e
+"agora" é argumento.
+
+**Os diretórios são mesas do daemon, e a página já vem com o globo.** Rádios do mundo, TVs do mundo,
+a TV de um tema, os filmes do Internet Archive e o que está ao vivo no YouTube são mesas do daemon,
+cada uma com a sua thread e a regra das buscas: a listagem nova substitui a que está andando. A
+página traz as linhas E as marcas do globo: um país na âncora do atlas, uma estação que diz onde
+está no lugar dela, as que não dizem na âncora do país, e as que não têm país que o mapa conheça
+contadas como "sem lugar no mapa". A porta agrupa e desenha, e nunca posiciona. Cada linha que toca
+traz o `Stream` pronto, com os relés e a origem, e tocar é pôr esse stream na fila.
+
+**O servidor do radio-browser é achado na hora.** Os espelhos mudam (num dia medido, só um respondia
+e outro tinha sumido do DNS). Só o nome de entrada, `all.api.radio-browser.info`, fica no código;
+a lista vem de `/json/servers`, e só vale um nome sob `api.radio-browser.info`. Sem lista, a
+entrada responde por todos.
+
+**O clique do radio-browser espera o som.** O serviço pede que o `/json/url/<uuid>` seja chamado
+toda vez que uma estação começa a tocar. O daemon chama depois do `FILE_LOADED` — o som chegou, não
+a linha —, uma vez por reprodução: um relé tentado depois de outro que falhou, uma pausa, a mesma
+entrada recarregada são a mesma reprodução; parar e tocar de novo é outra. Só com o rádio permitido.
+O mesmo começo põe a estação nos tocados há pouco.
+
+**A TV é um índice local.** Os arquivos do iptv-org vêm com gzip (1,6 MB em vez de 11,7 MB) e viram
+um índice compacto no cache do player, renovado uma vez por dia sob uma trava do processo — para as
+duas mesas de TV não baixarem juntas, e sem segurar o lock do cache, que seguraria as capas. Busca,
+país e categoria são respondidos dele, sem rede. Canal adulto, fechado, bloqueado, da categoria
+`xxx` ou sem stream que toque nunca entra; stream sem canal também não, porque nada prova que não é
+adulto. `UK` vira `GB`, e um código que não é país é recusado, nunca adivinhado. Os streams vão do
+mais alto ao mais baixo, e o geobloqueado vai por último; um canal só leva como relés os streams
+pedidos com os mesmos cabeçalhos do primeiro.
+
+**Uma lista aparece na hora e se renova por trás.** O que um diretório respondeu fica no cache do
+player pelo tempo que `assets/channels.nix` diz (rádio 6 h, TV e archive um dia, lives 30 min). Uma
+lista guardada aparece na hora; uma mais velha aparece marcada como velha enquanto a nova é pedida,
+e fica, com a recusa, quando o diretório não responde. Busca digitada nunca é guardada.
+
+**Um filme do archive é o arquivo que o mpv toca, aberto quando entra na fila.** A busca pede
+`mediatype:(movies)`, senão a coleção responde primeiro as subcoleções. A linha leva o filme
+inteiro (o endereço da página dele); ao ser posto, o daemon pergunta ao archive os arquivos, e o
+filme vira um stream, ou uma playlist com o nome dele — a página nunca espera a lista de arquivos
+de trinta filmes. De cada original fica uma cópia: h.264 até 1080 linhas, depois Ogg/WebM/Matroska,
+depois h.264 maior; som só quando o item não tem imagem; miniatura, GIF, metadado e torrent nunca.
+O endereço guardado é o `/download/`, que não muda quando o arquivo troca de servidor, e a licença
+que o archive diz é mostrada.
+
+**As lives são do YouTube, pelo yt-dlp.** A busca do que está ao vivo agora usa o filtro Live e só
+guarda `is_live`; um stream ao vivo tem `network-timeout=12`, para um relé morto ceder em segundos e
+não no minuto do mpv. As lives pedem o yt-dlp, que só o perfil de mídia instala: sem ele a recusa diz
+isso.
+
+**As categorias são declaradas em `assets/channels.nix`.** Cada tema junta TV ao vivo do iptv-org,
+filmes do archive e lives, e toda categoria tem lives, com a fonte dita na tela. O gerador recusa
+uma categoria do iptv-org que não existe, conferida contra uma captura da lista deles (pelo carimbo
+exato da captura): um erro de digitação seria uma linha de TV sempre vazia.
+
+**Favoritos são gravados pelo daemon.** A estrela é um pedido (`favourite`), e o daemon aplica ao
+arquivo como ele está agora, sob a trava dele: duas portas apertando ao mesmo tempo são duas
+mudanças, uma depois da outra. O que se guarda vem da página de um diretório, dos tocados há pouco
+ou dos próprios favoritos; o que nenhum deles tem é recusado. As portas leem e vigiam os dois
+arquivos.
+
+**Os diretórios, nas portas (P9).** Ouvir e assistir ganhou Rádios do mundo, TVs do mundo e Canais
+por tema (`LEADER p r`, `p v`, `p g`), e cada uma é uma pilha de páginas (`crate::player_directory`):
+
+- **A página pede a lista dela ao aparecer.** As mesas de diretório são uma por máquina e de todas
+  as portas: rádio, televisão, a TV de um tema, o archive e as lives. Por isso uma página que abre —
+  ou a que se volta com `Esc` — pede a SUA lista (`View::owing`, junto com o que a tecla fez, num
+  `Errand::Then`), e o cache do daemon responde de novo sem rede enquanto a lista é fresca. A porta
+  guarda o que a mesa disse de cada lista da pilha dela (`Found::listing`): outra porta que pediu
+  outra lista tomou a mesa, e a página desta continua mostrando a própria. A página diz "Perguntando
+  a {host}…" desde o pressionar, e não só quando o estado do daemon diz que a mesa está ocupada;
+  "Atualizando…" sobre uma lista velha; a recusa em frase com "Tentar de novo" (menos onde outra
+  tentativa não adianta: sem yt-dlp, as lives não são listadas); e de quando é a lista. O daemon
+  RECUSA NA HORA algumas perguntas antes de tocar na mesa (diretório não permitido, sem yt-dlp, tema
+  sem aquilo, palavras vazias, um limite, o player ausente): essa resposta volta à porta com a lista
+  a que se referia (`Told::Listing`), e a página a diz no lugar do "Perguntando…". Uma pergunta
+  aceita que outra porta substituiu na mesa — a mesa andou, está parada e segura outra lista — deixa
+  de estar perguntando, e a página diz que não há lista ainda, com a linha que pergunta de novo. A
+  lives recusada pelo yt-dlp é dita pelo nome do tema na língua da pessoa, nunca pelo id.
+- **Nenhum diretório nasce permitido.** Enquanto não for, a seção diz a quem perguntaria ("Perguntar
+  a radio-browser.info") e que pressionar permite; o pressionar é o `Errand::Let` das buscas (um
+  diretório, mesclado no `player.json`) e depois a pergunta. Nada vai para a rede antes, e a página
+  que abre sem permissão não pergunta nada.
+- **Rádios e TVs do mundo.** O globo, a busca pelo nome (`/`, na linha da porta), Favoritos e Tocados
+  há pouco com a contagem, na rádio os Gêneros e as Línguas, e um título Países com uma linha por país
+  — o NOME pelo atlas, na língua da pessoa, e quantos. O que o globo não põe no mapa vem sob um título
+  próprio, "Sem lugar no mapa (n)": os países sem ponto no atlas, cada um uma linha que abre, e na TV
+  "De país nenhum", a lista dos canais sem país (`TvList::Placeless`). Um país abre a lista dele numa
+  página titulada por ele; um gênero, uma língua (pelo nome da tabela de línguas: a palavra do
+  radio-browser quando ela diz a região — `brazilian portuguese` é pt-BR —, o código quando só uma
+  linha o tem, a língua sem região quando duas o dividem) e uma busca abrem a mesma página de
+  estações, cada uma com o próprio título. Os Gêneros e as Línguas trazem os que têm mais estações;
+  qualquer outro se acha pelo nome (`/`). Uma lista de estações vem em PÁGINAS de
+  `table::STATIONS_MOST`, as mais tocadas primeiro (o `offset` do radio-browser): a página diz "As
+  500 mais tocadas de 2380 estações — página 1 de 5" (o total vem da linha que a abriu) e tem
+  "Estações anteriores" e "Mais estações".
+- **Uma linha que toca.** A estrela na cabeça (um controle: o clique guarda ou tira dos favoritos,
+  como `b`), o nome na linha inteira e, embaixo no registro quieto, o que ela é — codec e kbps, o
+  país numa lista de vários, "não respondeu" — e a linha apagada, o cursor ainda na cor dele — quando
+  o stream não respondeu nesta sessão; de um canal
+  a altura da imagem, "só em alguns países", "nem sempre no ar" e as cidades que os feeds dão. Numa
+  coluna de valores o nome virava um toco em três linhas e o "não respondeu" era cortado. Uma linha
+  de várias — esta, um resultado, um rótulo quebrado — acende INTEIRA sob o ponteiro, de qualquer das
+  linhas dela, como o clique a toma inteira (`player_rows::whole_row`, nas duas portas). `RET` toca
+  agora (depois do que toca, a fila mantida), `a` põe na fila, e o daemon é quem grava os favoritos
+  (`Ask::Favourite`); as portas só leem e vigiam os dois arquivos.
+- **Canais por tema.** Uma linha por tema da tabela (`assets/channels.nix`), e a página do tema com
+  as três fontes em seções, cada uma só onde o tema a tem, com a própria permissão e o próprio
+  estado: a TV ao vivo, os filmes do Internet Archive (a busca pelo título, "Página n dos N
+  encontrados", os direitos sob cada filme pelo NOME da licença — domínio público, CC BY-SA 4.0 —,
+  "Filmes anteriores" e "Mais filmes", que pedem só a página de filmes de novo) e o que está ao vivo
+  no YouTube, com as palavras que acharam cada um. Toda categoria do iptv-org é um tema (a tabela
+  ganhou as que faltavam), e o Anime não tem TV ao vivo: o iptv-org não tem categoria de anime, e a
+  `animation` dele são todos os desenhos, que são do tema Desenhos.
+- **O globo, um gesto em toda porta.** Na janela e na coluna, as primeiras `space.player.globeLines`
+  linhas da página e uma linha que diz onde o ponteiro está; no rodapé, enquanto o painel de mídia
+  está ao lado das linhas, no lugar do filme (a imagem é deixada de pedir enquanto isso), e a linha
+  fica entre as linhas. O ponteiro sobre um grupo o acende e diz quantos e o lugar (a contagem
+  primeiro: o nome é o que uma porta estreita corta); o grupo aceso vale só para a página em que foi
+  achado (`player_globe::Seen::under`) — os ids das marcas recomeçam em toda página, e o velho
+  acendia outra estação. O primeiro clique leva o cursor à primeira linha que o grupo representa SEM
+  rolar a página (o globo está no topo, e um país lá embaixo o tirava da mão antes do segundo
+  clique; `View::globe_keeps_the_scroll`), o segundo faz o `RET` dela — uma estação
+  toca, um país abre a página — e um grupo de várias linhas enquadra e RECORTA a lista nelas, com a
+  linha "Mostrando n de N: mostrar todos" e `Esc` devolvendo todas antes de sair da página. Arrastar
+  (depois de `atlas.clickSlack`) gira, a roda aproxima, `C-k`/`C-j`/`C-r`. A caixa em que o globo é
+  pintado e a que o ponteiro lê são uma conta só (`player_globe::box_of`, `picture_px`). No rodapé,
+  cada tela guarda onde o desenhou (pelo conector), o ponteiro é lido pela caixa da tela em que está,
+  e o globo é medido UMA vez por quadro, na maior — medido por tela, uma trocava o tamanho da outra.
+  Um clique no painel fora do globo não pausa nada nem abre o palco: ali não há imagem.
+- **A cidade de um canal ainda é dita, não desenhada** (a mesma limitação do daemon): o atlas não
+  acha um lugar pelo nome, e o canal fica na âncora do país.
 
 ### As colunas — quatro tamanhos, uma linha de controle e um espaço de trabalho cada
 
@@ -10098,7 +11773,7 @@ lado:
 |---|---|---|
 | grande | 72 | meia média a mais: a lista de arquivos do player abre uma segunda coluna, e uma imagem 16:9 chega a ~17 linhas |
 | média | 48 | a de sempre; o player abre nela |
-| pequena | 32 | a mais estreita em que o transporte de nove botões cabe inteiro |
+| pequena | 32 | a mais estreita em que o transporte de onze botões cabe inteiro, sem folga |
 | barra | 3 | 5 com as margens: ímpar, para um glifo ficar no meio, e perto do dobro da espessura da modeline |
 
 Nenhum passa de `maxPct` (45%) da largura lógica da tela (da sala, enquanto o redimensionador corta
@@ -10113,14 +11788,38 @@ Grande, média e pequena adaptam por padrão (`Shape::Adapted`: as linhas reflue
 para quem tem conteúdo feito para ela (`Shape::Own`). Sem isso, o glifo da barra é inerte e diz
 `column-bar-not-offered`.
 
-**A linha de controle.** A linha 0 é da coluna em todo tamanho: os quatro glifos contados da borda
-direita (`chrome::from_the_edge`, e o ponteiro os pega por `chrome::at_the_edge`), do mais largo ao
-mais estreito, o atual em `text.primary` — nunca no acento, que na coluna é da linha de foco. Sob o
-ponteiro, a frase do glifo ocupa o espaço à esquerda dele; em repouso a linha é muda. Na barra há um
-glifo só, que volta ao tamanho de antes, em vez de girar pelos quatro, e ele não se explica: a barra
-é um controle remoto de glifos conhecidos (decisão do dono). As teclas são lidas ANTES do
-inquilino, porque o player lê tecla nomeada sem modificador e tomaria `C-<left>` pelo `<left>`
-dele. O desenho é uma função pura (`decoration`), e o ponteiro lê o que ela colocou (`glyph_at`).
+**A linha de controle.** A linha 0 é da coluna em todo tamanho: `[fechar] │ [G][M][P][B]`, contados
+da borda direita (`chrome::from_the_edge`, e o ponteiro os pega por `chrome::at_the_edge`), os
+tamanhos do mais largo ao mais estreito, o atual em `text.primary` — nunca no acento, que na coluna
+é da linha de foco. Sob o ponteiro, a frase do glifo, curta ("Tamanho grande", "Fechar"), encostada
+pela direita no fechar com uma célula de ar (`space.column.saidAir`); em repouso a linha é muda.
+Um tamanho recusado também se explica ali, em chave própria e curta ("Sem espaço aqui", "Sem barra
+ainda"): a frase inteira do recusado é a da linha do inquilino, e cortada com reticência perdia o
+motivo. Um teste confere, em toda língua, que nenhuma frase da linha é cortada na coluna pequena.
+O fechar se explica "Fechar"; a tecla `C-q` na gaveta, "Fechar a coluna; o que ela mostra
+continua". Na barra, a linha 0 tem um
+glifo só, que volta ao tamanho de antes em vez de girar pelos quatro, o fechar fica na ÚLTIMA linha,
+contada da borda de baixo (`Span::foot`; o inquilino para acima dela, `column::Area::end`), e
+nenhum dos dois se explica: a barra é um controle remoto de glifos conhecidos (decisão do dono). As
+teclas — `C-<left>`, `C-<right>` e `C-q` — são lidas ANTES do inquilino, porque o player lê tecla
+nomeada sem modificador e tomaria `C-<left>` pelo `<left>` dele; cada id da tabela nomeia seu ato
+(`column::Own`), porque com um `_` a terceira tecla estreitava a coluna. O desenho é uma função pura
+(`decoration`), e o ponteiro lê o que ela colocou (`glyph_at`).
+
+**A régua do fechar fica onde o ar dos dois lados é igual, medido na TINTA.** A régua é o
+`chrome::divider` entre o fechar e o tamanho grande. Pelas células ela ficaria um pixel e pouco fora
+do meio que o olho vê: o `md-close` tinge o avanço inteiro e o `md-size_xl` começa a um quinto do
+dele, fora do centro. Então o gerador de glifos mede, contra a face real, onde a tinta de cada glifo
+começa e acaba (`across` no `icons.json`, `tokens::icon::ink_across`), e a coluna põe a régua no
+meio entre o fim da tinta de um e o começo da do outro, com a aritmética de borda do renderizador
+— a mesma função, `ronoctua_render::from_the_border`, que o `Text::prepare` usa para os glifos, lida
+por `chrome::edge_x` — e o empurrão do `Size::OnTheCell`. Medido na foto: 10 px de cada lado, nos três
+tamanhos. A altura é a da linha menos `space.column.ruleInset` em cada ponta — a da tinta dos
+glifos, para a régua ser da linha e não uma fronteira entre duas.
+
+**Fechar.** O glifo e `C-q` fecham a COLUNA e nada mais: `Tenant::closing` avisa o inquilino (o
+player larga as imagens), a porta sai, e o `Drop` devolve o slot. O que o player toca continua
+tocando.
 
 **A linha de foco.** Enquanto algum teclado está na coluna, uma linha de 2 px
 (`space.column.focusLine`, o peso da borda de foco do compositor) de borda a borda, sobre tudo
@@ -10136,7 +11835,7 @@ cada tela mostra a coluna do seu. O contrato ganhou `Workspace { name, visible, 
 `step` (ficar, mostrar, mudar de tela ou estacionar), e um lugar só muda a superfície,
 `Column::place`. Estacionar destrói o papel da superfície e põe no lugar uma superfície sem papel
 (`Shell::Parked`): o processo, a fila e o estado ficam. Mostrar pede a tela pelo nome
-(`Door::output_named`), e uma tela ainda não descrita espera o `outputs_changed`. Uma tela que some
+(`Ui::screen_named`), e uma tela ainda não descrita espera o `outputs_changed`. Uma tela que some
 fecha a superfície: a coluna estaciona (`Content::layer_closed` devolve `Closed::Park`), e a
 próxima lista de espaços diz onde ela volta. A coluna não segue mais o foco de tela em tela (o
 `follow_the_focus` do player saiu): quem decide a tela é o espaço.
@@ -10144,6 +11843,11 @@ próxima lista de espaços diz onde ela volta. A coluna não segue mais o foco d
 **O custo, dito.** Trocar entre um espaço com coluna e outro sem re-arranja as janelas por um
 quadro: a zona sai e volta com a superfície. E um espaço que só tem a coluna estacionada some dos
 números da modeline; o player continua alcançável pela marca `player`.
+
+**As colunas são um slot por espaço de trabalho, e o inquilino é uma variante**
+(`right_column::Tenant`): quem toma um espaço encerra quem estava nele. O invariante 14 fala da
+BORDA, não do player; escrita como o arquivo do player, a regra valeria só para ele, e a próxima
+coisa que quisesse a borda traria um segundo arquivo — duas colunas lado a lado.
 
 **O slot.** Um arquivo por inquilino, `column-<inquilino>.pid`, com `<pid> <tamanho> <espaço…>` —
 o espaço por último, para um nome com espaços sobreviver —, escrito por rascunho e `rename`, cada
@@ -10344,7 +12048,8 @@ O nome na modeline de um web app vem do `Name` do `.desktop` que declara aquele 
 (`flatpak update --system`, o ÚNICO `--system` da feature) e `android-images` (desligado). Pessoa:
 `nix-profile`, `flatpak-user`, `appimages`, `android-apps` → `ronoctua-software upgrade <fonte>`, na
 MESMA pista da tela; e `flatpak-unused`, `nix-profile-history`, `appimage-cache` →
-`ronoctua-software tidy <fonte>`. A lei de ordem nova do gerador: um passo `upgrade-software` não
+`ronoctua-software tidy <fonte>` (o `nix-profile-history` vem desligado: ver *O disco se cuida
+sozinho*). A lei de ordem nova do gerador: um passo `upgrade-software` não
 roda antes de `apply-configuration`. "Atualizar tudo" pula a fonte que responde `SourceUnprepared`
 — uma máquina que nunca preparou o Android não falha toda atualização.
 
@@ -10440,7 +12145,7 @@ sessão), e o Chromium recusa rodar como root sem `--no-sandbox` e procura um X 
 buffers headless. `compositor` e `scroll` são folhas: só o `shell` as toca, e só a segunda sabe qual
 compositor é. `term` isola todo o `unsafe` e todo o FFI.
 
-Duas adições ao grafo original, cada uma por um problema real:
+As adições ao grafo original, cada uma por um problema real:
 
 - **`ronoctua-glyphgen`** (hoje `nix/glyphgen.nix`). O consumidor da base compila para wasip2 e
   **não tem filesystem**: não pode ler o TTF em tempo de build. Sem gerador separado, ou ele deixa
@@ -10451,6 +12156,42 @@ Duas adições ao grafo original, cada uma por um problema real:
 - **`ronoctua-playlist`.** Os leitores de lista de reprodução, com dois chamadores: a prévia do
   gerenciador (`ronoctua-inspect::playlist`, que guarda a parte que é sobre TIPO MIME) e o daemon do
   player, que não pode linkar o `ronoctua-inspect`.
+- **`ronoctua-xml`.** O XML que vem de fora — uma lista que o servidor de uma rádio mandou, uma
+  legenda baixada, as tags que o `mkvextract` tira de um arquivo de qualquer origem — só é lido
+  depois de medido (`ronoctua_xml::parse`). O `roxmltree` recursa uma vez por nível e não tem teto:
+  cem mil `<a>` cabem sob qualquer teto de bytes e estouram a pilha, e estouro de pilha não é pânico
+  que uma thread segure — derruba o PROCESSO (o daemon do player, o rodapé na prévia). A contagem
+  lê o texto antes de o leitor vê-lo (teto `DEPTH_MOST`, 48) e recusa uma entidade cujo valor é
+  marcação, a única via por onde o aninhamento cresceria longe da vista. A guarda nasceu dentro das
+  legendas do player; três crates leem XML de fora (as listas, as legendas e as tags do Matroska), e
+  uma guarda copiada em cada um é a que o próximo leitor esquece. O `ronoctua-inspect` (3MF, AMF,
+  DAE e os formatos de escritório) ainda lê pelo `roxmltree` direto; uma cena do DAE aninha fundo de
+  verdade, e o teto dele é outra medida.
+- **`ronoctua-player` e `ronoctua-player-engine`.** O cliente, o protocolo e as regras puras de um
+  lado; o daemon, o único que cita o libmpv, do outro (veja "O player"). O `ronoctua-player` não
+  tem rede nem processo: a fila, a sessão, a disposição e as legendas são funções que a porta e o
+  daemon chamam do mesmo jeito.
+- **`ronoctua-tags`.** A única fronteira com as etiquetas e as capas de um arquivo de mídia.
+  `sheet` e `can` são o esquema, só serde; a feature `engine` traz o lofty, o `image` e um
+  executor de programas próprio, pelo caminho. Próprio porque o `ronoctua_inspect::tools` recebe
+  o enum `Tool`, e uma variante nova ali obriga a variável na unidade do rodapé
+  (`document-formats-are-total`), que não grava arquivo nenhum.
+- **`ronoctua-lookup` e `ronoctua-broadcast`.** As buscas online e os diretórios de rádio, TV e
+  filmes. A feature `net` (a TLS do `ronoctua-http`) é padrão; sem ela ficam os tipos, os
+  parsers, as chaves e a tabela gerada. Nenhum dos três depende do `ronoctua-player`: é o
+  protocolo que depende deles, sem features, para levar os tipos deles no fio.
+- **O esquema sem feature não promete que a porta não linka TLS.** O Nix compila o workspace
+  numa rodada só, e o Cargo unifica as features: o shell já linka a TLS pelo `ronoctua-software`.
+  A feature desligada diz o que a porta USA, e os manifestos dizem isso.
+- **`ronoctua-ytdlp`.** Onde o yt-dlp está (`program`, `installed`), as flags do dispositivo e as
+  duas listagens do player — a playlist sem baixar nada (`watch?v=…&list=` é pedida como
+  `/playlist?list=`, porque a outra forma responde um vídeo só) e a busca do que está ao vivo —,
+  cada execução com prazo de 25 s e morta quando largada. A fila e o player o chamam; ele não
+  conhece o `ronoctua-playlist`: fazer de uma listagem um `Stream` é do daemon.
+- **`ronoctua-audio`** ganhou uma assinatura que para quando é largada (o `pw-dump` morre com
+  ela), e continua o único que roda um programa do PipeWire.
+- **`ronoctua-atlas`** continua `no_std` e sem dependências. As marcas e as âncoras entraram nele,
+  e não no shell: agrupar pontos é geometria, e o player não é o último a pôr pontos num globo.
 - **`ronoctua-clock`.** Uma fronteira, um crate — a regra que o `ronoctua-disks` e o
   `ronoctua-power` já seguem. Dois chamadores querem o `timedate1`: a vista `LEADER s l` e a vigia
   do brain. Um segundo leitor de `timedatectl` seria uma segunda resposta sobre um relógio só.
@@ -10505,3 +12246,4 @@ Duas correções que esses números carregam, ambas de ordem de grandeza:
 | R3 | **Instanciação de 5 ms** contra os dados do `glyphdb`. | `memory_init_cow` + AOT `.cwasm`, com gate de CI que mede e falha acima de 5 ms. |
 | R4 | **Xwayland quebrando PID → cgroup.** | Resolvido pelo compositor: o XWayland é embutido e ele reporta o PID do cliente X real (extensão XRes), então não há processo intermediário para confundir a correlação. Era um satellite por scope. |
 | R5 | **Closure de fonte de ~10 GB.** | Cinco derivações; o ISO leva 62 MB; `noto-fonts-extra` isolado e removível por opção de host. |
+| R6 | **Serviços de fora mudam sem aviso** — os formatos do OpenSubtitles, SubDL, TMDB, MusicBrainz e Wikidata foram escritos da documentação; o filtro Live do YouTube é interno dele; o Podnapisi já sumiu. | Cada serviço devolve uma recusa tipada, nunca um pânico; um campo de tipo inesperado perde o campo e não a resposta; os testes rodam sobre respostas gravadas; nada busca sem consentimento, e a tela diz o que falhou. |

@@ -718,7 +718,8 @@
     # Each of these is an EVENT (`ronoctua-shell`'s `events.rs`), the owner's
     # choice of 2026-09-28: a camera or a microphone opening and closing, the
     # camera's own recording and stream, a network, a tunnel or the aeroplane
-    # coming and going, the charger. An event is SAID on the minibuffer's line
+    # coming and going, the charger, the disk making room by itself. An event
+    # is SAID on the minibuffer's line
     # — its summary, for as long as any other echo — whether the modeline is
     # showing or not, and this row is read only when that line was somebody
     # else's: a view open, a question being typed, the line's drawer open, the
@@ -733,9 +734,9 @@
     # FULL AND QUICK: the minibuffer's pace — gone by itself — and the band's
     # second line, because the sentence that says WHY the event is on the band
     # opens its body (`events::notification`), and a `brief` entry is one line
-    # that never shows it. And AUTO-READ, except the two a person would want
+    # that never shows it. And AUTO-READ, except the three a person would want
     # the bell to keep: a camera or a microphone that opened while the line was
-    # busy.
+    # busy, and a disk still short after making what room it could.
     #
     # NONE CARRIES AN ACTION. The line offers what the catalogue offers
     # (`chrome::Piece::action`), and every one of these is a fact to be read,
@@ -1139,6 +1140,50 @@
       tags = [
         "charger-unplugged"
         "power"
+      ];
+      actions = [ ];
+    };
+    # THE DISK MADE ROOM BY ITSELF (`nix/modules/space.nix`), or could not.
+    # The first is a fact that goes by, like the charger. The second is the one
+    # event here the person has something to DO about — nothing more could be
+    # freed without them — so the bell keeps it (no auto-read), and it is a
+    # step louder in the list.
+    disk-relieved = {
+      when = [
+        {
+          field = "tag";
+          is = "disk-relieved";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 25;
+      auto-read = true;
+      icon = "md-broom";
+      tags = [
+        "disk-relieved"
+        "disk"
+      ];
+      actions = [ ];
+    };
+    disk-still-short = {
+      when = [
+        {
+          field = "tag";
+          is = "disk-still-short";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "quick";
+      loud = false;
+      level = 30;
+      icon = "disk";
+      tags = [
+        "disk-still-short"
+        "disk"
       ];
       actions = [ ];
     };

@@ -13,11 +13,11 @@
 //! lists, and this one has a queue and the files on disk, which is what
 //! `LEADER p l` browses.
 //!
-//! A TRACK'S ID IS ITS PLACE in the queue (`/br/ronoctua/player/track/<n>`),
-//! which moves when the queue does. The specification allows that, on one
-//! condition this module keeps: any change to the queue is announced as
-//! `TrackListReplaced`, so a listener never holds an id that now names
-//! another track.
+//! THE TRACK LIST IS THE QUEUE'S LEAVES, in the tree's order, and a
+//! track's id is its ENTRY's (`/br/ronoctua/player/track/<entry id>`): it
+//! names the same track after the queue is reordered, and is never handed to
+//! another. Any change to the queue's shape is still announced as
+//! `TrackListReplaced`, so a listener's order is never stale either.
 //!
 //! Every property is read from the engine when asked — nothing is copied —
 //! and the ones a listener watches (status, metadata, volume, the two
@@ -28,33 +28,27 @@
 
 use std::collections::HashMap;
 
-use ronoctua_player::wire::{Ask, Repeat, State};
+use ronoctua_player::{
+    own::LaneKind,
+    queue::{Body, EntryId, Place, Queue, Step},
+    wire::{Ask, Repeat, State, Thing},
+};
 use zbus::zvariant::{ObjectPath, Value};
 
-use crate::engine::Shared;
+use crate::engine::{Refused, Shared};
 
 /// The object every MPRIS player lives at.
 const PATH: &str = "/org/mpris/MediaPlayer2";
 
-/// The bus name: `org.mpris.MediaPlayer2.<instance>`, so the nested loop's
-/// player and the installed one are two players on the bus and not a fight
-/// over one name.
+/// The bus name (`ronoctua_player::mpris_name`): the one a door that closes
+/// an older player calls too.
 fn bus_name() -> String {
-    format!(
-        "org.mpris.MediaPlayer2.{}",
-        ronoctua_xdg::name().replace('-', "_")
-    )
+    ronoctua_player::mpris_name()
 }
 
 /// `org.mpris.MediaPlayer2`.
 struct Root {
     shared: Shared,
-}
-
-impl Root {
-    fn ask(&self, ask: Ask) {
-        tell(&self.shared, ask);
-    }
 }
 
 /// One order to the engine, as the socket would give it.
@@ -73,6 +67,102 @@ fn read(shared: &Shared) -> State {
     lock.lock().map(|e| e.state()).unwrap_or_default()
 }
 
+/// Puts what a listener named — a URI — at `place`, playing it when asked;
+/// the ids it was given. Read from the disk BEFORE the engine's lock, as the
+/// socket's `put` is.
+fn put(shared: &Shared, uri: &str, place: Place, play: bool) -> Vec<EntryId> {
+    let resolved =
+        crate::engine::resolve_all(vec![Thing::Location(crate::engine::path_of_uri(uri))]);
+    let (lock, bell) = &**shared;
+    let ids = lock.lock().map_or_else(
+        |_| Vec::new(),
+        |mut e| {
+            let ids = match e.put_at(resolved, place, play, false, shared) {
+                Ok(ids) => ids,
+                Err(Refused(t)) => {
+                    e.say_trouble(t);
+                    Vec::new()
+                }
+            };
+            e.broadcast();
+            ids
+        },
+    );
+    bell.notify_all();
+    ids
+}
+
+/// A leaf, as a listener is told of it.
+#[derive(Debug, Clone, PartialEq)]
+struct TrackInfo {
+    id: EntryId,
+    /// Its name: the queue's, else its file's — a set's is every source
+    /// together, never one file's.
+    title: String,
+    /// What it plays, as an address.
+    url: Option<String>,
+    /// Its file, when it is one — for the cover beside it.
+    file: Option<String>,
+}
+
+/// What a listener is shown, read from the engine in one go.
+#[derive(Debug, Clone, Default)]
+struct Look {
+    state: State,
+    tracks: Vec<TrackInfo>,
+    able: Able,
+    /// The cover of what plays, taken out of the file into the player's
+    /// cache (`engine/tags.rs`).
+    art: Option<String>,
+}
+
+fn look(shared: &Shared) -> Look {
+    let (lock, _) = &**shared;
+    let Ok(e) = lock.lock() else {
+        return Look::default();
+    };
+    let state = e.state();
+    let q = e.queue();
+    Look {
+        tracks: q
+            .leaves()
+            .into_iter()
+            .filter_map(|id| track_info(q, id))
+            .collect(),
+        able: able(&state, q, e.order()),
+        art: e.art_url(),
+        state,
+    }
+}
+
+/// A leaf of `q`, as a listener is told of it.
+fn track_info(q: &Queue, id: EntryId) -> Option<TrackInfo> {
+    let entry = q.find(id)?;
+    let location = match &entry.body {
+        Body::Single { location, .. } => Some(location.clone()),
+        Body::Stream(stream) => Some(stream.url.clone()),
+        Body::Set { set, .. } => set
+            .lanes
+            .iter()
+            .find(|l| l.kind != LaneKind::Subtitle)
+            .or_else(|| set.lanes.first())
+            .map(|l| l.source.clone()),
+        Body::Playlist { .. } => return None,
+    };
+    let file = location.clone().filter(|l| !l.contains("://"));
+    Some(TrackInfo {
+        id,
+        title: crate::engine::name_text(&entry.body.name()),
+        url: location.map(|l| {
+            if l.contains("://") {
+                l
+            } else {
+                format!("file://{l}")
+            }
+        }),
+        file,
+    })
+}
 /// The shell, to raise the column with: the unit names it
 /// (`nix/modules/player.nix`), and the nested loop's shell hands its own path
 /// to the daemon it starts (`client::ensure`).
@@ -93,19 +183,14 @@ impl Root {
                 .spawn();
         }
     }
-    /// Stops and goes. The next thing played starts the player again
-    /// (`client::ensure` asks the unit back), so quitting loses nothing but
-    /// what was playing.
+    /// Closes the player everywhere — the SAME path as the socket's `quit`
+    /// (`engine::quit`): the queue remembered, the farewell to every door,
+    /// and the process gone a moment AFTER the answer, since exiting inside
+    /// the call would leave the caller waiting for a reply that never comes.
+    /// The next thing played starts the player again (`client::ensure` asks
+    /// the unit back), so quitting loses nothing but what was playing.
     fn quit(&self) {
-        self.ask(Ask::Stop);
-        // AFTER THE ANSWER: exiting inside the call would leave the caller
-        // waiting for a reply that never comes.
-        let _ = std::thread::Builder::new()
-            .name("player-quit".into())
-            .spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                std::process::exit(0);
-            });
+        crate::engine::quit(&self.shared);
     }
     #[zbus(property)]
     fn can_quit(&self) -> bool {
@@ -196,52 +281,28 @@ impl Player {
     }
 }
 
-/// The id a track is known by on the bus: its place in the queue.
-fn track_id(i: usize) -> Option<ObjectPath<'static>> {
-    ObjectPath::try_from(format!("/br/ronoctua/player/track/{i}")).ok()
+/// The id a track is known by on the bus: its entry's.
+fn track_id(id: EntryId) -> Option<ObjectPath<'static>> {
+    ObjectPath::try_from(format!("/br/ronoctua/player/track/{}", id.0)).ok()
 }
 
-/// The place an id names, when it names one.
-fn place_of(id: &ObjectPath<'_>) -> Option<usize> {
+/// The entry an id names, when it names one.
+fn entry_of(id: &ObjectPath<'_>) -> Option<EntryId> {
     id.as_str()
         .strip_prefix("/br/ronoctua/player/track/")?
         .parse()
         .ok()
+        .map(EntryId)
 }
 
 /// "No track": where `AddTrack` puts a track FIRST.
 const NO_TRACK: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
 
-/// A `file://` address, back to the path it names — `%20` and its kin
-/// decoded, since a listener sends a URI and the engine opens paths.
-fn path_of(uri: &str) -> String {
-    let Some(rest) = uri.strip_prefix("file://") else {
-        return uri.to_owned();
-    };
-    let bytes = rest.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = |b: u8| char::from(b).to_digit(16);
-        if bytes[i] == b'%'
-            && let (Some(Some(h)), Some(Some(l))) = (
-                bytes.get(i + 1).map(|b| hex(*b)),
-                bytes.get(i + 2).map(|b| hex(*b)),
-            )
-        {
-            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
-            i += 3;
-            continue;
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// The picture beside a file, for `mpris:artUrl`: the names a ripped album
-/// carries its cover under. Nothing is extracted from the file itself — a
-/// picture inside a FLAC is not an address a listener can open.
+/// carries its cover under — for a leaf that does not play. What plays is
+/// given its OWN cover, taken out of the file into the player's cache
+/// ([`metadata_of`]'s `art`): a picture inside a FLAC is not an address a
+/// listener can open, and a copy of it is.
 fn cover_beside(location: &str) -> Option<String> {
     if location.contains("://") {
         return None;
@@ -264,8 +325,9 @@ fn cover_beside(location: &str) -> Option<String> {
     found.map(|p| format!("file://{}", p.display()))
 }
 
-/// What a listener may do now, from the state — each one false when the
-/// queue gives it nothing to act on.
+/// What a listener may do now — each one false when the queue gives it
+/// nothing to act on.
+#[derive(Debug, Clone, Copy, Default)]
 struct Able {
     next: bool,
     previous: bool,
@@ -274,12 +336,13 @@ struct Able {
     seek: bool,
 }
 
-fn able(s: &State) -> Able {
-    let looping = s.repeat == Repeat::Queue && !s.queue.is_empty();
+/// The queue's own answers — repeat and shuffle included — as what a
+/// listener may do.
+fn able(s: &State, q: &Queue, order: Option<&[EntryId]>) -> Able {
     Able {
-        next: s.current.is_some_and(|i| i + 1 < s.queue.len() || looping),
-        previous: s.current.is_some_and(|i| i > 0 || looping),
-        play: !s.queue.is_empty(),
+        next: s.current.is_some() && q.next(s.current, s.repeat, Step::Asked, order).is_some(),
+        previous: s.current.is_some() && q.previous(s.current, s.repeat, order).is_some(),
+        play: q.leaf_count() > 0,
         pause: s.current.is_some(),
         seek: s.current.is_some() && s.duration.is_some(),
     }
@@ -320,15 +383,24 @@ const fn loop_of(r: Repeat) -> &'static str {
     }
 }
 
-/// The metadata of what plays.
-fn metadata_of(s: &State) -> HashMap<String, Value<'static>> {
-    let Some(i) = s.current else {
+/// The metadata of what plays; `art`, its own cover kept in the cache, wins
+/// over a picture beside it.
+fn metadata_of(
+    s: &State,
+    tracks: &[TrackInfo],
+    art: Option<&str>,
+) -> HashMap<String, Value<'static>> {
+    let Some(current) = s.current else {
         return HashMap::new();
     };
-    let mut m = item_metadata(s, i);
-    if let Some(item) = s.queue.get(i)
-        && let Some(title) = s.title.clone().or_else(|| item.title.clone())
-    {
+    let mut m = tracks
+        .iter()
+        .find(|t| t.id == current)
+        .map(item_metadata)
+        .unwrap_or_default();
+    // THE STATE'S TITLE: the queue's name for it, else its own tag — and a
+    // set's is every source together (`Engine::given_title`).
+    if let Some(title) = s.title.clone() {
         m.insert("xesam:title".into(), Value::from(title));
     }
     if let Some(a) = &s.artist {
@@ -340,37 +412,26 @@ fn metadata_of(s: &State) -> HashMap<String, Value<'static>> {
     if let Some(d) = s.duration {
         m.insert("mpris:length".into(), Value::from(micros(d)));
     }
+    if let Some(art) = art {
+        m.insert("mpris:artUrl".into(), Value::from(art.to_owned()));
+    }
     m
 }
 
-/// What is known of ANY item of the queue — the track list asks this of
-/// items that are not playing, whose tags the engine has not read.
-fn item_metadata(s: &State, i: usize) -> HashMap<String, Value<'static>> {
+/// What is known of ANY leaf of the queue — the track list asks this of
+/// leaves that are not playing, whose tags the engine has not read.
+fn item_metadata(t: &TrackInfo) -> HashMap<String, Value<'static>> {
     let mut m: HashMap<String, Value<'static>> = HashMap::new();
-    let Some(item) = s.queue.get(i) else {
-        return m;
-    };
-    if let Some(p) = track_id(i) {
+    if let Some(p) = track_id(t.id) {
         m.insert("mpris:trackid".into(), Value::from(p));
     }
     // THE NAME WHEN NOTHING ELSE: a listener draws the title, and a track list
     // of blank rows says less than a list of file names.
-    let title = item.title.clone().unwrap_or_else(|| {
-        std::path::Path::new(&item.location)
-            .file_name()
-            .map_or_else(
-                || item.location.clone(),
-                |n| n.to_string_lossy().into_owned(),
-            )
-    });
-    m.insert("xesam:title".into(), Value::from(title));
-    let url = if item.location.contains("://") {
-        item.location.clone()
-    } else {
-        format!("file://{}", item.location)
-    };
-    m.insert("xesam:url".into(), Value::from(url));
-    if let Some(art) = cover_beside(&item.location) {
+    m.insert("xesam:title".into(), Value::from(t.title.clone()));
+    if let Some(url) = &t.url {
+        m.insert("xesam:url".into(), Value::from(url.clone()));
+    }
+    if let Some(art) = t.file.as_deref().and_then(cover_beside) {
         m.insert("mpris:artUrl".into(), Value::from(art));
     }
     m
@@ -399,8 +460,8 @@ impl Player {
     /// Before the start is the start, and past the end is the next track —
     /// the specification's two rules.
     fn seek(&self, offset: i64) {
-        let s = self.state();
-        if !able(&s).seek {
+        let Look { state: s, able, .. } = look(&self.shared);
+        if !able.seek {
             return;
         }
         match seek_to(&s, offset) {
@@ -415,7 +476,7 @@ impl Player {
     /// a listener that raced a change of track must not move the new one.
     fn set_position(&self, track: ObjectPath<'_>, position: i64) {
         let s = self.state();
-        if position < 0 || place_of(&track) != s.current || s.current.is_none() {
+        if position < 0 || entry_of(&track) != s.current || s.current.is_none() {
             return;
         }
         #[allow(clippy::cast_precision_loss)]
@@ -428,11 +489,10 @@ impl Player {
             relative: false,
         });
     }
+    /// Plays now, right after what played, and the queue is kept — what
+    /// opening from outside the player does everywhere.
     fn open_uri(&self, uri: &str) {
-        self.ask(Ask::Open {
-            items: vec![path_of(uri)],
-            replace: true,
-        });
+        put(&self.shared, uri, Place::End(None), true);
     }
 
     #[zbus(property)]
@@ -481,7 +541,8 @@ impl Player {
     }
     #[zbus(property)]
     fn metadata(&self) -> HashMap<String, Value<'static>> {
-        metadata_of(&self.state())
+        let l = look(&self.shared);
+        metadata_of(&l.state, &l.tracks, l.art.as_deref())
     }
     #[zbus(property)]
     fn volume(&self) -> f64 {
@@ -509,23 +570,23 @@ impl Player {
     }
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
-        able(&self.state()).next
+        look(&self.shared).able.next
     }
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
-        able(&self.state()).previous
+        look(&self.shared).able.previous
     }
     #[zbus(property)]
     fn can_play(&self) -> bool {
-        able(&self.state()).play
+        look(&self.shared).able.play
     }
     #[zbus(property)]
     fn can_pause(&self) -> bool {
-        able(&self.state()).pause
+        look(&self.shared).able.pause
     }
     #[zbus(property)]
     fn can_seek(&self) -> bool {
-        able(&self.state()).seek
+        look(&self.shared).able.seek
     }
     #[zbus(property(emits_changed_signal = "const"))]
     fn can_control(&self) -> bool {
@@ -548,71 +609,50 @@ impl TrackList {
         &self,
         track_ids: Vec<ObjectPath<'_>>,
     ) -> Vec<HashMap<String, Value<'static>>> {
-        let s = read(&self.shared);
+        let l = look(&self.shared);
         track_ids
             .iter()
-            .filter_map(place_of)
-            .filter(|&i| i < s.queue.len())
-            .map(|i| {
-                if Some(i) == s.current {
-                    metadata_of(&s)
+            .filter_map(entry_of)
+            .filter_map(|id| l.tracks.iter().find(|t| t.id == id))
+            .map(|t| {
+                if Some(t.id) == l.state.current {
+                    metadata_of(&l.state, &l.tracks, l.art.as_deref())
                 } else {
-                    item_metadata(&s, i)
+                    item_metadata(t)
                 }
             })
             .collect()
     }
-    /// Appended, then moved to where it was asked: after `after_track`, or
-    /// first for "no track".
+    /// Put where it was asked: right after `after_track`, first for "no
+    /// track", and at the end for an id that names nothing — the listener's
+    /// stale view of the list, and the end is the one place never wrong.
     fn add_track(&self, uri: &str, after_track: ObjectPath<'_>, set_as_current: bool) {
-        let s = read(&self.shared);
-        let appended = s.queue.len();
-        let wanted = if after_track.as_str() == NO_TRACK {
-            0
+        let place = if after_track.as_str() == NO_TRACK {
+            Place::Start(None)
         } else {
-            match place_of(&after_track).filter(|&i| i < appended) {
-                Some(i) => i + 1,
-                // AN ID THAT NAMES NOTHING is the listener's stale view of
-                // the list; the end is the one place that is never wrong.
-                None => appended,
-            }
+            let known = read_queue_has(&self.shared, entry_of(&after_track));
+            known.map_or(Place::End(None), Place::After)
         };
-        tell(
-            &self.shared,
-            Ask::Open {
-                items: vec![path_of(uri)],
-                replace: false,
-            },
-        );
-        if wanted != appended {
-            tell(
-                &self.shared,
-                Ask::Move {
-                    from: appended,
-                    to: wanted,
-                },
-            );
-        }
-        if set_as_current {
-            tell(&self.shared, Ask::Jump { index: wanted });
-        }
+        put(&self.shared, uri, place, set_as_current);
     }
     fn remove_track(&self, track_id: ObjectPath<'_>) {
-        if let Some(index) = place_of(&track_id).filter(|&i| i < read(&self.shared).queue.len()) {
-            tell(&self.shared, Ask::Remove { index });
+        if let Some(id) = read_queue_has(&self.shared, entry_of(&track_id)) {
+            tell(&self.shared, Ask::Remove { id });
         }
     }
     fn go_to(&self, track_id: ObjectPath<'_>) {
-        if let Some(index) = place_of(&track_id).filter(|&i| i < read(&self.shared).queue.len()) {
-            tell(&self.shared, Ask::Jump { index });
+        if let Some(id) = read_queue_has(&self.shared, entry_of(&track_id)) {
+            tell(&self.shared, Ask::Jump { id });
         }
     }
     /// The ids, announced by `TrackListReplaced` rather than by a property
     /// change — the specification says `invalidates`.
     #[zbus(property(emits_changed_signal = "invalidates"))]
     fn tracks(&self) -> Vec<ObjectPath<'static>> {
-        (0..read(&self.shared).queue.len())
-            .filter_map(track_id)
+        look(&self.shared)
+            .tracks
+            .iter()
+            .filter_map(|t| track_id(t.id))
             .collect()
     }
     #[zbus(property(emits_changed_signal = "const"))]
@@ -621,13 +661,30 @@ impl TrackList {
     }
 }
 
+/// `id`, when it names a leaf of the queue now.
+fn read_queue_has(shared: &Shared, id: Option<EntryId>) -> Option<EntryId> {
+    let id = id?;
+    let (lock, _) = &**shared;
+    let e = lock.lock().ok()?;
+    e.queue().find(id).filter(|e| e.body.is_leaf()).map(|_| id)
+}
+
 /// The loudest the bus may set, the engine's own ceiling.
 const fn ronoctua_player_max() -> u8 {
     130
 }
 
-/// What names a track to a listener: its place, title, artist and length.
-type TrackKey = (Option<usize>, Option<String>, Option<String>, Option<f64>);
+/// What names a track to a listener: its entry, title, artist, album,
+/// length and cover — a file whose tags were written keeps its entry and
+/// changes the rest.
+type TrackKey = (
+    Option<EntryId>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<f64>,
+    Option<String>,
+);
 
 /// What a listener is told about when it changes.
 #[derive(Debug, Clone, PartialEq)]
@@ -643,11 +700,17 @@ struct Watched {
 }
 
 impl Watched {
-    fn of(s: &State) -> Self {
-        let a = able(s);
+    fn of(s: &State, a: Able, art: Option<&str>) -> Self {
         Self {
             status: status_of(s),
-            track: Some((s.current, s.title.clone(), s.artist.clone(), s.duration)),
+            track: Some((
+                s.current,
+                s.title.clone(),
+                s.artist.clone(),
+                s.album.clone(),
+                s.duration,
+                art.map(str::to_owned),
+            )),
             volume: s.volume,
             shuffle: s.shuffle,
             repeat: s.repeat,
@@ -655,11 +718,6 @@ impl Watched {
             able: [a.next, a.previous, a.play, a.pause, a.seek],
         }
     }
-}
-
-/// The queue as a listener knows it: where each item is, and which plays.
-fn queue_of(s: &State) -> Vec<String> {
-    s.queue.iter().map(|i| i.location.clone()).collect()
 }
 
 /// Puts the player on the session bus, and announces what changes. Returns
@@ -706,26 +764,23 @@ pub fn start(shared: Shared) -> Option<std::sync::mpsc::Sender<()>> {
         .name("player-mpris".into())
         .spawn(move || {
             let mut last: Option<Watched> = None;
-            let mut last_queue: Option<Vec<String>> = None;
+            let mut last_queue: Option<u64> = None;
             let mut last_position = 0.0f64;
             while pokes.recv().is_ok() {
                 while pokes.try_recv().is_ok() {}
-                let s = {
-                    let (lock, _) = &*shared;
-                    let Ok(e) = lock.lock() else { return };
-                    e.state()
-                };
-                let now = Watched::of(&s);
+                let l = look(&shared);
+                let s = &l.state;
+                let now = Watched::of(s, l.able, l.art.as_deref());
                 // A JUMP IS `Seeked`: further than a tick's worth of playing.
                 let expected = last_position + if s.playing { 1.0 } else { 0.0 } * s.speed;
                 let jumped = (s.position - expected).abs() > 1.5 && last.is_some();
                 last_position = s.position;
-                // THE QUEUE CHANGED: every id may name another track now, so
-                // the whole list is announced, with the one playing.
-                let queue = queue_of(&s);
+                // THE QUEUE'S SHAPE CHANGED: the whole list is announced,
+                // with the one playing.
+                let queue = s.revision;
                 if last_queue.as_ref() != Some(&queue) {
                     let tracks: Vec<ObjectPath<'static>> =
-                        (0..queue.len()).filter_map(track_id).collect();
+                        l.tracks.iter().filter_map(|t| track_id(t.id)).collect();
                     let current = s
                         .current
                         .and_then(track_id)
@@ -780,13 +835,43 @@ pub fn start(shared: Shared) -> Option<std::sync::mpsc::Sender<()>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_player::wire::Item;
+    use ronoctua_player::own::Item;
+
+    fn single(location: &str) -> Item {
+        Item::Single {
+            location: location.to_owned(),
+            title: None,
+            seconds: None,
+        }
+    }
+
+    /// Three files, and a state with the first playing.
+    fn three() -> (Queue, Vec<EntryId>, State) {
+        let mut q = Queue::new();
+        let ids = q
+            .insert(
+                Place::End(None),
+                vec![
+                    single("/m/a.flac"),
+                    single("/m/b.flac"),
+                    single("/m/c.flac"),
+                ],
+            )
+            .expect("inserted");
+        let s = State {
+            current: Some(ids[0]),
+            duration: Some(100.0),
+            position: 95.0,
+            ..State::default()
+        };
+        (q, ids, s)
+    }
 
     #[test]
     fn the_status_and_the_loop_are_the_specifications_words() {
         let mut s = State::default();
         assert_eq!(status_of(&s), "Stopped");
-        s.current = Some(0);
+        s.current = Some(EntryId(1));
         assert_eq!(status_of(&s), "Paused");
         s.playing = true;
         assert_eq!(status_of(&s), "Playing");
@@ -796,83 +881,98 @@ mod tests {
 
     #[test]
     fn metadata_carries_a_track_id_and_microseconds() {
-        let s = State {
-            queue: vec![Item {
-                location: "/m/a.flac".into(),
-                title: None,
-            }],
-            current: Some(0),
-            title: Some("A".into()),
-            artist: Some("B".into()),
-            duration: Some(2.5),
-            ..State::default()
-        };
-        let m = metadata_of(&s);
+        let (q, ids, mut s) = three();
+        s.title = Some("A".into());
+        s.artist = Some("B".into());
+        s.duration = Some(2.5);
+        let tracks: Vec<TrackInfo> = q
+            .leaves()
+            .into_iter()
+            .filter_map(|i| track_info(&q, i))
+            .collect();
+        let m = metadata_of(&s, &tracks, None);
         assert_eq!(m.get("mpris:length"), Some(&Value::from(2_500_000i64)));
         assert_eq!(m.get("xesam:url"), Some(&Value::from("file:///m/a.flac")));
-        assert!(m.contains_key("mpris:trackid"));
-        assert!(metadata_of(&State::default()).is_empty());
-    }
-
-    fn queue_of_three() -> State {
-        State {
-            queue: ["/m/a.flac", "/m/b.flac", "/m/c.flac"]
-                .map(|l| Item {
-                    location: l.into(),
-                    title: None,
-                })
-                .to_vec(),
-            current: Some(0),
-            duration: Some(100.0),
-            position: 95.0,
-            ..State::default()
-        }
+        assert_eq!(m.get("xesam:title"), Some(&Value::from("A")));
+        assert_eq!(
+            m.get("mpris:trackid"),
+            Some(&Value::from(track_id(ids[0]).expect("an id")))
+        );
+        assert!(metadata_of(&State::default(), &tracks, None).is_empty());
+        // ITS OWN COVER, kept in the cache, is what a listener is handed.
+        let m = metadata_of(&s, &tracks, Some("file:///c/player/cover-1.jpg"));
+        assert_eq!(
+            m.get("mpris:artUrl"),
+            Some(&Value::from("file:///c/player/cover-1.jpg"))
+        );
     }
 
     /// FAILS IF: a listener is told it can go somewhere the queue does not
     /// reach — every one of these was `true` in any state.
     #[test]
     fn what_a_listener_can_do_follows_the_queue() {
-        let mut s = queue_of_three();
-        let a = able(&s);
+        let (q, ids, mut s) = three();
+        let a = able(&s, &q, None);
         assert!(a.next && !a.previous && a.play && a.pause && a.seek);
-        s.current = Some(2);
-        assert!(!able(&s).next);
+        s.current = Some(ids[2]);
+        assert!(!able(&s, &q, None).next);
         s.repeat = Repeat::Queue;
-        assert!(able(&s).next, "a looping queue always has a next");
-        let empty = State::default();
-        let a = able(&empty);
+        assert!(able(&s, &q, None).next, "a looping queue always has a next");
+        let a = able(&State::default(), &Queue::new(), None);
         assert!(!a.next && !a.previous && !a.play && !a.pause && !a.seek);
         s.duration = None;
-        assert!(!able(&s).seek, "a stream with no length does not seek");
+        assert!(
+            !able(&s, &q, None).seek,
+            "a stream with no length does not seek"
+        );
+        // SHUFFLED, what comes next is the order's: the last of the tree may
+        // have one.
+        s.repeat = Repeat::Nothing;
+        let order = vec![ids[2], ids[0], ids[1]];
+        assert!(able(&s, &q, Some(&order)).next);
     }
 
     /// FAILS IF: the two rules of `Seek` stop holding: before the start is
     /// the start, past the end is the next track.
     #[test]
     fn a_seek_stops_at_the_start_and_past_the_end_is_the_next() {
-        let s = queue_of_three();
+        let (_, _, s) = three();
         assert_eq!(seek_to(&s, -200_000_000), Some(0.0));
         assert_eq!(seek_to(&s, 2_000_000), Some(97.0));
         assert_eq!(seek_to(&s, 10_000_000), None);
     }
 
-    /// FAILS IF: a track's id stops naming its place, or an id from some
-    /// other player is read as one of ours.
+    /// FAILS IF: a track's id stops naming its entry — and so stops naming
+    /// the same track once the queue is reordered — or an id from some other
+    /// player is read as one of ours.
     #[test]
-    fn a_track_id_is_its_place_and_nothing_else_is() {
-        let id = track_id(7).unwrap();
-        assert_eq!(place_of(&id), Some(7));
-        let other = ObjectPath::try_from(NO_TRACK).unwrap();
-        assert_eq!(place_of(&other), None);
+    fn a_track_id_is_its_entry_and_survives_a_move() {
+        let (mut q, ids, _) = three();
+        let id = track_id(ids[2]).expect("an id");
+        q.move_to(ids[2], Place::Start(None)).expect("moved");
+        assert_eq!(entry_of(&id), Some(ids[2]));
+        assert_eq!(q.leaves()[0], ids[2]);
+        let other = ObjectPath::try_from(NO_TRACK).expect("a path");
+        assert_eq!(entry_of(&other), None);
     }
 
-    /// FAILS IF: an address from a listener reaches the engine still
-    /// escaped, and names a file that does not exist.
+    /// FAILS IF: a set reaches a listener under the name of one of its
+    /// files.
     #[test]
-    fn a_file_address_is_the_path_it_names() {
-        assert_eq!(path_of("file:///m/a%20b.flac"), "/m/a b.flac");
-        assert_eq!(path_of("https://x.org/a%20b"), "https://x.org/a%20b");
+    fn a_set_is_never_titled_after_one_file() {
+        use ronoctua_player::own::{Lane, LaneId, Set};
+        let mut q = Queue::new();
+        let mut set = Set::default();
+        set.lanes
+            .push(Lane::new(LaneId(1), LaneKind::Video, "/f/film.mkv"));
+        set.lanes
+            .push(Lane::new(LaneId(2), LaneKind::Audio, "/f/commentary.opus"));
+        let ids = q
+            .insert(Place::End(None), vec![Item::Set { set, from: None }])
+            .expect("inserted");
+        let t = track_info(&q, ids[0]).expect("a track");
+        assert_eq!(t.title, "film.mkv + commentary.opus");
+        assert_eq!(t.url.as_deref(), Some("file:///f/film.mkv"));
     }
 
     /// FAILS IF: an item that is not playing reaches the track list with no
@@ -882,14 +982,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ronoctua-mpris-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Cover.JPG"), b"").unwrap();
-        let s = State {
-            queue: vec![Item {
-                location: dir.join("01 One.flac").to_string_lossy().into_owned(),
-                title: None,
-            }],
-            ..State::default()
-        };
-        let m = item_metadata(&s, 0);
+        let mut q = Queue::new();
+        let ids = q
+            .insert(
+                Place::End(None),
+                vec![single(&dir.join("01 One.flac").to_string_lossy())],
+            )
+            .expect("inserted");
+        let m = item_metadata(&track_info(&q, ids[0]).expect("a track"));
         assert_eq!(m.get("xesam:title"), Some(&Value::from("01 One.flac")));
         let art = format!("file://{}", dir.join("Cover.JPG").display());
         assert_eq!(m.get("mpris:artUrl"), Some(&Value::from(art)));

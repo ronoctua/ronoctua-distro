@@ -1403,22 +1403,22 @@ impl Files {
             // renderer's ceiling. A key per frame would fill the cache with
             // one file's film and evict every icon. The globe is the same
             // kind of picture: it is redrawn as the hand moves.
-            let (gpu, im) = (canvas.gpu, &mut *canvas.images);
+            let (device, queue, im) = (canvas.device, canvas.queue, &mut *canvas.images);
             if preview_key.as_deref() == Some(key.as_str()) {
                 if let Some(frame) = self.view.live_frame() {
-                    im.upload_it(&gpu.device, &gpu.queue, key, frame);
+                    im.upload_it(device, queue, key, frame);
                 } else if im.missing(key)
                     // THE STILL ONE ONLY GOES UP WHEN IT IS MISSING: a
                     // preview is up to a mebibyte, and `prepare` is
                     // sixteen bytes.
                     && let Some(rgba) = self.view.preview_pixels()
                 {
-                    im.upload_it(&gpu.device, &gpu.queue, key, rgba);
+                    im.upload_it(device, queue, key, rgba);
                 }
             } else if globe_key.as_deref() == Some(key.as_str())
                 && let Some(rgba) = self.view.globe_frame()
             {
-                im.upload_it(&gpu.device, &gpu.queue, key, &rgba);
+                im.upload_it(device, queue, key, &rgba);
             } else if (im.missing(key) || self.view.thumb_moves(key))
                 // A STILL THUMBNAIL ONLY WHEN IT IS MISSING, for the reason
                 // the still preview gives: the key carries the file, the
@@ -1431,7 +1431,7 @@ impl Files {
                 // ceiling instead of filling the cache with one file's film.
                 && let Some(rgba) = self.view.thumb_pixels(key)
             {
-                im.upload_it(&gpu.device, &gpu.queue, key, rgba);
+                im.upload_it(device, queue, key, rgba);
             }
         }
         // QUADS, THEN IMAGES, THEN THE FEW QUADS THAT GO ON TOP, THEN TEXT —

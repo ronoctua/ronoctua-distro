@@ -31,6 +31,7 @@
 pub mod handlers;
 pub mod keys;
 pub mod list;
+pub mod screens;
 pub mod touch;
 
 use anyhow::{Context as _, Result};
@@ -172,8 +173,17 @@ pub struct Ui {
     /// Orders for the footer, sent off the loop on the next turn — see
     /// [`Ui::tell_the_footer`].
     orders: Vec<String>,
+    /// The window closes FOR ANOTHER DOOR that its orders ask the footer to
+    /// open — see [`Ui::hand_over`] — and stays when the footer took none.
+    handing_over: bool,
     /// Programs to start, off the loop on the next turn — see [`Ui::launch`].
     launches: Vec<Launching>,
+    /// EVERY SCREEN THIS DOOR KNOWS, and the ones its surface is on — kept by
+    /// the door from `wl_output` (`new_output`, `update_output`,
+    /// `output_destroyed`) and from the surface's `enter` and `leave`, and
+    /// told to the window as [`Content::screens_changed`]. A door that knows
+    /// no name for where it is is on every screen (`screens::Screens::here`).
+    pub screens: screens::Screens<wayland_client::protocol::wl_output::WlOutput>,
 }
 
 /// A program a window starts — see [`Ui::launch`] and [`Ui::launch_entry`].
@@ -395,33 +405,50 @@ impl Ui {
         self.paste_owed.is_some()
     }
 
-    /// The orders waiting for the footer — for a test of a window's.
-    #[cfg(test)]
+    /// The orders waiting for the footer — for a test of a window's, and
+    /// for a photograph to say what a click would have told it.
     #[must_use]
     pub fn orders(&self) -> &[String] {
         &self.orders
     }
 
-    /// The programs waiting to be started — for a test of a window's.
-    #[cfg(test)]
+    /// The programs waiting to be started — for a test of a window's, and
+    /// for a photograph to say what a click would have started.
     #[must_use]
     pub fn launches(&self) -> &[Launching] {
         &self.launches
     }
 
-    /// A `Ui` with no compositor behind it: a connection over a socket pair
-    /// nobody serves, and an inert surface — what a test hands a window.
+    /// A `Ui` with no compositor behind it — what a test hands a window.
     #[cfg(test)]
     #[must_use]
     pub fn for_tests(texts: ronoctua_i18n::Texts) -> Self {
-        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
-        let conn = Connection::from_socket(ours).expect("a connection over the pair");
+        let mut ui = Self::detached(texts, (900, 600), 1).expect("a socket pair");
+        (ui.columns, ui.lines) = (80, 24);
+        ui
+    }
+
+    /// A `Ui` with NO COMPOSITOR BEHIND IT, `size` logical pixels at `scale`:
+    /// a connection over a socket pair nobody serves, and an inert surface.
+    /// A window in it lays itself out, answers keys and pointers and draws
+    /// frames — and whatever it would send or commit goes nowhere. What a
+    /// test hands a window, and what `crate::photograph` draws one in.
+    ///
+    /// Configured, as a window on the screen is: it may draw at once.
+    ///
+    /// # Errors
+    ///
+    /// When the process cannot make a socket pair.
+    pub fn detached(texts: ronoctua_i18n::Texts, size: (u32, u32), scale: i32) -> Result<Self> {
+        let (ours, _theirs) =
+            std::os::unix::net::UnixStream::pair().context("a socket pair for a detached door")?;
+        let conn = Connection::from_socket(ours).context("a connection over the pair")?;
         let surface = wl_surface::WlSurface::inert(conn.backend().downgrade());
-        Self {
+        let mut ui = Self {
             texts: std::rc::Rc::new(texts),
-            width: 900,
-            height: 600,
-            scale: 1,
+            width: size.0,
+            height: size.1,
+            scale,
             columns: 80,
             lines: 24,
             margin: 1,
@@ -439,15 +466,21 @@ impl Ui {
             pointer_mods: Modifiers::default(),
             pointer_on: None,
             repeating: false,
-            // A TEST'S WINDOW IS ONE ON THE SCREEN, sized and configured.
+            // A DETACHED WINDOW IS ONE ON THE SCREEN, sized and configured.
             configured: true,
             size_owed: false,
             asking: None,
             questions: 0,
             paste_owed: None,
             orders: Vec::new(),
+            handing_over: false,
             launches: Vec::new(),
-        }
+            // ON NO SCREEN: a detached door has no compositor to describe one,
+            // and unknown is every screen.
+            screens: screens::Screens::default(),
+        };
+        ui.recount();
+        Ok(ui)
     }
 
     /// Hands command `id` — with its argument — to the footer, the way
@@ -478,6 +511,46 @@ impl Ui {
             None => format!("command {id}"),
         };
         self.orders.push(order);
+    }
+
+    /// THIS WINDOW FOR ANOTHER DOOR: `id` (with `argument`) for the footer,
+    /// which opens the other door, and this one closes — ONLY WHEN THE
+    /// FOOTER TOOK THE ORDER. A footer that is not there (the lifeline up,
+    /// its socket gone) would otherwise leave nothing open and nothing said:
+    /// the window stays, and says it could not reach the footer
+    /// (`door-no-footer`), on its own line. See `Door::settle`.
+    pub fn hand_over(&mut self, id: &str, argument: Option<&str>) {
+        let before = self.orders.len();
+        self.tell_the_footer(id, argument);
+        if self.orders.len() > before {
+            self.handing_over = true;
+            self.quit = true;
+            self.ask_paint();
+        }
+    }
+
+    /// The screen whose connector is `connector` (`eDP-1`), as this door's
+    /// connection has described it — what a stage is made fullscreen on and
+    /// a column is shown on. `None` until the compositor has described it,
+    /// and then [`Content::screens_changed`] is the moment to ask again.
+    #[must_use]
+    pub fn screen_named(
+        &self,
+        connector: &str,
+    ) -> Option<wayland_client::protocol::wl_output::WlOutput> {
+        self.screens.named(connector).cloned()
+    }
+
+    /// How the last orders of a closing window went — `taken`, all of them
+    /// by the footer. A HAND-OVER THE FOOTER DID NOT TAKE: nothing would
+    /// open in this window's place, so it stays and says why
+    /// ([`Ui::hand_over`]). A window closing for itself closes either way.
+    pub(crate) fn last_orders_sent(&mut self, taken: bool) {
+        if std::mem::take(&mut self.handing_over) && !taken {
+            self.quit = false;
+            self.message = Some(self.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
+            self.ask_paint();
+        }
     }
 
     /// The window's own size changed (`Content::own_size`): lay it out again.
@@ -623,8 +696,15 @@ pub struct Canvas<'a> {
     pub pictures: Vec<(String, ronoctua_render::image::Area)>,
     /// Every pointer's row, in its cursor's colour — for the hover bands.
     pub lit: &'a [(tokens::Color, Option<usize>)],
-    /// The GPU, for a window that uploads a picture.
-    pub gpu: &'a ronoctua_render::gpu::Gpu,
+    /// The device, for a window that uploads a picture.
+    ///
+    /// THE DEVICE AND THE QUEUE, and not the `Gpu` they came from: a `Gpu`
+    /// is bound to a `wl_surface`, and a frame composed for a photograph
+    /// (`crate::photograph`) has none — its device is a texture's. What a
+    /// window does with a picture is the same on both.
+    pub device: &'a wgpu::Device,
+    /// The queue, likewise.
+    pub queue: &'a wgpu::Queue,
     /// The pictures already on the GPU.
     pub images: &'a mut ronoctua_render::image::Images,
     /// Every bar this frame draws, by its track — see `crate::bars`.
@@ -644,8 +724,7 @@ impl Canvas<'_> {
     /// for a picture that CHANGES under the same key (a magnifier following
     /// the pointer). The texture is reused while the size stays the same.
     pub fn replace(&mut self, key: &str, rgba: &ronoctua_render::image::Rgba) {
-        self.images
-            .upload_it(&self.gpu.device, &self.gpu.queue, key, rgba);
+        self.images.upload_it(self.device, self.queue, key, rgba);
     }
 
     /// Puts a picture on the GPU under `key`, unless it is already there.
@@ -661,10 +740,134 @@ impl Canvas<'_> {
             let Some(rgba) = make() else {
                 return false;
             };
-            self.images
-                .upload_it(&self.gpu.device, &self.gpu.queue, key, &rgba);
+            self.images.upload_it(self.device, self.queue, key, &rgba);
         }
         true
+    }
+}
+
+/// One frame of a door, COMPOSED and on no surface yet: what
+/// [`Door::paint`] presents to its window, and what `crate::photograph`
+/// presents to a texture.
+///
+/// # Why it is its own step
+///
+/// Because a photograph of a native door has to BE the door's frame. The
+/// window's paint, the hover bands, the sweep of text, the header's drawer
+/// bar and the clip of every band under a bar are all here, in [`compose`],
+/// and the two presents differ only in where the pixels land — a
+/// `wl_surface` with its scale told in the same commit, or a texture read
+/// back into a PNG. A photographer with a painter of its own would be the
+/// second arithmetic `render-png` exists to refuse.
+pub struct Composed {
+    /// The text.
+    pub spans: Vec<ronoctua_render::Span>,
+    /// Every rectangle: the ones UNDER the pictures, then — from `split` —
+    /// the ones over them and under the text.
+    pub quads: Vec<ronoctua_render::quad::Quad>,
+    /// Where the rectangles over the pictures begin in `quads`.
+    pub split: u32,
+    /// The pictures, by key, in pixels of the window.
+    pub pictures: Vec<(String, ronoctua_render::image::Area)>,
+}
+
+impl Composed {
+    /// Draws the frame, once its three pipelines were handed it — the text
+    /// over the PHYSICAL pixels, the rectangles and the pictures over the
+    /// LOGICAL ones (`crate::hidpi`, and `Door::present`) — in the canvas's
+    /// order: the rectangles under, the pictures, the rectangles over, the
+    /// text. There is no depth test — later is on top.
+    ///
+    /// # Errors
+    ///
+    /// When the text could not be drawn.
+    pub fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        text: &ronoctua_render::Text,
+        quads: &ronoctua_render::quad::Quads,
+        images: &ronoctua_render::image::Images,
+    ) -> Result<()> {
+        let total = u32::try_from(self.quads.len()).unwrap_or(u32::MAX);
+        quads.draw_range(pass, 0, self.split);
+        images.draw(pass);
+        quads.draw_range(pass, self.split, total);
+        text.draw(ronoctua_render::Atlas::Pinned, pass)
+    }
+}
+
+/// What a frame is composed WITH, past the window and what it keeps: every
+/// pointer's row, the GPU a picture goes up to, and what the door keeps of
+/// the last frame — its bars, and the sweep of text drawn over it.
+pub struct Easel<'a> {
+    /// Every pointer's row, in its cursor's colour.
+    pub lit: &'a [(tokens::Color, Option<usize>)],
+    /// The device.
+    pub device: &'a wgpu::Device,
+    /// The queue.
+    pub queue: &'a wgpu::Queue,
+    /// The pictures already on the GPU.
+    pub images: &'a mut ronoctua_render::image::Images,
+    /// Every bar this frame draws, cleared and recorded here.
+    pub bars: &'a mut crate::bars::Drawn,
+    /// The text swept with the pointer, drawn over the letters it covers.
+    pub selection: Option<&'a crate::text_select::Selection>,
+}
+
+/// Composes one frame of `content`: what it paints, the sweep of text over
+/// it, the header's drawer bar, and no band under any bar — see
+/// [`Composed`]. The page is worn by the caller, before this.
+pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Composed {
+    let Easel {
+        lit,
+        device,
+        queue,
+        images,
+        bars,
+        selection,
+    } = easel;
+    bars.clear();
+    let mut canvas = Canvas {
+        spans: Vec::new(),
+        under: Vec::new(),
+        over: Vec::new(),
+        pictures: Vec::new(),
+        lit,
+        device,
+        queue,
+        images,
+        bars: &mut *bars,
+    };
+    content.paint(ui, &mut canvas);
+    let Canvas {
+        spans,
+        mut under,
+        mut over,
+        pictures,
+        ..
+    } = canvas;
+    // THE SWEEP ITSELF, over the letters it covers (`crate::text_select`).
+    if let Some(sel) = selection {
+        let f = ui.frame(0);
+        over.extend(crate::text_select::highlight(
+            sel,
+            f.cell(),
+            f.line(),
+            |l| f.y_of(l),
+        ));
+    }
+    // THE HEADER'S DRAWER BAR, in every door — the header is the door's.
+    bars.record_opt(ui.hinted.drawer_track(ui.frame(0)));
+    // AND NO BAND RUNS UNDER A BAR, whoever painted it: see `crate::bars`.
+    bars.clip(&mut under);
+    bars.clip(&mut over);
+    let split = u32::try_from(under.len()).unwrap_or(u32::MAX);
+    under.extend(over);
+    Composed {
+        spans,
+        quads: under,
+        split,
+        pictures,
     }
 }
 
@@ -956,6 +1159,13 @@ pub trait Content: Sized + 'static {
         let _ = ui;
     }
 
+    /// What `ui.screens` says moved: a screen described, renamed or gone, or
+    /// the surface entered or left one. A window that shows something per
+    /// screen — the player's pictures, routed by connector — asks again here.
+    fn screens_changed(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+
     /// A language was chosen, and `ui.texts` already speaks it.
     fn language_changed(&mut self, ui: &mut Ui) {
         let _ = ui;
@@ -1129,7 +1339,9 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             questions: 0,
             paste_owed: None,
             orders: Vec::new(),
+            handing_over: false,
             launches: Vec::new(),
+            screens: screens::Screens::default(),
         },
         content,
         handle,
@@ -1261,22 +1473,6 @@ impl<C: Content> Door<C> {
         }
     }
 
-    /// The screen whose connector is `connector` (`eDP-1`), as this door's
-    /// connection knows it — `None` until the compositor has described it,
-    /// and then `Content::outputs_changed` is the moment to ask again.
-    #[must_use]
-    pub fn output_named(
-        &self,
-        connector: &str,
-    ) -> Option<wayland_client::protocol::wl_output::WlOutput> {
-        self.outputs.outputs().find(|o| {
-            self.outputs
-                .info(o)
-                .and_then(|i| i.name)
-                .is_some_and(|n| n == connector)
-        })
-    }
-
     /// Takes the door OFF the screen and keeps it: the surface's role is
     /// destroyed and a surface with none takes its place (`Shell::Parked`).
     /// Only a layer surface parks — a window has nowhere to be put away.
@@ -1325,6 +1521,10 @@ impl<C: Content> Door<C> {
         self.text = None;
         self.gpu = None;
         self.ui.surface = shell.wl_surface().clone();
+        // A NEW SURFACE IS ON NO SCREEN until it is told it entered one —
+        // and the window is told that moved, as every other change of
+        // `ui.screens` is (`Content::screens_changed`).
+        let left = self.ui.screens.left_every_screen();
         let old = std::mem::replace(&mut self.shell, shell);
         if let Shell::Parked(bare, _) = old
             && &bare != self.shell.wl_surface()
@@ -1339,6 +1539,9 @@ impl<C: Content> Door<C> {
         // one's says nothing about it (`Ui::may_draw`).
         self.ui.configured = false;
         self.ui.ask_paint();
+        if left {
+            self.content.screens_changed(&mut self.ui);
+        }
     }
 
     /// A language was chosen: the words, the renderer, and the window.
@@ -1414,6 +1617,9 @@ impl<C: Content> Door<C> {
             g.config.format,
             self.ui.scale,
             tokens::text::size(),
+            // BORN IN THIS DOOR'S LANGUAGE, and not in a default only a
+            // CHANGE of language moved: the Han faces are picked by it.
+            self.ui.texts.language(),
         ) {
             Ok(t) => self.text = Some(t),
             Err(e) => tracing::error!(error = %e, "assembling the text failed"),
@@ -1438,6 +1644,7 @@ impl<C: Content> Door<C> {
         for launching in std::mem::take(&mut self.ui.launches) {
             self.start(launching);
         }
+        let mut untaken = false;
         for order in std::mem::take(&mut self.ui.orders) {
             // THE LAST ORDERS ARE SENT HERE, and not from a thread: the loop
             // stops at the end of this turn and the process with it, and a
@@ -1446,11 +1653,13 @@ impl<C: Content> Door<C> {
             if self.ui.quit {
                 if let Err(e) = crate::leader::send_it(&order) {
                     tracing::warn!(error = %e, "the footer did not take the last order");
+                    untaken = true;
                 }
             } else {
                 self.send_to_the_footer(order);
             }
         }
+        self.ui.last_orders_sent(!untaken);
         if std::mem::take(&mut self.ui.size_owed) {
             self.take_the_size();
         }
@@ -1490,10 +1699,48 @@ impl<C: Content> Door<C> {
             self.assemble_gpu();
         }
         let lit = self.lit();
-        self.bars.clear();
         // THE PAGE THIS DOOR WEARS, worn for the frame: every colour below
         // resolves through it, and its chrome is the ground.
         tokens::theme::set_ground(self.content.page());
+        // ALL FOUR BEFORE THE WINDOW PAINTS, as before `compose` was a step
+        // of its own: a window's paint does things — uploads its pictures,
+        // and the player counts a frame as drawn and asks the compositor for
+        // a window no buffer ever mapped — and a frame that cannot be
+        // presented must not have done them.
+        let (Some(gpu), true, true, Some(images)) = (
+            self.gpu.as_ref(),
+            self.text.is_some(),
+            self.quads.is_some(),
+            self.images.as_mut(),
+        ) else {
+            return;
+        };
+        let composed = compose(
+            &mut self.content,
+            &mut self.ui,
+            Easel {
+                lit: &lit,
+                device: &gpu.device,
+                queue: &gpu.queue,
+                images,
+                bars: &mut self.bars,
+                selection: self.selection.as_ref(),
+            },
+        );
+        // WHAT WAS DRAWN, for a sweep to copy (`crate::text_select`).
+        self.painted = crate::text_select::painted_of(&composed.spans);
+        self.present(&composed);
+    }
+
+    /// Puts a composed frame on the window's surface.
+    fn present(&mut self, composed: &Composed) {
+        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
+        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes —
+        // see `crate::hidpi::told_before_present`.
+        let surface = self.shell.wl_surface().clone();
+        let scale = self.ui.scale;
+        let told = &mut self.scale_told;
+        let (width, height) = (self.ui.width, self.ui.height);
         let (Some(gpu), Some(text), Some(quads), Some(images)) = (
             self.gpu.as_mut(),
             self.text.as_mut(),
@@ -1502,57 +1749,13 @@ impl<C: Content> Door<C> {
         ) else {
             return;
         };
-        let mut canvas = Canvas {
-            spans: Vec::new(),
-            under: Vec::new(),
-            over: Vec::new(),
-            pictures: Vec::new(),
-            lit: &lit,
-            gpu,
-            images,
-            bars: &mut self.bars,
-        };
-        self.content.paint(&mut self.ui, &mut canvas);
-        let Canvas {
-            spans,
-            mut under,
-            mut over,
-            pictures,
-            ..
-        } = canvas;
-        // WHAT WAS DRAWN, for a sweep to copy — and the sweep itself, over the
-        // letters it covers (`crate::text_select`).
-        self.painted = crate::text_select::painted_of(&spans);
-        if let Some(sel) = &self.selection {
-            let f = self.ui.frame(0);
-            over.extend(crate::text_select::highlight(
-                sel,
-                f.cell(),
-                f.line(),
-                |l| f.y_of(l),
-            ));
-        }
-        // THE HEADER'S DRAWER BAR, in every door — the header is the door's.
-        self.bars
-            .record_opt(self.ui.hinted.drawer_track(self.ui.frame(0)));
-        // AND NO BAND RUNS UNDER A BAR, whoever painted it: see `crate::bars`.
-        self.bars.clip(&mut under);
-        self.bars.clip(&mut over);
-
-        // THE SURFACE AND THE TWO SCALE NUMBERS, taken before the borrows:
-        // `set_buffer_scale` has to travel in the commit `Gpu::frame` makes —
-        // see `crate::hidpi::told_before_present`.
-        let surface = self.shell.wl_surface().clone();
-        let scale = self.ui.scale;
-        let told = &mut self.scale_told;
-        let (width, height) = (self.ui.width, self.ui.height);
         if let Err(e) = text.prepare(
             &gpu.device,
             &gpu.queue,
             gpu.config.width,
             gpu.config.height,
             ronoctua_render::Atlas::Pinned,
-            &spans,
+            &composed.spans,
         ) {
             tracing::error!(error = %e, "preparing the text failed");
             return;
@@ -1563,21 +1766,13 @@ impl<C: Content> Door<C> {
         // rectangle in the window's own pixels, and the renderer turns it into
         // NDC by dividing — so a logical rectangle over a logical viewport lands
         // exactly where a physical one over a physical viewport would.
-        let split = u32::try_from(under.len()).unwrap_or(u32::MAX);
-        under.extend(over);
-        let total = u32::try_from(under.len()).unwrap_or(u32::MAX);
-        quads.prepare(&gpu.device, &gpu.queue, width, height, under.as_slice());
-        images.prepare(&gpu.queue, width, height, &pictures);
-        let (quads, images) = (&*quads, &*images);
+        quads.prepare(&gpu.device, &gpu.queue, width, height, &composed.quads);
+        images.prepare(&gpu.queue, width, height, &composed.pictures);
+        let (text, quads, images) = (&*text, &*quads, &*images);
         if let Err(e) = gpu.frame(
             tokens::color::SURFACE_CHROME.to_linear(),
             || crate::hidpi::told_before_present(scale, told, &surface),
-            |pass| {
-                quads.draw_range(pass, 0, split);
-                images.draw(pass);
-                quads.draw_range(pass, split, total);
-                text.draw(ronoctua_render::Atlas::Pinned, pass)
-            },
+            |pass| composed.draw(pass, text, quads, images),
         ) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
@@ -1591,96 +1786,38 @@ impl<C: Content> Door<C> {
     /// list follows the cursor, on the EVENT and never in the paint.
     fn typed(&mut self, event: &KeyEvent, mods: Modifiers) {
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
-        // EVERY WINDOW READS A KEY THE SAME WAY — see `keys::as_read`.
-        let (event, mods) = keys::as_read(event, mods, self.content.types_capitals());
-        // A SWEEP OF TEXT IS THE DOOR'S, and so are the two keys that answer
-        // it: `Ctrl+C` copies it and `Esc` lets it go. Asked before the
-        // window, and only while there is a sweep — every other `Esc` and
-        // every other `C-c` is still the window's.
-        if let Some(sel) = self.selection {
-            if event.keysym == Keysym::Escape {
-                self.selection = None;
-                self.ui.ask_paint();
-                return;
-            }
-            if mods.ctrl && !mods.alt && matches!(event.keysym, Keysym::c | Keysym::C) {
-                let text = sel.extract(&self.painted);
-                if !text.is_empty() {
-                    self.ui.message = Some(crate::chrome::copied(&text, &self.ui.texts));
-                }
-                self.ui.ask_paint();
-                return;
-            }
-        }
-        // A QUESTION ON THE LINE TAKES EVERY KEY — the footer's
-        // `minibuffer_key` intercept, in every window.
-        if self.ui.asking.is_some() {
-            self.line_key(&event, mods);
-            return;
-        }
-        self.content.typed(&mut self.ui, &event, mods);
-        self.follow();
+        typed_into(
+            &mut self.content,
+            &mut self.ui,
+            &mut self.selection,
+            &self.painted,
+            event,
+            mods,
+        );
     }
 
-    /// A key while the line asks — [`Ui::line_key`], and what the window
-    /// is told of the answer.
-    fn line_key(&mut self, event: &KeyEvent, mods: Modifiers) {
-        let Some(key) = keys::key_of(event, mods) else {
-            return;
-        };
-        match self.ui.line_key(key) {
-            Routed::Kept => {}
-            Routed::Answered(id, text) => {
-                self.content.answered(&mut self.ui, id, &text);
-                self.follow();
-            }
-            Routed::Cancelled(id) => self.content.unanswered(&mut self.ui, id),
-        }
-    }
-
-    /// The list follows the keyboard's cursor.
-    fn follow(&mut self) {
-        if let Some(cursor) = self.content.cursor() {
-            let rows = self.content.rows(&self.ui).len();
-            self.ui.follow(cursor, rows);
-        }
-    }
-
-    /// A click on a shortcut of the header: what the key would have done.
-    ///
-    /// A key is pressed through the SAME path the keyboard takes, so the click
-    /// does exactly what the key does in the state the window is in. A command
-    /// of the registry is handed to the footer, which is where commands run —
-    /// off the loop, and a footer that is not there says so
-    /// ([`Ui::tell_the_footer`]).
+    /// A click on a shortcut of the header: what the key would have done —
+    /// see [`act_into`].
     fn act(&mut self, act: crate::chrome::Act) {
-        match act {
-            crate::chrome::Act::Key(key) => {
-                let (event, mods) = keys::event_of(key);
-                self.typed(&event, mods);
-                // A CLICK IS A PRESS AND A RELEASE. A window that acts on
-                // the release — the buffer host's `Esc`, which is a tap only
-                // once it comes up, because held it chooses a state — heard
-                // the press alone: the Back button did nothing over a buffer
-                // window, and left its `Esc` held for the next key.
-                self.content.released(&mut self.ui, &event);
-            }
-            crate::chrome::Act::Run(id) => self.ui.tell_the_footer(id, None),
-        }
-        self.ui.ask_paint();
+        self.ui.keyboard_seat = self.keyboards.colour_number_here();
+        act_into(
+            &mut self.content,
+            &mut self.ui,
+            &mut self.selection,
+            &self.painted,
+            act,
+        );
     }
 
-    /// THE BACK BUTTON IS `Esc`, by the path the `Esc` key takes: the
-    /// header's drawer shuts first, and then the window's own `Esc` — the
-    /// line's, when a question is up.
+    /// THE BACK BUTTON IS `Esc` — see [`went_back_into`].
     fn went_back(&mut self) {
-        if self.header_took(Keysym::Escape, true) {
-            self.ui.ask_paint();
-            return;
-        }
-        if let Ok(esc) = ronoctua_keymap::Key::parse("ESC") {
-            self.act(crate::chrome::Act::Key(esc));
-        }
+        self.ui.keyboard_seat = self.keyboards.colour_number_here();
+        went_back_into(
+            &mut self.content,
+            &mut self.ui,
+            &mut self.selection,
+            &self.painted,
+        );
     }
 
     /// What one of the door's threads handed back.
@@ -1699,7 +1836,7 @@ impl<C: Content> Door<C> {
                 };
                 if self.ui.pasted_into_the_line(to, &text) == Some(false) {
                     self.content.pasted(&mut self.ui, &text);
-                    self.follow();
+                    follow_into(&self.content, &mut self.ui);
                     self.ui.ask_paint();
                 }
             }
@@ -1787,128 +1924,30 @@ impl<C: Content> Door<C> {
         }
     }
 
-    /// One pointer's frame — from a mouse, or from a finger played as one.
-    ///
-    /// A press on a shortcut of the header is taken HERE, for every window:
-    /// the header is the system's, and so is what a click on it does.
+    /// One pointer's frame — from a mouse, or from a finger played as one —
+    /// read as every door reads it ([`pointer_into`]), with the seat of the
+    /// pointer told to the window before the rest reaches it.
     fn pointer_frame_here(&mut self, events: &[PointerEvent]) {
-        use smithay_client_toolkit::seat::pointer::PointerEventKind;
-        let mut rest: Vec<PointerEvent> = Vec::with_capacity(events.len());
-        // WHAT THE HEADER'S CONTROLS WERE ASKED — `None` is the Back button.
-        let mut acts: Vec<Option<crate::chrome::Act>> = Vec::new();
-        for e in events {
-            // THE SHORTCUT UNDER THE POINTER LIGHTS, in every door — the header
-            // is the door's (`chrome::Hinted::light_at`).
-            let lights = match e.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.ui.hinted.light_at(Some(e.position))
-                }
-                PointerEventKind::Leave { .. } => self.ui.hinted.light_at(None),
-                _ => false,
-            };
-            if lights {
-                self.ui.ask_paint();
-            }
-            match e.kind {
-                PointerEventKind::Press { .. } => self.here.held = true,
-                PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
-                    self.here.held = false;
-                }
-                _ => {}
-            }
-            // A SWEEP OF TEXT: a press ARMS it (and is still the window's
-            // click), a held button a cell away STARTS it, and from then on
-            // the motion is the sweep's and not the window's. Never on a bar,
-            // which is grabbed where it is drawn, and never where the window
-            // says a held button is its own gesture (`Content::text_area`).
-            match e.kind {
-                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                    if self.selection.take().is_some() {
-                        self.ui.ask_paint();
-                    }
-                    self.here.selecting = crate::text_select::Selecting::Idle;
-                    if !self.bars.on(e.position.0, e.position.1)
-                        && let Some((line, cell)) =
-                            crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
-                        && let Some(area) = self.content.text_area(&self.ui, line, cell)
-                        && area.holds(line, cell)
-                    {
-                        self.here.selecting = crate::text_select::Selecting::Pressed {
-                            at: (line, cell),
-                            area,
-                        };
-                    }
-                }
-                PointerEventKind::Motion { .. } if self.here.held => {
-                    if let Some((line, cell)) =
-                        crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
-                        && let Some(sel) = self.here.selecting.moved_to(line, cell)
-                    {
-                        if self.selection != Some(sel) {
-                            self.selection = Some(sel);
-                            self.ui.ask_paint();
-                        }
-                        continue;
-                    }
-                }
-                PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
-                    let swept = self.here.selecting.sweeping();
-                    self.here.selecting = crate::text_select::Selecting::Idle;
-                    // THE RELEASE OF A SWEEP IS NOT A CLICK of the window.
-                    if swept && matches!(e.kind, PointerEventKind::Release { .. }) {
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-            // THE BAR'S COLUMN IS THE BAR'S — for every door, whatever drew the
-            // bar (`crate::bars`). A pointer resting on a track, with no button
-            // held, reaches the content as the pointer LEAVING the rows: no
-            // content can light a row under a bar, because none is ever told
-            // the pointer is on one. A press and the wheel still reach it — a
-            // bar is grabbed and turned where it is drawn — and so does every
-            // motion of a drag.
-            if matches!(
-                e.kind,
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. }
-            ) && !self.here.held
-                && self.bars.on(e.position.0, e.position.1)
-            {
-                rest.push(PointerEvent {
-                    surface: e.surface.clone(),
-                    position: e.position,
-                    kind: PointerEventKind::Leave { serial: 0 },
-                });
-                continue;
-            }
-            if let PointerEventKind::Press { button, .. } = e.kind
-                && button == LEFT_BUTTON
-                && let Some(act) = self.ui.hinted.press_under(e.position.0, e.position.1)
-            {
-                acts.push(Some(act));
-                continue;
-            }
-            // THE BACK BUTTON, over any part of the window — see `went_back`.
-            if let PointerEventKind::Press { button, .. } = e.kind
-                && button == BACK_BUTTON
-            {
-                acts.push(None);
-                continue;
-            }
-            rest.push(e.clone());
-        }
-        if !rest.is_empty() {
-            self.ui.pointer_seat = self.pointers.colour_number_here();
-            self.ui.many_pointers = self.pointers.many();
-            let seat = self.pointers.seat_here().cloned();
-            self.ui.pointer_mods = seat
-                .as_ref()
-                .and_then(|seat| self.keyboards.state_on(seat, &self.mods))
-                .copied()
-                .unwrap_or_default();
-            self.ui.pointer_on = seat;
-            self.content.pointer(&mut self.ui, &mut self.here, &rest);
-        }
+        let (pointers, keyboards, mods) = (&self.pointers, &self.keyboards, &self.mods);
+        let acts = pointer_into(
+            &mut self.content,
+            &mut self.ui,
+            &mut self.here,
+            &self.bars,
+            &mut self.selection,
+            events,
+            |ui| {
+                ui.pointer_seat = pointers.colour_number_here();
+                ui.many_pointers = pointers.many();
+                let seat = pointers.seat_here().cloned();
+                ui.pointer_mods = seat
+                    .as_ref()
+                    .and_then(|seat| keyboards.state_on(seat, mods))
+                    .copied()
+                    .unwrap_or_default();
+                ui.pointer_on = seat;
+            },
+        );
         for act in acts {
             match act {
                 Some(act) => self.act(act),
@@ -1922,6 +1961,464 @@ impl<C: Content> Door<C> {
     fn header_took(&mut self, sym: Keysym, down: bool) -> bool {
         let its = self.content.header_keys();
         self.ui.header_took(its, sym, down)
+    }
+}
+
+/// One key into a window: the sweep's two keys, a question on the line, and
+/// otherwise the window's — and the list follows the cursor, on the EVENT
+/// and never in the paint. What [`Door::typed`] does, less the keyboard's
+/// seat, which a door without a compositor has not got.
+fn typed_into<C: Content>(
+    content: &mut C,
+    ui: &mut Ui,
+    selection: &mut Option<crate::text_select::Selection>,
+    painted: &[crate::text_select::Painted],
+    event: &KeyEvent,
+    mods: Modifiers,
+) {
+    // EVERY WINDOW READS A KEY THE SAME WAY — see `keys::as_read`.
+    let (event, mods) = keys::as_read(event, mods, content.types_capitals());
+    // A SWEEP OF TEXT IS THE DOOR'S, and so are the two keys that answer
+    // it: `Ctrl+C` copies it and `Esc` lets it go. Asked before the
+    // window, and only while there is a sweep — every other `Esc` and
+    // every other `C-c` is still the window's.
+    if let Some(sel) = *selection {
+        if event.keysym == Keysym::Escape {
+            *selection = None;
+            ui.ask_paint();
+            return;
+        }
+        if mods.ctrl && !mods.alt && matches!(event.keysym, Keysym::c | Keysym::C) {
+            let text = sel.extract(painted);
+            if !text.is_empty() {
+                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+            }
+            ui.ask_paint();
+            return;
+        }
+    }
+    // A QUESTION ON THE LINE TAKES EVERY KEY — the footer's
+    // `minibuffer_key` intercept, in every window.
+    if ui.asking.is_some() {
+        line_key_into(content, ui, &event, mods);
+        return;
+    }
+    content.typed(ui, &event, mods);
+    follow_into(content, ui);
+}
+
+/// A key while the line asks — [`Ui::line_key`], and what the window is
+/// told of the answer.
+fn line_key_into<C: Content>(content: &mut C, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+    let Some(key) = keys::key_of(event, mods) else {
+        return;
+    };
+    match ui.line_key(key) {
+        Routed::Kept => {}
+        Routed::Answered(id, text) => {
+            content.answered(ui, id, &text);
+            follow_into(content, ui);
+        }
+        Routed::Cancelled(id) => content.unanswered(ui, id),
+    }
+}
+
+/// The list follows the keyboard's cursor.
+fn follow_into<C: Content>(content: &C, ui: &mut Ui) {
+    if let Some(cursor) = content.cursor() {
+        let rows = content.rows(ui).len();
+        ui.follow(cursor, rows);
+    }
+}
+
+/// A click on a shortcut of the header: what the key would have done.
+///
+/// A key is pressed through the SAME path the keyboard takes, so the click
+/// does exactly what the key does in the state the window is in. A command
+/// of the registry is handed to the footer, which is where commands run —
+/// off the loop, and a footer that is not there says so
+/// ([`Ui::tell_the_footer`]).
+fn act_into<C: Content>(
+    content: &mut C,
+    ui: &mut Ui,
+    selection: &mut Option<crate::text_select::Selection>,
+    painted: &[crate::text_select::Painted],
+    act: crate::chrome::Act,
+) {
+    match act {
+        crate::chrome::Act::Key(key) => {
+            let (event, mods) = keys::event_of(key);
+            typed_into(content, ui, selection, painted, &event, mods);
+            // A CLICK IS A PRESS AND A RELEASE. A window that acts on
+            // the release — the buffer host's `Esc`, which is a tap only
+            // once it comes up, because held it chooses a state — heard
+            // the press alone: the Back button did nothing over a buffer
+            // window, and left its `Esc` held for the next key.
+            content.released(ui, &event);
+        }
+        crate::chrome::Act::Run(id) => ui.tell_the_footer(id, None),
+    }
+    ui.ask_paint();
+}
+
+/// THE BACK BUTTON IS `Esc`, by the path the `Esc` key takes: the header's
+/// drawer shuts first, and then the window's own `Esc` — the line's, when a
+/// question is up.
+fn went_back_into<C: Content>(
+    content: &mut C,
+    ui: &mut Ui,
+    selection: &mut Option<crate::text_select::Selection>,
+    painted: &[crate::text_select::Painted],
+) {
+    let its = content.header_keys();
+    if ui.header_took(its, Keysym::Escape, true) {
+        ui.ask_paint();
+        return;
+    }
+    if let Ok(esc) = ronoctua_keymap::Key::parse("ESC") {
+        act_into(
+            content,
+            ui,
+            selection,
+            painted,
+            crate::chrome::Act::Key(esc),
+        );
+    }
+}
+
+/// One pointer's frame, as every door reads it: the header's shortcut under
+/// the pointer lit, a sweep of text, a bar's column, a press on the header —
+/// and what is left handed to the window, after `seat` has told it whose
+/// hand it is. What the header's controls were asked is handed back, for the
+/// caller to act on after (`None` is the Back button).
+///
+/// A press on a shortcut of the header is taken HERE, for every window: the
+/// header is the system's, and so is what a click on it does.
+fn pointer_into<C: Content>(
+    content: &mut C,
+    ui: &mut Ui,
+    here: &mut Hand<C::Hand>,
+    bars: &crate::bars::Drawn,
+    selection: &mut Option<crate::text_select::Selection>,
+    events: &[PointerEvent],
+    seat: impl FnOnce(&mut Ui),
+) -> Vec<Option<crate::chrome::Act>> {
+    use smithay_client_toolkit::seat::pointer::PointerEventKind;
+    let mut rest: Vec<PointerEvent> = Vec::with_capacity(events.len());
+    // WHAT THE HEADER'S CONTROLS WERE ASKED — `None` is the Back button.
+    let mut acts: Vec<Option<crate::chrome::Act>> = Vec::new();
+    for e in events {
+        // THE SHORTCUT UNDER THE POINTER LIGHTS, in every door — the header
+        // is the door's (`chrome::Hinted::light_at`).
+        let lights = match e.kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                ui.hinted.light_at(Some(e.position))
+            }
+            PointerEventKind::Leave { .. } => ui.hinted.light_at(None),
+            _ => false,
+        };
+        if lights {
+            ui.ask_paint();
+        }
+        match e.kind {
+            PointerEventKind::Press { .. } => here.held = true,
+            PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
+                here.held = false;
+            }
+            _ => {}
+        }
+        // A SWEEP OF TEXT: a press ARMS it (and is still the window's
+        // click), a held button a cell away STARTS it, and from then on
+        // the motion is the sweep's and not the window's. Never on a bar,
+        // which is grabbed where it is drawn, and never where the window
+        // says a held button is its own gesture (`Content::text_area`).
+        match e.kind {
+            PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                if selection.take().is_some() {
+                    ui.ask_paint();
+                }
+                here.selecting = crate::text_select::Selecting::Idle;
+                if !bars.on(e.position.0, e.position.1)
+                    && let Some((line, cell)) =
+                        crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
+                    && let Some(area) = content.text_area(ui, line, cell)
+                    && area.holds(line, cell)
+                {
+                    here.selecting = crate::text_select::Selecting::Pressed {
+                        at: (line, cell),
+                        area,
+                    };
+                }
+            }
+            PointerEventKind::Motion { .. } if here.held => {
+                if let Some((line, cell)) =
+                    crate::text_select::Selecting::cell_of(e.position.0, e.position.1)
+                    && let Some(sel) = here.selecting.moved_to(line, cell)
+                {
+                    if *selection != Some(sel) {
+                        *selection = Some(sel);
+                        ui.ask_paint();
+                    }
+                    continue;
+                }
+            }
+            PointerEventKind::Release { .. } | PointerEventKind::Leave { .. } => {
+                let swept = here.selecting.sweeping();
+                here.selecting = crate::text_select::Selecting::Idle;
+                // THE RELEASE OF A SWEEP IS NOT A CLICK of the window.
+                if swept && matches!(e.kind, PointerEventKind::Release { .. }) {
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        // THE BAR'S COLUMN IS THE BAR'S — for every door, whatever drew the
+        // bar (`crate::bars`). A pointer resting on a track, with no button
+        // held, reaches the content as the pointer LEAVING the rows: no
+        // content can light a row under a bar, because none is ever told
+        // the pointer is on one. A press and the wheel still reach it — a
+        // bar is grabbed and turned where it is drawn — and so does every
+        // motion of a drag.
+        if matches!(
+            e.kind,
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. }
+        ) && !here.held
+            && bars.on(e.position.0, e.position.1)
+        {
+            rest.push(PointerEvent {
+                surface: e.surface.clone(),
+                position: e.position,
+                kind: PointerEventKind::Leave { serial: 0 },
+            });
+            continue;
+        }
+        if let PointerEventKind::Press { button, .. } = e.kind
+            && button == LEFT_BUTTON
+            && let Some(act) = ui.hinted.press_under(e.position.0, e.position.1)
+        {
+            acts.push(Some(act));
+            continue;
+        }
+        // THE BACK BUTTON, over any part of the window — see `went_back_into`.
+        if let PointerEventKind::Press { button, .. } = e.kind
+            && button == BACK_BUTTON
+        {
+            acts.push(None);
+            continue;
+        }
+        rest.push(e.clone());
+    }
+    if !rest.is_empty() {
+        seat(ui);
+        content.pointer(ui, here, &rest);
+    }
+    acts
+}
+
+/// A DOOR WITH NO COMPOSITOR BEHIND IT: the window, what every window
+/// keeps, one hand, and what a frame and a sweep leave behind — for
+/// `crate::photograph`, which draws a native door into a PNG.
+///
+/// # Why it is not a second door
+///
+/// Because everything it does is the door's own: a key goes down the path a
+/// key takes ([`typed_into`], the header's keys first), a pointer down the
+/// one a pointer takes ([`pointer_into`], the header's shortcuts, the bars'
+/// columns, the sweep of text), and a frame is [`compose`]d as
+/// [`Door::paint`] composes it. What it has not got is a Wayland connection
+/// anybody serves, so nothing it would send or commit goes anywhere — and
+/// the one hand is the only one, as on a screen with one cursor.
+pub struct Detached<C: Content> {
+    /// What every window keeps.
+    pub ui: Ui,
+    /// The window.
+    pub content: C,
+    /// The pointer.
+    pub here: Hand<C::Hand>,
+    bars: crate::bars::Drawn,
+    painted: Vec<crate::text_select::Painted>,
+    selection: Option<crate::text_select::Selection>,
+    /// The size it was given, in logical pixels — what a window that owns
+    /// no size of its own is laid out at, as a door lays out a configure.
+    given: (u32, u32),
+    /// Whether the keyboard came into the window: a door hears `enter`
+    /// before its first key.
+    keyboard_in: bool,
+}
+
+impl<C: Content> Detached<C> {
+    /// The window `content` in `ui`, its header on the line the window says.
+    #[must_use]
+    pub fn new(mut ui: Ui, content: C) -> Self {
+        ui.hinted = crate::chrome::Hinted::at(content.header_line());
+        // THE COLUMNS COUNTED AGAIN with the window's own margin, as a
+        // door counts them against every configure.
+        ui.margin = content.margin();
+        ui.recount();
+        let given = (ui.width, ui.height);
+        Self {
+            ui,
+            content,
+            here: Hand::default(),
+            bars: crate::bars::Drawn::default(),
+            painted: Vec::new(),
+            selection: None,
+            given,
+            keyboard_in: false,
+        }
+    }
+
+    /// The window is given `size` logical pixels, and laid out as a door
+    /// lays out a configure — at its own size instead, when it owns one
+    /// (`Content::own_size`: the player's corner).
+    pub fn lay_out_at(&mut self, size: (u32, u32)) {
+        self.given = size;
+        self.lay_out();
+    }
+
+    /// What `Door::take_the_size` does, less the GPU: a photograph's
+    /// texture is made at the size laid out here.
+    fn lay_out(&mut self) {
+        let size = self.content.own_size().unwrap_or(self.given);
+        (self.ui.width, self.ui.height) = size;
+        self.ui.recount();
+        self.content.resized(&mut self.ui);
+        self.ui.ask_paint();
+    }
+
+    /// One turn of the loop, as a door's ends: the window's own turn, and
+    /// the size laid out again when the window's own one changed
+    /// (`Ui::retake_the_size`).
+    pub fn turn(&mut self) {
+        self.content.each_turn(&mut self.ui);
+        if std::mem::take(&mut self.ui.size_owed) {
+            self.lay_out();
+        }
+    }
+
+    /// A key pressed and let go, as a keyboard's handler takes it: the
+    /// header's own keys first, then the window's — and the release.
+    pub fn press(&mut self, key: ronoctua_keymap::Key) {
+        // THE KEYBOARD COMES IN FIRST, as it does on a screen: a key reaches
+        // a window only after its `enter` — which draws a column's focus line.
+        self.keyboard_comes_in();
+        let (event, mods) = keys::event_of(key);
+        let its = self.content.header_keys();
+        if self.ui.header_took(its, event.keysym, true) {
+            self.ui.ask_paint();
+        } else {
+            typed_into(
+                &mut self.content,
+                &mut self.ui,
+                &mut self.selection,
+                &self.painted,
+                &event,
+                mods,
+            );
+        }
+        // ASKED AGAIN FOR THE RELEASE, as `Door::release_key` asks: the key
+        // may have given the header its keys or taken them — the column
+        // turned into its bar, or back.
+        let its = self.content.header_keys();
+        self.ui.header_took(its, event.keysym, false);
+        self.content.released(&mut self.ui, &event);
+    }
+
+    /// The keyboard comes in, once: before a window's first key, and on a
+    /// click — the compositor gives a clicked window the keyboard, and a
+    /// column (`OnDemand`) is one it gives it to only then. A column's
+    /// focus line is drawn from here.
+    fn keyboard_comes_in(&mut self) {
+        if !std::mem::replace(&mut self.keyboard_in, true) {
+            self.content.keyboard_entered(&mut self.ui);
+        }
+    }
+
+    /// One pointer's frame, as a door's handler takes it — the header's
+    /// controls acted on after, the Back button included.
+    pub fn pointer(&mut self, events: &[PointerEvent]) {
+        // A PRESS BRINGS THE KEYBOARD, before the button reaches the window —
+        // the order the compositor sends them in.
+        if events.iter().any(|e| {
+            matches!(
+                e.kind,
+                smithay_client_toolkit::seat::pointer::PointerEventKind::Press { .. }
+            )
+        }) {
+            self.keyboard_comes_in();
+        }
+        let acts = pointer_into(
+            &mut self.content,
+            &mut self.ui,
+            &mut self.here,
+            &self.bars,
+            &mut self.selection,
+            events,
+            |_| {},
+        );
+        for act in acts {
+            match act {
+                Some(act) => act_into(
+                    &mut self.content,
+                    &mut self.ui,
+                    &mut self.selection,
+                    &self.painted,
+                    act,
+                ),
+                None => went_back_into(
+                    &mut self.content,
+                    &mut self.ui,
+                    &mut self.selection,
+                    &self.painted,
+                ),
+            }
+        }
+    }
+
+    /// Composes a frame as [`Door::paint`] does — the page is the caller's
+    /// to wear — with the one hand's row lit, as one cursor lights it.
+    pub fn compose(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        images: &mut ronoctua_render::image::Images,
+    ) -> Composed {
+        let lit = [(
+            crate::seats::band_colour(false, 0),
+            self.here.row_under_pointer,
+        )];
+        let mut composed = compose(
+            &mut self.content,
+            &mut self.ui,
+            Easel {
+                lit: &lit,
+                device,
+                queue,
+                images: &mut *images,
+                bars: &mut self.bars,
+                selection: self.selection.as_ref(),
+            },
+        );
+        // AND ONCE MORE IF THE HEADER'S DRAWER JUST OPENED, as `Door::settle`
+        // paints twice: its height is only known inside the frame that drew
+        // it, and a photograph of the first frame showed the drawer open with
+        // none of its lines. It answers once (`Hinted::settled`).
+        if self.ui.hinted.settled() {
+            composed = compose(
+                &mut self.content,
+                &mut self.ui,
+                Easel {
+                    lit: &lit,
+                    device,
+                    queue,
+                    images,
+                    bars: &mut self.bars,
+                    selection: self.selection.as_ref(),
+                },
+            );
+        }
+        self.painted = crate::text_select::painted_of(&composed.spans);
+        composed
     }
 }
 
@@ -2155,5 +2652,35 @@ mod tests {
                 "command files-window".to_owned()
             ]
         );
+    }
+
+    /// FAILS IF: a window that closes FOR ANOTHER DOOR closes when the footer
+    /// did not take the order that opens it — nothing would be left open
+    /// and nothing said (the lifeline up, the footer's socket gone) — or it
+    /// stays when the footer took it, or a window closing for itself is kept
+    /// open by a footer that is not there.
+    #[test]
+    fn a_hand_over_the_footer_did_not_take_keeps_the_window() {
+        let mut refused = ui();
+        refused.hand_over("player-column", Some("raise"));
+        assert!(refused.quit);
+        assert_eq!(refused.orders(), ["command player-column raise".to_owned()]);
+        refused.last_orders_sent(false);
+        assert!(!refused.quit, "the window closed and nothing opened");
+        assert_eq!(
+            refused.message,
+            Some(refused.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER))
+        );
+
+        let mut taken = ui();
+        taken.hand_over("player-window", None);
+        taken.last_orders_sent(true);
+        assert!(taken.quit, "the footer took it, and the window stayed");
+
+        let mut closing = ui();
+        closing.tell_the_footer("player-quit", None);
+        closing.quit = true;
+        closing.last_orders_sent(false);
+        assert!(closing.quit, "a window closing for itself was kept open");
     }
 }

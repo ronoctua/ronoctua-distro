@@ -103,7 +103,7 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 ```
 nix develop                  ambiente de trabalho (o direnv é opcional e fica no host)
 nix run .#dev                compositor aninhado + rodapé, com hot reload; leader = Ctrl+Alt+Espaço
-nix run .#png                desenha um buffer em PNG em ~0,2 s, sem VM
+nix run .#png                desenha um buffer, ou uma porta nativa (--door), em PNG em ~0,2 s, sem VM
 nix run .#shot -- <cena.py>  fotografa numa VM (veja "Como trabalhar"); --apps é o palco do Flatpak
 nix run .#quick              dez checks escolhidos (tests/quick.nix), ~1 min
 nix run .#most               tudo menos o que constrói uma instalação, ~16 min
@@ -132,7 +132,9 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
 - **Daemons de usuário**, para o que tem de sobreviver ao rodapé: `ronoctua-transfers` (a fila),
   `ronoctua-brain` (decide quando a máquina se mantém: atualização, limpeza de cache, vigias),
   `ronoctua-player` e `ronoctua-studio` (a câmera). Falam com o shell por socket, um JSON por linha,
-  e mandam o estado inteiro, nunca um delta.
+  e nunca um delta: cada mensagem vai inteira (o player manda duas, o estado e o contorno da fila).
+  O que é grande e quase ninguém mostra — a folha de um arquivo, a página de uma busca — nunca vai no
+  estado: ele leva a geração, e a porta que mostra pede, fora do laço, quando ela anda.
 - **`ronoctua-software`**: não é daemon. É a biblioteca e a CLI dos programas da pessoa
   (`LEADER i`); o rodapé a usa para ler e buscar, e toda ordem que muda algo é um
   `Work::Software` que a fila roda como filho, num escopo próprio da `app.slice`.
@@ -144,8 +146,9 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
 ### O rodapé
 
 - É o desktop: uma `wlr-layer-shell` ancorada embaixo, com modeline e minibuffer colados, a região
-  de expansão acima deles (teto em `space.expansion.maxLines` e `maxFooterPct`) e a faixa de
-  notificação acima da modeline. Crescer para cima não move a modeline.
+  de expansão acima deles (teto em `space.expansion.maxLines` e `maxFooterPct`; o filme sozinho do
+  player, `o`, vai a `playerStagePct`) e a faixa de notificação acima da modeline. Crescer para cima
+  não move a modeline.
 - Em repouso ele não pega o teclado, senão nenhum buffer receberia tecla. Quem vê a leader é o
   compositor, que roda `ronoctua-shell leader` no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`); só então a superfície expande e pede teclado
@@ -273,6 +276,10 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   no gerador reconstrói o workspace: afine antes de compilar Rust.
 - Papel novo exige família em todas as sementes (menos a `.reference`); sem isso o gerador recusa
   com `no family '<nome>' in the seed`.
+- As cores das faixas de legenda (`subtitle.*`) são a exceção de página: resolvidas contra uma
+  imagem escura fixa, iguais em todo tema e em toda página (o gerador recusa duas sementes que
+  discordem). No cromo, a cor de uma faixa só aparece dentro de um chip de `subtitle.edge`
+  (`chrome::chip`): sobre uma página ela não foi medida.
 - Hex só existe gerado ou medido (`tokens.rs`, `report.md`, a fixture congelada). Quem escolhe uma
   cor diz matiz, croma e contraste; o solver resolve.
 - Todo fundo é medido pelos portões (cobra `every-ground-is-measured`), e régua, barra e o texto
@@ -320,8 +327,13 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | câmera (V4L2) | `ronoctua-camera` — só a `Capture` abre uma (cobra `the-camera-has-one-door`) |
 | o disco, para o gerenciador de arquivos | `ronoctua-files` |
 | decodificar imagem, vídeo, documento e 3D | `ronoctua-inspect` |
-| HTTP | `ronoctua-http` (cobra `one-http-writer`) |
+| HTTP (redirecionamento e gzip só em `web`) | `ronoctua-http` (cobra `one-http-writer`) |
 | zip | `ronoctua-zip` (cobra `one-zip-reader`) |
+| XML que vem de fora (a guarda de profundidade) | `ronoctua-xml` |
+| tags e capas de um arquivo de mídia (lofty, mkvtoolnix, remux do ffmpeg) | `ronoctua-tags` |
+| LRCLIB, SponsorBlock, MusicBrainz, Cover Art Archive, Wikidata, TMDB, OpenSubtitles, SubDL e as chaves da pessoa | `ronoctua-lookup` |
+| radio-browser, iptv-org e archive.org | `ronoctua-broadcast` |
+| yt-dlp: toda linha de comando dele | `ronoctua-ytdlp` |
 | keyd | `ronoctua-keyboards` |
 | arquivos de preferência | `ronoctua-store`, sobre o `ronoctua-xdg` |
 | perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`) | `ronoctua-software` (cobra `one-software-boundary`) |
@@ -364,7 +376,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `the-cursor-is-a-colour`). A única exceção é o gerenciador de arquivos, cujo cursor é a faixa
   `surface.selection` mais a régua acesa (`chrome::divider_lit`).
 - Rótulo e valor têm uma aritmética só (`chrome::field_pair`): o valor começa na coluna
-  `space.view.labelCells`, limitada à metade da linha.
+  `space.view.labelCells`, limitada à metade da linha. Uma seção escrita inteira (as páginas do
+  player) alinha os valores dela depois do rótulo mais largo e quebra o rótulo que não cabe
+  (`chrome::section_column`, `chrome::aligned_pair`).
 - Título de seção usa `text.heading`; `text.group` é só o submenu da leader (cobra
   `a-heading-is-not-a-submenu`). Título tem o tamanho do corpo: hierarquia é cor e ar
   (`chrome::AIR` antes de todo título), nunca tamanho.
@@ -461,12 +475,17 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   na partida vira cópia velha.
 - Evento, não relógio: prefira sinal, long poll e inotify a temporizador. Um relógio, quando
   existe, é armado só enquanto é preciso.
+- Uma linha de JSON num soquete é montada inteira e escrita com UM `write_all`: serializada direto
+  no soquete, cada token é uma escrita, e um leitor parado por um instante recebe meia linha, cortada
+  pelo prazo de escrita.
 - Nada bloqueia a thread do laço de eventos: `systemd-run --scope`, HTTP, varredura de rádio e ICMP
   vão para uma thread.
 - Programa chamado pelo sistema (unidade systemd, regra udev, script gerado) é chamado pelo caminho
   no store, nunca pelo nome: o `PATH` de uma unidade é mínimo e a falha aparece longe da causa. O
   caminho chega por `option_env!` (posto em `nix/rust.nix`) ou pelo ambiente.
-- Segredo nunca vai no `argv`: vai num arquivo `0600` (cobra `stream-key-is-never-an-argument`).
+- Segredo nunca vai no `argv` nem na query string (a exceção é o SubDL, que só aceita assim, e a tela
+  diz): vai num arquivo criado já `0600` (`create_new` + `mode`) — um `chmod` depois deixa o arquivo
+  legível entre as duas chamadas (cobra `stream-key-is-never-an-argument`).
 - Processo filho que segura um dispositivo (microfone, câmera) roda sob `setpriv --pdeathsig KILL`,
   além da guarda de `Drop`.
 - Grandeza que cruza uma fronteira leva a unidade no nome ou no tipo.
@@ -483,12 +502,28 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 
 ### Nix e build
 
-- **Nada de build dentro da árvore** (custou 793 GB): o `CARGO_TARGET_DIR` fica fora (cobra
-  `lean-tree`), e nunca use `${../.}`.
+- **Nada de build dentro da árvore** (custou 793 GB): onde o cargo escreve é o
+  `nix/cargo-dirs.nix`, sob o cache e com a versão do `rustc` no caminho — o devshell e o `.#dev`
+  exportam as duas variáveis, a sessão só o `CARGO_BUILD_BUILD_DIR` (cobram `lean-tree` e
+  `deps-layer-is-lean`). Nunca use `${../.}`.
+- **O `build-dir` não é o `target/`.** O `{workspace-path-hash}` vira dois níveis (`ab/cdef…`),
+  com o `CACHEDIR.TAG` na raiz deles, e o executável de teste mora lá; no `target/` só fica o que o
+  cargo promove (binários, por hard link). Em `${VAR:-…}` a `}` do template fecha a expansão: use
+  `if`. O crane não exporta `CARGO_TARGET_DIR`, então teste que o lê no Nix cai no fallback. E o
+  `target/` é um só para todo checkout: copie de lado o binário com que vai fotografar ou medir.
 - **Uma derivação referencia o que os bytes dela citam.** Extraia o binário (`rust.installer`,
   `rust.rescue`, `rust.filesRoot`, `rust.transfers`) em vez de depender do workspace, que punha Zig,
   clang e LLVM no ISO. Um `option_env!` com caminho do store também é referência, e quem compila a
   paga: ícones e buffers vêm do ambiente, senão editar um buffer reconstrói o workspace.
+- **Geração só sai por contagem, e só a do sistema.** `nix-collect-garbage -d` ou
+  `--delete-older-than` como root apaga as gerações de TODO perfil, `per-user` inclusive — o que a
+  garantia do dono proíbe. Quem apaga geração é o `ronoctua-system-generations` (as N mais novas,
+  a atual, a em execução, a do boot — especialização inclusive —, a de onde a última troca saiu e
+  toda que o menu de boot lista ficam; nenhum outro perfil), e o menu de boot lista no máximo N
+  (cobra `nix-gc-keeps-generations`). O resto é lixo: o piso do Nix (`min-free`) e a coleta da
+  atualização.
+- **O Nix pula sem aviso um `!include` que não consegue ler**: um piso em arquivo `0600` é uma
+  máquina sem piso, e um arquivo ausente também não é erro (cobra `store-has-a-floor`).
 - **Interruptor que não interrompe**: um `mkIf` desligado não garante que o pacote saiu, porque ele
   pode entrar por outra porta. Meça com `nix why-depends`. E meça de novo antes de confiar num
   tamanho escrito num comentário (o `notoExtra` prometia poupar 1 GB e poupava 49 MB).
@@ -496,6 +531,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   em linha comentada; `` ` `` é substituição de comando até em comentário; e qualquer `''` fecha a
   string, inclusive dentro de um comentário ou de um literal Python (escapes: `'''`, `''$`, `''\`).
 - `nix flake check` sem `-L` não mostra log: silêncio não é sintoma.
+- Flake avaliado por CAMINHO (`builtins.getFlake (toString ./.)`, `path:`) copia a árvore inteira
+  para o store, ignorados inclusive — gigabytes por avaliação. Avalie `git+file://`.
 - Download sem versão é um hash com prazo de validade: o endereço regenera o arquivo e a cópia no
   store some na próxima coleta de lixo. Endereço vivo vira captura (`snapshot` em `nix/atlas.nix`;
   cobra `downloads-are-pinned`), e `nix/kept-sources.nix` é a raiz de GC de todo input e download.
@@ -533,7 +570,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - A API gráfica mudou muito entre versões: leia a fonte da versão pinada, não suponha.
 - `take` é teto, nunca contagem, e `usize::MAX` é sentinela: uma função que materializava "todas" as
   linhas pediu 2⁶⁴ `Row`, e o `systemd-oomd` matou o cgroup da janela inteira, agente junto.
-- O `tracing` põe aspas em valor `Debug`: procure `engine="alacritty"`, não `engine=alacritty`.
+- O `tracing` põe aspas em valor `Debug`: procure `engine="alacritty"`, não `engine=alacritty`. E o
+  alvo é o crate do BINÁRIO: o `[[bin]]` `ronoctua-player` loga sob `ronoctua_player::…`.
 
 ### Renderização e fontes
 
@@ -610,7 +648,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   existem. O rodapé, a fila e as duas unidades da atualização têm `enableDefaultPath = false` e
   herdam o `PATH` da sessão (cobra `session-units-inherit-the-session-path`).
 - Unidade com sandbox (a do Tor é um chroot) só enxerga o que foi montado nela, e só teste de VM vê
-  isso — teste unitário nenhum.
+  isso — teste unitário nenhum. Um `ReadWritePaths=` que não existe derruba a unidade antes de ela
+  rodar (226/NAMESPACE): quem escreve em `%t/…` declara `RuntimeDirectory`.
 - O Chrome roda como a pessoa: o que a política dele aponta por `file://` (o `update.xml`, o `.crx`)
   tem de estar num diretório que ela atravesse. Com `/var/lib/ronoctua-browser` em `0700`, a
   instalação forçada esperava para sempre, sem log; a chave se protege pelo próprio modo (`0600`).
@@ -619,6 +658,16 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - `grep -r` não segue symlink, e todo `/etc` do NixOS é symlink: use `-R`.
 - No btrfs, `nodatacow` e `compress` são do sistema de arquivos, e a primeira montagem vence sem
   avisar; a hibernação depende do NOCOW (`lsattr` → `C`). PCR 15 exige UKI medida.
+- Snapshot que contém `/nix` ou um cache segura tudo o que a coleta e a varredura liberam;
+  `nix/modules/filesystem.nix` recusa o alvo e faz de cada `~/.cache` um subvolume (cobra
+  `snapshots-skip-the-store`). Arquivo NOCOW não aceita reflink.
+- Todo `switch` reinicia os targets ativos: um `oneshot` sem `RemainAfterExit` que um target quer
+  roda de novo a cada `switch`, e um com `RemainAfterExit` não roda de novo com `systemctl start`.
+  E o switch sai com 4 se uma unidade que ELE iniciou falhou (as falhas antigas ele reseta antes): a
+  `nixos-rebuild` chama de falha uma troca que aconteceu. Unidade que o switch dispara e que não pode
+  derrubá-lo leva `-` no `ExecStart`.
+- `st_dev` não vê montagem por bind do mesmo sistema de arquivos: quem apaga por árvore pergunta ao
+  kernel onde começa uma montagem (`STATX_ATTR_MOUNT_ROOT`).
 - `pkill` e `pgrep` casam o próprio comando. `git checkout <arquivo>` apaga o que não foi commitado
   (a cópia fica no store: `ls -dt /nix/store/*-source`).
 
@@ -649,9 +698,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   dizendo qual check acrescentaria, o que ele pega e quanto custa. Quem decide o escopo é o dono.
   Isso não vale para o que o pedido claramente inclui, nem para deixar sem conserto um check que
   você acabou de ver falhar.
-- **Olhe antes de dizer "pronto".** `nix run .#png` desenha um buffer em 0,2 s. Verde não é prova:
-  teste de estado não vê espaço em branco, sobreposição nem faixa. Se um buffer não puder ser
-  fotografado, a ferramenta é que está incompleta.
+- **Olhe antes de dizer "pronto".** `nix run .#png` desenha um buffer, ou uma porta nativa
+  (`--door`), em 0,2 s. Verde não é prova: teste de estado não vê espaço em branco, sobreposição nem
+  faixa. Se um buffer ou uma porta não puder ser fotografado, a ferramenta é que está incompleta.
 - **Foto de feature**: escreva uma cena `.py` para a feature, fora do repositório, e rode
   `nix run .#shot -- <cena.py>`. O palco (VM, compositor, rodapé e os ajudantes `control`, `notify`,
   `shot`, `crop`, `changed`, `has_colour`…) é o `nix/shot.nix`; as fotos vão para
@@ -680,7 +729,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `.#vm`, `.#iso`, `.#install`, `.#bench` e os módulos usam `release` (cobra
   `the-loop-profile-is-never-installed`).
 - **Sabotagem é síncrona**: quebre, rode o check e restaure na mesma chamada, nunca com um build em
-  segundo plano.
+  segundo plano. Restaure REESCREVENDO o arquivo, nunca com `cp -p`: o mtime antigo faz o cargo tomar
+  o build sabotado por fresco, e a rodada "limpa" seguinte testa a sabotagem.
 - **Arquivo novo precisa de `git add -N`**: o flake só vê o que o git rastreia, e o erro aparece
   minutos depois como "can't find bin".
 - **O que você sobe, você encerra** (daemon de teste, VM, processo solto), depois de conferir que

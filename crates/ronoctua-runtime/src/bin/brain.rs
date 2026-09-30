@@ -72,6 +72,7 @@ const TASKS: &[&str] = &[
     "cache-sweep",
     "trash-expire",
     "emacs-daemon",
+    "disk-space",
 ];
 
 /// The update sequence's table, as the build generated it.

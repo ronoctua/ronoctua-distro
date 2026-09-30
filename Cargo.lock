@@ -365,6 +365,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -515,6 +521,17 @@ name = "cfg_aliases"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
+name = "chardetng"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14b8f0b65b7b08ae3c8187e8d77174de20cb6777864c6b832d8ad365999cf1ea"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
+]
 
 [[package]]
 name = "cipher"
@@ -868,6 +885,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
 name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1072,12 +1095,13 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flate2"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
- "miniz_oxide",
+ "miniz_oxide 0.9.1",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1904,10 +1928,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "log"
-version = "0.4.33"
+name = "lofty"
+version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "bb21dd79145b0781f2423fda92dd807fcd3911e44b66044d86db3b11ec7accf9"
+dependencies = [
+ "byteorder",
+ "data-encoding",
+ "flate2",
+ "lofty_attr",
+ "log",
+ "ogg_pager",
+ "paste",
+]
+
+[[package]]
+name = "lofty_attr"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdbca1b60ba7cea959ffc84ac27f3dbdbacd6dfda168c7eabbc00e48654bb9fd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "log"
+version = "0.4.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lru"
@@ -1986,6 +2036,16 @@ name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
@@ -2187,6 +2247,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ogg_pager"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d36b1d6964c3ac92b7aea701057e02b6b91143d70d83b20abf75a231a3c0216"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2297,7 +2366,7 @@ dependencies = [
  "crc32fast",
  "fdeflate",
  "flate2",
- "miniz_oxide",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -2749,6 +2818,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-broadcast"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-http",
+ "ronoctua-playlist",
+ "ronoctua-store",
+ "ronoctua-xdg",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-browser"
 version = "0.1.0"
 dependencies = [
@@ -2766,6 +2848,7 @@ name = "ronoctua-cache-sweep"
 version = "0.1.0"
 dependencies = [
  "ronoctua-xdg",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -2899,11 +2982,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "flate2",
  "ring",
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -2983,6 +3068,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-lookup"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-http",
+ "ronoctua-tags",
+ "ronoctua-xdg",
+ "ronoctua-zip",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-memory"
 version = "0.1.0"
 dependencies = [
@@ -3024,12 +3122,22 @@ name = "ronoctua-player"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chardetng",
+ "encoding_rs",
+ "ronoctua-broadcast",
  "ronoctua-frames",
+ "ronoctua-lookup",
+ "ronoctua-playlist",
+ "ronoctua-protocol",
  "ronoctua-store",
+ "ronoctua-tags",
  "ronoctua-xdg",
+ "ronoctua-xml",
+ "ronoctua-ytdlp",
  "serde",
  "serde_json",
  "tracing",
+ "zbus",
 ]
 
 [[package]]
@@ -3037,11 +3145,17 @@ name = "ronoctua-player-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-atlas",
+ "ronoctua-audio",
+ "ronoctua-broadcast",
  "ronoctua-frames",
  "ronoctua-http",
+ "ronoctua-lookup",
  "ronoctua-player",
  "ronoctua-playlist",
  "ronoctua-store",
+ "ronoctua-tags",
+ "ronoctua-tokens",
  "ronoctua-tunnel",
  "ronoctua-xdg",
  "ronoctua-ytdlp",
@@ -3057,7 +3171,9 @@ dependencies = [
 name = "ronoctua-playlist"
 version = "0.1.0"
 dependencies = [
- "roxmltree 0.21.1",
+ "ronoctua-xml",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3169,6 +3285,7 @@ dependencies = [
  "ronoctua-audio",
  "ronoctua-bluetooth",
  "ronoctua-brain",
+ "ronoctua-broadcast",
  "ronoctua-browser",
  "ronoctua-camera",
  "ronoctua-clipboard",
@@ -3188,6 +3305,7 @@ dependencies = [
  "ronoctua-keymap",
  "ronoctua-keys",
  "ronoctua-lan",
+ "ronoctua-lookup",
  "ronoctua-memory",
  "ronoctua-network",
  "ronoctua-notify",
@@ -3204,6 +3322,7 @@ dependencies = [
  "ronoctua-studio",
  "ronoctua-syncthing",
  "ronoctua-syntax",
+ "ronoctua-tags",
  "ronoctua-term",
  "ronoctua-tokens",
  "ronoctua-transfers",
@@ -3295,6 +3414,19 @@ name = "ronoctua-syntax"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-tags"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "lofty",
+ "ronoctua-xml",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ronoctua-term"
 version = "0.1.0"
 dependencies = [
@@ -3366,8 +3498,19 @@ name = "ronoctua-xdg"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-xml"
+version = "0.1.0"
+dependencies = [
+ "roxmltree 0.21.1",
+]
+
+[[package]]
 name = "ronoctua-ytdlp"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ronoctua-zip"
@@ -5710,6 +5853,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"

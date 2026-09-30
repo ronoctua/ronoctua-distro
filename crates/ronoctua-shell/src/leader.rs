@@ -1233,6 +1233,27 @@ pub const BY_NAME_ONLY: &[&str] = &[
     // setting touched once in a while.
     "player-shuffle",
     "player-repeat",
+    // PAIRING WITH ANOTHER MACHINE is a row of the machines' page (`p m`),
+    // done once per machine: a key of its own would be a second way to the
+    // row the page already offers.
+    "player-pair",
+    // SAVING WHAT PLAYS AS A SET, AND THE QUEUE: rows of the view's "More
+    // features", each a name and a folder asked in turn — done now and then,
+    // and a sequence each would be two keys for it.
+    "player-save-set",
+    "player-save-queue",
+    // EVERY AMBIENT SOUND OFF: a row of their page (`p e`), where a person
+    // sees what is on before silencing it — a sequence of its own would be a
+    // key that acts on sounds nobody is looking at.
+    "player-ambience-silence",
+    // WHAT THE INTERNET SAYS OF WHAT PLAYS, and the page of what asks it:
+    // rows of the view — the Metadata's, "More features" — each asking only
+    // when a row naming its hosts is pressed; a sequence each would be four
+    // keys for pages visited now and then (the plan's "by name only").
+    "player-suggestions",
+    "player-find-subtitles",
+    "player-find-lyrics",
+    "player-internet",
     // CALIBRATING THE GESTURES happens once per camera placement, and the
     // gestures themselves are one key away: a second sequence for it would
     // be a line of the list spent on something done once.
@@ -1778,9 +1799,17 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             id: "player-enqueue",
             label: key::CMD_PLAYER_ENQUEUE,
         },
+        // PLAYING TOGETHER: another video in step with this sound, asked as a
+        // path or an address — the page's own row picks one from the files.
         Command {
-            id: "player-follow",
-            label: key::CMD_PLAYER_FOLLOW,
+            id: "player-together",
+            label: key::CMD_PLAYER_TOGETHER,
+        },
+        // THE OTHER MACHINES' PAGE, and the pairing its row asks — which is
+        // reached by name, the page being where it is done.
+        Command {
+            id: "player-machines",
+            label: key::CMD_PLAYER_MACHINES,
         },
         Command {
             id: "player-pair",
@@ -1877,6 +1906,159 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         Command {
             id: "player-mute",
             label: key::CMD_PLAYER_MUTE,
+        },
+        // THE DOOR FOR THE OTHER — the view's `w`, the last button of the
+        // transport and of the bar, and the glyph on the footer's "Now".
+        Command {
+            id: "player-swap",
+            label: key::CMD_PLAYER_SWAP,
+        },
+        // THE MEDIA IN THE FILE — the view's `k` and the transport's glyph,
+        // shown while the file offers a choice: the page of its sounds, its
+        // pictures or its subtitles.
+        Command {
+            id: "player-tracks",
+            label: key::CMD_PLAYER_TRACKS,
+        },
+        // THE QUEUE'S GROUPS FOLD — the view's `TAB` — and ONE OF THE FILE'S
+        // MEDIA PLAYS TOO, `a` on its row: the view's keys, reached by name
+        // like the others.
+        Command {
+            id: "player-fold",
+            label: key::CMD_PLAYER_FOLD,
+        },
+        // AN ENTRY OF THE QUEUE ONE PLACE EARLIER OR LATER — the arrows on
+        // it, taught in their own words: on a group they fold it.
+        Command {
+            id: "player-earlier",
+            label: key::CMD_PLAYER_EARLIER,
+        },
+        Command {
+            id: "player-later",
+            label: key::CMD_PLAYER_LATER,
+        },
+        Command {
+            id: "player-also",
+            label: key::CMD_PLAYER_ALSO,
+        },
+        // ANOTHER NAME for an entry of the queue — the view's `r` — and the
+        // player's own files: what plays saved as a set, the queue saved.
+        Command {
+            id: "player-rename",
+            label: key::CMD_PLAYER_RENAME,
+        },
+        Command {
+            id: "player-save-set",
+            label: key::CMD_PLAYER_SAVE_SET,
+        },
+        Command {
+            id: "player-save-queue",
+            label: key::CMD_PLAYER_SAVE_QUEUE,
+        },
+        // THE SUBTITLES OVER THE PICTURE — `LEADER p u` and the view's `u` —
+        // and SHOWING OR HIDING A LANE, the view's `v`, what a click on a
+        // subtitle's chip does.
+        Command {
+            id: "player-subtitles",
+            label: key::CMD_PLAYER_SUBTITLES,
+        },
+        Command {
+            id: "player-lane-shown",
+            label: key::CMD_PLAYER_LANE_SHOWN,
+        },
+        // THE AMBIENT SOUNDS — `LEADER p e`, their page — and every one of
+        // them off, by name: the page has the row.
+        Command {
+            id: "player-ambience",
+            label: key::CMD_PLAYER_AMBIENCE,
+        },
+        Command {
+            id: "player-ambience-silence",
+            label: key::CMD_PLAYER_AMBIENCE_SILENCE,
+        },
+        // THE TIMELINE — `LEADER p i` and the view's `t` — every lane of what
+        // plays on one clock, a row a lane.
+        Command {
+            id: "player-timeline",
+            label: key::CMD_PLAYER_TIMELINE,
+        },
+        // THE LAYOUT — `LEADER p y` and the view's `y` — how the pictures of
+        // what plays share a screen; and WHAT PLAYS ON EVERY SCREEN it goes
+        // to, the view's `M`.
+        Command {
+            id: "player-layout",
+            label: key::CMD_PLAYER_LAYOUT,
+        },
+        Command {
+            id: "player-every-screen",
+            label: key::CMD_PLAYER_EVERY_SCREEN,
+        },
+        // THE METADATA — `LEADER p d` — what the file that plays says of
+        // itself: the home's last section, the cursor on it.
+        Command {
+            id: "player-metadata",
+            label: key::CMD_PLAYER_METADATA,
+        },
+        // WHAT THE INTERNET SAYS OF WHAT PLAYS — the suggestions for its
+        // tags, subtitles, lyrics — and the page of what asks it and the
+        // person's keys: by name.
+        Command {
+            id: "player-suggestions",
+            label: key::CMD_PLAYER_SUGGESTIONS,
+        },
+        Command {
+            id: "player-find-subtitles",
+            label: key::CMD_PLAYER_FIND_SUBTITLES,
+        },
+        Command {
+            id: "player-find-lyrics",
+            label: key::CMD_PLAYER_FIND_LYRICS,
+        },
+        Command {
+            id: "player-internet",
+            label: key::CMD_PLAYER_INTERNET,
+        },
+        // THE DIRECTORIES — `LEADER p r`, `p v`, `p g` — the world's radio
+        // and TV and the channels by theme; and their pages' keys: `/` to
+        // search by name, `b` to keep among the favourites, and the globe's
+        // three.
+        Command {
+            id: "player-radio",
+            label: key::CMD_PLAYER_RADIO,
+        },
+        Command {
+            id: "player-tv",
+            label: key::CMD_PLAYER_TV,
+        },
+        Command {
+            id: "player-channels",
+            label: key::CMD_PLAYER_CHANNELS,
+        },
+        Command {
+            id: "player-search",
+            label: key::CMD_PLAYER_SEARCH,
+        },
+        Command {
+            id: "player-favourite",
+            label: key::CMD_PLAYER_FAVOURITE,
+        },
+        Command {
+            id: "player-nearer",
+            label: key::CMD_PLAYER_NEARER,
+        },
+        Command {
+            id: "player-further",
+            label: key::CMD_PLAYER_FURTHER,
+        },
+        Command {
+            id: "player-world",
+            label: key::CMD_PLAYER_WORLD,
+        },
+        // CLOSING IT EVERYWHERE — the daemon and every door of it; the
+        // view's row asks first, and `p q` is the question already answered.
+        Command {
+            id: "player-quit",
+            label: key::CMD_PLAYER_QUIT,
         },
         // MICE, TOUCHPADS AND EVERY CURSOR — `s i i` in the footer and `s i w`
         // in a window, the doubled letter and the `w` every view of this
@@ -3391,22 +3573,42 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         // odds and ends is exactly where a named trio would stop looking like
         // one.
         // `p` FOR THE PLAYER: its three doors, the three questions (play,
-        // queue, follow), and the transport.
+        // queue, a video together), two of its pages, and the transport.
         ("p p", "player-open", None),
         ("p w", "player-window", None),
         ("p c", "player-column", None),
         ("p o", "player-play-file", None),
         ("p a", "player-enqueue", None),
-        ("p f", "player-follow", None),
+        // `j` FOR JOINING a video to this sound: played together, in step.
+        ("p j", "player-together", None),
         // `l` FOR THE LIBRARY: the files, from the music folder.
         ("p l", "player-browse", None),
-        // `m` FOR MACHINE: pairing with another one, by its name and the code
-        // it shows.
-        ("p m", "player-pair", None),
+        // `m` FOR MACHINES: the page of the other machines on the tailnet,
+        // where pairing with one is a row.
+        ("p m", "player-machines", None),
+        // `e` FOR THE AMBIENT SOUNDS' page (the plan's key table), and `u`
+        // for the sUbtitles over the picture — `s` is stop.
+        ("p e", "player-ambience", None),
+        ("p u", "player-subtitles", None),
+        // `i` FOR THE TIMELINE (the plan's key table): `t` is the toggle.
+        ("p i", "player-timeline", None),
+        // `y` FOR THE LAYOUT of the pictures (the plan's key table).
+        ("p y", "player-layout", None),
+        // `d` FOR THE DATA ABOUT WHAT PLAYS — the metadata (the plan's key
+        // table).
+        ("p d", "player-metadata", None),
+        // `r` FOR THE WORLD'S RADIO, `v` for its TV (`t` is the toggle) and
+        // `g` for the channels grouped by theme (the plan's key table).
+        ("p r", "player-radio", None),
+        ("p v", "player-tv", None),
+        ("p g", "player-channels", None),
         ("p t", "player-toggle", None),
         ("p n", "player-next", None),
         ("p b", "player-previous", None),
         ("p s", "player-stop", None),
+        // `q` FOR QUIT: the player closed everywhere — the daemon, the
+        // window, the column, the view.
+        ("p q", "player-quit", None),
         ("m s", "screen-capture", None),
         ("m c", "camera-open", None),
         // `k` for KEYBOARD — the one on the screen, for a finger. `s k` is
@@ -5226,7 +5428,8 @@ mod tests {
             "player-column",
             "player-play-file",
             "player-enqueue",
-            "player-follow",
+            "player-together",
+            "player-machines",
             "player-pair",
             "player-toggle",
             "player-next",
@@ -5251,6 +5454,36 @@ mod tests {
             "player-louder",
             "player-pip",
             "player-mute",
+            "player-swap",
+            "player-tracks",
+            "player-fold",
+            "player-earlier",
+            "player-later",
+            "player-also",
+            "player-rename",
+            "player-save-set",
+            "player-save-queue",
+            "player-quit",
+            "player-subtitles",
+            "player-lane-shown",
+            "player-ambience",
+            "player-ambience-silence",
+            "player-timeline",
+            "player-layout",
+            "player-metadata",
+            "player-suggestions",
+            "player-find-subtitles",
+            "player-find-lyrics",
+            "player-internet",
+            "player-every-screen",
+            "player-radio",
+            "player-tv",
+            "player-channels",
+            "player-search",
+            "player-favourite",
+            "player-nearer",
+            "player-further",
+            "player-world",
             "pointers-up",
             "pointers-down",
             "pointers-enter",

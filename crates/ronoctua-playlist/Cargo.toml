@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-playlist"
-description = "The playlist parsers: M3U, PLS, XSPF and ASX, read into entries."
+description = "The playlist parsers: M3U, PLS, XSPF and ASX, read into entries; and our own set and queue files."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,16 @@ license.workspace = true
 publish.workspace = true
 
 # The playlist parsers, shared by the file manager's preview
-# (`ronoctua-inspect`) and the player daemon. An XML reader and nothing else:
-# the daemon links this, and must not link the preview's decoders.
+# (`ronoctua-inspect`) and the player daemon. An XML reader and a JSON one, and
+# nothing else: the daemon links this, and must not link the preview's
+# decoders. The JSON is for our own `.rset` and `.rqueue` (`src/own.rs`); both
+# crates were already in every program that links this one.
 [dependencies]
-roxmltree = "0.21"
+# XSPF and ASX go through the workspace's depth guard: a list fetched from a
+# radio's server is a text anyone could have written.
+ronoctua-xml = { path = "../ronoctua-xml" }
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

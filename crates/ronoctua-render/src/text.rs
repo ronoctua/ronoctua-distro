@@ -260,6 +260,21 @@ pub fn across(physical: u32, scale: f32, size: f32) -> u16 {
     tokens::metrics::columns(physical as f32 / scale, size)
 }
 
+/// Where cell `column` of a run anchored to the border (`Span::edge`) begins,
+/// on a surface `width` wide whose layout was resolved against `across`
+/// cells of `cell` each: `across - column` cells back from the border, so the
+/// grid's remainder falls to the left of them — in whatever unit the three
+/// lengths are in.
+///
+/// THE ONE ARITHMETIC: [`Text::prepare`] places an edge run by it, and
+/// whoever draws something BETWEEN two such runs (the column's rule, between
+/// its close glyph and its sizes) reads the same answer, so a change here
+/// moves both and never one.
+#[must_use]
+pub fn from_the_border(width: f32, across: u16, column: u16, cell: f32) -> f32 {
+    (f32::from(across) - f32::from(column)).mul_add(-cell, width)
+}
+
 /// The same, downwards: how many whole lines fit in `physical` pixels.
 ///
 /// For `Span::foot`, which is `Span::edge` on the other axis. See `across`.
@@ -606,6 +621,11 @@ impl Text {
     /// factor for ever after. The result is worse than the blur it replaces:
     /// glyphs rasterised at logical size into a physical buffer, half-size
     /// text in the top-left quarter of the window.
+    ///
+    /// THE LOCALE IS A PARAMETER TOO, for the same reason: it started at a
+    /// default and only a CHANGE of language moved it (`set_locale`), so every
+    /// window drew the unified Han of its first language the default's way
+    /// until somebody chose a language again.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -619,7 +639,50 @@ impl Text {
         // holds, so this is also one conversion fewer at eleven call sites.
         scale: i32,
         size: f32,
+        // The interface's language (`Texts::language`), which picks among
+        // the four unified Han faces — see `set_locale`.
+        locale: &str,
     ) -> Result<Self> {
+        let (face, coverage) = Self::faces(locale)?;
+
+        let cache = glyphon::Cache::new(device);
+        let viewport = glyphon::Viewport::new(device, &cache);
+        let mut atlas_pinned = glyphon::TextAtlas::new(device, queue, &cache, format_of);
+        let mut atlas_scratch = glyphon::TextAtlas::new(device, queue, &cache, format_of);
+        let renderer_pinned = glyphon::TextRenderer::new(
+            &mut atlas_pinned,
+            device,
+            wgpu::MultisampleState::default(),
+            None,
+        );
+        let renderer_scratch = glyphon::TextRenderer::new(
+            &mut atlas_scratch,
+            device,
+            wgpu::MultisampleState::default(),
+            None,
+        );
+
+        Ok(Self {
+            face,
+            swash: glyphon::SwashCache::new(),
+            shapings: 0,
+            viewport,
+            atlas_pinned,
+            atlas_scratch,
+            renderer_pinned,
+            renderer_scratch,
+            size,
+            // REFUSED, AND LOUDLY, the way `draw_scaled` refuses it — see
+            // `rasterised_at`, which is the one conversion.
+            scale: rasterised_at(scale),
+            coverage,
+        })
+    }
+
+    /// The faces a shaper draws with, speaking `locale` from its first run,
+    /// and how many coverage faces joined them. No device: this half is
+    /// the fonts'.
+    fn faces(locale: &str) -> Result<(glyphon::FontSystem, usize)> {
         // THE BANK IS BUILT HERE, and not by `new_with_fonts`.
         //
         // cosmic-text 0.19's `new_with_fonts` does
@@ -703,45 +766,13 @@ impl Text {
         let face = glyphon::FontSystem::new_with_locale_and_db_and_fallback(
             // THE LOCALE IS A DRAWING, not a formality: it is what decides,
             // among the four unified Han faces, whether 直 comes out Japanese or
-            // Chinese. It starts at the default and `set_locale` moves it when
-            // the interface's language changes.
-            crate::chain::DEFAULT_LOCALE.to_owned(),
+            // Chinese. It is the interface's language from the first run, and
+            // `set_locale` moves it when the language changes.
+            locale.to_owned(),
             db,
             crate::chain::Chain,
         );
-
-        let cache = glyphon::Cache::new(device);
-        let viewport = glyphon::Viewport::new(device, &cache);
-        let mut atlas_pinned = glyphon::TextAtlas::new(device, queue, &cache, format_of);
-        let mut atlas_scratch = glyphon::TextAtlas::new(device, queue, &cache, format_of);
-        let renderer_pinned = glyphon::TextRenderer::new(
-            &mut atlas_pinned,
-            device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
-        let renderer_scratch = glyphon::TextRenderer::new(
-            &mut atlas_scratch,
-            device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
-
-        Ok(Self {
-            face,
-            swash: glyphon::SwashCache::new(),
-            shapings: 0,
-            viewport,
-            atlas_pinned,
-            atlas_scratch,
-            renderer_pinned,
-            renderer_scratch,
-            size,
-            // REFUSED, AND LOUDLY, the way `draw_scaled` refuses it — see
-            // `rasterised_at`, which is the one conversion.
-            scale: rasterised_at(scale),
-            coverage,
-        })
+        Ok((face, coverage))
     }
 
     /// Draws the unified Han the way this language expects, from the next
@@ -906,7 +937,7 @@ impl Text {
         // The viewport arrives physical, so it is divided back rather than the
         // cell being multiplied: dividing is what makes the two expressions
         // identical instead of merely equal.
-        let across = f32::from(across(width, scale, self.size));
+        let columns = across(width, scale, self.size);
         let down = f32::from(down(height, scale, self.size));
         let metric = glyphon::Metrics::new(ink, lh);
         // THE METRIC OF A RUN THAT ASKS FOR ANOTHER SIZE.
@@ -982,7 +1013,7 @@ impl Text {
                     // the run sits from the right, and that distance is exact
                     // in pixels however the remainder falls.
                     left: if t.edge {
-                        (across - f32::from(t.column)).mul_add(-cw, width as f32)
+                        from_the_border(width as f32, columns, t.column, cw)
                             + t.size.times(scale).nudge(ink)
                     } else {
                         f32::from(t.column).mul_add(cw, t.size.times(scale).nudge(ink))
@@ -1062,6 +1093,17 @@ impl Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a shaper is born speaking another language than the one it
+    /// is given — every door drew the unified Han of its first language the
+    /// default's way, until somebody chose a language again.
+    #[test]
+    fn a_shaper_is_born_speaking_its_language() {
+        for locale in ["pt-BR", "ja", "zh-CN", crate::chain::DEFAULT_LOCALE] {
+            let (face, _) = Text::faces(locale).expect("the faces");
+            assert_eq!(face.locale(), locale);
+        }
+    }
 
     #[test]
     fn the_embedded_font_is_not_empty() {
@@ -1224,6 +1266,19 @@ mod tests {
         assert_eq!(across(1920, 0.0, size), 0);
         assert_eq!(down(1080, -1.0, size), 0);
         assert_eq!(across(1920, 1.0, 0.0), 0);
+    }
+
+    /// FAILS IF: a run anchored to the border stops being counted back from
+    /// it — the grid's remainder would move to the right of the marks, and
+    /// whatever is placed between two of them by this answer (the column's
+    /// rule) would part from them.
+    #[test]
+    fn an_edge_run_is_counted_back_from_the_border() {
+        // 10 cells of 9 px on 100 px: the last cell ends ON the border, and
+        // the 10 px of remainder are on the left.
+        assert!((from_the_border(100.0, 10, 9, 9.0) - 91.0).abs() < f32::EPSILON);
+        assert!((from_the_border(100.0, 10, 0, 9.0) - 10.0).abs() < f32::EPSILON);
+        assert!((from_the_border(100.0, 10, 10, 9.0) - 100.0).abs() < f32::EPSILON);
     }
 
     #[test]

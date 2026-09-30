@@ -25,7 +25,7 @@
 //! `cos(latitude)` as well, so dragging near a pole feels attached rather than
 //! geared.
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 
 use crate::{
     Point, Tongue,
@@ -61,7 +61,12 @@ pub enum Ink {
     /// The coordinate itself.
     Dot,
     /// The ring around the dot, so it reads over land and over sea both.
+    ///
+    /// Every mark wears one too.
     Halo,
+    /// The mark somebody chose or is pointing at. Every other mark is a
+    /// [`Ink::Dot`].
+    Chosen,
 }
 
 /// One closed or open path, in the box's own pixels.
@@ -89,6 +94,84 @@ pub struct Drawing {
     pub dot: Option<(f32, f32)>,
     /// The radius of the disc, in pixels.
     pub rim: f32,
+    /// The marks that are on this side and inside the box, grouped, in
+    /// painting order. Painted from these same numbers, and grabbed by them.
+    pub marks: Vec<Placed>,
+}
+
+/// One thing to put on the globe: a station, a country, a city.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mark {
+    /// Where it is.
+    pub at: Point,
+    /// The caller's name for it, handed back in [`Placed::members`].
+    pub id: u32,
+    /// How much it counts — a country's number of stations, or one.
+    pub weight: u32,
+}
+
+/// The marks of one picture, and how they are drawn.
+///
+/// Every number is the caller's (a token, in pixels): this crate is compiled
+/// where there is no token.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Marks<'a> {
+    /// Every mark, in any order: the grouping does not depend on it.
+    pub all: &'a [Mark],
+    /// Marks closer than this on screen, in pixels, are one.
+    pub merge_px: f32,
+    /// The radius of a group, in pixels, by its [`tier`].
+    pub radii: [f32; 4],
+    /// The id of the mark that is lit; the group that holds it is drawn
+    /// [`Ink::Chosen`].
+    pub lit: Option<u32>,
+}
+
+impl Marks<'_> {
+    /// No marks at all.
+    pub const NONE: Marks<'static> = Marks {
+        all: &[],
+        merge_px: 0.0,
+        radii: [0.0; 4],
+        lit: None,
+    };
+}
+
+/// A group of marks as it lands on the picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Placed {
+    /// Where its centre is, in the box's own pixels: the heaviest member's.
+    pub at: (f32, f32),
+    /// Its radius, in pixels, by the tier of its weight.
+    pub radius: f32,
+    /// Every member's weight, added.
+    pub weight: u32,
+    /// Its members' ids, the heaviest first.
+    pub members: Vec<u32>,
+    /// Where its centre is on the planet: the heaviest member's.
+    pub centre: Point,
+}
+
+/// How many marks one picture considers — the heaviest, when there are more.
+///
+/// A guard and not a preference, like [`VERTEX_CEILING`]: every list the
+/// player draws is bounded far below it, and a caller that handed over a
+/// whole directory would otherwise group it on every frame.
+pub const MARKS_CEILING: usize = 4096;
+
+/// Which of four sizes a group of this weight is drawn at: one; two to nine;
+/// ten to ninety-nine; a hundred or more. Pure.
+///
+/// The picture has no text (the rasteriser draws none), so the SIZE is what
+/// says "many here"; four steps are what the eye tells apart at a glance.
+#[must_use]
+pub const fn tier(weight: u32) -> usize {
+    match weight {
+        0..=1 => 0,
+        2..=9 => 1,
+        10..=99 => 2,
+        _ => 3,
+    }
 }
 
 /// Where the globe is pointed.
@@ -215,6 +298,12 @@ impl Lens {
             self.cos_lat * sp - self.sin_lat * cp * cd,
             self.sin_lat * sp + self.cos_lat * cp * cd,
         )
+    }
+
+    /// Where a point lands, when it is on this side.
+    fn onto(&self, at: Point) -> Option<(f32, f32)> {
+        let v = self.space(at.lat, at.lon);
+        (v.2 > 0.0).then(|| self.flat(v))
     }
 
     fn flat(&self, v: (f32, f32, f32)) -> (f32, f32) {
@@ -353,6 +442,7 @@ pub fn project(
     box_px: (f32, f32),
     ways: &[Vec<(f32, f32)>],
     dot_radius: f32,
+    marks: &Marks<'_>,
 ) -> Drawing {
     let lens = Lens::of(pose, box_px);
     let mut shapes = Vec::new();
@@ -467,10 +557,24 @@ pub fn project(
         points: circle(lens.half, lens.radius),
     });
 
-    let dot = at.and_then(|p| {
-        let v = lens.space(p.lat, p.lon);
-        (v.2 > 0.0).then(|| lens.flat(v))
-    });
+    // THE MARKS, after the rim and before the dot: a mark reaching the edge
+    // is still whole, and the coordinate asked about stays on top of them.
+    let placed = group(&lens, box_px, marks);
+    for p in &placed {
+        let lit = marks.lit.is_some_and(|id| p.members.contains(&id));
+        shapes.push(Shape {
+            ink: if lit { Ink::Chosen } else { Ink::Dot },
+            closed: true,
+            points: circle(p.at, p.radius),
+        });
+        shapes.push(Shape {
+            ink: Ink::Halo,
+            closed: false,
+            points: circle(p.at, p.radius + 1.0),
+        });
+    }
+
+    let dot = at.and_then(|p| lens.onto(p));
     if let Some(d) = dot {
         shapes.push(Shape {
             ink: Ink::Dot,
@@ -488,5 +592,199 @@ pub fn project(
         shapes,
         dot,
         rim: lens.radius,
+        marks: placed,
+    }
+}
+
+/// The marks of `marks`, grouped as they land on a picture of `pose` in a box
+/// of `box_px` — exactly what [`project`] puts in [`Drawing::marks`]. Pure.
+#[must_use]
+pub fn placed(marks: &Marks<'_>, pose: Pose, box_px: (f32, f32)) -> Vec<Placed> {
+    group(&Lens::of(pose, box_px), box_px, marks)
+}
+
+/// A group while it is being made.
+struct Growing {
+    at: (f32, f32),
+    weight: u32,
+    members: Vec<u32>,
+    centre: Point,
+}
+
+/// Groups the marks that are on this side and inside the box, by distance ON
+/// SCREEN.
+///
+/// # Why the answer does not depend on the order given
+///
+/// The marks are SORTED first — heaviest first, then by id, then by where
+/// they are — and walked in that order. A mark joins the nearest group whose
+/// centre is closer than `merge_px`; otherwise it starts one, centred on
+/// itself. So a group's centre is always its heaviest member, and the same
+/// marks in any order are the same groups.
+///
+/// A grid of `merge_px` cells finds the nearby groups: a mark looks at its
+/// own cell and the eight around it, which is every centre that can be closer
+/// than one cell.
+///
+/// The lit group is painted last, so it is never under another.
+fn group(lens: &Lens, box_px: (f32, f32), marks: &Marks<'_>) -> Vec<Placed> {
+    let mut seen: Vec<(Mark, (f32, f32))> = marks
+        .all
+        .iter()
+        .filter_map(|m| {
+            let at = lens.onto(m.at)?;
+            let inside = at.0 >= 0.0 && at.0 < box_px.0 && at.1 >= 0.0 && at.1 < box_px.1;
+            inside.then_some((*m, at))
+        })
+        .collect();
+    seen.sort_by(|(a, _), (b, _)| {
+        b.weight
+            .cmp(&a.weight)
+            .then(a.id.cmp(&b.id))
+            .then(a.at.lat.total_cmp(&b.at.lat))
+            .then(a.at.lon.total_cmp(&b.at.lon))
+    });
+    seen.truncate(MARKS_CEILING);
+
+    let merge = marks.merge_px;
+    let cell = |at: (f32, f32)| -> (i32, i32) {
+        if merge > 0.0 {
+            ((at.0 / merge) as i32, (at.1 / merge) as i32)
+        } else {
+            (0, 0)
+        }
+    };
+    let mut groups: Vec<Growing> = Vec::new();
+    let mut grid: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
+    for (mark, at) in seen {
+        let (cx, cy) = cell(at);
+        let mut best: Option<(f32, usize)> = None;
+        if merge > 0.0 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let Some(list) = grid.get(&(cx + dx, cy + dy)) else {
+                        continue;
+                    };
+                    for &n in list {
+                        let g = &groups[n];
+                        let (ex, ey) = (g.at.0 - at.0, g.at.1 - at.1);
+                        let d = crate::sqrt(ex * ex + ey * ey);
+                        // THE LOWER INDEX WINS A TIE, and the index is the
+                        // order groups were made in — which the sort fixed.
+                        let nearer = match best {
+                            None => true,
+                            Some((bd, bn)) => d < bd || (d == bd && n < bn),
+                        };
+                        if d < merge && nearer {
+                            best = Some((d, n));
+                        }
+                    }
+                }
+            }
+        }
+        match best {
+            Some((_, n)) => {
+                let g = &mut groups[n];
+                g.weight = g.weight.saturating_add(mark.weight);
+                g.members.push(mark.id);
+            }
+            None => {
+                grid.entry((cx, cy)).or_default().push(groups.len());
+                groups.push(Growing {
+                    at,
+                    weight: mark.weight,
+                    members: alloc::vec![mark.id],
+                    centre: mark.at,
+                });
+            }
+        }
+    }
+
+    let mut out: Vec<Placed> = groups
+        .into_iter()
+        .map(|g| Placed {
+            at: g.at,
+            radius: marks.radii[tier(g.weight)],
+            weight: g.weight,
+            members: g.members,
+            centre: g.centre,
+        })
+        .collect();
+    if let Some(id) = marks.lit
+        && let Some(n) = out.iter().position(|p| p.members.contains(&id))
+    {
+        let lit = out.remove(n);
+        out.push(lit);
+    }
+    out
+}
+
+/// A pose that shows every point of `points` inside a box of `box_px`, with
+/// `air_px` to spare on every side. Pure.
+///
+/// Centred on their middle on the sphere (the mean of their directions,
+/// which does not care about the date line), and as near as the farthest
+/// point allows — within [`Pose::WORLD`] and [`Pose::LOCAL`]. One point is
+/// [`Pose::on`] it. Points spread over more than the visible half cannot all
+/// be shown, and are given the whole world around their middle; no points is
+/// the whole world.
+#[must_use]
+pub fn framing(points: &[Point], box_px: (f32, f32), air_px: f32) -> Pose {
+    use core::f32::consts::PI;
+    let world = |centre: Point| Pose {
+        centre,
+        zoom: Pose::WORLD,
+    };
+    let Some(first) = points.first() else {
+        return world(Point { lat: 0.0, lon: 0.0 });
+    };
+    if points.len() == 1 {
+        return Pose::on(*first);
+    }
+    let (mut x, mut y, mut z) = (0.0_f32, 0.0_f32, 0.0_f32);
+    for p in points {
+        let (la, lo) = (p.lat * PI / 180.0, p.lon * PI / 180.0);
+        x += crate::cos(la) * crate::cos(lo);
+        y += crate::cos(la) * crate::sin(lo);
+        z += crate::sin(la);
+    }
+    let across = crate::sqrt(x * x + y * y);
+    let centre = if crate::sqrt(across * across + z * z) < 1e-4 {
+        *first
+    } else {
+        Point {
+            lat: (crate::atan2(z, across) * 180.0 / PI).clamp(-85.0, 85.0),
+            lon: wrap(crate::atan2(y, x) * 180.0 / PI),
+        }
+    };
+
+    let lens = Lens::of(
+        Pose {
+            centre,
+            zoom: Pose::WORLD,
+        },
+        box_px,
+    );
+    let half = (box_px.0 * 0.5 - air_px, box_px.1 * 0.5 - air_px);
+    if half.0 <= 0.0 || half.1 <= 0.0 || lens.radius <= 0.0 {
+        return world(centre);
+    }
+    let mut zoom = Pose::LOCAL;
+    for p in points {
+        let v = lens.space(p.lat, p.lon);
+        // ROUND THE BACK, or on the rim: no zoom brings it to this side.
+        if v.2 <= 0.0 {
+            return world(centre);
+        }
+        if v.0 != 0.0 {
+            zoom = zoom.min(half.0 / (lens.radius * v.0.abs()));
+        }
+        if v.1 != 0.0 {
+            zoom = zoom.min(half.1 / (lens.radius * v.1.abs()));
+        }
+    }
+    Pose {
+        centre,
+        zoom: zoom.clamp(Pose::WORLD, Pose::LOCAL),
     }
 }

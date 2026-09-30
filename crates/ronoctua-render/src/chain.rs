@@ -40,13 +40,14 @@
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Chain;
 
-/// The locale a renderer starts at, before anyone has chosen a language.
+/// The locale of a program with no language of its own to say — the glyph
+/// tester's. A renderer is BORN in the language it is given
+/// ([`super::text::Text::new`] takes it, as it takes the scale), and
+/// [`super::text::Text::set_locale`] moves it when the language changes.
 ///
 /// It matches `ronoctua_i18n::DEFAULT`, and it is written here rather than
 /// depended on: this crate has no i18n dependency and must not grow one — a
 /// renderer that needed the text layer could not be linked by the installer.
-/// The `Texts` a door builds moves it with [`super::text::Text::set_locale`],
-/// and a test in the shell holds the two together.
 pub const DEFAULT_LOCALE: &str = "en-GB";
 
 include!(concat!(env!("OUT_DIR"), "/chain.rs"));

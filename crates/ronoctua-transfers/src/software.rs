@@ -108,7 +108,7 @@ pub fn command_line(systemd_run: &str, software: &str) -> Vec<String> {
 /// Where the software center's CLI is, read from the ENVIRONMENT.
 ///
 /// The unit sets it, inside the `mkIf` that decides whether the software
-/// center exists at all — the reason [`crate::engine`] gives for
+/// center exists at all — the reason [`ronoctua_ytdlp::program`] gives for
 /// `RONOCTUA_YT_DLP`: baked in with `option_env!`, a store path is a REFERENCE,
 /// and it would drag the CLI's TLS stack into this unit's closure. There is no
 /// fallback to a bare name: without it, the job fails with a sentence.

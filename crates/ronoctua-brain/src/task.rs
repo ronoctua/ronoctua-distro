@@ -3,7 +3,8 @@
 //! # Five methods, and four of them are pure
 //!
 //! [`Task::due`], [`Task::needs`], [`Task::countdown`] and [`Task::steps`] take
-//! no clock, open no file and spawn nothing. That is not tidiness — it is what
+//! no clock, open no file and spawn nothing — and neither does
+//! [`Task::wanted_now`], which reads the pulse it is handed. That is not tidiness — it is what
 //! lets a whole year of scheduling be tested in milliseconds, and it is the
 //! reason a bug in "when" can be found without a machine that is busy. Only
 //! [`Task::run`] touches the world, and it runs on the runner's thread, alone,
@@ -124,6 +125,42 @@ pub trait Task: Send + Sync {
         &[]
     }
 
+    /// Whether the MACHINE wants it now, whatever the calendar says.
+    ///
+    /// # Why a second way to come due
+    ///
+    /// Because [`Task::due`] answers from a calendar, and some work has no
+    /// calendar: a disk running short is a state of the machine, and the answer
+    /// to it is "now", not "tonight". This reads the pulse the runner already
+    /// took — the heartbeat reads the filesystems anyway — so it arms no clock
+    /// of its own (event, not clock: nothing tells a process that a disk is
+    /// filling, and the tick is already there).
+    ///
+    /// PURE like `due`: the pulse and the clock are handed in. `last` is the
+    /// last time it ran, for a task that must rest between two runs.
+    ///
+    /// The default is `false`: every calendar task comes due through `due`.
+    fn wanted_now(
+        &self,
+        _now: Moment,
+        _pulse: &Pulse,
+        _prefs: &Prefs,
+        _last: Option<Moment>,
+    ) -> bool {
+        false
+    }
+
+    /// Whether the general gate — memory, processor, battery — may hold it.
+    ///
+    /// `true` for everything that can wait for a quieter machine, which is
+    /// everything but a relief: holding one until the build that fills the
+    /// disk is over is holding it until the disk is full. A task that answers
+    /// `false` also goes to the HEAD of the queue ([`crate::mind::Shared::queue_first`]):
+    /// behind a task the gate is holding, it would be held all the same.
+    fn gated(&self) -> bool {
+        true
+    }
+
     /// Do it. On the runner's thread, alone, and it may block.
     ///
     /// The [`Report`] is how it learns what happened: it is the file the unit
@@ -164,6 +201,33 @@ pub struct Notice {
     /// standalone-Emacs one has no button on purpose, because what is open is
     /// somebody's work and nothing here knows whether it is saved.
     pub act: Option<String>,
+}
+
+/// What a relief of the disk did, for the line under the minibuffer.
+///
+/// # Why it travels in the mind
+///
+/// Because the person should hear it — "room made: 12 GB freed", or "the disk
+/// is still short" — and the footer only ever reads the mind. The footer says
+/// it once, when `at` moves (`ronoctua-shell`'s `events.rs`): the first mind a
+/// footer sees is its baseline, so a relief from before it started is not news.
+///
+/// NUMBERS AND NOT WORDS: the footer makes the sentence in the person's
+/// language (invariant 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Relieved {
+    /// When it ended — stamped by the runner, whose clock it is.
+    pub at: Moment,
+    /// How much free space it gained, in bytes: the largest gain among the
+    /// filesystems it measured (another process writing meanwhile can only
+    /// make this smaller than what was freed).
+    pub freed_bytes: u64,
+    /// How much of the fullest of them is free now, in per mille.
+    pub free_per_mille: u16,
+    /// Whether that is still under the floor — nothing more could be freed
+    /// without the person.
+    pub short: bool,
 }
 
 /// Whether a task repeats, or happens once and is then gone.
@@ -466,6 +530,10 @@ pub struct Report {
     /// already shared across the thread that watches. One more slot on it
     /// costs nothing and adds no vocabulary anywhere else.
     said: Arc<std::sync::Mutex<Option<Notice>>>,
+    /// What a relief of the disk did, when this run was one — the same channel
+    /// as `said`, for the same reason: it is not what the run's steps did, and
+    /// the task has nowhere else to put it.
+    relieved: Arc<std::sync::Mutex<Option<Relieved>>>,
 }
 
 /// How watching ended.
@@ -494,6 +562,7 @@ impl Report {
             stop,
             rehearsal: false,
             said: Arc::new(std::sync::Mutex::new(None)),
+            relieved: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -543,6 +612,19 @@ impl Report {
     #[must_use]
     pub fn said(&self) -> Option<Notice> {
         self.said.lock().ok().and_then(|s| s.clone())
+    }
+
+    /// Records what a relief of the disk did. The runner stamps `at`.
+    pub fn relieve(&self, relieved: Relieved) {
+        if let Ok(mut slot) = self.relieved.lock() {
+            *slot = Some(relieved);
+        }
+    }
+
+    /// What a relief did, for the runner to publish.
+    #[must_use]
+    pub fn relieved(&self) -> Option<Relieved> {
+        self.relieved.lock().ok().and_then(|r| *r)
     }
 
     /// What the file says now, or `None` when it is not there or is half

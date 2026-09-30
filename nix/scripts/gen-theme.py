@@ -286,6 +286,43 @@ CONTEXT_FAMILIES = ("accent", "success", "warning", "error", "group", "subtle", 
 #: Families that only content (the syntax palette) spends.
 CONTENT_FAMILIES = ("slate", "sky", "azure", "cyan", "orange")
 REQUIRED_FAMILIES = CONTEXT_FAMILIES + CONTENT_FAMILIES
+
+#: THE FAMILIES DRAWN ON A FILM, and never on a page.
+#:
+#: A subtitle lane is read over a picture whose colours are anybody's, with an
+#: outline round every letter — not on the chrome, a desk or a window. So its
+#: colours are solved against ONE FIXED PICTURE (`PICTURE_GROUND_L`) and not
+#: against the theme's chrome: the theme's `lift`, `chroma` multiplier and
+#: page play no part, and a lane is the same colour in every theme and on
+#: every page (`IDENTICAL_IN_EVERY_THEME`, `IDENTICAL_ON_EVERY_PAGE`). The
+#: player's daemon, which draws them into the film with no door open and
+#: knows no theme, resolves them itself.
+#:
+#: A FAMILY IN EVERY SEED all the same, which is the rule every role follows
+#: (a seed without it is refused `no family 'subtitle' in the seed`), and the
+#: same one in every seed, which the build refuses otherwise. Only `hue` (lane
+#: one's; the other five are spaced from it) and `chroma` (the share of the
+#: gamut every lane takes) mean anything on a film.
+PICTURE_FAMILIES = ("subtitle",)
+PICTURE_FIELDS = frozenset(("hue", "chroma"))
+#: The picture the lanes are solved against: achromatic, at the lightness of
+#: a dark scene — where a subtitle is hardest to lose and easiest to make
+#: garish. A bright scene is the outline's job (`SUBTITLE_ON_EDGE`).
+PICTURE_GROUND_L = 0.25
+#: How many lanes one picture carries (`ronoctua_player::session::
+#: SUBTITLES_PER_PICTURE`), each `subtitle.lane-<word>`.
+SUBTITLE_LANES = 6
+#: Every lane at ONE contrast on the picture — the colour is what tells two
+#: lanes apart, and a ramp would let them differ mostly by how light they are
+#: (the cursors' argument). 75 is body text's floor on a page, measured
+#: without the outline; with it every letter has a black rim besides.
+SUBTITLE_LC = 75.0
+#: The lightness the six hues are spaced at, in equal ΔE arcs from the
+#: family's hue (`cs.even_delta_e_hues`): where the solved lanes land.
+SUBTITLE_MEASURE_L = 0.85
+#: The outline, `subtitle.edge`: black. A rim that reads on a white sky and
+#: melts into a night.
+SUBTITLE_EDGE_L = 0.0
 #: The five whose hues have to stay apart on the footer.
 CHROME_HUES = ("accent", "success", "warning", "error", "group")
 #: The four solids the colour-vision report compares.
@@ -461,11 +498,26 @@ class Theme:
         if not isinstance(families, dict):
             raise Refusal(f"{source}: families must be an attribute set")
         self.families: dict[str, dict[str, float]] = {}
+        #: The families drawn on a film (`PICTURE_FAMILIES`): apart from
+        #: `families`, so no ladder, gate or report of a page ever reads one.
+        self.pictures: dict[str, dict[str, float]] = {}
         for name, fields in families.items():
             if not VALID_SEGMENT.match(name):
                 raise Refusal(f"{source}: the family name {name!r} is not a WIT identifier")
             if not isinstance(fields, dict) or "hue" not in fields:
                 raise Refusal(f"{source}: family {name!r} needs at least a hue")
+            if name in PICTURE_FAMILIES:
+                unknown = set(fields) - PICTURE_FIELDS
+                if unknown or "chroma" not in fields:
+                    raise Refusal(
+                        f"{source}: the picture family {name!r} is a hue and a chroma and nothing else "
+                        f"(unknown: {sorted(unknown)}) — it is solved on a film, where no page or ladder reaches"
+                    )
+                self.pictures[name] = {
+                    "hue": _number(fields["hue"], f"{source}: {name}.hue", 0.0, 360.0) % 360.0,
+                    "chroma": _number(fields["chroma"], f"{source}: {name}.chroma", 0.0, 1.0),
+                }
+                continue
             unknown = set(fields) - FAMILY_FIELDS
             if unknown:
                 raise Refusal(f"{source}: family {name!r} has unknown field(s) {sorted(unknown)}")
@@ -636,9 +688,38 @@ class Theme:
         key = (family, step, scale)
         if key in self._memo:
             return self._memo[key]
-        swatch = self._neutral(step, scale) if family == "neutral" else self._chromatic(family, step, scale)
+        if family == "neutral":
+            swatch = self._neutral(step, scale)
+        elif family in PICTURE_FAMILIES:
+            swatch = self._picture(family, step, scale)
+        else:
+            swatch = self._chromatic(family, step, scale)
         self._memo[key] = swatch
         return swatch
+
+    def _picture(self, family: str, step: str, scale: float) -> Swatch:
+        """A colour drawn ON A FILM (`PICTURE_FAMILIES`): solved against the
+        fixed dark picture and nothing of this theme — not its chrome, its
+        page, its `lift` or its `chroma` multiplier — so the same seed gives
+        the same bytes in every theme and on every page."""
+        if family not in self.pictures:
+            raise Refusal(f"{self.source}: no family {family!r} in the seed")
+        fam = self.pictures[family]
+        if step == "edge":
+            lch, rgb8 = cs.screen_colour(SUBTITLE_EDGE_L, fam["hue"], 0.0)
+            return Swatch(lch, rgb8, f"fixed L {SUBTITLE_EDGE_L:g}, no chroma: the rim of every lane")
+        lanes = [f"lane-{WORDS[i + 1]}" for i in range(SUBTITLE_LANES)]
+        if step not in lanes:
+            raise Refusal(f"{self.source}: the picture family {family!r} has no step {step!r}; it has {lanes} and 'edge'")
+        rel = min(1.0, fam["chroma"] * scale)
+        hue = cs.even_delta_e_hues(SUBTITLE_LANES, fam["hue"], SUBTITLE_MEASURE_L, rel)[lanes.index(step)]
+        picture = cs.screen_colour(PICTURE_GROUND_L, 0.0, 0.0)[1]
+        l, shortfall = cs.solve_lightness(
+            ("apca", SUBTITLE_LC), lambda _: hue, rel,
+            reference_lightness=PICTURE_GROUND_L, reference_rgb=cs.dequantize(picture), direction=1.0,
+        )
+        lch, rgb8 = cs.screen_colour(l, hue, rel)
+        return Swatch(lch, rgb8, f"Lc {SUBTITLE_LC:g} on the picture's L {PICTURE_GROUND_L:g}, h {hue:.0f}", shortfall)
 
     def _neutral(self, step: str, scale: float) -> Swatch:
         if self.base is not None:
@@ -756,6 +837,9 @@ class Theme:
             out[f"neutral.{step}"] = self.primitive("neutral", step)
         for family in self.families:
             for step in (*(n for n, _, _ in PAINT_STEPS), *(n for n, _, _ in SOLID_STEPS), *(n for n, _ in TEXT_STEPS), "on-solid"):
+                out[f"{family}.{step}"] = self.primitive(family, step)
+        for family in self.pictures:
+            for step in (*(f"lane-{WORDS[i + 1]}" for i in range(SUBTITLE_LANES)), "edge"):
                 out[f"{family}.{step}"] = self.primitive(family, step)
         return out
 
@@ -1082,9 +1166,14 @@ DESKS = {"backdrop": "surface.backdrop", "near": "surface.near", "absolute": "su
 #: grounds and inks whatever the footer stands on (the owner: they never change
 #: with these options), and so do the glance's two stripes; the desks are what
 #: the pages ARE; the outlines are the compositor's, whose fragments carry the
-#: base.
-IDENTICAL_ON_EVERY_PAGE = ("notification.", "brain.", "glance.", "border.")
+#: base; and the subtitle lanes are drawn on a film, never on a page.
+IDENTICAL_ON_EVERY_PAGE = ("notification.", "brain.", "glance.", "border.", "subtitle.")
 IDENTICAL_KEYS = frozenset(DESKS.values())
+#: THE ROLES THAT ARE THE SAME IN EVERY THEME, byte for byte, or the build is
+#: refused: the subtitle lanes, which the player draws into a film with no
+#: door open and no theme to ask (`PICTURE_FAMILIES`). Their seeds must agree,
+#: and this is what says so when one is edited alone.
+IDENTICAL_IN_EVERY_THEME = ("subtitle.",)
 
 
 def identical_on_every_page(key: str) -> bool:
@@ -1592,6 +1681,59 @@ DISTANCE_GATES = (
     # It is not hypothetical: `cyber` was drafted at a ramp chroma of 0.16 and
     # landed at ΔE 0.010, while the three themes before it sat at 0.055.
     ("text.answer", "text.primary", 0.035, 0.045),
+    # THE CHOSEN MARK ON THE GLOBE, against the marks it is chosen from and
+    # the two grounds it is drawn on. Read before gating, across the 44
+    # palettes at their nearest: 0.215 from the dot, 0.161 from the land and
+    # 0.344 from the ocean (`colors.nix` says which recipes lost, and by how
+    # much). The halo every mark wears is what the dot relies on over land
+    # (0.044 at its nearest); the chosen one does not need it.
+    ("mark.atlas.chosen", "mark.atlas.dot", 0.15, 0.18),
+    ("mark.atlas.chosen", "surface.atlas.land", 0.10, 0.12),
+    ("mark.atlas.chosen", "surface.atlas.ocean", 0.25, 0.30),
+    # THE PLAYER'S DECK (`player_timeline`): three kinds of lane, a lane that
+    # is off, the ghost of one being dragged and the playhead, all on the
+    # chrome's track. Read before gating, over the 44 palettes at their
+    # nearest: the kinds from each other 0.079 (azure and success, in
+    # `flashbang`'s desk), the ghost from a kind 0.079, the playhead from a
+    # kind 0.102, a kind from the lane that is off 0.183, the off lane from
+    # the track's rule 0.198 and a band from the chrome 0.458.
+    ("player.lane.video", "player.lane.audio", 0.06, 0.07),
+    ("player.lane.video", "player.lane.subtitle", 0.06, 0.07),
+    ("player.lane.audio", "player.lane.subtitle", 0.06, 0.07),
+    ("player.lane.held", "player.lane.video", 0.06, 0.07),
+    ("player.lane.held", "player.lane.audio", 0.06, 0.07),
+    ("player.lane.held", "player.lane.subtitle", 0.06, 0.07),
+    ("player.lane.off", "player.lane.video", 0.12, 0.15),
+    ("player.lane.off", "player.lane.audio", 0.12, 0.15),
+    ("player.lane.off", "player.lane.subtitle", 0.12, 0.15),
+    ("player.lane.off", "player.lane.held", 0.12, 0.15),
+    ("player.lane.off", "rule.default", 0.12, 0.15),
+    ("player.lane.off", "surface.chrome", 0.20, 0.25),
+    ("player.lane.video", "surface.chrome", 0.30, 0.35),
+    ("player.lane.audio", "surface.chrome", 0.30, 0.35),
+    ("player.lane.subtitle", "surface.chrome", 0.30, 0.35),
+    ("player.lane.held", "surface.chrome", 0.30, 0.35),
+    ("player.playhead", "player.lane.video", 0.08, 0.09),
+    ("player.playhead", "player.lane.audio", 0.08, 0.09),
+    ("player.playhead", "player.lane.subtitle", 0.08, 0.09),
+    ("player.playhead", "player.lane.held", 0.10, 0.12),
+    ("player.playhead", "surface.chrome", 0.40, 0.50),
+    # AND EACH BAND FROM THE METER BESIDE IT: a lane's line ends in its volume
+    # meter, filled in `state.accent`, and in the themes whose accent is a
+    # blue the picture's band and the meter are two blues on one line. Read
+    # before gating, at the nearest: the words 0.069 (`flashbang`'s desk), the
+    # picture 0.082 (`industrial`'s absolute desk), the ghost 0.082, the sound
+    # 0.106. A regression floor under what is there, as every row here is —
+    # not a proof that the two read apart, which the glyph and the name at the
+    # head of the line also carry.
+    ("player.lane.video", "state.accent", 0.05, 0.06),
+    ("player.lane.audio", "state.accent", 0.05, 0.06),
+    ("player.lane.subtitle", "state.accent", 0.05, 0.06),
+    ("player.lane.held", "state.accent", 0.05, 0.06),
+    # AND THE LAYOUT'S SCHEMATIC: a tile on the chrome (0.171 at the nearest)
+    # and the lit one against it (0.268).
+    ("player.tile", "surface.chrome", 0.10, 0.12),
+    ("player.tile-lit", "player.tile", 0.15, 0.20),
 )
 #: THE NEAR DESK AMONG THE OTHERS, measured where the chooser offers it: in a
 #: LIGHT theme only. A dark theme has the token (every theme has the same keys)
@@ -1692,6 +1834,20 @@ FAINT_EDGE_FLOOR, FAINT_EDGE_CEILING = (0.012, 0.015), (1.10, 1.08)
 #: one — "clearly" being a JND and a half of ΔE_ok between each pair's
 #: distances from the desk.
 DISCREET_ORDER = (0.03, 0.04)
+#: THE SUBTITLE LANES (`PICTURE_FAMILIES`), measured once, on the base: they
+#: are the same on every page and in every theme.
+#:
+#: Two lanes told apart while READING, at a glance, a line that is gone in
+#: three seconds: three JNDs, stricter than two cursors (`CURSOR_GAP`), which
+#: are looked for rather than read. Measured at the seed's hue 109 and chroma
+#: 0.70: the closest pair (lanes three and four) 0.1006.
+SUBTITLE_GAP = (0.06, 0.08)
+#: A lane on its own rim, which is all that stands between a letter and a
+#: white sky: the floor body text carries. Measured 77.5 on black.
+SUBTITLE_ON_EDGE = (70, 75)
+#: And on the dark picture it was solved against: the anchor itself, so a
+#: lane that could not reach it is a Fail and not a quieter lane.
+SUBTITLE_ON_PICTURE = (SUBTITLE_LC, SUBTITLE_LC)
 
 
 class Finding:
@@ -1867,6 +2023,28 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
         for b in selections[i + 1 :]:
             v = de(a, b)
             findings.append(Finding(_level(v, *CURSOR_HOVER_GAP), "cursors", f"{a} vs {b}", v, f"ΔE ≥ {CURSOR_HOVER_GAP[0]}"))
+
+    # THE SUBTITLE LANES, on the base alone: a film is under them on every
+    # page. Each on the dark picture it was solved against, each on its own
+    # rim, and every pair told apart — and, reported and never gated, the
+    # pair a person without one of the three cones tells apart least: the
+    # lane's place in the stack says which it is for them.
+    subtitles = [f"subtitle.lane-{WORDS[i + 1]}" for i in range(SUBTITLE_LANES)]
+    picture = cs.dequantize(cs.screen_colour(PICTURE_GROUND_L, 0.0, 0.0)[1])
+    for i, a in enumerate(subtitles if base else ()):
+        v = cs.apca_magnitude(tokens[a].rgb, picture)
+        findings.append(Finding(_level(v, *SUBTITLE_ON_PICTURE), "subtitles", f"{a} on the dark picture (L {PICTURE_GROUND_L:g})", v, f"Lc ≥ {SUBTITLE_ON_PICTURE[0]:g}"))
+        v = lc(a, "subtitle.edge")
+        findings.append(Finding(_level(v, *SUBTITLE_ON_EDGE), "subtitles", f"{a} on subtitle.edge", v, f"Lc ≥ {SUBTITLE_ON_EDGE[0]} (warn < {SUBTITLE_ON_EDGE[1]})"))
+        for b in subtitles[i + 1 :]:
+            v = de(a, b)
+            findings.append(Finding(_level(v, *SUBTITLE_GAP), "subtitles", f"{a} vs {b}", v, f"ΔE ≥ {SUBTITLE_GAP[0]} (warn < {SUBTITLE_GAP[1]})"))
+    if base:
+        (kind, v), a, b = min(
+            ((cs.worst_separation(tokens[a].rgb, tokens[b].rgb), a, b) for i, a in enumerate(subtitles) for b in subtitles[i + 1 :]),
+            key=lambda found: found[0][1],
+        )
+        findings.append(Finding("Note", "subtitles", f"{a} vs {b} ({kind}), the closest pair", v, "reported only: the stack's order tells the lanes apart"))
 
     levels = [f"level.{WORDS[k]}" for k in range(11)]
     for a, b in zip(levels, levels[1:]):
@@ -2215,6 +2393,21 @@ def main() -> int:
         for theme_id, keys in key_sets.items():
             if keys != first:
                 raise Refusal(f"the theme {theme_id} does not have the same keys as {ids[0]}: {sorted(set(keys) ^ set(first))}")
+        # THE ROLES A THEME MUST NOT MOVE (`IDENTICAL_IN_EVERY_THEME`): the
+        # same bytes in every theme, or the seeds disagree about a family that
+        # has to be one.
+        for theme_id in ids[1:]:
+            moved = sorted(
+                key
+                for key in first
+                if key.startswith(IDENTICAL_IN_EVERY_THEME)
+                and results[theme_id]["tokens"][key].token != results[ids[0]]["tokens"][key].token
+            )
+            if moved:
+                raise Refusal(
+                    f"{', '.join(moved)} differ between {ids[0]} and {theme_id}: they are drawn on a film, the same in every theme — "
+                    f"give assets/themes/{theme_id}.nix the same `{moved[0].split('.', 1)[0]}` family as assets/themes/{ids[0]}.nix"
+                )
 
         args.out.mkdir(parents=True, exist_ok=True)
         combined = []

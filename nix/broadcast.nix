@@ -1,0 +1,69 @@
+# The player's channels by theme, from Nix to Rust — the twin of `nix/world.nix`.
+#
+# `assets/channels.nix` becomes three things here:
+#
+#   broadcast.rs  the table `ronoctua_broadcast::table` compiles
+#   keys.txt      the text keys BOTH languages have to carry
+#   a refusal     an iptv-org category that does not exist takes the build down
+#
+# The third is the one that matters: the index is filtered by those ids at run
+# time, and a typo would be a TV row that is always empty.
+{
+  lib,
+  stdenvNoCC,
+  python3,
+  writeText,
+  fetchurl,
+  channelsFile,
+}:
+
+let
+  # IPTV-ORG'S OWN LIST OF CATEGORIES, from a CAPTURE.
+  #
+  # The file is published at a live address that is rebuilt every day
+  # (`iptv-org.github.io/api/…`), so a hash pinned against it holds only until
+  # the store copy is collected — the defect `nix/atlas.nix` records. A
+  # Wayback Machine capture with `id_` answers the original bytes and does not
+  # change.
+  #
+  # The stamp is the CAPTURE'S OWN, the one the archive answers with a 200 and
+  # no redirect. A rounded date (`20260601000000`, which this read first) is
+  # resolved by the archive to whatever capture is NEAREST on the day it is
+  # asked — here through a second capture that was itself a redirect — so the
+  # bytes behind it are the archive's choice, not this file's. Refreshing it is
+  # choosing a newer capture (`curl -sI` on a rounded stamp names it in
+  # `location:`) and its hash.
+  categories = fetchurl {
+    url = "https://web.archive.org/web/20260523230739id_/https://iptv-org.github.io/api/categories.json";
+    hash = "sha256-KvRdQ7HatUPMAESUrL/QnJD0y7GiJOEh1FWssAGGcbg=";
+  };
+in
+stdenvNoCC.mkDerivation {
+  pname = "ronoctua-broadcast-rs";
+  version = "1";
+
+  nativeBuildInputs = [ python3 ];
+  dontUnpack = true;
+  dontConfigure = true;
+
+  buildPhase = ''
+    runHook preBuild
+    mkdir -p $out
+    python3 ${./scripts/gen-broadcast.py} \
+      --channels ${writeText "channels.json" (builtins.toJSON (import channelsFile))} \
+      --iptv-categories ${categories} \
+      --out $out/broadcast.rs \
+      --out-keys $out/keys.txt
+    runHook postBuild
+  '';
+
+  dontInstall = true;
+
+  # What was downloaded to make this, for `nix/kept-sources.nix` to root.
+  passthru.sources = [ categories ];
+
+  meta = {
+    description = "The player's channels by theme, generated from assets/channels.nix";
+    platforms = lib.platforms.all;
+  };
+}

@@ -15,6 +15,7 @@
 
 pub mod clock;
 pub mod emacs;
+pub mod space;
 pub mod sweep;
 pub mod trash;
 pub mod update;
@@ -40,6 +41,9 @@ pub fn tasks(zone: Arc<dyn Offset>) -> Vec<Box<dyn Task>> {
         Box::new(update::SystemUpdate::with(Arc::clone(&zone))),
         Box::new(sweep::CacheSweep::with(Arc::clone(&zone))),
         Box::new(trash::EmptyTrash::with(zone)),
+        // THE ONE THE MACHINE CALLS FOR: no calendar, no gate — the disk
+        // under its floor, read on the heartbeat.
+        Box::new(space::DiskSpace::new()),
         // THE TWO THAT ONLY LOOK. Neither takes a zone: a cadence in minutes
         // short-circuits the calendar before a zone is reached.
         Box::new(emacs::EmacsDaemon::new()),

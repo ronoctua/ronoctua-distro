@@ -149,7 +149,11 @@ usage: ronoctua-render-png <component.wasm> [options]
   --type <text>       types, character by character
 
 The last four are repeatable and apply IN THE ORDER they appear: that is how
-one reaches a screen that only exists after walking to it.";
+one reaches a screen that only exists after walking to it.
+
+A NATIVE DOOR — the player's window, its column at every size — is not a
+component: `nix run .#png -- --door window|column …` draws it with
+`ronoctua-shell photograph`, whose `--help` lists its options.";
 
 /// A count of cells a person typed, refused if the size it implies would wrap.
 ///
@@ -541,6 +545,7 @@ fn main() -> Result<()> {
         ronoctua_render::offscreen::FORMAT,
         i32::from(ask.scale),
         tokens::text::size(),
+        texts.language(),
     )?;
     let mut quads =
         ronoctua_render::quad::Quads::new(&gpu.device, ronoctua_render::offscreen::FORMAT)?;

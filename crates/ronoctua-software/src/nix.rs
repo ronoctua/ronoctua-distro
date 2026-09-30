@@ -51,8 +51,13 @@ use crate::{AppKey, Context, Done, Failure, Order, Outcome, Refusal, Roots, Sour
 pub const FLAKE: &str = "nixpkgs";
 /// The variable nixpkgs' `check-meta.nix` reads to allow an unfree package.
 pub const UNFREE_VARIABLE: &str = "NIXPKGS_ALLOW_UNFREE";
-/// How old a generation must be before `Tidy` deletes it. The system's own
-/// collection uses the same thirty days (`nix.gc.options`).
+/// How old a generation must be before `Tidy` deletes it.
+///
+/// `Tidy` is the PERSON's own act, taken from the software view: nothing
+/// automatic removes a generation of their profile. The update's
+/// `nix-profile-history` step, which runs this same tidy, ships off for that
+/// reason, and the system's own collection never passes an age at all — it
+/// trims only the SYSTEM profile, by count (`nix/modules/store.nix`).
 pub const KEEP_HISTORY: &str = "30d";
 
 /// Whether an attribute may be handed to Nix: `^[A-Za-z0-9_+.-]+$`, with no
@@ -115,7 +120,8 @@ pub fn list_argv() -> Vec<String> {
     words(&["profile", "list", "--json"])
 }
 
-/// `nix profile wipe-history --older-than 30d`.
+/// `nix profile wipe-history --older-than 30d`: only ever on the person's
+/// order (see [`KEEP_HISTORY`]).
 #[must_use]
 pub fn tidy_argv() -> Vec<String> {
     words(&["profile", "wipe-history", "--older-than", KEEP_HISTORY])

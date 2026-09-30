@@ -19,7 +19,9 @@ use alloc::{string::String, vec::Vec};
 
 use crate::{
     Address, Named, Point, Tongue,
-    baked::{Atlas, CELLS_LAT, CELLS_LON, Cursor, cell_of, lat_of, lat_to, lon_of, lon_to},
+    baked::{
+        ANCHOR_BYTES, Atlas, CELLS_LAT, CELLS_LON, Cursor, cell_of, lat_of, lat_to, lon_of, lon_to,
+    },
 };
 
 /// How far out the nearest-place search will walk, in rings of 2° cells.
@@ -138,6 +140,90 @@ pub fn country_at(atlas: &Atlas<'_>, at: Point, tongue: Tongue) -> Option<(Named
                     Tongue::Portuguese => portuguese,
                 };
                 found = Some((name, iso, here));
+                return false;
+            }
+            true
+        },
+    );
+    found
+}
+
+/// Where a country's mark goes on a globe: a point ON ITS OWN LAND — Natural
+/// Earth's label point, or the nearest point of the country to it — `None`
+/// for a code the table does not know, or a table baked before the section
+/// existed.
+///
+/// # Why a label point, and not the middle of anything
+///
+/// The middle of the bounding box is wrong the moment a country crosses the
+/// date line (the United States' box spans the planet and its middle is in
+/// the Atlantic), and the centroid of the rings falls outside a crescent. The
+/// label point is chosen by hand, per country, by the people who drew the
+/// borders.
+///
+/// # And why not always the label point itself
+///
+/// Because it is where a map writes the NAME, and a name is sometimes better
+/// written beside a country: eleven are off their own land on the grid —
+/// New Zealand's is in the sea off Taranaki, seven small island countries'
+/// are beside their islands, and three countries a few grid steps wide
+/// (Monaco, Macau, the Vatican) have theirs where the grid gives the point to
+/// a neighbour or to the water. A mark stands for the
+/// country, and [`country_at`] of its anchor has to answer that country — so
+/// the generator (`gen-atlas.py`, `on_land`) moves such a point to the
+/// nearest grid point that is inside the country's own rings.
+///
+/// A binary search: the section is sorted by code when it is baked.
+#[must_use]
+pub fn anchor_of(atlas: &Atlas<'_>, iso: [u8; 2]) -> Option<Point> {
+    let bytes = atlas.anchors_bytes();
+    let mut c = Cursor::of(bytes);
+    let n = usize::from(c.u16()?);
+    let records = bytes.get(2..2 + n * ANCHOR_BYTES)?;
+    let (mut lo, mut hi) = (0_usize, n);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let r = &records[mid * ANCHOR_BYTES..(mid + 1) * ANCHOR_BYTES];
+        match [r[0], r[1]].cmp(&iso) {
+            core::cmp::Ordering::Less => lo = mid + 1,
+            core::cmp::Ordering::Greater => hi = mid,
+            core::cmp::Ordering::Equal => {
+                return Some(Point {
+                    lon: lon_of(i16::from_le_bytes([r[2], r[3]])),
+                    lat: lat_of(i16::from_le_bytes([r[4], r[5]])),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// A country's name in `tongue`, by its ISO code; `None` for a code the table
+/// does not know.
+///
+/// The `??` the generator writes for a feature with no code is never an
+/// answer: several features share it, and a name chosen among them would be
+/// a guess.
+#[must_use]
+pub fn country_name(atlas: &Atlas<'_>, iso: [u8; 2], tongue: Tongue) -> Option<Named> {
+    if iso == *b"??" {
+        return None;
+    }
+    let mut found = None;
+    each(
+        atlas.countries_bytes(),
+        |c| {
+            let code = [c.u8()?, c.u8()?];
+            let english = c.short()?;
+            let portuguese = c.short()?;
+            Some((code, english, portuguese))
+        },
+        |(code, english, portuguese), _| {
+            if code == iso {
+                found = Some(match tongue {
+                    Tongue::English => english,
+                    Tongue::Portuguese => portuguese,
+                });
                 return false;
             }
             true

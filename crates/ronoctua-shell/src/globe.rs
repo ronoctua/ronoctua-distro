@@ -13,13 +13,35 @@
 //! component any VIEW can embed — the file manager is its first caller and
 //! never its owner.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use smithay_client_toolkit::reexports::calloop;
 
-use ronoctua_atlas::{Address, Atlas, Ink, Point, Pose, Tongue};
+use ronoctua_atlas::{Address, Atlas, Ink, Placed, Point, Pose, Tongue};
 use ronoctua_render::image::Rgba;
 use ronoctua_tokens as tokens;
+
+/// How far a key moves a globe, in pixels of the box.
+///
+/// A KEY HAS NO DISTANCE, so it borrows one: thirty pixels of the picture,
+/// which `Pose::panned` then divides by the zoom — so the step is a tenth of
+/// what is on screen whether the globe shows the world or one city. Every
+/// view that embeds a globe steps it by this.
+pub const GLOBE_STEP: f32 = 30.0;
+
+/// How much one notch of the wheel zooms a globe — and the file manager's
+/// shape, which borrows it so the two figures of one panel answer the same
+/// gesture the same way.
+///
+/// Smaller than a key's step, because a wheel sends several notches for one
+/// flick of a finger and the same factor would cross the whole range in one
+/// gesture.
+pub const WHEEL_ZOOM: f32 = 1.12;
+
+/// How much one key brings a globe nearer, or takes it further — `C-k` and
+/// `C-j` in every view that embeds one, and the file manager's shape, which
+/// borrows it: a quarter, a step the eye follows as one place coming closer.
+pub const KEY_ZOOM: f32 = 1.25;
 
 /// WHO IS SHOWING A GLOBE.
 ///
@@ -43,16 +65,20 @@ pub enum Owner {
     /// See `docs/PENDING.md` for what the view still needs.
     #[allow(dead_code)]
     Atlas,
+    /// The player's world radio and TV pages: a globe of marks — countries,
+    /// stations, cities — and no coordinate (`crate::player_globe`).
+    Player,
 }
 
 impl Owner {
     /// How many there can be at once.
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 3;
 
     const fn slot(self) -> usize {
         match self {
             Self::Files => 0,
             Self::Atlas => 1,
+            Self::Player => 2,
         }
     }
 
@@ -60,6 +86,48 @@ impl Owner {
         match self {
             Self::Files => "files",
             Self::Atlas => "atlas",
+            Self::Player => "player",
+        }
+    }
+}
+
+/// THE MARKS A VIEW PUTS ON ITS GLOBE — stations, countries, cities — and the
+/// number that names this set of them.
+///
+/// Shared (`Arc`) because a set is thousands of marks and it travels with
+/// every order to the thread; named by `generation` because the texture key
+/// has to say which set a picture shows without carrying it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkSet {
+    /// A number the view moves each time the set is a different one — in the
+    /// texture key, and on every frame, so a picture of an older set is never
+    /// grabbed by the ids of this one.
+    pub generation: u64,
+    /// The marks, each with the view's own id.
+    pub all: Vec<ronoctua_atlas::Mark>,
+}
+
+impl MarkSet {
+    /// Where the mark `id` is.
+    fn at_of(&self, id: u32) -> Option<Point> {
+        self.all.iter().find(|m| m.id == id).map(|m| m.at)
+    }
+
+    /// The set as the pure crate draws it: the sizes and the merge are the
+    /// tokens' (`atlas.markTier1..4`, in tenths of a pixel, and
+    /// `atlas.markMerge`), and `lit` the group drawn as chosen.
+    fn marks(&self, lit: Option<u32>) -> ronoctua_atlas::Marks<'_> {
+        let tenths = |t: u16| f32::from(t) / 10.0;
+        ronoctua_atlas::Marks {
+            all: &self.all,
+            merge_px: f32::from(tokens::space::ATLAS_MARKMERGE),
+            radii: [
+                tenths(tokens::space::ATLAS_MARKTIER1),
+                tenths(tokens::space::ATLAS_MARKTIER2),
+                tenths(tokens::space::ATLAS_MARKTIER3),
+                tenths(tokens::space::ATLAS_MARKTIER4),
+            ],
+            lit,
         }
     }
 }
@@ -93,8 +161,10 @@ fn bytes() -> Option<&'static [u8]> {
 
 /// The world, opened.
 ///
-/// THE ONE PLACE that reads the variable, so a machine cannot have the atlas
-/// for one view and not for another.
+/// THE ONE PLACE IN THE SHELL that reads the variable, so a machine cannot
+/// have the atlas for one view and not for another. The player's daemon reads
+/// the same variable for its directories' marks
+/// (`ronoctua_player_engine`'s `atlas_map`), from its unit's environment.
 pub fn world() -> Option<Atlas<'static>> {
     let b = bytes()?;
     match Atlas::open(b) {
@@ -226,6 +296,7 @@ pub const fn ink_color(ink: Ink) -> tokens::Color {
         Ink::Street => tokens::color::RULE_ATLAS_STREET,
         Ink::Dot => tokens::color::MARK_ATLAS_DOT,
         Ink::Halo => tokens::color::MARK_ATLAS_HALO,
+        Ink::Chosen => tokens::color::MARK_ATLAS_CHOSEN,
     }
 }
 
@@ -346,6 +417,11 @@ pub struct Sight {
     pub theme: usize,
     /// Which language the address is wanted in.
     pub portuguese: bool,
+    /// The marks on it, when the view puts any.
+    pub marks: Option<Arc<MarkSet>>,
+    /// The mark whose group is lit — the one under the pointer, or the one
+    /// the cursor's row names.
+    pub lit: Option<u32>,
 }
 
 impl Sight {
@@ -362,6 +438,15 @@ impl Sight {
     ///
     /// FIVE PARTS: owner, subject, size, the cut and theme.
     ///
+    /// NOT the pose, the marks' set or the lit mark, though all three are
+    /// painted INTO the picture: a globe is a MOVING picture, and both doors
+    /// upload it every frame under this key (`files_window::present`, the
+    /// footer's paint), so what changed reaches the GPU by replacing the
+    /// texture, as a film's frame does. A key per lit group would be a new
+    /// full-size texture each time the pointer crosses one, and past the
+    /// renderer's ceiling its `dump` drops every texture the frame does not
+    /// hold — the thumbnails and icons off screen with them.
+    ///
     /// Without the OWNER two views showing one coordinate at one size in one
     /// theme resolve to a single key — and both are redrawn under it every
     /// frame, so they would overwrite each other with nothing in any log. And
@@ -377,7 +462,7 @@ impl Sight {
             self.size.0,
             self.size.1,
             self.from,
-            self.theme
+            self.theme,
         )
     }
 }
@@ -406,6 +491,89 @@ pub struct Frame {
     /// It comes back rather than being worked out again because WHERE A THING
     /// IS DRAWN IS WHERE IT IS GRABBED: one projection, one answer.
     pub dot: Option<(f32, f32)>,
+    /// The groups of marks, where they were painted — in the box's own
+    /// pixels, the cut applied, as `dot` — and only the ones whose centre is
+    /// in the picture: a mark that scrolled away cannot be grabbed.
+    pub marks: Vec<Placed>,
+    /// Which set of marks they are of.
+    pub generation: Option<u64>,
+    /// The lit group's centre, as bits — what a [`Beat::Placed`] that comes
+    /// after the picture is matched against.
+    pub lit_centre: Option<(u32, u32)>,
+    /// Where the lit group is, when the thread already knew it; otherwise it
+    /// follows the picture ([`Beat::Placed`]).
+    pub lit_place: Option<Address>,
+}
+
+/// The lit group's place as the thread last looked it up: the set's
+/// generation, the group's centre (as bits, compared exactly), whether it
+/// was asked in Portuguese — a place's name is in the language asked — and
+/// the place.
+type LitPlace = (u64, (u32, u32), bool, Address);
+
+/// A picture of a sight, and where its dot and its marks landed in THE
+/// PAINTED PICTURE'S pixels — what the thread sends, out of one projection.
+struct Painted {
+    rgba: Rgba,
+    dot: Option<(f32, f32)>,
+    marks: Vec<Placed>,
+}
+
+/// Projects `sight` whole, paints it with its top cut, and moves the dot and
+/// the marks up with everything else — the ONE function between a sight and
+/// what is shown of it and grabbed in it.
+///
+/// THE WHOLE PICTURE IS PROJECTED, and only part of it is put down:
+/// `sight.from` is how much of the top has scrolled away, and a globe that
+/// answered the shorter box by being reprojected into it would change what it
+/// SHOWS. See [`paint`].
+fn painted(atlas: &Atlas<'_>, sight: &Sight) -> Option<Painted> {
+    #[allow(clippy::cast_precision_loss)]
+    let whole = (sight.size.1 + sight.from) as f32;
+    let marks = sight
+        .marks
+        .as_ref()
+        .map_or(ronoctua_atlas::Marks::NONE, |m| m.marks(sight.lit));
+    #[allow(clippy::cast_precision_loss)]
+    let drawing = ronoctua_atlas::project(
+        atlas,
+        sight.pose,
+        sight.at.map(|(lat, lon)| Point { lat, lon }),
+        (sight.size.0 as f32, whole),
+        &[],
+        f32::from(tokens::space::ATLAS_DOTRADIUS) / 10.0,
+        &marks,
+    );
+    let rgba = paint(
+        &drawing,
+        sight.size.0,
+        sight.size.1,
+        sight.from,
+        sight.theme,
+    )?;
+    // IN THE PAINTED PICTURE'S OWN PIXELS, which is not where the projection
+    // put them: the drawing is made at full height and the top `from` of it
+    // is cut away, so every mark moves up with everything else. A mark left
+    // in the projection's coordinates is a mark the eye sees in one place and
+    // the hand finds in another, which is the rule these fields exist to keep.
+    #[allow(clippy::cast_precision_loss)]
+    let (cut, tall) = (sight.from as f32, sight.size.1 as f32);
+    let seen = |y: f32| (0.0..tall).contains(&(y - cut));
+    Some(Painted {
+        rgba,
+        dot: drawing
+            .dot
+            .and_then(|(x, y)| seen(y).then_some((x, y - cut))),
+        marks: drawing
+            .marks
+            .into_iter()
+            .filter(|p| seen(p.at.1))
+            .map(|p| Placed {
+                at: (p.at.0, p.at.1 - cut),
+                ..p
+            })
+            .collect(),
+    })
 }
 
 /// What comes back.
@@ -425,6 +593,21 @@ pub enum Beat {
         owner: Owner,
         /// What was found.
         address: Box<Address>,
+    },
+    /// Where the lit group of a picture already sent is — looked up AFTER
+    /// the picture went, so a hover onto a new group is drawn at once and not
+    /// after a street lookup on a cold pack.
+    Placed {
+        /// The subject.
+        key: String,
+        /// Which view asked.
+        owner: Owner,
+        /// Which set of marks the group is of.
+        generation: Option<u64>,
+        /// The group's centre, as bits.
+        centre: (u32, u32),
+        /// What was found.
+        place: Box<Address>,
     },
     /// There is no world data on this machine.
     Absent {
@@ -481,6 +664,10 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
             // globe A does not throw away globe B's lookup.
             let mut held: [Option<(Sight, Address)>; GLOBES_AT_ONCE] =
                 [const { None }; GLOBES_AT_ONCE];
+            // AND THE LIT GROUP'S PLACE, once per group: a drag redraws the
+            // picture per pointer event, and the group under the hand is the
+            // same one all the while.
+            let mut lit_held: [Option<LitPlace>; GLOBES_AT_ONCE] = [const { None }; GLOBES_AT_ONCE];
             while let Ok(first) = orders.recv() {
                 // ONLY THE NEWEST SURVIVES. A drag queues an order per pointer
                 // event and every one behind the last is a view nobody is
@@ -539,55 +726,81 @@ pub fn stage(out: calloop::channel::Sender<Beat>) -> Option<Stage> {
                 };
                 held[slot] = Some((sight.clone(), address));
 
-                // THE WHOLE PICTURE IS PROJECTED, and only part of it is put
-                // down: `sight.from` is how much of the top has scrolled away,
-                // and a globe that answered the shorter box by being
-                // reprojected into it would change what it SHOWS. See `paint`.
-                let whole = (sight.size.1 + sight.from) as f32;
-                let drawing = ronoctua_atlas::project(
-                    &atlas,
-                    sight.pose,
-                    sight.at.map(|(lat, lon)| Point { lat, lon }),
-                    (sight.size.0 as f32, whole),
-                    &[],
-                    f32::from(tokens::space::ATLAS_DOTRADIUS) / 10.0,
-                );
+                let Some(picture) = painted(&atlas, &sight) else {
+                    continue;
+                };
                 // AND AFTER THE DRAW TOO: putting a picture on screen under a
                 // name the cursor has already left is the one failure a preview
                 // must not have.
                 if mine[slot].load(std::sync::atomic::Ordering::SeqCst) != now {
                     continue;
                 }
-                let Some(rgba) = paint(
-                    &drawing,
-                    sight.size.0,
-                    sight.size.1,
-                    sight.from,
-                    sight.theme,
-                ) else {
-                    continue;
-                };
+                let generation = sight.marks.as_ref().map(|m| m.generation);
+                let lit = sight
+                    .lit
+                    .and_then(|id| picture.marks.iter().find(|p| p.members.contains(&id)))
+                    .map(|p| (p.centre, (p.centre.lat.to_bits(), p.centre.lon.to_bits())));
+                // THE LIT GROUP'S PLACE, when it is already known — for this
+                // set, this group and this language.
+                let known = lit.and_then(|(_, centre)| {
+                    lit_held[slot]
+                        .as_ref()
+                        .filter(|(g, c, pt, _)| {
+                            Some(*g) == generation && *c == centre && *pt == sight.portuguese
+                        })
+                        .map(|(_, _, _, a)| a.clone())
+                });
+                let owed = lit.filter(|_| known.is_none());
                 if out
                     .send(Beat::Drawn(Box::new(Frame {
                         key: sight.key.clone(),
                         owner: sight.owner,
-                        rgba,
-                        // IN THE PAINTED PICTURE'S OWN PIXELS, which is not
-                        // where the projection put it: the drawing is made at
-                        // full height and the top `from` of it is cut away, so
-                        // the mark moves up with everything else. A dot left in
-                        // the projection's coordinates is a mark the eye sees
-                        // in one place and the hand finds in another, which is
-                        // the rule this field exists to keep.
-                        #[allow(clippy::cast_precision_loss)]
-                        dot: drawing.dot.and_then(|(x, y)| {
-                            let y = y - sight.from as f32;
-                            (y >= 0.0 && y < sight.size.1 as f32).then_some((x, y))
-                        }),
+                        rgba: picture.rgba,
+                        dot: picture.dot,
+                        marks: picture.marks,
+                        generation,
+                        lit_centre: lit.map(|(_, c)| c),
+                        lit_place: known,
                     })))
                     .is_err()
                 {
                     return;
+                }
+                // AND THEN THE PLACE, when it was not known: the picture is not
+                // held back for a street lookup, and the lookup is kept even
+                // when the cursor has moved on — the next frame of that group
+                // finds it. It is SENT only while this is still the newest.
+                if let Some((point, centre)) = owed {
+                    let found = ronoctua_atlas::address(
+                        &atlas,
+                        point,
+                        if sight.portuguese {
+                            Tongue::Portuguese
+                        } else {
+                            Tongue::English
+                        },
+                    );
+                    lit_held[slot] = Some((
+                        generation.unwrap_or(0),
+                        centre,
+                        sight.portuguese,
+                        found.clone(),
+                    ));
+                    if mine[slot].load(std::sync::atomic::Ordering::SeqCst) != now {
+                        continue;
+                    }
+                    if out
+                        .send(Beat::Placed {
+                            key: sight.key.clone(),
+                            owner: sight.owner,
+                            generation,
+                            centre,
+                            place: Box::new(found),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             }
         });
@@ -613,6 +826,14 @@ struct Shown {
     rgba: Rgba,
     /// Where the coordinate was drawn in it.
     dot: Option<(f32, f32)>,
+    /// Where its groups of marks were drawn.
+    marks: Vec<Placed>,
+    /// Which set of marks they are of.
+    generation: Option<u64>,
+    /// The lit group's centre, as bits.
+    lit_centre: Option<(u32, u32)>,
+    /// Where the lit group is.
+    lit_place: Option<Address>,
 }
 
 /// A globe a VIEW embeds.
@@ -637,6 +858,8 @@ pub struct Globe {
     address: Option<Address>,
     absent: bool,
     told: Option<Sight>,
+    marks: Option<Arc<MarkSet>>,
+    lit: Option<u32>,
 }
 
 impl Globe {
@@ -659,6 +882,8 @@ impl Globe {
             address: None,
             absent: false,
             told: None,
+            marks: None,
+            lit: None,
         }
     }
 
@@ -698,8 +923,12 @@ impl Globe {
     /// What should be drawn, when it is not what was last asked for.
     ///
     /// The value diff `wants_turn` already makes, and the same shape.
+    ///
+    /// A globe of MARKS draws with no coordinate: the player's world pages
+    /// point at nothing and show everything.
     pub fn wants(&mut self) -> Option<Ask> {
-        let now = (self.at.is_some() && self.size.0 > 0 && self.size.1 > 0).then(|| Sight {
+        let subject = self.at.is_some() || self.marks.is_some();
+        let now = (subject && self.size.0 > 0 && self.size.1 > 0).then(|| Sight {
             owner: self.owner,
             key: self.key.clone(),
             at: self.at,
@@ -708,6 +937,8 @@ impl Globe {
             from: self.from,
             theme: self.theme,
             portuguese: self.portuguese,
+            marks: self.marks.clone(),
+            lit: self.lit,
         });
         let ask = match (&self.told, &now) {
             (None, None) => None,
@@ -731,9 +962,30 @@ impl Globe {
                     key: f.key.clone(),
                     rgba: f.rgba.clone(),
                     dot: f.dot,
+                    marks: f.marks.clone(),
+                    generation: f.generation,
+                    lit_centre: f.lit_centre,
+                    lit_place: f.lit_place.clone(),
                 });
                 true
             }
+            // THE PLACE AFTER ITS PICTURE, taken only by the picture it is
+            // of: the same set and the same group still lit in it.
+            Beat::Placed {
+                key,
+                owner,
+                generation,
+                centre,
+                place,
+            } if *owner == self.owner && *key == self.key => match self.frame.as_mut() {
+                Some(shown)
+                    if shown.generation == *generation && shown.lit_centre == Some(*centre) =>
+                {
+                    shown.lit_place = Some((**place).clone());
+                    true
+                }
+                _ => false,
+            },
             Beat::Said {
                 key,
                 owner,
@@ -768,10 +1020,7 @@ impl Globe {
     /// Where the coordinate was drawn.
     #[must_use]
     pub fn dot(&self) -> Option<(f32, f32)> {
-        self.frame
-            .as_ref()
-            .filter(|s| s.key == self.key)
-            .and_then(|s| s.dot)
+        self.current().and_then(|s| s.dot)
     }
 
     /// What was found, when anything was.
@@ -834,6 +1083,145 @@ impl Globe {
     }
 }
 
+/// THE MARKS, which the player's world pages put on a globe
+/// (`crate::player_globe`).
+impl Globe {
+    /// The marks to put on the globe — `None` takes them off. A new set does
+    /// not move the globe; [`Globe::frame_on`] does, when a view asks.
+    pub fn showing(&mut self, marks: Option<Arc<MarkSet>>) {
+        self.marks = marks;
+    }
+
+    /// Lights the group that holds the mark `id` — or none. `true` when it
+    /// changed, and the picture is asked again: the lit group is painted in.
+    pub fn light(&mut self, id: Option<u32>) -> bool {
+        let moved = self.lit != id;
+        self.lit = id;
+        moved
+    }
+
+    /// The mark whose group is lit.
+    #[must_use]
+    pub const fn lit(&self) -> Option<u32> {
+        self.lit
+    }
+
+    /// Where it is pointed and how near — what a test of a view asks.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn pose(&self) -> Pose {
+        self.pose
+    }
+
+    /// The whole world, from where it is pointed now: what `C-r` gives back
+    /// on a page of the whole world.
+    pub fn whole_world(&mut self) -> bool {
+        let was = self.pose;
+        self.pose = Pose {
+            centre: Point { lat: 0.0, lon: 0.0 },
+            zoom: Pose::WORLD,
+        };
+        was != self.pose
+    }
+
+    /// DRAWN HERE, on the caller's own thread — a door with NO LOOP, a
+    /// photograph's or a test's, which has no thread to hand the order to:
+    /// what [`Globe::wants`] asks, painted by the ONE function the thread
+    /// paints with ([`painted`]), the address and the lit group's place
+    /// looked up as the thread looks them up. Nothing when nothing changed.
+    pub fn drawn_here(&mut self) {
+        let Some(Ask::Show(sight)) = self.wants() else {
+            return;
+        };
+        let Some(atlas) = world() else {
+            self.absent = true;
+            return;
+        };
+        let tongue = if sight.portuguese {
+            Tongue::Portuguese
+        } else {
+            Tongue::English
+        };
+        if self.address.is_none()
+            && let Some((lat, lon)) = sight.at
+        {
+            self.address = Some(ronoctua_atlas::address(&atlas, Point { lat, lon }, tongue));
+        }
+        let Some(picture) = painted(&atlas, &sight) else {
+            return;
+        };
+        let generation = sight.marks.as_ref().map(|m| m.generation);
+        let lit = sight
+            .lit
+            .and_then(|id| picture.marks.iter().find(|p| p.members.contains(&id)))
+            .map(|p| p.centre);
+        self.frame = Some(Shown {
+            key: sight.key.clone(),
+            rgba: picture.rgba,
+            dot: picture.dot,
+            marks: picture.marks,
+            generation,
+            lit_centre: lit.map(|c| (c.lat.to_bits(), c.lon.to_bits())),
+            lit_place: lit.map(|c| ronoctua_atlas::address(&atlas, c, tongue)),
+        });
+    }
+
+    /// The picture last shown, while it is of the subject AND of the set of
+    /// marks shown now — a picture of an older set is never grabbed by the
+    /// ids of this one.
+    fn current(&self) -> Option<&Shown> {
+        let generation = self.marks.as_ref().map(|m| m.generation);
+        self.frame
+            .as_ref()
+            .filter(|s| s.key == self.key && s.generation == generation)
+    }
+
+    /// The groups of marks where the last picture drew them, in its pixels.
+    #[must_use]
+    pub fn marks(&self) -> &[Placed] {
+        self.current().map_or(&[], |s| &s.marks)
+    }
+
+    /// The group of marks at `px`, in the picture's own pixels (as
+    /// [`Globe::dot`]): the nearest centre whose disc, and `atlas.markSlack`
+    /// round it, holds the point — read off the numbers it was PAINTED from.
+    #[must_use]
+    pub fn mark_at(&self, px: (f32, f32)) -> Option<&Placed> {
+        let slack = f32::from(tokens::space::ATLAS_MARKSLACK);
+        let far = |p: &Placed| {
+            let (dx, dy) = (p.at.0 - px.0, p.at.1 - px.1);
+            (dx * dx + dy * dy).sqrt()
+        };
+        self.marks()
+            .iter()
+            .filter(|p| far(p) <= p.radius + slack)
+            .min_by(|a, b| far(a).total_cmp(&far(b)))
+    }
+
+    /// Where the lit group is, once the thread has looked it up.
+    #[must_use]
+    pub fn lit_place(&self) -> Option<&Address> {
+        self.current()?.lit_place.as_ref()
+    }
+
+    /// Framed on the marks `members` — a group, a country's stations — whole,
+    /// with the disc's own air round them. `false` when the set knows none of
+    /// them, and the pose stays.
+    pub fn frame_on(&mut self, members: &[u32]) -> bool {
+        let Some(set) = self.marks.as_ref() else {
+            return false;
+        };
+        let points: Vec<Point> = members.iter().filter_map(|id| set.at_of(*id)).collect();
+        if points.is_empty() {
+            return false;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let size = (self.size.0 as f32, self.size.1 as f32);
+        self.pose = ronoctua_atlas::framing(&points, size, f32::from(tokens::space::ATLAS_AIR));
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// FAILS IF: the rows that scrolled away are SQUEEZED out of the picture
@@ -860,6 +1248,7 @@ mod tests {
             }],
             dot: None,
             rim: 10.0,
+            marks: Vec::new(),
         };
         // HOW MUCH OF THE BOX THE BAND COVERS, as a fraction of its pixels.
         let covered = |height: u32, from: u32| {
@@ -926,5 +1315,292 @@ mod tests {
             "the nearest place to London is {place}, {metres} m away"
         );
         assert!(atlas.credits().contains("GeoNames"));
+    }
+
+    /// Lisbon and Porto, a station each, and a country's worth at Madrid —
+    /// three public capitals and a city (invariant 13).
+    fn iberia(generation: u64) -> std::sync::Arc<super::MarkSet> {
+        let mark = |id, lat, lon, weight| ronoctua_atlas::Mark {
+            at: ronoctua_atlas::Point { lat, lon },
+            id,
+            weight,
+        };
+        std::sync::Arc::new(super::MarkSet {
+            generation,
+            all: vec![
+                mark(1, 38.72, -9.14, 1),
+                mark(2, 41.15, -8.61, 1),
+                mark(3, 40.42, -3.70, 120),
+            ],
+        })
+    }
+
+    /// A sight of `marks` over Iberia, 320 × 240 with its top 40 scrolled away.
+    fn sight_of(marks: std::sync::Arc<super::MarkSet>, lit: Option<u32>) -> super::Sight {
+        super::Sight {
+            owner: super::Owner::Player,
+            key: "radio-world".into(),
+            at: None,
+            pose: ronoctua_atlas::Pose {
+                centre: ronoctua_atlas::Point {
+                    lat: 40.0,
+                    lon: -6.0,
+                },
+                zoom: 12.0,
+            },
+            size: (320, 240),
+            from: 40,
+            theme: ronoctua_tokens::theme::palette(),
+            portuguese: false,
+            marks: Some(marks),
+            lit,
+        }
+    }
+
+    /// FAILS IF: the lit mark or the set of marks becomes part of the
+    /// texture's name — a new full-size texture each time the pointer
+    /// crosses a group, while the picture already replaces its texture every
+    /// frame under one key, as the pose does.
+    #[test]
+    fn the_marks_are_painted_in_and_never_name_a_texture() {
+        let plain = sight_of(iberia(1), None);
+        let lit = sight_of(iberia(1), Some(2));
+        let other = sight_of(iberia(1), Some(3));
+        let newer = sight_of(iberia(2), Some(2));
+        let keys = [&plain, &lit, &other, &newer].map(super::Sight::texture_key);
+        for k in &keys[1..] {
+            assert_eq!(k, &keys[0], "one moving picture, one texture");
+        }
+        let mut moved = sight_of(iberia(1), Some(2));
+        moved.pose.zoom *= 2.0;
+        assert_eq!(moved.texture_key(), keys[0], "nor does the pose");
+        let mut cut = sight_of(iberia(1), None);
+        cut.from += 1;
+        assert_ne!(cut.texture_key(), keys[0], "the cut still does");
+        assert!(
+            keys[0].contains("player"),
+            "the owner is not in {}",
+            keys[0]
+        );
+        // AND A GLOBE ASKS AGAIN when its lit mark moves, with no coordinate.
+        let mut globe = super::Globe::new(super::Owner::Player);
+        globe.looking_at(None, "radio-world", (320, 240), 0, 0, false);
+        assert!(globe.wants().is_none(), "nothing to draw yet");
+        globe.showing(Some(iberia(1)));
+        assert!(
+            matches!(globe.wants(), Some(super::Ask::Show(_))),
+            "marks and no coordinate"
+        );
+        assert!(globe.wants().is_none());
+        assert!(globe.light(Some(1)));
+        assert!(!globe.light(Some(1)));
+        assert!(matches!(globe.wants(), Some(super::Ask::Show(s)) if s.lit == Some(1)));
+    }
+
+    /// FAILS IF: a group of marks is grabbed anywhere but where it was painted
+    /// — its disc and the slack round it — or a picture of an older set of
+    /// marks is grabbed by the ids of the new one.
+    #[test]
+    fn a_mark_is_grabbed_where_it_is_drawn() {
+        let set = iberia(1);
+        let sight = sight_of(std::sync::Arc::clone(&set), Some(3));
+        // THE GROUPS AS THE PURE CRATE PLACES THEM on the whole picture, cut
+        // as the thread cuts them: what a frame carries without the atlas.
+        #[allow(clippy::cast_precision_loss)]
+        let whole = (sight.size.0 as f32, (sight.size.1 + sight.from) as f32);
+        let placed: Vec<_> = ronoctua_atlas::placed(&set.marks(Some(3)), sight.pose, whole)
+            .into_iter()
+            .map(|p| ronoctua_atlas::Placed {
+                at: (p.at.0, p.at.1 - 40.0),
+                ..p
+            })
+            .filter(|p| (0.0..240.0).contains(&p.at.1))
+            .collect();
+        assert_eq!(placed.len(), 3, "{placed:?}");
+        let mut globe = super::Globe::new(super::Owner::Player);
+        globe.looking_at(
+            None,
+            "radio-world",
+            sight.size,
+            sight.from,
+            sight.theme,
+            false,
+        );
+        globe.showing(Some(std::sync::Arc::clone(&set)));
+        let frame = |marks: Vec<ronoctua_atlas::Placed>, generation| {
+            super::Beat::Drawn(Box::new(super::Frame {
+                key: "radio-world".into(),
+                owner: super::Owner::Player,
+                rgba: ronoctua_render::image::Rgba::new(1, 1, vec![0; 4]).expect("a pixel"),
+                dot: None,
+                marks,
+                generation: Some(generation),
+                lit_centre: None,
+                lit_place: None,
+            }))
+        };
+        assert!(globe.saw(&frame(placed.clone(), 1)));
+        let slack = f32::from(ronoctua_tokens::space::ATLAS_MARKSLACK);
+        for p in &placed {
+            assert_eq!(globe.mark_at(p.at).map(|g| &g.members), Some(&p.members));
+            let edge = (p.at.0 + p.radius + slack - 0.25, p.at.1);
+            assert_eq!(
+                globe.mark_at(edge).map(|g| &g.members),
+                Some(&p.members),
+                "the slack"
+            );
+        }
+        let madrid = placed
+            .iter()
+            .find(|p| p.members.contains(&3))
+            .expect("Madrid");
+        let past = (madrid.at.0, madrid.at.1 + madrid.radius + slack + 1.0);
+        assert!(
+            globe
+                .mark_at(past)
+                .is_none_or(|g| g.members != madrid.members),
+            "grabbed past its disc"
+        );
+        // A PICTURE OF ANOTHER SET is never grabbed.
+        assert!(globe.saw(&frame(placed.clone(), 7)));
+        assert!(globe.mark_at(madrid.at).is_none());
+        assert!(globe.marks().is_empty());
+
+        // AND ON THE BAKED WORLD, where it exists: each group's centre is
+        // painted in its mark's ink, the lit one as chosen.
+        let Some(atlas) = super::world() else {
+            return;
+        };
+        let picture = super::painted(&atlas, &sight).expect("a picture");
+        assert_eq!(picture.marks, placed, "the thread placed them elsewhere");
+        let palette = sight.theme;
+        for p in &picture.marks {
+            // THE PIXEL THE CENTRE IS IN, whose farthest corner is well inside
+            // the smallest disc.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (x, y) = (p.at.0.floor() as usize, p.at.1.floor() as usize);
+            let at = (y * sight.size.0 as usize + x) * 4;
+            let ink = if p.members.contains(&3) {
+                ronoctua_atlas::Ink::Chosen
+            } else {
+                ronoctua_atlas::Ink::Dot
+            };
+            let want = super::ink_color(ink).to_rgba8_in(palette);
+            assert_eq!(
+                &picture.rgba.pixels[at..at + 3],
+                &want[..3],
+                "the group {:?} is not painted where it is grabbed",
+                p.members
+            );
+        }
+    }
+
+    /// FAILS IF: framing a group does not bring the globe onto it, a group the
+    /// set does not know moves it anyway, or the lit group's place outlives
+    /// the set it was looked up for.
+    #[test]
+    fn a_group_is_framed_whole_and_its_place_belongs_to_its_set() {
+        let mut globe = super::Globe::new(super::Owner::Player);
+        globe.looking_at(None, "radio-world", (320, 240), 0, 0, false);
+        assert!(!globe.frame_on(&[1, 2]), "no marks, nothing to frame");
+        globe.showing(Some(iberia(4)));
+        let before = globe.pose;
+        assert!(!globe.frame_on(&[99]), "an id the set does not have");
+        assert_eq!(globe.pose, before);
+        assert!(globe.frame_on(&[1, 2]));
+        let c = globe.pose.centre;
+        assert!(
+            (38.7..41.2).contains(&c.lat) && (-9.2..-8.6).contains(&c.lon),
+            "{c:?}"
+        );
+        assert!(globe.pose.zoom > ronoctua_atlas::Pose::WORLD);
+        // THE PLACE comes with the picture, and goes with its set.
+        let place = ronoctua_atlas::Address {
+            region: Some("Lisboa".into()),
+            ..ronoctua_atlas::Address::default()
+        };
+        let frame = |generation| {
+            super::Beat::Drawn(Box::new(super::Frame {
+                key: "radio-world".into(),
+                owner: super::Owner::Player,
+                rgba: ronoctua_render::image::Rgba::new(1, 1, vec![0; 4]).expect("a pixel"),
+                dot: None,
+                marks: Vec::new(),
+                generation: Some(generation),
+                lit_centre: Some((1, 2)),
+                lit_place: Some(place.clone()),
+            }))
+        };
+        assert!(globe.saw(&frame(4)));
+        assert_eq!(globe.lit_place(), Some(&place));
+        assert!(globe.saw(&frame(3)));
+        assert_eq!(globe.lit_place(), None);
+        // OR IT COMES AFTER THE PICTURE, and is taken only by the picture of
+        // its own set whose lit group it is.
+        let porto = ronoctua_atlas::Address {
+            region: Some("Porto".into()),
+            ..ronoctua_atlas::Address::default()
+        };
+        let placed = |generation, centre| super::Beat::Placed {
+            key: "radio-world".into(),
+            owner: super::Owner::Player,
+            generation: Some(generation),
+            centre,
+            place: Box::new(porto.clone()),
+        };
+        let bare = super::Beat::Drawn(Box::new(super::Frame {
+            key: "radio-world".into(),
+            owner: super::Owner::Player,
+            rgba: ronoctua_render::image::Rgba::new(1, 1, vec![0; 4]).expect("a pixel"),
+            dot: None,
+            marks: Vec::new(),
+            generation: Some(4),
+            lit_centre: Some((1, 2)),
+            lit_place: None,
+        }));
+        assert!(globe.saw(&bare));
+        assert_eq!(globe.lit_place(), None, "not known yet");
+        assert!(!globe.saw(&placed(3, (1, 2))), "another set");
+        assert!(!globe.saw(&placed(4, (9, 9))), "another group");
+        assert_eq!(globe.lit_place(), None);
+        assert!(globe.saw(&placed(4, (1, 2))));
+        assert_eq!(globe.lit_place(), Some(&porto));
+    }
+
+    /// FAILS IF: a country's anchor — where its mark goes — is not on the
+    /// land it names, as the reader answers it (`country_at`).
+    ///
+    /// It failed for ten countries on the first run: Natural Earth's label
+    /// point is where a map writes the NAME, and New Zealand's is in the sea
+    /// off Taranaki. The generator moves such a point onto the land
+    /// (`gen-atlas.py`, `on_land`), and this is what says it did.
+    ///
+    /// Skipped without the baked world, like the test above it.
+    #[test]
+    fn every_anchor_is_inside_its_own_country() {
+        let Some(atlas) = super::world() else {
+            return;
+        };
+        let mut anchors = 0;
+        let mut outside = Vec::new();
+        for a in b'A'..=b'Z' {
+            for b in b'A'..=b'Z' {
+                let iso = [a, b];
+                let Some(at) = ronoctua_atlas::anchor_of(&atlas, iso) else {
+                    continue;
+                };
+                anchors += 1;
+                let found = ronoctua_atlas::country_at(&atlas, at, ronoctua_atlas::Tongue::English)
+                    .map(|(_, code, _)| code);
+                if found != Some(iso) {
+                    outside.push((String::from_utf8_lossy(&iso).into_owned(), found));
+                }
+            }
+        }
+        assert!(anchors >= 100, "only {anchors} anchors baked");
+        assert!(
+            outside.is_empty(),
+            "anchors off their own land: {outside:?}"
+        );
     }
 }

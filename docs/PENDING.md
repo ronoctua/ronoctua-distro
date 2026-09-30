@@ -94,6 +94,16 @@ Tudo abaixo é decisão, não esquecimento.
   sete `command::svg` (um por `Ink`, um token cada, sem mudar o WIT) com a malha de 110 m, sem ruas
   e sem ponteiro, porque buffer não tem disco nem recebe valor de token.
 
+### 0.0000001-D. O país da coordenada acende pela CAIXA · pequeno
+
+O `Ink::Here` acende todo país cuja caixa envolvente contém o ponto (`ronoctua-atlas/src/globe.rs`):
+uma coordenada em Londres acende também a Holanda e a Rússia. O atlas já sabe dizer em que país um
+ponto está pelos anéis (`lookup::country_at`, o que o endereço usa); o acendimento pergunta só à
+caixa. Anterior à reforma do player, visto nas fotos do globo.
+
+- acabou quando: uma coordenada acende só o país cujos anéis a contêm, com um teste que planta um
+  ponto em Londres e confere que só o GB acende
+
 ### 0.0000001-C. As miniaturas — o que elas deliberadamente NÃO fazem · registro
 
 Entregues no modo grade (`C-g`). O que ficou de fora, com o preço de cada um:
@@ -197,6 +207,37 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 
 ## Funcionalidade especificada e ausente
+
+### 0.0000028. A folga do disco — o que só uma máquina da distro prova · pequeno cada
+
+A folga (`docs/ARCHITECTURE.md`, "Quando o disco aperta") foi provada por teste com árvores
+plantadas, por sabotagem e por um ensaio lido num disco real; estas coisas não:
+
+- **A unidade no sandbox dela.** Que `nix-store --gc --print-roots` alcança o daemon sob
+  `ProtectSystem=strict`, `PrivateNetwork` e `SystemCallFilter=@system-service`, como a pessoa, está
+  medido (uma unidade transiente com as mesmas propriedades: 369 raízes, saída 0); falta o
+  `--gc --max-freed`, que apaga, e a unidade de verdade numa máquina da distro. Um `space-vm` (~90 s):
+  um btrfs pequeno cheio até abaixo do piso, uma árvore do cargo e lixo no store plantados; o
+  cérebro dispara a folga, o disco volta à meta, a raiz plantada e a geração ficam.
+- **O caminho inteiro até a linha.** Cérebro → unidade → relatório → `Relieved` no `Mind` →
+  `disk-relieved` no minibuffer, e `disk-still-short` quando nada mais sai. Cada pedaço tem teste;
+  a costura, não.
+- **A página da tarefa mostra cadência e janela** ("roda a cada 7 dias", "entre qualquer hora"),
+  que uma tarefa sem calendário não usa — como as duas vigias já mostram. A linha da lista diz o
+  certo ("quando falta disco"); a página precisaria esconder as duas linhas quando `why_not` diz que
+  não há calendário, e isso é o buffer do cérebro, com foto.
+
+- **A aparagem numa troca de verdade.** Que o trecho de ativação grava
+  `/run/ronoctua-generations/previous-system` antes de `/run/current-system` mudar, que a
+  `ronoctua-system-generations-at-activation` roda a cada `switch` sem derrubá-lo, e que o menu de
+  uma ESP real (systemd-boot) é lido. Provado em fixture com o `nix-env` de verdade, não numa troca.
+  Um `store-vm` (~75 s): gerações plantadas, uma especialização, um rollback e uma troca.
+- **A montagem por bind.** `STATX_ATTR_MOUNT_ROOT` foi provado em `/` e num diretório comum; um
+  bind dentro do cache precisa de root. Um subteste de VM planta um e roda as duas varreduras.
+- **A conversão do `~/.cache` num boot de verdade**: que ela vê `starting`, que o login espera por
+  ela, e que o limite de 10 minutos corta e o bilhete segura a próxima. Provado com um
+  `systemctl` substituto; o `cache-subvolume-vm` oferecido prova o resto.
+- acabou quando: o `space-vm` passa e a foto da linha "espaço aberto no disco" está numa cena
 
 ### 0.0000029. O rodapé transparente — o que só a GPU do dono prova · minúsculo
 
@@ -788,13 +829,236 @@ GIF não tem duração, então não ganha linha do tempo (buscar num GIF é comp
 quadro: 707 ms no arquivo do dono).
 
 Provar a linha do tempo pede um **vídeo**, que pede `ffmpeg-full` DENTRO da VM das fotos, mais as
-duas variáveis que o `nix/modules/media.nix` põe na sessão. Isso é decisão de closure numa VM de
-teste, não decisão de teste — por isso não foi tomada.
+duas variáveis que o `nix/modules/media.nix` põe na sessão. Isso já existe: o rodapé do palco leva
+`RONOCTUA_FFMPEG` e `RONOCTUA_FFPROBE`, e `MEDIA` tem o `film.mp4`. Falta a cena.
 
-- acabou quando: uma cena do `.#shot` arrasta o cursor da linha do tempo e mede que ele andou, ou o dono decide
-  que o custo de closure não vale
+O preço já foi pago, e é maior do que o ffmpeg: medido com `nix path-info -S` no driver do `.#shot`,
+o palco do player somou **+198 MiB** (de 5,2 para 5,4 GiB, 33 caminhos). O ffmpeg é 1,2 MiB (só a
+saída `bin`; a `lib` e a `data` já vinham pelo mpv), a mídia 9,9 MiB e o daemon 6,9 MiB; os outros
+~180 MiB são a tabela de decodificadores (`nix/player-tools.nix`: o zxtune e o Qt5 que ele puxa,
+~130 MiB; a soundfont, 31 MiB; vgmstream, uade…), mais uma segunda avaliação do nixpkgs para o único
+decodificador não livre. As cenas de `film.mp4` e `subbed.mkv` não usam a tabela: o mpv decodifica os
+dois sozinho. Ela está lá para que uma cena abra qualquer arquivo do `MEDIA`.
+
+- acabou quando: uma cena do `.#shot` arrasta o cursor da linha do tempo e mede que ele andou; e o
+  dono decide se a tabela de decodificadores fica no palco ou sai dele
+
+### 0.00031. O que a câmera das portas e o palco do player ainda não provaram · pequeno cada
+
+O `ronoctua-shell photograph` e o palco do player no `.#shot` entraram juntos, e três provas pediam
+VM numa máquina com menos de 25 GB livres — então não foram feitas:
+
+- **A foto contra a tela.** A janela e a coluna do player, fotografadas pelos dois caminhos — a
+  câmera e o `.#shot` com um `film.mp4` pausado num segundo conhecido, o `look("nome")` e o
+  `frame_png` do mesmo instante dados à câmera — e toda diferença explicada. Hoje o que se sabe é que
+  a câmera chama a mesma `door::compose` que a porta chama.
+- **A legenda do libass no quadro do daemon.** O único pacote de legenda do `subbed.mkv` ficava no
+  byte 776 462 de 1 147 591, retido pelo `-shortest`, e nenhum quadro do daemon mostrou o "hello".
+  Sem o `-shortest` (`tests/player-media.nix`), o mpv pinado com `--vo=image` desenha o "hello" em 1 s
+  e em 3 s, e o arquivo antigo, nos mesmos instantes, não desenha — mas o arquivo testado foi feito à
+  mão com o mesmo comando, a derivação não foi construída e nada foi refotografado na VM. O
+  `player-vm` continua sem olhar um pixel da legenda.
+- **Duas telas numa foto.** O `start_compositor(outputs=2)` sobe as duas, mas as duas janelas do X
+  ficam empilhadas em `+0+0`, o `shot()` não recebe `output=`, e qual nome de saída cada janela do X
+  carrega não foi medido.
+- **A coluna de mídia do rodapé na tela** (`player_media`). A câmera não alcança o rodapé, e o que
+  existe são testes da geometria (o degrau por largura, o pé do painel, o botão e a barra pegos onde
+  o rodapé os pinta, o teto do palco). Falta o `.#shot`: um filme a 1024 px (degrau pequeno) e a
+  1500 px (médio), o botão de tocar e a barra de tempo apertados onde a linha de depuração "the
+  player's panel laid out" diz que estão, o `o` levando o rodapé a 70% da tela e o `Esc` de volta,
+  um mp3 com capa, um flac sem capa (o cartão de título em `text.secondary`, nunca sobre
+  `surface.backdrop`), um fluxo sem duração e uma tela de 700 px (a frase da recusa na home). E o
+  que só a tela mostra: o filme do mesmo tamanho numa página de duas linhas e na home
+  (`player_media::panel_lines`), o glifo de trocar só no painel, o `k` sob o `o` trazendo as
+  linhas e abrindo a página, e o botão aceso sob uma mão parada quando o glifo das mídias chega.
+- **O par da modeline numa foto.** Os quatro cliques do par (tocar/pausar e levantar a coluna;
+  próximo e abrir a vista) e a modeline depois de fechar o player em todo lugar nunca foram vistos
+  numa tela: a cena (`modeline-pair`) foi escrita e não rodou, porque pede a VM.
+
+- acabou quando: cada item acima sai daqui com a foto que o prova
+
+### 0.00032. A home do player com uma fila grande, e o nome de uma língua · pequeno cada
+
+- **A fila não tem teto na home.** Ela vem antes de Ouvir e assistir e de Recursos variados, então
+  com duzentos itens esses ficam duzentas linhas abaixo, e o rodapé mostra umas quinze. A fila já é
+  árvore (`player_queue`) e uma playlist de duzentos dobra numa linha, mas duzentos arquivos soltos
+  no nível de cima continuam duzentas linhas: falta a home mostrar a atual e algumas em volta, com
+  uma linha "Fila · N" que abre a página inteira.
+- **Uma faixa diz o código da língua** (`eng`, `por`), cru, como o mpv o dá; duas iguais já ganham
+  o codec e o número (`player::track_name`). Na página das legendas, uma faixa diz também o código
+  que o arquivo declara (`pt-BR · Portuguese`, `player_subtitles::name`). O nome da língua sai da
+  tabela gerada de línguas que as buscas trazem.
+
+- acabou quando: a home mostra uma janela da fila e a faixa diz o nome da língua, nos dois idiomas
+
+### 0.00033. O XML da prévia ainda não passa pela guarda de profundidade · pequeno
+
+As listas, as legendas e as tags do Matroska leem XML pelo `ronoctua_xml::parse`, que mede o
+aninhamento antes de o `roxmltree` recursar. O `ronoctua-inspect` ainda chama o `roxmltree` direto
+em oito lugares (`document.rs`: o texto corrido dos documentos, o livro, as planilhas ODF e
+OOXML; `mesh/`: AMF e DAE), e um
+arquivo feito para isso derruba o rodapé na prévia. Não entrou no mesmo passo porque o teto não é
+o mesmo: uma cena DAE aninha nós de verdade (um esqueleto passa de vinte níveis), e 48 é o teto
+medido para listas e legendas.
+
+- acabou quando: todo `Document::parse` do workspace passa pela guarda, com o teto de cada formato
+  medido, e um check (`one-xml-reader`, no molde do `one-zip-reader`) recusa um novo leitor direto
+
+### 0.00034. Os sons ambientes sem gravações, e o par da modeline sem foto · pequeno cada
+
+- **As gravações não foram publicadas.** Os laços saem de três originais aprovados de ouvido, que
+  vão num asset de Release `ambience-v1`: `nix run .#ambience-release -- <pasta dos originais>`
+  confere cada sha256 contra `assets/ambience.nix`, empacota o arquivo sempre com os mesmos bytes e
+  imprime as notas e o hash; o dono cria o Release e sobe o arquivo como o único asset. Depois: o
+  input `ambience-v1` (`file+https://`, pelo motivo das fontes) com `nix flake lock --update-input
+  ambience-v1`, o pacote `ambience` passado ao módulo e ao `.#dev`, e o `RONOCTUA_AMBIENCE` do
+  `player.nix` sem a condição `ronoctua ? ambience`. O palco do `.#shot` passa o catálogo de teste
+  (`--setenv=RONOCTUA_AMBIENCE=${MEDIA}/ambience`), para a página ser fotografada. Até lá o player diz na página que a máquina não tem sons ambientes, e a página, a
+  linha da home e o par da modeline só foram vistos com estados escritos para a foto. Sons novos só entram com
+  aprovação de ouvido do dono.
+- **O par da modeline com só o ambiente não foi visto na tela.** A câmera não alcança o rodapé; o
+  que existe é o teste da geometria (as mesmas células, o próximo no tom inerte, as frases sob o
+  ponteiro). Falta o `.#shot`: um som ligado com a fila vazia, o par, o próximo apagado, um clique
+  nele que não faz nada e o `hint-player-next-ambience` sob o ponteiro, e o tocar/pausar trocando o
+  glifo quando o daemon responde.
+- **A emenda num aparelho de verdade.** O build prova, amostra por amostra, o que o mpv ENTREGA
+  (`--ao=pcm`, sem relógio); uma falta de dados do aparelho enquanto o mpv volta ao zero não foi
+  medida.
+
+- acabou quando: o `ambience-v1` está publicado e no flake, o player de uma instalação lista os três
+  sons e toca um, e as duas fotos existem
+
+### 0.00035. A linha do tempo nas portas — o que ainda não foi visto ou feito · pequeno cada
+
+- **O deck no "Agora" do rodapé não foi visto na tela.** A câmera não alcança o rodapé; o que
+  existe são os testes da vista (as linhas do deck no lugar da posição, só para um conjunto) e a
+  aritmética dividida com a janela (`player_rows::deck_at`, `Deck::press`), provada pelos testes da
+  janela. Falta o `.#shot`: um conjunto tocando, o deck no "Agora", uma banda arrastada (o fantasma),
+  a frase sob o ponteiro na linha da mensagem e o `Esc` que cancela.
+- **A régua fica rala num trilho curto.** Na coluna média, com os nomes, o trilho tem ~17 células e
+  só o `0:00` cabe inteiro antes do fim (`ticks` só escreve o rótulo que termina dentro do trilho).
+  Deslocar o último rótulo para terminar no fim do trilho daria uma segunda marca; é decisão de
+  desenho, não feita.
+- **O roteamento por tela no rodapé não foi visto na tela.** Cada superfície do rodapé compõe as
+  imagens roteadas ao conector dela (`player_media::placed_on_screen`), provado por teste; falta o
+  `.#shot` com duas saídas: um filme só numa, a capa só na outra, e o esquema da página Disposição
+  pintado na região.
+- **"Mostrar em cada tela" não foi visto em duas telas.** A decisão é testada e as fotos mostram a
+  frase; falta a VM de duas saídas (`player-vm`, o plano) provar que o compositor pinado honra o
+  `set_fullscreen(Some(output))` e que cada janela mostra só o que vai à tela dela.
+- **Os glifos das linhas são pequenos** ao lado do texto: a forma na Disposição, o `◀`/`▶` e os tipos
+  de saída de som são desenhados no tamanho do texto, como toda marca de linha da vista.
+- **Uma faixa desligada não tem comprimento dito** (o daemon só manda `lane_states` das ligadas), e
+  a banda dela, cinza, corre até o fim do trilho como uma ao vivo.
+- **O que o rodapé ganhou na revisão não foi visto na tela**: um tamanho só por imagem entre as
+  telas que a mostram, o arrasto do deck que acaba com a vista, a garra das saídas refeita depois de
+  um player reiniciado, a pasta ao lado do filme lida numa thread e a Disposição medida na caixa do
+  painel. Os testes da vista e da janela cobrem a lógica dividida.
+- **Decisões do dono**, levantadas na revisão e não tomadas aqui:
+  - um som em duas saídas: uma faixa tem uma saída, e a mesma trilha como segunda faixa é recusada;
+  - uma frase dita no cabeçalho de uma coluna estreita é cortada na linha fechada (a gaveta a mostra
+    inteira) — vale para toda janela, não só o player;
+  - no canto, as imagens pequenas ficam SOBRE a primeira, com um anel do chão (invariante 15).
+  (Tomadas em 2026-09-29: `C-↑`/`C-↓` movem uma entrada ou um grupo; a página da faixa ganhou nome,
+  fim e imagem; uma nota nunca perde linha; o clique numa banda escolhe e o segundo abre.)
+- **Um clique abaixo da última linha da lista do player escolhe a última linha** (`row_at` devolve
+  um índice além das linhas, e `Row::owner` o prende à última): visto fotografando a página que
+  escolhe uma capa. Antigo, não desta mudança.
+
+- acabou quando: a foto do rodapé existe, a VM de duas saídas mostra cada tela com as suas imagens,
+  e cada decisão acima foi tomada
 
 
+
+### 0.00036. Os metadados do player — o que ainda não foi visto ou feito · pequeno cada
+
+- **A seção no rodapé não foi vista na tela.** A câmera não alcança o rodapé; a capa sobre as linhas
+  da região sai da mesma conta que a janela pinta (`player_metadata::cover_place`, testada), e o
+  resto são as linhas da vista, que as fotos da janela e da coluna mostram. Falta o `.#shot`: uma
+  música com capa no rodapé, rolada até a capa ficar pela metade.
+- **O rascunho no editor não foi visto de ponta a ponta.** O daemon (E7) foi medido num namespace
+  privado, e a vista pergunta "gravar?" pelo estado (teste); falta ver o `Told::Draft` abrindo o
+  `emacsclient` e o salvar voltando como pergunta, com um player de verdade (`player-vm` ou o `.#dev`).
+- **As buscas na rede (P8) não foram vistas com um daemon de verdade.** As páginas (Sugestões, a de
+  uma sugestão com as duas capas, Buscar legendas, Buscar letras, Internet) foram fotografadas na
+  janela e na coluna com mesas dadas (`photograph --desk`), e o daemon foi medido contra falsos no
+  lane E8; falta a volta inteira: a porta pedindo a mesa quando a geração anda, a capa sugerida
+  buscada ao abrir a página, e o teste de uma chave dizendo "aceitou" — num `player-vm` com o palco
+  do `lookups-vm`, ou no `.#dev` com uma chave de verdade. E no rodapé, que a câmera não alcança.
+- **O que ainda é só leitura.** O dono escolheu o genérico: toda linha de Todas as etiquetas que o
+  formato grava age, e "Acrescentar uma etiqueta" pergunta nome e valor. Ficaram sem linha que os
+  mude a língua, o título e as marcas de um fluxo (`Edit::Stream`, que o escritor do Matroska já
+  faz) e o título de um capítulo; e as etiquetas de uma faixa do Matroska dizem que não são gravadas
+  (`NotGlobal`: o `--tags track:<n>:` do `mkvpropedit` substitui as de uma faixa, e a faixa teria
+  de ser achada pelo `TrackUID` no `mkvmerge -J`).
+- **Tirar o último campo de um FLAC é recusado.** O lofty 0.25.4 não grava um comentário Vorbis
+  VAZIO num FLAC: o rascunho relido não confere (`native::verify`) e é jogado fora, o arquivo como
+  estava, e a tela diz que a gravação falhou. Vale para `d` no único campo ou na única etiqueta.
+- **Etiquetas pelo próprio nome não foram gravadas por um daemon de verdade.** O escritor foi provado
+  em arquivos feitos no teste (FLAC, MP3, M4A, e um Ogg com o ffmpeg de verdade) e com programas de
+  mentira para o Matroska e o remux; a página, fotografada com folhas dadas (`--sheet`). Falta a volta
+  inteira — gravar, a folha nova chegando pela geração — com um player de verdade.
+- **Gravar Matroska com o `mkvtoolnix` de verdade.** O escritor foi testado com programas de
+  mentira (`/bin/sh`), nunca com os três programas. Um subteste no `player-vm` com o perfil de
+  mídia.
+- **Etiquetas de um MP4 acima de 512 MiB.** O lofty reescreve com o arquivo inteiro na memória, e a
+  folha diz que é grande demais — quase todo filme em MP4. Um escritor que não segure o arquivo
+  (reescrever só o `moov`, ou o remux do ffmpeg onde ele guarda tudo).
+- **Os formatos de resposta** do MusicBrainz, Cover Art Archive, Wikidata, TMDB, OpenSubtitles e
+  SubDL vêm da documentação, com fixtures escritas à mão; só o do LRCLIB foi conferido contra uma
+  resposta de verdade. E o moviehash contra os vetores publicados (`breakdance.avi`, 12,9 MB) tem o
+  teste, `#[ignore]`, sem o download pinado que o alimenta.
+- **Os códigos de língua do OpenSubtitles e do SubDL** em `assets/tongues.nix` foram escritos das
+  listas dos serviços e só conferidos na forma: as duas listas pedem a chave de uma conta.
+- **O Podnapisi** volta quando o domínio responder (`podnapisi::AWAKE`).
+- **`lookups-vm` e `directories-vm`**: os palcos dos lanes E8 e E9 (uma CA descartável,
+  `networking.hosts` para um falso HTTPS de cada host) como testes de VM.
+- **`ronoctua_lookup::keys::write_private_file`** mora no crate das buscas e guarda também as máquinas
+  pareadas: é do `ronoctua-store`.
+- **A cidade de um canal de TV** é dita e não desenhada: o atlas não acha um lugar pelo nome dentro
+  de um país (`ronoctua_atlas::place_named`, e usá-lo em `AtlasMap::place`).
+- **Os diretórios (P9) não foram vistos com um daemon de verdade nem no rodapé.** As páginas (Rádios
+  e TVs do mundo com o globo, a lista de um país, gêneros, línguas, uma busca, os temas com as três
+  fontes, favoritos, tocados há pouco) foram fotografadas na janela e na coluna com mesas dadas e o
+  globo desenhado no lugar; falta a volta inteira — a porta pedindo a lista ao abrir e a mesa
+  chegando, a estrela gravada pelo daemon e relida pela vigia do arquivo — e o globo no painel do
+  rodapé (arrastar, a roda, um clique), que só os testes da vista cobrem. Também não medido: o custo
+  de reprojetar o globo a cada evento do ponteiro com milhares de marcas (`nix run .#bench`). Duas
+  telas: o rodapé guarda o globo desenhado por tela e o mede uma vez na maior (sem foto — a câmera
+  não alcança o rodapé).
+- **As páginas de estações e a recusa na hora não foram vistas contra o radio-browser**: o `offset`
+  de uma página seguinte e a recusa que volta à página (`Told::Listing`) são testados com falsos e
+  fotografados com `--desk`/`--refused`.
+- **Uma página com o diretório não permitido mostra a lista que a mesa ainda guarda**, de antes de a
+  permissão ser tirada: a linha que pergunta vem em cima, mas a lista velha fica.
+
+- acabou quando: a foto do rodapé existe, o rascunho e uma etiqueta foram vistos ida e volta, os
+  diretórios foram vistos contra um daemon, cada formato de serviço tem uma resposta de verdade como
+  fixture, e cada linha só de leitura acima ou age ou diz por que não
+
+### 0.00037. Legendas: o que só um arquivo de verdade ou a VM provam · pequeno cada
+
+- **Legenda de imagem (PGS, VobSub) num teste de VM.** O ffmpeg não codifica PGS a partir de texto,
+  então a trilha secundária só tem teste de unidade. Falta uma amostra pinada (`downloads-are-pinned`)
+  e o subteste que a vê no quadro, com as faixas de texto subindo para a banda de cima.
+- **A trilha de dentro de um filme que toca pela rede** (seguindo outra máquina) só aparece sozinha:
+  a chave de acesso à mídia vai num cabeçalho, e o ffmpeg a levaria no `argv`.
+- **Um SAMI com várias línguas** mostra a primeira classe que diz algo; escolher outra pede um
+  parâmetro que a faixa não tem.
+
+- acabou quando: a legenda de imagem tem subteste com pixel, e as outras duas existem ou estão no
+  `ARCHITECTURE.md` como decisão
+
+### 0.00038. Faixas: o que ficou sem fazer · pequeno cada
+
+- **Um conjunto com todas as faixas desligadas** não toca nada e nunca acaba: a thread do relógio
+  anda enquanto ele "toca".
+- **A porta não pede o contorno.** O `watch` manda o contorno da fila antes do estado que vai com
+  ele, e a porta guarda o último; uma porta cujo contorno ficasse mais velho que o `revision` do
+  estado (uma linha perdida) não pede o outro (`Ask::Queue`).
+
+- acabou quando: um conjunto sem faixa ligada termina (com teste), e a porta pede o contorno quando
+  a revisão do estado passa a dela
 
 ### 0.0. As TREZE vistas do rodapé não têm estado · pequeno, e é uma decisão
 

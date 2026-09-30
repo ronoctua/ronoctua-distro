@@ -182,11 +182,59 @@ Um buffer vira PNG em 0,2 s, sem VM. Dentro do `nix develop`, cada componente te
 tema, idioma, e teclas e cliques para andar até a tela que se quer.
 
 ```
+nix run .#png -- --door column --size small --state look.json --frame 1=quadro.png \
+  --output eDP-1 --output 'DP-2=Um monitor' --language pt-BR --key '<down>' --out coluna.png
+```
+
+Com `--door`, a foto é de uma porta nativa — hoje a janela e a coluna do player, em todo tamanho,
+barra inclusive —, tirada por `ronoctua-shell photograph`. A porta é a de produção, desligada, e o
+quadro sai da mesma função com que ela se desenha na tela (`door::compose`); a comparação pixel a
+pixel com a porta numa tela ainda está no `docs/PENDING.md`. O player dela não age fora da porta: o
+que um clique faria sai impresso (`asked the player: …`, `would have …`), e a resposta do daemon é o
+`--state` seguinte, que vale na ordem em que aparece, como as teclas e os cliques. O contorno da
+fila é outra resposta e outro passo, o `--queue` (a resposta a `{"ask":"queue"}`): sem ele a fila da
+foto é vazia. O `--frame <faixa>=<png>` é uma imagem parada no lugar dos quadros da imagem daquela
+faixa (`every=` para toda imagem sem a sua), o `--output` descreve uma tela que a porta conhece pelo
+nome — a primeira é a em que ela está, e o que é roteado a ela é o que ela mostra —, e o `--places`
+é a pasta que o navegador de arquivos lista no lugar das pastas da máquina. O `--sheet` é a folha de
+um arquivo como o daemon a responde (`{"ask":"sheet"}`: as etiquetas, as capas, os fluxos, o que
+pode ser gravado e por que não), o `--desk` é uma página de uma mesa do daemon (as buscas, os
+diretórios de rádio e TV), o `--refused` é uma lista de diretório que o daemon recusou na hora
+(`{"query":…,"trouble":…}`, como a resposta do `find` volta à porta que perguntou), e `--favourites`
+e `--recent` são os favoritos e os tocados há pouco como o daemon os grava — nunca os da máquina.
+Uma marca do globo é menor que uma célula: o `--list` diz onde cada grupo foi desenhado (`globe mark
+[ids] at coluna,linha px x,y`), e `--hover-at`/`--click-at x,y` apontam para esse ponto, em pixels
+lógicos. O que não caberia na foto é recusado com uma frase, nunca ignorado: uma imagem parada de
+uma faixa que a porta não pôs ali também.
+
+Um `look` se tira de um player que toca de verdade: numa cena do `.#shot`, `look("nome")` salva
+`nome.json` ao lado das fotos; fora da VM, `python3 tests/player-client.py '{"ask":"look"}' >
+look.json` pergunta ao player que estiver rodando, e `look` só lê. O contorno se tira do mesmo
+jeito: `python3 tests/player-client.py '{"ask":"queue"}' > queue.json`, ou `player({"ask": "queue"})`
+numa cena.
+
+O `.#png -- --door` usa o workspace `release` do Nix, e editar o shell o reconstrói (minutos, e uns
+8 GB de memória). Iterando, a câmera é o mesmo subcomando do binário do laço:
+`cargo build --profile loop -p ronoctua-shell --bin ronoctua-shell` dentro do `nix develop`, e
+`ronoctua-shell photograph …` com os mesmos argumentos. Sem GPU, aponte `VK_DRIVER_FILES` para o
+lavapipe do Mesa do flake (`lvp_icd.x86_64.json`), como o app `.#png` faz. O `target/` do cargo é um
+só para todo checkout: com duas árvores abertas, copie de lado o binário com que vai fotografar.
+
+```
 nix run .#shot -- <cena.py>        fotografa a feature do momento numa VM, pela cena escrita para ela
                                    (fora do repo); as fotos vão para ~/.cache/ronoctua-distro/shot
 ```
 
 Teste verde não vê espaço em branco, sobreposição nem uma faixa no lugar errado. A foto vê.
+
+O palco também tem o player: `start_player()` sobe o daemon com a tabela de decodificadores,
+`player({...})` pergunta ao socket, `frame_png(None, "nome")` salva a primeira imagem que o daemon
+mostra, e `frame_png(<faixa>, "nome")` a de uma faixa, e `MEDIA` é a pasta de arquivos que o
+`player-vm` prova que tocam (`tests/player-media.nix`). Ali estão também `words.mkv` e
+`words.en.srt` (uma legenda de dentro e uma de ao lado do mesmo filme) e `list.xspf` (uma playlist
+que diz o próprio nome). Suba o player antes de abrir a vista, senão o rodapé sobe um sem os
+decodificadores. Que a legenda do libass sai no quadro ainda não foi visto nesta VM
+(`docs/PENDING.md`).
 
 **A modeline do quiosque, sem Chrome.** A cena monta as duas metades do par à mão (`<N>` é o nonce,
 `<W>` o id da janela no Chrome, e os arquivos de runtime levam o nome da instância,
@@ -208,6 +256,19 @@ Teste verde não vê espaço em branco, sobreposição nem uma faixa no lugar er
 Com `"state":"normal"` o rodapé entende um F11 e mostra as barras do Chrome. `modeline.json`, no
 diretório de ajustes, com `{"address_line":true}` mostra a linha de endereço; fechar o host mostra
 a marca de sem conexão.
+
+### O daemon do player sem VM, e sem tocar a sessão
+
+O daemon de depuração (`cargo build -p ronoctua-player-engine`) roda num namespace próprio:
+`unshare --map-root-user --net --mount`, com `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, `XDG_CONFIG_HOME` e
+`HOME` em pastas temporárias, um `dbus-daemon --session` privado para o MPRIS, e `/dev/snd` e
+`/run/tailscale` escondidos por montagens vazias (o som vai para a saída nula, e nenhuma tailnet de
+verdade é alcançada). O cliente é o `tests/player-client.py`, apontado para o `XDG_RUNTIME_DIR` da
+sala. Para as buscas e os diretórios, um servidor HTTPS falso responde por cada host: uma CA
+descartável montada por cima do pacote de certificados do sistema e um `/etc/hosts` que manda os
+nomes para 127.0.0.1, dentro da mesma sala. Nada disso fica no repositório — o roteiro é da tarefa,
+como uma cena do `.#shot` —, e o `dbus-daemon` e o servidor que você subir, você encerra: o
+namespace morre com o shell, eles não.
 
 ## Os outros comandos
 

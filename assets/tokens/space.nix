@@ -11,6 +11,12 @@
   # padding: the segments are text, not boxes.
   modeline = {
     segmentGap = 2;
+    # THE AIR INSIDE A PAIR that is one mark: the player's play/pause and
+    # its next (`player_mark`). One segment, so the layout keeps the two or
+    # drops both; one cell, and not the two between segments, so the pair
+    # reads as one thing and not as two marks that happen to sit together.
+    # The cell belongs to neither glyph: a click on it does nothing.
+    bondGap = 1;
     # Margin at the screen's edges, in cells.
     #
     # THE RIGHT ONE USED TO BE ZERO, and it was wrong. The reasoning was
@@ -93,6 +99,29 @@
     # Region borders are drawn only when the country's box is at least this
     # wide in pixels — below it they are mud.
     regionsFrom = 240;
+    # THE MARKS the player puts on a globe (stations, countries, cities), as
+    # a disc per GROUP, in TENTHS of a pixel like `dotRadius`. Four sizes, by
+    # how many the group holds (`ronoctua_atlas::tier`: one, two to nine, ten
+    # to ninety-nine, a hundred or more): the rasteriser draws no text, so
+    # the size is what says "many here". The first is the coordinate's own
+    # dot less a hair, so one station never reads louder than where one is.
+    markTier1 = 25;
+    markTier2 = 35;
+    markTier3 = 50;
+    markTier4 = 70;
+    # Marks closer than this on the picture, in pixels, are one group: the
+    # largest disc's diameter and a little, so two groups' DISCS never
+    # overlap. Their halos may touch: two of the largest groups exactly this
+    # far apart meet at the halo's edge.
+    markMerge = 16;
+    # How far past a group's disc, in pixels, a pointer still takes it: a
+    # disc of two and a half pixels is smaller than a fingertip's error.
+    markSlack = 4;
+    # How far a press on a globe of marks may travel, in pixels, and still be
+    # a CLICK on the group under it — past it, the press is a drag that turns
+    # the globe. `markSlack`'s fingertip, so a click taken on a group is never
+    # turned into a drag by the hand that aimed it.
+    clickSlack = 4;
   };
 
   files = {
@@ -579,6 +608,9 @@
   # and 50 in Portuguese — a sentence, beside a two-letter value — and the
   # first version of this cut it to `keep awake: no s…`, which is the very
   # defect the comment deleted from `power.rs` had been written about.
+  # The player's pages lay a SECTION out whole instead (`chrome::section_column`):
+  # its values after its widest label, never before this column, and a label
+  # the row cannot hold beside its value wrapped, never cut.
   view = {
     labelCells = 28;
     # HOW MUCH ROOM A VALUE GETS, in the row's own cells.
@@ -740,9 +772,21 @@
   # `the_ceiling_this_screen_was_raised_for_is_reachable` is what keeps the two
   # numbers in step — raise this one far enough and the percentage swallows it
   # in silence, which would be a token that no longer says what happens.
+  #
+  # # A film is the one thing let past them
+  #
+  # `playerStagePct` is the owner's (2026-09-28): *"um filme que dá para ver na
+  # janela dá para ver no rodapé"*. With the player's picture alone (`o`), the
+  # region is the picture and the whole footer may reach this share of the
+  # screen — and `maxLines` does not bind it, because fifteen lines of film
+  # are a strip. It is the SAME surface growing (invariant 14), for as long as
+  # the picture is alone and the view is open; everything else keeps the two
+  # ceilings above. Read by `Footer::expansion_ceiling` from the stored
+  # `player_only`, never from what the region holds.
   expansion = {
     maxLines = 15;
     maxFooterPct = 40;
+    playerStagePct = 70;
   };
 
   # THE NOTIFICATION MANAGER, in cells.
@@ -880,7 +924,8 @@
   #               reaches ~17 lines
   #   medium  48  the width the player's column always had; tenants open here
   #   small   32  the narrowest that still holds the player's whole transport
-  #               (nine buttons of three cells)
+  #               (eleven buttons of three cells, the last one's air on the
+  #               edge: no room for a twelfth)
   #   bar      3  five with the margins: ODD, so a one-cell glyph sits exactly
   #               in the middle, and about twice the modeline's thickness, so it
   #               reads as a strip and not a line
@@ -893,7 +938,15 @@
   # second video playing in step (a follower) takes as many again.
   # `focusLine` is in LOGICAL PIXELS, not cells: the line drawn across the top
   # while the column has the keyboard, the weight of the compositor's focus
-  # border (`default_border pixel 2`).
+  # border (`default_border pixel 2`). `ruleInset` is in LOGICAL PIXELS too:
+  # how far the rule between the close glyph and the sizes stays from the top
+  # and the bottom of the control line — a line's height less this at each end
+  # is about the height of the glyphs' ink, so the rule reads as part of the
+  # row and never as a border between two lines. `ruleCells` is the CELLS the
+  # rule stands in, between the close glyph's two and the widest size's: one,
+  # so the rule is a cell and a half from each glyph's middle before the
+  # measured ink moves it. `saidAir` is the cells of air between the sentence
+  # under the pointer — set against the close from the right — and the close.
   column = {
     large = 72;
     medium = 48;
@@ -902,6 +955,9 @@
     maxPct = 45;
     pictures = 12;
     focusLine = 2;
+    ruleInset = 6;
+    ruleCells = 1;
+    saidAir = 1;
   };
 
   # THE SCREEN RESIZER (`LEADER d r`, `crate::resizer`): two curtains that cut
@@ -965,12 +1021,132 @@
   # out on the grid, and what the compositor is asked is a size in pixels.
   # 16:9 at 384 wide, because most of what plays in one is a video; `pipAir`
   # is the room between it and the two edges it sits against.
+  #
+  # THE DECK — the timeline of a set's lanes (`player_timeline`). `deckLanes`
+  # is how many lane LINES a door shows before the deck scrolls (the Timeline
+  # page shows every one) — a count of lines — and `deckNames` the CELLS a
+  # lane's name gets beside its glyph. `deckGlyph` is the cells a glyph takes
+  # on a deck's line (the kind's, a mute), and `deckAir` the cell of air
+  # between two things on it: the window's mute on its time bar has always
+  # been these, two and one. `laneBand` (how thick a lane's band is),
+  # `ghostBand` (how thick the ghost of one being dragged is) and `playhead`
+  # (how wide the one vertical line of "now" is) are LOGICAL PIXELS: they
+  # are drawn across the grid, not on it. The band is twice the time bar's
+  # track (three rules) so a band reads as a thing lying on the track and not
+  # as the track; the ghost is two thirds of it, drawn ON the band, so where
+  # the band ends and where it would land both show — a third was a hairline
+  # nobody saw move; the playhead is two, the
+  # compositor's own focus border, the widest line this interface draws.
+  # `tickQuarters` is how high a ruler's tick rises from the line's foot, in
+  # QUARTERS OF A LINE — the playhead rises that high on the ruler too, and
+  # never through the times written above. `liveRoomPct` is how far past the
+  # latest thing it knows a deck with no known length looks, in PERCENT: a
+  # quarter more, so a live lane has somewhere to run and the playhead is
+  # never at the edge.
+  #
+  # THE LAYOUT'S SCHEMATIC — the Layout page's small picture of where each
+  # picture goes (`chrome::tile`). `tileGap` is the air between two tiles
+  # and `tileFloor` the smallest a picture is placed at before it is
+  # dropped (both logical pixels, the `arrange::Air` a door hands over),
+  # `cornerPct` how wide the corner's small pictures are against the whole,
+  # and `schematicLines` how many lines the schematic takes on the page. Every
+  # door places its pictures with the first three (`player_layout::air`), and
+  # the Layout page draws the fourth.
+  #
+  # THE QUEUE AS A TREE (`player_queue`). `queueGlyph` is the cells a
+  # group's triangle takes at the head of its row — the glyph and the cell
+  # of air after it, as the file browser's glyphs have — and `queueAir` the
+  # cell between an entry's number and what comes after it. A level is set
+  # in by `view.nestCells`, the one indent every list here has.
+  #
+  # A SUBTITLE LANE'S CHIP (`chrome::chip`) — its colour drawn on the black
+  # edge a subtitle wears over a film, never on a page, where the lane
+  # colours are not measured. `chipCells` is the cells the chip's control
+  # takes at the head of its row: the glyph in the middle one, the chip's
+  # ground half a cell past it on each side, and half a cell of air before
+  # the next thing — so the ground's two sides are the same distance from
+  # the drawing. `chipAir` is the LOGICAL PIXELS left above and below the
+  # ground inside its line, so two chips on two lines never touch.
+  #
+  # `soundBar` is the cells an AMBIENT SOUND's own volume bar takes at the
+  # most — less than `volumeBar`: the page stands three bars side by side,
+  # and a full one each squeezed the sounds' names to a stub in a column.
+  #
+  # `dragSlack` is the CELLS a band pressed on a deck has to travel before it
+  # is dragged rather than clicked — a click chooses the lane (a second opens
+  # its page), a drag moves when the lane begins. Two, the file manager's `sweepSlack` and for
+  # its reason: a hand that trembles by a cell on a click would move a lane's
+  # sync nobody meant to move. Once it is a drag the ghost follows the hand
+  # to the cell.
+  #
+  # THE COVER on the Metadata section (`player_metadata`): `coverLines` is
+  # the lines its picture takes — the picture fitted in them, in its own
+  # proportion, from the rows' first cell — and `coverPx` the LOGICAL PIXELS
+  # the longer side of the picture is decoded to at the most: eight lines are
+  # under two hundred pixels tall, so a 3000 px scan held whole would be
+  # megabytes of texture nobody sees, and twice the drawn size keeps it sharp
+  # on a screen at scale 2. `coverGap` is the CELLS between two pictures drawn
+  # side by side — a suggested cover beside the file's own
+  # (`Builder::pictures`): each has a box of its own, the room shared out
+  # evenly, and two covers touching would read as one picture.
+  #
+  # THE GLOBE of a directory's page — the world radio's and TV's, a list of
+  # stations (`player_globe`): `globeLines` is the lines its picture takes at
+  # the top of the page in a window and in the column, the line saying where
+  # the pointer is under them. Ten, against the file manager's six
+  # (`atlas.lines`): there the globe is one fact among a file's, here it is
+  # what the page is for — a world of marks to point at — and ten lines keep
+  # a country's stations apart on a laptop's screen while the rows under it
+  # still show a screenful.
   player = {
+    queueGlyph = 2;
+    queueAir = 1;
     browseColumn = 24;
     volumeBar = 10;
     pipWidth = 384;
     pipHeight = 216;
     pipAir = 16;
+    deckLanes = 4;
+    deckNames = 12;
+    deckGlyph = 2;
+    deckAir = 1;
+    laneBand = 6;
+    ghostBand = 4;
+    playhead = 2;
+    tickQuarters = 1;
+    liveRoomPct = 25;
+    tileGap = 4;
+    tileFloor = 96;
+    cornerPct = 25;
+    schematicLines = 5;
+    chipCells = 3;
+    chipAir = 3;
+    soundBar = 6;
+    dragSlack = 2;
+    coverLines = 8;
+    coverPx = 512;
+    coverGap = 2;
+    globeLines = 10;
+  };
+
+  # THE SUBTITLE LANES OVER A FILM (`ronoctua_player::subtitles::merge`), in
+  # THOUSANDTHS OF THE PICTURE'S HEIGHT and not cells: the merge writes one
+  # ASS script of 1080 rows per picture, and the film is drawn at whatever
+  # size a door asks, so a letter is a share of the picture. Another unit
+  # than the cells around it, and every name says which.
+  #
+  # `size` is a line's font size: 54 rows of 1080, the size a film's own
+  # subtitles are usually drawn at. `outline` is the black rim round every
+  # letter (`subtitle.edge`), `margin` the air between the lowest lane and the
+  # picture's edge (and at both sides), `gap` the air between two lanes'
+  # lines — enough that two lanes read as two, not as one cue of two lines.
+  # How wide a letter is drawn is the font's own cell (`font.cellWidthEm`),
+  # which is what the merge breaks lines by.
+  subtitle = {
+    sizePermille = 50;
+    outlinePermille = 3;
+    marginPermille = 40;
+    gapPermille = 8;
   };
 
   # THE ON-SCREEN KEYBOARD (`LEADER m k`), in cells and quarter-lines — and
