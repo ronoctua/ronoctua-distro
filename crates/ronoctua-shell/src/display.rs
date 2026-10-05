@@ -65,6 +65,8 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("a", "display-automatic", Where::OnAKnob),
     ("d", "display-forget", Where::OnAMonitor),
     ("m", "display-arrange", Where::OnTheList),
+    ("S-<up>", "display-rise", Where::OnTheArrangement),
+    ("S-<down>", "display-sink", Where::OnTheArrangement),
 ];
 
 /// Where in the view a key is worth teaching.
@@ -103,6 +105,11 @@ pub enum Where {
     /// rather than a variant, because none of ITS keys is dead under a
     /// question. Here two are, and naming them is what keeps the arm honest.
     WhileNothingIsAsked,
+    /// Only on the arrangement — `S-<up>`/`S-<down>`, which move a screen
+    /// above or below its neighbours. They also answer on a sheet's place
+    /// row, but a sheet has one place row among ten, and teaching them on the
+    /// whole sheet would teach two keys that do nothing on nine rows.
+    OnTheArrangement,
     // THERE IS NO `OnARow`, AND THERE WAS. `←`/`→` move something on every
     // LEVEL — the value under the cursor on a sheet, the screen under it on
     // the map — so a case that named some of those was a case that hid the
@@ -122,6 +129,7 @@ impl Where {
             Self::OnTheList => matches!(level, Level::List),
             Self::OnAMonitor => matches!(level, Level::Monitor(_)),
             Self::OnAKnob => matches!(level, Level::Monitor(_) | Level::Arrange),
+            Self::OnTheArrangement => matches!(level, Level::Arrange),
         }
     }
 }
@@ -159,6 +167,10 @@ pub enum Press {
     Forget,
     /// Open the arrangement.
     Arrange,
+    /// The screen under the cursor up, to the next edge of a neighbour.
+    Rise,
+    /// The screen under the cursor down, to the next edge of a neighbour.
+    Sink,
 }
 
 /// What the row under the cursor is about.
@@ -187,6 +199,8 @@ pub enum Target {
     Turn,
     /// Whether the refresh rate may vary.
     Vary,
+    /// How many bits per colour the compositor renders at.
+    Depth,
     /// The brightness.
     Light,
     /// Whether the session opens focused here.
@@ -595,6 +609,65 @@ pub struct View {
     /// SETTING, which is the split `place_said`, `scale_said` and `turn_said`
     /// were each written to close, left open on the one row that has both.
     place_pending: Option<(String, i32, i32)>,
+    /// Whether the key being read is a REPEAT of a held one — told by the
+    /// door before [`View::key`] (`View::hold`). A held arrow on a place row
+    /// moves the row and writes nothing: each write is a re-read of the whole
+    /// compositor configuration, and a repeat is twenty-five of them a second.
+    held: bool,
+    /// The screen whose place moved under a held key and is not written yet —
+    /// written once, when the key comes up ([`View::let_go`]).
+    owed: Option<String>,
+}
+
+/// The positions a screen can be put at along ONE AXIS, beside its
+/// neighbours: for a screen `len` long and each neighbour's `(start, len)`
+/// on that axis, the four places that touch it — just past it, just before
+/// it, its start lined up, its end lined up. Sorted, each once.
+///
+/// THE ARROWS STOP AT EDGES and not every ten pixels: putting a monitor
+/// beside another was 192 presses of a ten-pixel nudge, each a re-read of the
+/// compositor's configuration. Beside, above, below and lined up are what an
+/// arrangement IS; a gap of exactly 37 pixels is typed into the file.
+#[must_use]
+pub fn stops(len: i64, others: &[(i64, i64)]) -> Vec<i64> {
+    let mut out: Vec<i64> = others
+        .iter()
+        .flat_map(|&(start, other)| [start + other, start - len, start, start + other - len])
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The next stop from `from`, forward (right, down) or back — and past the
+/// last stop on that side, a [`NUDGE`]: there is always somewhere to go.
+#[must_use]
+pub fn next_stop(from: i64, stops: &[i64], forward: bool) -> i64 {
+    let found = if forward {
+        stops.iter().copied().find(|s| *s > from)
+    } else {
+        stops.iter().rev().copied().find(|s| *s < from)
+    };
+    found.unwrap_or(if forward {
+        from + i64::from(NUDGE)
+    } else {
+        from - i64::from(NUDGE)
+    })
+}
+
+/// A render depth, in the person's words: the compositor's own choice, or so
+/// many bits per colour.
+#[must_use]
+pub fn depth_said(depth: Option<u8>, texts: &ronoctua_i18n::Texts) -> String {
+    depth.map_or_else(
+        || texts.t(ronoctua_i18n::key::DISPLAY_VALUE_AUTOMATIC),
+        |bits| {
+            texts.t_args(
+                ronoctua_i18n::key::DISPLAY_DEPTH_BITS,
+                &[("bits", ronoctua_i18n::Arg::Number(i64::from(bits)))],
+            )
+        },
+    )
 }
 
 /// Where a row's text begins and how much of the line it may use.
@@ -935,7 +1008,9 @@ impl View {
             // the sharper test, because `d` is about the whole record and this
             // is about the four knobs `automatic` can reach.
             Where::OnAKnob => match &self.level {
-                Level::Monitor(_) => screen.is_some_and(|s| s.lit() && hands_back(s)),
+                // A DARK SCREEN TOO: its knobs are handed back in the file
+                // (`automatic`'s first arm), and its rows show what is filed.
+                Level::Monitor(_) => screen.is_some_and(hands_back),
                 // THE ARRANGEMENT'S ROWS ARE PLACES, one per lit screen, so
                 // what `a` can hand back there is a place somebody chose.
                 Level::Arrange => {
@@ -949,6 +1024,9 @@ impl View {
             },
             // And `m` opens a level that would have nothing in it.
             Where::OnTheList => can_be_arranged(now),
+            // AND THE VERTICAL PAIR MOVES A ROW THAT IS THERE: an arrangement
+            // of fewer than two lit screens has none.
+            Where::OnTheArrangement => turnable,
             _ => true,
         };
         // AND THE THREE THAT `Where::Anywhere` COVERS ARE ASKED OF THE ROWS.
@@ -1228,6 +1306,17 @@ impl View {
             Press::Escape => self.back(),
             Press::Less | Press::More if disabled => Errand::Nothing,
             Press::Less | Press::More => self.turn(&target, press == Press::More, now, moment),
+            // THE OTHER AXIS, on a place row and nowhere else: `↑`/`↓` are the
+            // cursor, so the vertical move is the shifted pair — the family
+            // "same key, another sense" the file manager already uses.
+            Press::Rise | Press::Sink if disabled || self.asking.is_some() => Errand::Nothing,
+            Press::Rise | Press::Sink => match &target {
+                Target::Place(at) => {
+                    let at = at.clone();
+                    self.place_step(&at, false, press == Press::Sink, now)
+                }
+                _ => Errand::Nothing,
+            },
             Press::Enter if disabled || on_a_title => Errand::Nothing,
             Press::Enter => self.enter(&target, now, &rows),
             // NOTHING NEW WHILE A QUESTION STANDS. `d` used to overwrite the
@@ -1670,6 +1759,7 @@ fn hands_back(s: &Screen) -> bool {
         || s.wanted.scale.is_some()
         || s.wanted.transform != Transform::Normal
         || s.wanted.position.is_some()
+        || s.wanted.depth.is_some()
 }
 
 /// Whether there is an arrangement to speak of.
@@ -2142,10 +2232,35 @@ impl View {
         let one_size = s.lit() && sizes_of(s).len() < 2;
         let one_rate =
             s.lit() && running.is_some_and(|m| rates_of(s, (m.width, m.height)).len() < 2);
+        // A DARK SCREEN SHOWS WHAT IS FILED FOR IT. The rows used to trade
+        // their value for the sentence that it is dark — which the "Driven"
+        // row above already says — so a scale, a mode, a turn and a place
+        // written down for a shut lid could only be read in `display.json`.
+        // One sentence says what the values are, and each row says its own.
+        if dark {
+            b.told(b.texts.t(ronoctua_i18n::key::DISPLAY_DARK_SHOWS_FILED));
+        }
+        let w = &s.wanted;
+        let filed_size = || {
+            w.mode.map_or_else(
+                || b.texts.t(ronoctua_i18n::key::DISPLAY_VALUE_AUTOMATIC),
+                |m| format!("{}{}{}", m.width, tokens::mark::TIMES, m.height),
+            )
+        };
+        let filed_rate = || {
+            w.mode.and_then(|m| m.rate).map_or_else(
+                || b.texts.t(ronoctua_i18n::key::DISPLAY_VALUE_AUTOMATIC),
+                |hz| {
+                    let hz = format!("{hz:.1}").replace('.', &b.texts.decimal_mark().to_string());
+                    b.texts
+                        .t_with(ronoctua_i18n::key::DISPLAY_VALUE_RATE, &[("hz", &hz)])
+                },
+            )
+        };
         b.pair(
             b.texts.t(ronoctua_i18n::key::DISPLAY_RESOLUTION),
             if dark {
-                b.texts.t(ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK)
+                filed_size()
             } else if no_mode {
                 b.texts.t(ronoctua_i18n::key::DISPLAY_NO_MODE)
             } else if one_size {
@@ -2167,7 +2282,7 @@ impl View {
         b.pair(
             b.texts.t(ronoctua_i18n::key::DISPLAY_RATE),
             if dark {
-                b.texts.t(ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK)
+                filed_rate()
             } else if no_mode {
                 b.texts.t(ronoctua_i18n::key::DISPLAY_NO_MODE)
             } else if one_rate {
@@ -2189,7 +2304,7 @@ impl View {
         b.pair(
             b.texts.t(ronoctua_i18n::key::DISPLAY_SCALE),
             if dark {
-                b.texts.t(ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK)
+                scale_said(w.scale, w.scale, b.texts)
             } else {
                 scale_said(s.wanted.scale, s.logical.map(|l| l.scale), b.texts)
             },
@@ -2199,7 +2314,7 @@ impl View {
         b.pair(
             b.texts.t(ronoctua_i18n::key::DISPLAY_TURN),
             if dark {
-                b.texts.t(ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK)
+                turn_said(w.transform, w.transform, b.texts)
             } else {
                 turn_said(s.wanted.transform, s.turn(), b.texts)
             },
@@ -2209,7 +2324,8 @@ impl View {
         b.pair(
             b.texts.t(ronoctua_i18n::key::DISPLAY_PLACE),
             if dark {
-                b.texts.t(ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK)
+                let filed = w.position.map(|p| (p.x, p.y));
+                place_said(filed, filed, b.texts)
             } else {
                 // WHAT WAS ASKED FOR COMES FIRST, until the reading catches
                 // up — the arrangement's copy of this row was given the rule
@@ -2231,11 +2347,7 @@ impl View {
         );
         b.pair(
             b.texts.t(ronoctua_i18n::key::DISPLAY_VARY),
-            if dark {
-                b.texts.t(ronoctua_i18n::key::DISPLAY_SCREEN_IS_DARK)
-            } else {
-                vary_said(s, b.texts)
-            },
+            vary_said(s, b.texts),
             Target::Vary,
             // AND A DARK SCREEN HAS NO REFRESH RATE TO VARY. Every other row
             // of this section is `!s.lit()`; this one was not, so on an off
@@ -2243,6 +2355,29 @@ impl View {
             // answered the arrows — and then the single one drawn dim with a
             // value that reads like any other value.
             dark || !s.vrr_supported,
+        );
+        // THE RENDER DEPTH, beside the varying refresh: both written down,
+        // neither able to blind a screen. WHAT IS FILED is what it shows,
+        // dark or lit — the compositor's IPC reports no depth (`get_outputs`
+        // has no field for it in the pinned source), so the file, read back
+        // after the write, is the only answer there is; the compositor's own
+        // grammar proves the line at build time (`display-fragment-validates`).
+        //
+        // AND THE LABEL SAYS SO on a lit screen, where every other row
+        // shows what the picture IS: a depth the monitor cannot take is drawn
+        // at one it can (`scroll-output.5`), and "Colour depth: 10 bits"
+        // would claim what nobody measured — it is the depth ASKED FOR. A
+        // dark screen's sheet already says it for all its rows
+        // (`display-dark-shows-filed`).
+        b.pair(
+            b.texts.t(if dark {
+                ronoctua_i18n::key::DISPLAY_DEPTH
+            } else {
+                ronoctua_i18n::key::DISPLAY_DEPTH_ASKED
+            }),
+            depth_said(w.depth, b.texts),
+            Target::Depth,
+            dark,
         );
 
         b.heading(ronoctua_i18n::key::DISPLAY_HEADING_LIGHT);
@@ -2466,6 +2601,7 @@ impl View {
                 | Target::Resolution
                 | Target::Rate
                 | Target::Vary
+                | Target::Depth
                 | Target::Place(_)
         )
     }
@@ -2684,45 +2820,113 @@ impl View {
                 self.keep(now, |w| w.vary = next)
             }
             Target::Place(at) => {
-                let Some(s) = now.screen(at) else {
-                    return Errand::Nothing;
-                };
-                // FROM WHAT WAS LAST ASKED FOR, then from what is WRITTEN
-                // DOWN, and only then from the picture — the same order
-                // `place_said` draws them in, and the same round trip
-                // `View::place_pending` carries for the reason written there.
-                let Some((from_x, from_y)) = self
-                    .place_pending
-                    .as_ref()
-                    .filter(|(who, ..)| who == at)
-                    .map(|&(_, x, y)| (x, y))
-                    .or_else(|| s.wanted.position.map(|p| (p.x, p.y)))
-                    .or_else(|| s.logical.map(|l| (l.x, l.y)))
-                else {
-                    return Errand::Nothing;
-                };
-                // SATURATING, because `position x=` is a line somebody may
-                // have typed: these files are meant to be edited by hand, and
-                // an `i32` at its end overflows in debug and wraps in release.
-                let x = if up {
-                    from_x.saturating_add(NUDGE)
-                } else {
-                    from_x.saturating_sub(NUDGE)
-                };
-                // AT THE END OF THE RANGE, NOTHING — the text row's rule, and
-                // here it is what stops a held arrow rewriting the file for a
-                // number that cannot move.
-                if x == from_x {
-                    return Errand::Nothing;
-                }
                 let at = at.clone();
-                self.place_pending = Some((at.clone(), x, from_y));
-                self.keep_for(&at, now, move |w| {
-                    w.position = Some(ronoctua_display::fragment::Spot { x, y: from_y });
-                })
+                self.place_step(&at, true, up, now)
+            }
+            // WRITTEN DOWN, like the varying refresh: a depth the monitor
+            // cannot take is rendered at one it can (`scroll-output.5`), so it
+            // cannot leave a screen nobody can read. The compositor's choice,
+            // then the three depths it takes, a list one walks.
+            Target::Depth => {
+                let Some(s) = self.here(now) else {
+                    return Errand::Nothing;
+                };
+                let all: Vec<Option<u8>> = std::iter::once(None)
+                    .chain(ronoctua_display::fragment::DEPTHS.iter().copied().map(Some))
+                    .collect();
+                let at = all.iter().position(|d| *d == s.wanted.depth);
+                let Some(next) = step(&all, at.or(Some(0)), up) else {
+                    return Errand::Nothing;
+                };
+                self.keep(now, |w| w.depth = next)
             }
             _ => Errand::Nothing,
         }
+    }
+
+    /// One arrow on a place row: the screen to the next edge of a neighbour
+    /// along one axis (`across` is x), from what was last asked for, then
+    /// from what is written down, then from the picture — the order
+    /// `place_said` draws them in.
+    ///
+    /// A HELD KEY WRITES NOTHING: the row moves, the screen is owed, and
+    /// [`View::let_go`] writes it once when the key comes up.
+    fn place_step(&mut self, at: &str, across: bool, forward: bool, now: &Snapshot) -> Errand {
+        let Some(s) = now.screen(at) else {
+            return Errand::Nothing;
+        };
+        let Some((from_x, from_y)) = self
+            .place_pending
+            .as_ref()
+            .filter(|(who, ..)| who == at)
+            .map(|&(_, x, y)| (x, y))
+            .or_else(|| s.wanted.position.map(|p| (p.x, p.y)))
+            .or_else(|| s.logical.map(|l| (l.x, l.y)))
+        else {
+            return Errand::Nothing;
+        };
+        // THE NEIGHBOURS' EDGES, on the axis being moved: every OTHER lit
+        // screen, where the picture has it.
+        let mine = s.logical.map_or((0, 0), |l| (l.width, l.height));
+        let others: Vec<(i64, i64)> = now
+            .screens
+            .iter()
+            .filter(|o| o.at != at && o.lit())
+            .filter_map(|o| o.logical)
+            .map(|l| {
+                if across {
+                    (i64::from(l.x), i64::from(l.width))
+                } else {
+                    (i64::from(l.y), i64::from(l.height))
+                }
+            })
+            .collect();
+        let (from, len) = if across {
+            (i64::from(from_x), i64::from(mine.0))
+        } else {
+            (i64::from(from_y), i64::from(mine.1))
+        };
+        let to = next_stop(from, &stops(len, &others), forward);
+        // SATURATING into the file's `i32`: a `position` is a line somebody
+        // may have typed, and one at the end of the range does not move.
+        let to = i32::try_from(to).unwrap_or(if forward { i32::MAX } else { i32::MIN });
+        let (x, y) = if across { (to, from_y) } else { (from_x, to) };
+        if (x, y) == (from_x, from_y) {
+            return Errand::Nothing;
+        }
+        let at = at.to_owned();
+        self.place_pending = Some((at.clone(), x, y));
+        if self.held {
+            self.owed = Some(at);
+            return Errand::Nothing;
+        }
+        self.keep_for(&at, now, move |w| {
+            w.position = Some(ronoctua_display::fragment::Spot { x, y });
+        })
+    }
+
+    /// The door says whether the next key is a REPEAT of a held one.
+    pub const fn hold(&mut self, held: bool) {
+        self.held = held;
+    }
+
+    /// The held key came up: the place it walked to is written, once.
+    pub fn let_go(&mut self, now: &Snapshot) -> Errand {
+        self.held = false;
+        let Some(at) = self.owed.take() else {
+            return Errand::Nothing;
+        };
+        let Some((x, y)) = self
+            .place_pending
+            .as_ref()
+            .filter(|(who, ..)| *who == at)
+            .map(|&(_, x, y)| (x, y))
+        else {
+            return Errand::Nothing;
+        };
+        self.keep_for(&at, now, move |w| {
+            w.position = Some(ronoctua_display::fragment::Spot { x, y });
+        })
     }
 
     /// Applies a change provisionally and starts the clock on it.
@@ -2978,20 +3182,28 @@ impl View {
     /// the same question the arrows do — except on a screen that is dark,
     /// where there is no picture to judge and the whole gesture is refused.
     fn automatic(&mut self, target: &Target, now: &Snapshot, moment: Instant) -> Errand {
-        // A DARK SCREEN HAS NO KNOB TO HAND BACK. Every row of its picture is
-        // drawn refusing with the sentence that says why, and `a` is not gated
-        // by that refusal — deliberately, because `disabled` usually means the
-        // ARROWS have nowhere to go and `a` is exactly for the rows where
-        // something IS written down. Dark is the one reason that is about the
-        // whole screen rather than the row, so it is checked here: without it
-        // `a` wrote the setting away and the row redrew identically, because
-        // its value is the dark sentence and does not depend on `wanted`.
+        // A DARK SCREEN'S KNOBS ARE HANDED BACK IN THE FILE. There is no
+        // picture to preview a change on, and a hand-back cannot blind a
+        // screen that is not drawn — so `a` writes it down at once, and the
+        // row, which shows what is FILED for a dark screen, says so straight
+        // away. It used to be refused on the whole sheet: the one key that
+        // would undo a filed scale on a shut lid did nothing.
         //
         // The place row is not on a screen at all when the level is the
         // arrangement, which lists only lit ones — so `here` answering `None`
         // there is not this case.
-        if matches!(self.level, Level::Monitor(_)) && self.here(now).is_some_and(|s| !s.lit()) {
-            return Errand::Nothing;
+        if matches!(self.level, Level::Monitor(_))
+            && let Some(s) = self.here(now).filter(|s| !s.lit())
+        {
+            let at = s.at.clone();
+            return match target {
+                Target::Resolution | Target::Rate => self.keep_for(&at, now, |w| w.mode = None),
+                Target::Scale => self.keep_for(&at, now, |w| w.scale = None),
+                Target::Turn => self.keep_for(&at, now, |w| w.transform = Transform::Normal),
+                Target::Place(_) => self.keep_for(&at, now, |w| w.position = None),
+                Target::Depth => self.keep_for(&at, now, |w| w.depth = None),
+                _ => Errand::Nothing,
+            };
         }
         match target {
             // ONE ASK, TWO SENTENCES. Handing the mode back is the same order
@@ -3057,6 +3269,8 @@ impl View {
                 }
                 self.keep_for(&at, now, |w| w.position = None)
             }
+            // WRITTEN DOWN, as its arrows are.
+            Target::Depth => self.keep(now, |w| w.depth = None),
             _ => Errand::Nothing,
         }
     }
@@ -3913,18 +4127,23 @@ mod tests {
         let rows = v.rows(&now, DECIDING_WIDTH, moment, &texts());
         v.settle(&now, &rows);
         assert_eq!(rows[v.cursor].target, Target::Scale);
-        assert_eq!(
-            v.key(Press::Automatic, &now, DECIDING_WIDTH, moment, &texts()),
-            Errand::Nothing,
-            "`a` threw a setting away on a screen nobody is looking at",
-        );
-        assert!(v.asking.is_none());
+        // `a` HANDS THE KNOB BACK IN THE FILE, at once: there is no picture to
+        // preview it on, and the row — which shows what is filed — says so.
+        match v.key(Press::Automatic, &now, DECIDING_WIDTH, moment, &texts()) {
+            Errand::Order(o) => match *o {
+                ronoctua_display::Order::Keep { at, wanted } => {
+                    assert_eq!(at, "DP-1");
+                    assert_eq!(wanted.scale, None, "the filed scale stayed");
+                }
+                other => panic!("`a` on a dark screen asked {other:?}"),
+            },
+            other => panic!("`a` on a dark screen did {other:?}"),
+        }
+        assert!(v.asking.is_none(), "a dark screen raised a preview");
 
-        // AND THE LINE DOES NOT TEACH IT EITHER. A key that refuses on every
-        // row of a level, named in the line above those rows, is the same
-        // defect as an arrow with nowhere to go — and it is worse here,
-        // because a dark screen is the screen somebody came to this view to
-        // rescue.
+        // AND THE LINE TEACHES IT, on the dark sheet with a filed scale: it
+        // works there, and a dark screen is the screen somebody came to this
+        // view to rescue.
         let t = texts();
         let line = v
             .hint(&now, DECIDING_WIDTH, Instant::now(), &t)
@@ -3933,8 +4152,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(
-            !line.contains(&t.t(ronoctua_i18n::key::DISPLAY_AUTOMATIC)),
-            "a dark sheet taught `a`, which refuses on every one of its rows: {line}",
+            line.contains(&t.t(ronoctua_i18n::key::DISPLAY_AUTOMATIC)),
+            "a dark sheet with a filed scale did not teach `a`: {line}",
         );
         // AND ON A LIT ONE WITH SOMETHING WRITTEN DOWN IT IS TAUGHT. The
         // second half is not decoration: `a` HANDS BACK, and on a screen

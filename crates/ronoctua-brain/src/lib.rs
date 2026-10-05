@@ -39,36 +39,36 @@
 //! in that space" becomes a feature rather than a new daemon, and a place is
 //! only a place if the steps to use it are written down.
 //!
-//! Adding a task touches **five** places, and nothing else:
+//! A feature is a MODULE: a folder under `crates/ronoctua-brain/modules/<id>/`
+//! whose `module.rs` answers the contract in [`module`] — a manifest (what it
+//! is, its schedule, its marks, notices, actions and events), and whichever of
+//! three faces it has: a run on a schedule ([`module::Scheduled`]), a watch on
+//! the journal, a path, a child or a clock ([`module::Watcher`]), and what it
+//! shows ([`module::Module::face`], [`module::Module::screen`]). The folder
+//! carries its texts, its NixOS module, its checks and its `why.md`; the
+//! generator reads the folder, and nothing outside it names the module.
 //!
-//! 1. **`src/tasks/<name>.rs`** — one type implementing [`task::Task`]. Five
-//!    methods: what it is called, when it is due, what it needs, how long it
-//!    warns for, and what it does.
-//! 2. **One line in [`tasks::tasks`]** — the single `vec![]` that lists them.
-//!    [`registry::Registry::of`] refuses a malformed or repeated id there, at
-//!    construction, the way `ronoctua-cmd` refuses a command.
-//! 3. **`brain-task-<id>` and `brain-task-<id>-does` in both `.ftl`** — the
-//!    name the screen draws and the line under the cursor that says what it
-//!    really does. Two languages, or the screen shows the key in brackets.
-//! 4. **One home-page row in `buffers/brain/`**, if it wants one. A task with
-//!    no row still runs; it simply has no screen of its own.
-//! 5. **A default in [`prefs`]**, if it has preferences. A task without them
-//!    inherits the general gate and nothing else.
+//! What a module does **not** have to write, because the core already owns it:
+//! the queue (at most one run at a time, and what comes due meanwhile waits),
+//! the metric gate (busy machine, battery), the announcement and its
+//! countdown, the journal, the one follower of the system journal, the socket,
+//! dismissing and snoozing its notices, and every screen that watches.
 //!
-//! What a new task does **not** have to write, because the runner already owns
-//! it: the queue (at most one task runs at a time, and what comes due meanwhile
-//! waits), the metric gate (busy machine, battery), the announcement and its
-//! countdown, the journal, the socket, and every screen that watches.
+//! Every feature lives in its own folder under `modules/`; the features that
+//! came before modules moved there too, so nothing is written in place any
+//! more.
 //!
 //! # The shape of it
 //!
 //! ```text
 //!   footer      ──┐
-//!   brain buffer ─┼─→  socket  →  Shared (Mutex + Condvar + version)
-//!   `ronoctua-brain look` ─┘        │
+//!   brain buffer ─┼─→  socket  →  Core: Shared (Mutex + Condvar + version),
+//!   `ronoctua-brain look` ─┘        │     ONE registry, ONE journal
 //!                                   ├─→ ONE runner thread → systemctl start
 //!                                   │        ↑ pulse (ronoctua-memory)
-//!                                   └─→ thread per watcher → the whole mind
+//!                                   ├─→ ONE watch thread ← journalctl --follow,
+//!                                   │        inotify, children, one clock
+//!                                   └─→ thread per client → the whole mind
 //! ```
 //!
 //! # Where the database would go
@@ -84,8 +84,11 @@
 #![forbid(unsafe_code)]
 
 pub mod client;
+pub mod compiled;
+pub mod hub;
 pub mod journal;
 pub mod mind;
+pub mod module;
 pub mod moment;
 pub mod prefs;
 pub mod pulse;
@@ -96,18 +99,41 @@ pub mod serve;
 pub mod systemd;
 pub mod tail;
 pub mod task;
-pub mod tasks;
+pub mod watch;
 pub mod wire;
+
+#[cfg(test)]
+mod fake;
+
+/// Every module this build knows, made for one birth: the ones compiled from
+/// their folders under `modules/` ([`compiled`]).
+#[must_use]
+pub fn every_module(birth: &Birth) -> Vec<Box<dyn Module>> {
+    compiled::all(birth)
+}
 
 pub use journal::Journal;
 pub use mind::{Announcement, Mind, Shared, Standing, StepState, TaskState};
+// THE CONTRACT'S DOORS at the root; its vocabulary (`Face`, `Mark`, the
+// module's `Notice`…) is named through `module::`, because the root's `Notice`
+// is still the old one-line notice the footer reads.
+pub use hub::Core;
+pub use module::{Birth, Manifest, Module, Scheduled, Watcher};
 pub use moment::{Clock, Moment, Offset};
 pub use prefs::{Gate, PartOfDay, Prefs, TaskPrefs, Where};
 pub use pulse::{Meter, Pulse};
 pub use registry::Registry;
 pub use runner::Runner;
 pub use task::{
-    Due, Hold, Kind, Notice, Outcome, OutcomeKind, Relieved, Report, RunRecord, Sheet, Step,
-    StepOutcome, Task, Verdict, Watched,
+    Due, Hold, Kind, Outcome, OutcomeKind, Report, RunRecord, Sheet, Step, StepOutcome, Verdict,
+    Watched,
 };
-pub use wire::{Ask, Say};
+pub use wire::{Ask, Knob, Say};
+
+/// THE `#[path]` PILOT (brain.md §3, "Step 1"): the shim `build.rs` writes for
+/// `tests/modules/pilot-sample`, loading it the way every module is loaded.
+/// Tests only — the sample lives outside `modules/` and is never registered.
+#[cfg(test)]
+mod pilot {
+    include!(concat!(env!("OUT_DIR"), "/pilot.rs"));
+}

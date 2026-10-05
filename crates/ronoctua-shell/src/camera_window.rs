@@ -207,7 +207,7 @@ impl CameraWindow {
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                ui.message = Some(
+                ui.say(
                     ui.texts
                         .t_with(ronoctua_i18n::key::STUDIO_PHOTO_SAVED, &[("file", &name)]),
                 );
@@ -279,10 +279,10 @@ impl CameraWindow {
     fn tell(ui: &mut Ui, ask: &Ask) {
         match ronoctua_studio::client::ask(ask) {
             Ok(ronoctua_studio::wire::Say::Refused(t)) => {
-                ui.message = Some(camera::trouble_sentence(&t, &ui.texts));
+                ui.say(camera::trouble_sentence(&t, &ui.texts));
             }
             Ok(_) => {}
-            Err(_) => ui.message = Some(ui.texts.t(ronoctua_i18n::key::STUDIO_NOT_RUNNING)),
+            Err(_) => ui.say(ui.texts.t(ronoctua_i18n::key::STUDIO_NOT_RUNNING)),
         }
     }
 

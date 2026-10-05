@@ -62,6 +62,10 @@ impl Icon {
 /// The metadata's URL (jsDelivr).
 pub const METADATA: &str = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/metadata.json";
 
+/// The host the icon index is served from, as the person's consent row
+/// lets it (`consent.json`).
+pub const HOSTS: &[&str] = &["cdn.jsdelivr.net"];
+
 /// How much the metadata may weigh before it is refused: four times what it
 /// weighed when this was written (1 181 244 bytes).
 pub const METADATA_MOST: u64 = 4 << 20;

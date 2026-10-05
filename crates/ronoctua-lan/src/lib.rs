@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 pub mod icmp;
+pub mod neigh;
 pub mod oui;
 
 /// How long a sweep waits for the slowest answer.
@@ -53,8 +54,56 @@ pub struct Found {
 /// # Errors
 ///
 /// The kernel refused the socket.
-pub fn ping(address: std::net::Ipv4Addr) -> anyhow::Result<Option<u32>> {
+pub fn ping(address: std::net::Ipv4Addr) -> anyhow::Result<Option<std::time::Duration>> {
     icmp::ping(address, PATIENCE)
+}
+
+/// How many echoes a measurement sends.
+pub const ECHOES: u8 = 3;
+
+/// What a measurement of one machine found: the fastest and the slowest of
+/// the round trips that came back, and how many did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Measured {
+    /// The quickest round trip.
+    pub fastest: std::time::Duration,
+    /// The slowest one.
+    pub slowest: std::time::Duration,
+    /// How many of the [`ECHOES`] came back.
+    pub answered: u8,
+}
+
+/// Measures the round trip to one machine — the gateway's row asks for it
+/// ON DEMAND, and never a sweep (see [`icmp::ping`] for why a sweep's number
+/// would lie). Three echoes a fifth of a second apart, because one is a
+/// sample and a link is a range: the fastest and the slowest are both said.
+///
+/// `None` when none came back.
+///
+/// # Errors
+///
+/// The kernel refused the socket.
+pub fn measure(address: std::net::Ipv4Addr) -> anyhow::Result<Option<Measured>> {
+    let mut times = Vec::new();
+    for n in 0..ECHOES {
+        if n > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if let Some(t) = icmp::ping(address, PATIENCE)? {
+            times.push(t);
+        }
+    }
+    Ok(summed(&times))
+}
+
+/// The fastest, the slowest and the count of a set of round trips.
+#[must_use]
+pub fn summed(times: &[std::time::Duration]) -> Option<Measured> {
+    Some(Measured {
+        fastest: *times.iter().min()?,
+        slowest: *times.iter().max()?,
+        answered: u8::try_from(times.len()).unwrap_or(u8::MAX),
+    })
 }
 
 /// Sweeps the network of one address, on the calling thread.
@@ -86,6 +135,21 @@ pub fn sweep(address_with_prefix: &str) -> anyhow::Result<Found> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_measurement_is_its_fastest_its_slowest_and_its_count() {
+        use std::time::Duration;
+        assert_eq!(super::summed(&[]), None);
+        let m = super::summed(&[
+            Duration::from_micros(900),
+            Duration::from_micros(400),
+            Duration::from_micros(2_100),
+        ])
+        .unwrap();
+        assert_eq!(m.fastest, Duration::from_micros(400));
+        assert_eq!(m.slowest, Duration::from_micros(2_100));
+        assert_eq!(m.answered, 3);
+    }
+
     #[test]
     fn a_sweep_of_nothing_asks_nothing() {
         // AN ADDRESS THAT IS NOT ONE is no hosts, and the sweep is a socket

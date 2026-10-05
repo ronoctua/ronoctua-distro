@@ -24,7 +24,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use ronoctua_playlist::own::{Item, QueueFile, Set, Stream};
+use ronoctua_playlist::own::{Item, Lane, LaneKind, QueueFile, Set, Stream};
 use serde::{Deserialize, Serialize};
 
 use crate::limit::{Limit, TooMany};
@@ -178,18 +178,36 @@ impl Body {
     }
 }
 
-/// Every distinct source of a set, in lane order, each by the title one of
-/// its lanes gave, else its file name.
+/// Every distinct source of a set's PICTURES AND SOUNDS, in lane order, each
+/// by the title one of those lanes gave, else its file name.
+///
+/// # Why subtitles do not count (decision A3, 2026-09-30)
+///
+/// A film with its subtitles is one film: "Film + film.en.srt" named it after
+/// a file of words nobody watches, and a set that only ADDED subtitles to a
+/// film — the commonest set there is — read as two things played together.
+/// What is played together is what is seen and heard. A set of subtitles
+/// alone (none is kept: they need a picture) would be named by them rather
+/// than by nothing.
 fn sources(set: &Set) -> Vec<String> {
+    let played: Vec<&Lane> = set
+        .lanes
+        .iter()
+        .filter(|lane| lane.kind != LaneKind::Subtitle)
+        .collect();
+    let lanes: Vec<&Lane> = if played.is_empty() {
+        set.lanes.iter().collect()
+    } else {
+        played
+    };
     let mut seen: Vec<&str> = Vec::new();
     let mut out = Vec::new();
-    for lane in &set.lanes {
+    for lane in &lanes {
         if seen.contains(&lane.source.as_str()) {
             continue;
         }
         seen.push(&lane.source);
-        let title = set
-            .lanes
+        let title = lanes
             .iter()
             .filter(|other| other.source == lane.source)
             .find_map(|other| {
@@ -275,6 +293,69 @@ pub enum Name {
     /// An unnamed set: every distinct source, joined by the door with
     /// [`together`].
     Together(Vec<String>),
+}
+
+/// Where the queue is kept, as the state says it — what the Queue's title
+/// says beside its name.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kept")]
+pub enum QueueKept {
+    /// The queue holds nothing: there is nothing to keep.
+    #[default]
+    Empty,
+    /// It was never opened from a file nor saved as one.
+    Never,
+    /// It is what the file says.
+    Same {
+        /// The `.rqueue`.
+        path: String,
+        /// What it is called.
+        name: String,
+    },
+    /// It changed since it was opened from the file or saved as it.
+    Changed {
+        /// The `.rqueue`.
+        path: String,
+        /// What it is called.
+        name: String,
+    },
+}
+
+/// Where a location IS, for "is it already in the queue?": a file by its
+/// canonical path (a link, `..` and a second spelling of one file are one
+/// place), a YouTube video by its id (`ronoctua_ytdlp::video_id`: a time, the
+/// short form and the mobile site are one video), anything else by its text.
+///
+/// A path that cannot be resolved (gone, unreadable) is its text: two
+/// spellings of a file that is not there are two places, which costs one
+/// question too many and never a refusal of a file that is not queued.
+#[must_use]
+pub fn place_of(location: &str) -> String {
+    if let Some(id) = ronoctua_ytdlp::video_id(location) {
+        return format!("youtube:{id}");
+    }
+    if location.contains("://") {
+        return location.to_owned();
+    }
+    std::fs::canonicalize(location).map_or_else(
+        |_| location.to_owned(),
+        |path| path.to_string_lossy().into_owned(),
+    )
+}
+
+/// Whether two locations are the same place ([`place_of`]).
+#[must_use]
+pub fn same_place(a: &str, b: &str) -> bool {
+    a == b || place_of(a) == place_of(b)
+}
+
+/// Where a location is WITHOUT ASKING THE DISK: a YouTube video by its id,
+/// anything else by its text — what a leaf of the queue is compared by in
+/// [`Queue::holding`], under the engine's lock.
+#[must_use]
+pub fn written_place(location: &str) -> String {
+    ronoctua_ytdlp::video_id(location)
+        .map_or_else(|| location.to_owned(), |id| format!("youtube:{id}"))
 }
 
 /// The kind of an outline's node.
@@ -672,6 +753,38 @@ impl Queue {
         out
     }
 
+    /// The leaf already at `place` — what [`place_of`] answered for the
+    /// location being put, worked out BEFORE the engine's lock is taken —
+    /// and what it is called: a file or a stream; a set is many places and
+    /// never one.
+    ///
+    /// # Why a leaf is never resolved here
+    ///
+    /// This runs under the engine's lock, which the render and sync threads
+    /// sleep on, at every `Put`: a canonical path per leaf was up to ten
+    /// thousand calls to the disk per `Put`, and one stale network mount
+    /// hung every door. So a leaf is compared by its [`written_place`] — a
+    /// video by its id, a file by its text — and a file is the same place
+    /// when it was put by its canonical path, which is how the engine is to
+    /// put files in the queue (its `absolute`). One walk, strings only.
+    #[must_use]
+    pub fn holding(&self, place: &str) -> Option<(EntryId, Name)> {
+        let mut found = None;
+        walk_leaves(&self.entries, &mut |entry| {
+            let here = match &entry.body {
+                Body::Single { location, .. } => location.as_str(),
+                Body::Stream(stream) => stream.url.as_str(),
+                Body::Set { .. } | Body::Playlist { .. } => return false,
+            };
+            let same = here == place || written_place(here) == place;
+            if same {
+                found = Some((entry.id, entry.body.name()));
+            }
+            same
+        });
+        found
+    }
+
     /// How many things to play there are.
     #[must_use]
     pub fn leaf_count(&self) -> usize {
@@ -953,6 +1066,20 @@ fn leaves_of(list: &[Entry], out: &mut Vec<EntryId>) {
     }
 }
 
+/// Every leaf of `list`, in the tree's order, until `stop` says so.
+fn walk_leaves(list: &[Entry], stop: &mut impl FnMut(&Entry) -> bool) -> bool {
+    for entry in list {
+        let done = match &entry.body {
+            Body::Playlist { children, .. } => walk_leaves(children, stop),
+            _ => stop(entry),
+        };
+        if done {
+            return true;
+        }
+    }
+    false
+}
+
 /// Fills `path` with where `id` is under `list`.
 fn path_in(list: &[Entry], id: EntryId, path: &mut Vec<usize>) -> bool {
     for (n, entry) in list.iter().enumerate() {
@@ -1011,6 +1138,71 @@ mod tests {
     use ronoctua_playlist::own::{Lane, LaneId, LaneKind};
 
     use super::*;
+
+    /// FAILS IF: one file reached by two paths, or one video by two of its
+    /// addresses, is two places — or two different ones are one.
+    #[test]
+    fn a_place_is_the_file_or_the_video_however_it_is_written() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-same-place-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).expect("a folder");
+        let file = dir.join("a.flac");
+        std::fs::write(&file, b"x").expect("a file");
+        let other = dir.join("b.flac");
+        std::fs::write(&other, b"y").expect("another");
+        let link = dir.join("link.flac");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&file, &link).expect("a link");
+        let roundabout = dir.join("sub/../a.flac");
+        let (file_s, link_s, round_s, other_s) = (
+            file.to_string_lossy().into_owned(),
+            link.to_string_lossy().into_owned(),
+            roundabout.to_string_lossy().into_owned(),
+            other.to_string_lossy().into_owned(),
+        );
+        assert!(same_place(&file_s, &link_s), "a link is its file");
+        assert!(same_place(&file_s, &round_s), "`..` is resolved");
+        assert!(!same_place(&file_s, &other_s));
+        assert!(same_place(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+            "https://youtu.be/dQw4w9WgXcQ"
+        ));
+        assert!(!same_place(
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://youtu.be/aaaaaaaaaaa"
+        ));
+        assert!(!same_place(
+            "https://radio.example/a",
+            "https://radio.example/b"
+        ));
+
+        // AND THE QUEUE ANSWERS WITH THE LEAF, however deep it sits — a file
+        // put by its canonical path (as the engine is to put one), found from
+        // a link and a roundabout spelling of it.
+        let canonical = place_of(&link_s);
+        let mut q = Queue::new();
+        let ids = q
+            .insert(
+                Place::End(None),
+                vec![
+                    single(&other_s),
+                    playlist("list", vec![single(&canonical)]),
+                    single("https://youtu.be/dQw4w9WgXcQ"),
+                ],
+            )
+            .expect("inserted");
+        for spelling in [&round_s, &link_s, &file_s] {
+            let (entry, name) = q.holding(&place_of(spelling)).expect("the file is held");
+            assert_eq!(q.find(entry).map(|e| e.body.kind()), Some(NodeKind::Single));
+            assert_eq!(name, Name::Location(canonical.clone()));
+            assert_ne!(Some(entry), ids.first().copied());
+        }
+        let (video, _) = q
+            .holding(&place_of("https://m.youtube.com/watch?v=dQw4w9WgXcQ"))
+            .expect("the video");
+        assert_eq!(Some(video), ids.last().copied());
+        assert_eq!(q.holding(&place_of("/nowhere/c.flac")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A file.
     fn single(location: &str) -> Item {
@@ -1357,13 +1549,24 @@ mod tests {
             set: film_and_commentary.clone(),
             from: None,
         };
+        // THE SUBTITLES ARE NOT A THING PLAYED (A3): the name is what is
+        // seen and heard.
         assert_eq!(
             body.name(),
-            Name::Together(vec![
-                "Film".to_owned(),
-                "commentary.opus".to_owned(),
-                "film.en.srt".to_owned()
-            ])
+            Name::Together(vec!["Film".to_owned(), "commentary.opus".to_owned()])
+        );
+        // A FILM AND ITS SUBTITLES is the film.
+        let subtitled = Body::Set {
+            set: set_of(&[
+                (LaneKind::Video, "/films/film.mkv", None),
+                (LaneKind::Audio, "/films/film.mkv", None),
+                (LaneKind::Subtitle, "/films/film.pt.srt", Some("Portuguese")),
+            ]),
+            from: None,
+        };
+        assert_eq!(
+            subtitled.name(),
+            Name::Together(vec!["film.mkv".to_owned()])
         );
         // A SET OF ONE SOURCE is one medium, and is its name.
         let one = Body::Set {

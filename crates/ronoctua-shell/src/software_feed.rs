@@ -303,7 +303,10 @@ impl Feed {
         let url = url.to_owned();
         let post = self.poster();
         spawn("ronoctua-software-site", move || {
-            let answer = ronoctua_software::icons::from_site(&url);
+            // THE PERSON TYPED IT: that is the consent to ask its host,
+            // recorded before anything is asked, and the page is read on it.
+            let answer = ronoctua_software::icons::typed_pass(&url)
+                .and_then(|pass| ronoctua_software::icons::from_site(&pass, &url));
             post(Arrival::Site { url, answer });
         });
     }
@@ -795,6 +798,10 @@ pub struct Readings {
     pub now: u64,
     /// `$HOME`, so a typed `~/…` is a path.
     pub home: Option<PathBuf>,
+    /// The person's consents (`consent.json`), as read at the view's
+    /// opening, after a consent row was pressed, and when the preferences
+    /// change: a catalogue that is on and not let draws its consent row.
+    pub consents: ronoctua_consent::Consents,
 }
 
 impl Readings {
@@ -804,6 +811,7 @@ impl Readings {
         Self {
             prefs,
             taught,
+            consents: ronoctua_consent::store().read(),
             ..Self::default()
         }
     }
@@ -986,12 +994,23 @@ impl Readings {
 
     /// The preferences file changed.
     pub fn took_preferences(&mut self, prefs: Preferences) -> bool {
+        let consents = self.reread_consents();
         if self.prefs == prefs {
-            return false;
+            return consents;
         }
         self.prefs = prefs;
         // THE PREFERENCE DECIDES WHICH SOURCE IS RECOMMENDED.
         self.merge();
+        true
+    }
+
+    /// Reads `consent.json` again; answers whether it changed.
+    pub fn reread_consents(&mut self) -> bool {
+        let fresh = ronoctua_consent::store().read();
+        if fresh == self.consents {
+            return false;
+        }
+        self.consents = fresh;
         true
     }
 

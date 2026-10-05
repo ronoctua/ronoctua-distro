@@ -50,11 +50,18 @@ pub fn refused(order: &Order, why: Refusal, words: &str, texts: &ronoctua_i18n::
         Refusal::NotAuthorized => key::POWER_REFUSED_AUTHORITY,
         Refusal::NotAvailable => key::POWER_REFUSED_ABSENT,
         Refusal::Invalid => key::POWER_REFUSED_INVALID,
+        Refusal::TimedOut => key::POWER_REFUSED_TIMED_OUT,
+        Refusal::Failed => key::POWER_REFUSED_FAILED,
+        Refusal::NoBus => key::POWER_REFUSED_NO_BUS,
         Refusal::Other => key::POWER_REFUSED_OTHER,
     });
+    // THE DAEMON'S OWN WORDS GO TO THE LOG: they are English, and the line
+    // is in the person's language. Every refusal that reaches the line has
+    // a name now; the words are for whoever reads the journal.
+    tracing::info!(?why, words, "a power daemon refused");
     texts.t_with(
         key::ECHO_POWER_REFUSED,
-        &[("what", &what), ("why", &reason), ("words", words)],
+        &[("what", &what), ("why", &reason)],
     )
 }
 

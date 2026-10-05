@@ -47,7 +47,7 @@ use ronoctua_player::{
     remote::{self, Moment},
     session::{self, Master, When},
     sync::{self, Correction, Follower},
-    wire::{LaneChange, LaneState, LaneStatus, Source, Track, TrackKind, Trouble},
+    wire::{LaneChange, LaneLength, LaneState, LaneStatus, Source, Track, TrackKind, Trouble},
 };
 
 use super::{Engine, Refused, voice};
@@ -256,29 +256,76 @@ fn voice_length(v: &voice::Voice) -> Option<f64> {
     v.duration
 }
 
+/// Whether a voice's file, loaded, has no sound at all — what a sound lane
+/// of it is refused for ([`Trouble::NoSound`]). Before FILE_LOADED nothing is
+/// known, and nothing is said.
+fn has_no_sound(v: &voice::Voice) -> bool {
+    v.file_loaded && !v.tracks.iter().any(|t| t.kind == TrackKind::Audio)
+}
+
 /// `mpv seek <to> absolute+exact`.
 fn seek(mpv: &Mpv, to: f64) {
     let _ = mpv.command(&["seek", &format!("{to:.3}"), "absolute+exact"]);
 }
 
+/// The lane that shares `lane`'s voice: the other of a picture and a sound
+/// of ONE source over the same stretch of it from the same start — a film's
+/// picture and its own sound. What [`session::voices`] would put in one mpv,
+/// asked of the lanes on or off (a sound switched off is still its
+/// picture's). Pure.
+#[must_use]
+pub(super) fn voice_mate(lanes: &[Lane], lane: LaneId) -> Option<LaneId> {
+    let me = lanes.iter().find(|l| l.id == lane)?;
+    let other = match me.kind {
+        LaneKind::Video => LaneKind::Audio,
+        LaneKind::Audio => LaneKind::Video,
+        LaneKind::Subtitle => return None,
+    };
+    let same = |a: f64, b: f64| (a - b).abs() < 0.000_5;
+    lanes
+        .iter()
+        .find(|l| {
+            l.id != lane
+                && l.kind == other
+                && l.source == me.source
+                && same(l.start_seconds, me.start_seconds)
+                && same(l.from_seconds, me.from_seconds)
+                && match (l.until_seconds, me.until_seconds) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => same(a, b),
+                    _ => false,
+                }
+        })
+        .map(|l| l.id)
+}
+
 /// A change to one lane, as the set says it — refused with the reason when
 /// the lane is not one it applies to, or the value is out of its range.
+///
+/// A START OR A STRETCH WITH `voice` moves the lane's voice mate
+/// ([`voice_mate`]) the same way, so a picture dragged along the timeline
+/// keeps its own sound with it; without, the lane moves alone.
 fn apply_change(set: &mut Set, lane: LaneId, change: LaneChange) -> Result<(), Trouble> {
     let count = set.lanes.len();
+    let mate = voice_mate(&set.lanes, lane);
     let l = set.lane_mut(lane).ok_or(Trouble::NoSuchLane { lane })?;
     let bad = Trouble::BadValue { lane };
     let wrong = Trouble::WrongKind { lane };
     let seconds = |s: f64| s.is_finite() && s >= 0.0;
     match change {
-        LaneChange::Start { seconds: s } => {
+        LaneChange::Start { seconds: s, voice } => {
             if !seconds(s) {
                 return Err(bad);
             }
             l.start_seconds = s;
+            if let Some(m) = mate.filter(|_| voice).and_then(|m| set.lane_mut(m)) {
+                m.start_seconds = s;
+            }
         }
         LaneChange::Trim {
             from_seconds,
             until_seconds,
+            voice,
         } => {
             if !seconds(from_seconds)
                 || until_seconds.is_some_and(|u| !u.is_finite() || u <= from_seconds)
@@ -287,6 +334,10 @@ fn apply_change(set: &mut Set, lane: LaneId, change: LaneChange) -> Result<(), T
             }
             l.from_seconds = from_seconds;
             l.until_seconds = until_seconds;
+            if let Some(m) = mate.filter(|_| voice).and_then(|m| set.lane_mut(m)) {
+                m.from_seconds = from_seconds;
+                m.until_seconds = until_seconds;
+            }
         }
         LaneChange::Enabled { on } => l.enabled = on,
         LaneChange::Volume { percent } => {
@@ -323,6 +374,12 @@ fn apply_change(set: &mut Set, lane: LaneId, change: LaneChange) -> Result<(), T
         LaneChange::Title { title } => {
             l.title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
         }
+        LaneChange::Language { lang } => {
+            if l.kind != LaneKind::Subtitle {
+                return Err(wrong);
+            }
+            l.lang = lang.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+        }
         LaneChange::Remove => {
             if count == 1 {
                 return Err(Trouble::LastLane);
@@ -335,6 +392,49 @@ fn apply_change(set: &mut Set, lane: LaneId, change: LaneChange) -> Result<(), T
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// The lanes an `add-lane` puts in `set`: the one asked — and, for a
+/// PICTURE WITH NO TRACK CHOSEN, its own sound beside it, on the same source,
+/// start and stretch, so the two are one voice ([`session::voices`]) and
+/// the film played together is heard (`aid=auto` there, never `no`). With a
+/// track chosen it is that one track and nothing else: "play also" of one
+/// picture track of a file whose sound already plays. Refused with the reason
+/// for a value out of range or subtitles laid over what is not a picture.
+///
+/// # Why its own sound comes with it
+///
+/// A picture lane played with `aid=no` — its voice has no sound lane — so a
+/// second film "played together" was a silent one, and nothing on screen
+/// said so (the owner's report: "tocar junto: só o áudio do primeiro"). The
+/// sound is its own lane, so it can be muted, sent elsewhere or moved for
+/// lip-sync like any other.
+pub(super) fn lanes_added(
+    set: &mut Set,
+    source: &str,
+    kind: LaneKind,
+    track: Option<i64>,
+    start_seconds: f64,
+    over: Option<LaneId>,
+) -> Result<(), Trouble> {
+    let id = set.next_lane_id();
+    if source.is_empty() || !start_seconds.is_finite() || start_seconds < 0.0 {
+        return Err(Trouble::BadValue { lane: id });
+    }
+    if over.is_some() && kind != LaneKind::Subtitle {
+        return Err(Trouble::WrongKind { lane: id });
+    }
+    let mut lane = Lane::new(id, kind, source);
+    lane.track = track;
+    lane.start_seconds = start_seconds;
+    lane.over = over;
+    set.lanes.push(lane);
+    if kind == LaneKind::Video && track.is_none() {
+        let mut sound = Lane::new(set.next_lane_id(), LaneKind::Audio, source);
+        sound.start_seconds = start_seconds;
+        set.lanes.push(sound);
     }
     Ok(())
 }
@@ -473,6 +573,7 @@ impl Engine {
         self.cast(&set.lanes, &set.arrangement.covers, at)?;
         self.tick();
         self.remember_where();
+        self.read_lengths_off();
         Ok(())
     }
 
@@ -903,9 +1004,8 @@ impl Engine {
             };
             let voiced: Vec<&voice::Voice> =
                 self.voices.iter().filter(|v| v.part.is_some()).collect();
-            let over = length.is_some_and(|end| t >= end - 0.02)
-                || (!voiced.is_empty() && voiced.iter().all(|v| done(v)));
-            if over && playing {
+            let all_done = (!voiced.is_empty()).then(|| voiced.iter().all(|v| done(v)));
+            if over_at(t, length, all_done, &lanes) && playing {
                 self.set_ended();
                 return;
             }
@@ -1099,14 +1199,16 @@ impl Engine {
         let Some(first) = self.voices.first().map(|v| v.mpv.clone()) else {
             return;
         };
-        match next {
-            Some(n) if n == id => self.session_seek(0.0),
-            Some(n) => {
+        let nothing_on = session::plays_nothing(&self.lanes_now().0);
+        match after_the_end(id, next, nothing_on) {
+            AfterEnd::Again => self.session_seek(0.0),
+            AfterEnd::Hold => self.session_play(false),
+            AfterEnd::Load(n) => {
                 if let Err(Refused(t)) = self.load_leaf(&first, n, false) {
                     self.state.troubles = vec![t];
                 }
             }
-            None => {
+            AfterEnd::Stop => {
                 let _ = self.stop(&first);
                 self.set_current(None);
                 self.remember_where();
@@ -1180,6 +1282,8 @@ impl Engine {
         let reshaped = (set.lanes.len(), set.name.clone()) != shape;
         if let Some(slot) = self.queue.set_mut(id) {
             *slot = set;
+            // A LANE CHANGED IN PLACE, which the revision does not say.
+            self.lanes_moved += 1;
         }
         if reshaped {
             self.queue.touch();
@@ -1227,7 +1331,9 @@ impl Engine {
         })
     }
 
-    /// `add-lane`: something more plays together with what plays.
+    /// `add-lane`: something more plays together with what plays — a
+    /// picture with no track chosen bringing its own sound
+    /// ([`lanes_added`]).
     pub(super) fn add_lane(
         &mut self,
         source: &str,
@@ -1237,21 +1343,7 @@ impl Engine {
         over: Option<LaneId>,
     ) -> Result<(), Refused> {
         let source = super::absolute(source.trim());
-        self.change_set(|set| {
-            let id = set.next_lane_id();
-            if source.is_empty() || !start_seconds.is_finite() || start_seconds < 0.0 {
-                return Err(Trouble::BadValue { lane: id });
-            }
-            if over.is_some() && kind != LaneKind::Subtitle {
-                return Err(Trouble::WrongKind { lane: id });
-            }
-            let mut lane = Lane::new(id, kind, source);
-            lane.track = track;
-            lane.start_seconds = start_seconds;
-            lane.over = over;
-            set.lanes.push(lane);
-            Ok(())
-        })
+        self.change_set(|set| lanes_added(set, &source, kind, track, start_seconds, over))
     }
 
     /// `lane`: one lane changes.
@@ -1285,7 +1377,12 @@ impl Engine {
             v.mpv.set(name, &value)?;
             return Ok(());
         }
-        self.change_set(|set| apply_change(set, lane, change))
+        let off = matches!(change, LaneChange::Enabled { on: false });
+        self.change_set(|set| apply_change(set, lane, change))?;
+        if off {
+            self.read_lengths_off();
+        }
+        Ok(())
     }
 
     /// `arrange`: how the pictures share a screen.
@@ -1378,7 +1475,13 @@ impl Engine {
                         None => LaneStatus::Preparing,
                         Some(v) if v.failed.is_some() => LaneStatus::Refused(Trouble::Unplayable {
                             why: v.failed.clone().unwrap_or_default(),
+                            said: v.said.clone(),
                         }),
+                        // A SOUND WHOSE FILE HAS NONE, said once the file is
+                        // loaded and its tracks are what it has.
+                        Some(v) if lane.kind == LaneKind::Audio && has_no_sound(v) => {
+                            LaneStatus::Refused(Trouble::NoSound { lane: lane.id })
+                        }
                         Some(_) if self.session.is_none() => LaneStatus::Playing,
                         Some(v) if v.loaded.is_none() => LaneStatus::Preparing,
                         Some(v) => match session::when(t, lane, v.duration) {
@@ -1398,9 +1501,54 @@ impl Engine {
                     master: master == Some(lane.id),
                     size: v.filter(|_| picture).and_then(|v| v.size),
                     cover,
+                    languages: if lane.kind == LaneKind::Subtitle {
+                        self.subtitles.languages_of(lane.id)
+                    } else {
+                        Vec::new()
+                    },
                 }
             })
             .collect()
+    }
+
+    /// How long each picture or sound of `lanes` that is OFF runs, when it
+    /// is known: as a voice that still holds its source says it — a film's
+    /// picture switched off while its sound plays — else as the sheet read
+    /// of its file says it (read when it played, or asked when it was found
+    /// off, [`Engine::read_lengths_off`]).
+    pub(super) fn lengths_off(&self, lanes: &[Lane]) -> Vec<LaneLength> {
+        lanes
+            .iter()
+            .filter(|l| !l.enabled && l.kind != LaneKind::Subtitle)
+            .filter_map(|l| {
+                let seconds = self
+                    .voices
+                    .iter()
+                    .filter(|v| v.loaded.as_deref() == Some(l.source.as_str()))
+                    .find_map(|v| v.duration)
+                    .or_else(|| self.sheet_length(&l.source))?;
+                (seconds.is_finite() && seconds > 0.0).then_some(LaneLength {
+                    lane: l.id,
+                    seconds,
+                })
+            })
+            .collect()
+    }
+
+    /// The lanes of what plays that are off and whose length nobody knows
+    /// have their files' sheets read — off the lock — so their bands end
+    /// where their files do ([`Engine::lengths_off`]).
+    pub(super) fn read_lengths_off(&mut self) {
+        let (lanes, _) = self.lanes_now();
+        let known: Vec<LaneId> = self.lengths_off(&lanes).iter().map(|l| l.lane).collect();
+        for lane in lanes
+            .iter()
+            .filter(|l| !l.enabled && l.kind != LaneKind::Subtitle && !known.contains(&l.id))
+        {
+            if !lane.source.contains("://") {
+                self.read_tags_of(&lane.source);
+            }
+        }
     }
 
     /// The sources of `lanes`, each with its tracks — what every voice that
@@ -1498,10 +1646,83 @@ impl Engine {
     }
 }
 
+/// Whether a set playing here is over at `t`: the clock passed the last
+/// lane's end (`length`), every voice is at its end (`all_done`, `None` with
+/// no voice) — and AT ONCE when nothing of it is on: every lane switched off,
+/// or only words left ([`session::plays_nothing`]), when no voice plays to
+/// end and no length is known for the clock to pass.
+fn over_at(t: f64, length: Option<f64>, all_done: Option<bool>, lanes: &[Lane]) -> bool {
+    length.is_some_and(|end| t >= end - 0.02)
+        || all_done == Some(true)
+        || session::plays_nothing(lanes)
+}
+
+/// What follows the end of set `id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterEnd {
+    /// From its start again (repeat one).
+    Again,
+    /// Paused where it is: repeated with nothing on, it would end again at
+    /// once, every tick, for ever — it waits for a lane switched on.
+    Hold,
+    /// The next entry loaded.
+    Load(EntryId),
+    /// Nothing next: stopped.
+    Stop,
+}
+
+/// What follows the end of set `id`, `next` being the queue's answer and
+/// `nothing_on` whether every lane of it is off ([`AfterEnd`]).
+fn after_the_end(id: EntryId, next: Option<EntryId>, nothing_on: bool) -> AfterEnd {
+    match next {
+        Some(n) if n == id && nothing_on => AfterEnd::Hold,
+        Some(n) if n == id => AfterEnd::Again,
+        Some(n) => AfterEnd::Load(n),
+        None => AfterEnd::Stop,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ronoctua_player::own::Stack;
+
+    /// FAILS IF: a set playing here whose every picture and sound lane is
+    /// switched off — or that has only words left — is not over at once
+    /// (its clock walked for ever, nothing heard or seen, no end to reach),
+    /// or one with a lane on is over before its end.
+    #[test]
+    fn a_set_with_every_lane_off_ends() {
+        let mut lanes = vec![
+            Lane::new(LaneId(1), LaneKind::Video, "/m/film.mkv"),
+            Lane::new(LaneId(2), LaneKind::Audio, "/m/film.mkv"),
+            Lane::new(LaneId(3), LaneKind::Subtitle, "/m/film.srt"),
+        ];
+        assert!(!over_at(1.0, None, None, &lanes), "nothing ends it yet");
+        assert!(!over_at(1.0, Some(60.0), Some(false), &lanes));
+        assert!(over_at(59.99, Some(60.0), Some(false), &lanes), "its end");
+        assert!(over_at(1.0, None, Some(true), &lanes), "every voice done");
+        lanes[0].enabled = false;
+        assert!(!over_at(1.0, None, None, &lanes), "its sound still plays");
+        lanes[1].enabled = false;
+        assert!(over_at(1.0, None, None, &lanes), "only words left: over");
+        lanes[2].enabled = false;
+        assert!(over_at(0.0, None, None, &lanes), "nothing on: over");
+    }
+
+    /// FAILS IF: a set repeated with nothing on is started again — it would
+    /// end again at the next tick, for ever — instead of held paused; or the
+    /// end of a set with something on does not repeat, go on or stop as the
+    /// queue says.
+    #[test]
+    fn a_repeated_set_with_nothing_on_is_held() {
+        let (id, other) = (EntryId(7), EntryId(8));
+        assert_eq!(after_the_end(id, Some(id), true), AfterEnd::Hold);
+        assert_eq!(after_the_end(id, Some(id), false), AfterEnd::Again);
+        assert_eq!(after_the_end(id, Some(other), true), AfterEnd::Load(other));
+        assert_eq!(after_the_end(id, Some(other), false), AfterEnd::Load(other));
+        assert_eq!(after_the_end(id, None, true), AfterEnd::Stop);
+    }
 
     fn track(id: i64, kind: TrackKind, selected: bool, albumart: bool) -> Track {
         Track {
@@ -1624,6 +1845,132 @@ mod tests {
         assert_eq!(get(&silent, "aid"), "no");
     }
 
+    /// FAILS IF: a film added to what plays comes without its sound — two
+    /// videos and a song played together must be three voices, EACH with a
+    /// sound (`aid` never `no`) — or a picture asked with a chosen track
+    /// brings a sound nobody asked for.
+    #[test]
+    fn two_videos_and_a_song_together_are_three_voices_all_heard() {
+        let mut set = implicit_set(
+            "/m/a.mkv",
+            None,
+            &[
+                track(1, TrackKind::Video, true, false),
+                track(1, TrackKind::Audio, true, false),
+            ],
+        );
+        lanes_added(&mut set, "/m/b.mkv", LaneKind::Video, None, 0.0, None).expect("a film");
+        lanes_added(&mut set, "/m/song.flac", LaneKind::Audio, None, 0.0, None).expect("a song");
+        let kinds: Vec<(u32, LaneKind, &str)> = set
+            .lanes
+            .iter()
+            .map(|l| (l.id.0, l.kind, l.source.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (1, LaneKind::Video, "/m/a.mkv"),
+                (2, LaneKind::Audio, "/m/a.mkv"),
+                (3, LaneKind::Video, "/m/b.mkv"),
+                (4, LaneKind::Audio, "/m/b.mkv"),
+                (5, LaneKind::Audio, "/m/song.flac"),
+            ]
+        );
+        assert!(set.check().is_ok());
+        let voices = session::voices(&set.lanes);
+        assert_eq!(voices.len(), 3, "{voices:#?}");
+        for v in &voices {
+            assert!(v.audio.is_some(), "a voice with no sound: {v:?}");
+            let dress = dress_of(v, &set.lanes, &[], (100, false), None);
+            let aid = dress
+                .iter()
+                .find(|(n, _)| *n == "aid")
+                .map(|(_, v)| v.as_str());
+            assert_ne!(aid, Some("no"), "{v:?} plays no sound");
+        }
+        assert_eq!(voices[1].video, Some(LaneId(3)));
+        assert_eq!(
+            voices[1].audio,
+            Some(LaneId(4)),
+            "the film's own sound, in its voice"
+        );
+        // A CHOSEN TRACK is that track alone.
+        let before = set.lanes.len();
+        lanes_added(&mut set, "/m/b.mkv", LaneKind::Video, Some(2), 0.0, None).expect("a track");
+        assert_eq!(set.lanes.len(), before + 1);
+        // AND A STARTING POINT is the sound's too.
+        lanes_added(&mut set, "/m/c.mkv", LaneKind::Video, None, 4.5, None).expect("later");
+        let last: Vec<f64> = set
+            .lanes
+            .iter()
+            .rev()
+            .take(2)
+            .map(|l| l.start_seconds)
+            .collect();
+        assert_eq!(last, vec![4.5, 4.5]);
+    }
+
+    /// FAILS IF: a picture moved with its voice leaves its own sound behind
+    /// (the two would split into two voices out of step), or a sound moved
+    /// alone for lip-sync drags its picture along.
+    #[test]
+    fn a_picture_moves_with_its_sound_and_a_sound_moves_alone() {
+        let mut set = Set::default();
+        lanes_added(&mut set, "/m/b.mkv", LaneKind::Video, None, 0.0, None).expect("a film");
+        set.lanes
+            .push(Lane::new(LaneId(3), LaneKind::Audio, "/m/other.opus"));
+        assert_eq!(voice_mate(&set.lanes, LaneId(1)), Some(LaneId(2)));
+        assert_eq!(voice_mate(&set.lanes, LaneId(2)), Some(LaneId(1)));
+        assert_eq!(voice_mate(&set.lanes, LaneId(3)), None);
+        let start = |set: &Set, id: u32| set.lane(LaneId(id)).map(|l| l.start_seconds);
+        apply_change(
+            &mut set,
+            LaneId(1),
+            LaneChange::Start {
+                seconds: 3.0,
+                voice: true,
+            },
+        )
+        .expect("moved");
+        assert_eq!((start(&set, 1), start(&set, 2)), (Some(3.0), Some(3.0)));
+        assert_eq!(
+            session::voices(&set.lanes).len(),
+            2,
+            "still one voice for the film"
+        );
+        // LIP-SYNC: the sound alone, a fifth of a second later.
+        apply_change(
+            &mut set,
+            LaneId(2),
+            LaneChange::Start {
+                seconds: 3.2,
+                voice: false,
+            },
+        )
+        .expect("moved");
+        assert_eq!((start(&set, 1), start(&set, 2)), (Some(3.0), Some(3.2)));
+        assert_eq!(
+            voice_mate(&set.lanes, LaneId(1)),
+            None,
+            "no longer one voice"
+        );
+        // A STRETCH with the voice trims both.
+        let mut film = Set::default();
+        lanes_added(&mut film, "/m/b.mkv", LaneKind::Video, None, 0.0, None).expect("a film");
+        apply_change(
+            &mut film,
+            LaneId(1),
+            LaneChange::Trim {
+                from_seconds: 5.0,
+                until_seconds: Some(9.0),
+                voice: true,
+            },
+        )
+        .expect("trimmed");
+        assert_eq!(film.lanes[1].from_seconds, 5.0);
+        assert_eq!(film.lanes[1].until_seconds, Some(9.0));
+    }
+
     /// FAILS IF: a lane change is taken for a lane it does not fit, a value
     /// out of its range is taken, or the last lane of a set can be removed.
     #[test]
@@ -1653,8 +2000,45 @@ mod tests {
             refused(&mut set, 2, LaneChange::Stack { stack: Stack::Top }),
             Some(Trouble::WrongKind { lane: LaneId(2) })
         );
+        // A LANGUAGE is a subtitle's to keep — and an empty one gives it
+        // back the first that speaks.
         assert_eq!(
-            refused(&mut set, 2, LaneChange::Start { seconds: -1.0 }),
+            refused(
+                &mut set,
+                2,
+                LaneChange::Language {
+                    lang: Some("pt-BR".into())
+                }
+            ),
+            Some(Trouble::WrongKind { lane: LaneId(2) })
+        );
+        apply_change(
+            &mut set,
+            LaneId(3),
+            LaneChange::Language {
+                lang: Some(" pt-BR ".into()),
+            },
+        )
+        .expect("kept");
+        assert_eq!(set.lanes[2].lang.as_deref(), Some("pt-BR"));
+        apply_change(
+            &mut set,
+            LaneId(3),
+            LaneChange::Language {
+                lang: Some(String::new()),
+            },
+        )
+        .expect("given back");
+        assert_eq!(set.lanes[2].lang, None);
+        assert_eq!(
+            refused(
+                &mut set,
+                2,
+                LaneChange::Start {
+                    seconds: -1.0,
+                    voice: false
+                }
+            ),
             Some(Trouble::BadValue { lane: LaneId(2) })
         );
         assert_eq!(
@@ -1663,7 +2047,8 @@ mod tests {
                 2,
                 LaneChange::Trim {
                     from_seconds: 5.0,
-                    until_seconds: Some(5.0)
+                    until_seconds: Some(5.0),
+                    voice: false
                 }
             ),
             Some(Trouble::BadValue { lane: LaneId(2) })
@@ -1688,7 +2073,14 @@ mod tests {
             None
         );
         assert_eq!(
-            refused(&mut set, 2, LaneChange::Start { seconds: 2.0 }),
+            refused(
+                &mut set,
+                2,
+                LaneChange::Start {
+                    seconds: 2.0,
+                    voice: false
+                }
+            ),
             None
         );
         assert_eq!(set.lanes[1].sink.as_deref(), Some("h"));

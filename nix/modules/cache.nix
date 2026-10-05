@@ -1,4 +1,5 @@
-# Nothing cached stays for ever.
+# Nothing cached stays for ever — the catalogue's options, and where every
+# build lands.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -7,30 +8,17 @@
 # cleaned: no timer, no tmpfiles rule, no walk. His rule came back in one
 # sentence — nothing cached may stay for ever.
 #
-# WHY IT IS A UNIT AND NOT SOMETHING THE BRAIN DOES ITSELF
-# ---------------------------------------------------------
-# `Task::run` blocks the brain's own thread: a walk of a quarter of a million
-# files there is a daemon that draws nothing and cannot be stopped while it
-# lasts. And a unit gets `IOSchedulingClass=idle` for nothing, which is the
-# argument `nix/modules/memory.nix` already makes about collecting the store —
-# it competes with everything for the disk, so it yields to whatever the person
-# is doing. A run takes whole cache directories at once, which is a lot of
-# `unlink`; without this it is a machine nobody can type on while it happens.
-#
-# WHAT IT MAY NOT DO
-# ------------------
-# It runs as the PERSON and never as root, it asks nobody for anything, and it
-# touches exactly one directory tree: `$XDG_CACHE_HOME`. There is no polkit rule
-# here and there must never be one — a sweep that could be talked into running
-# as root is a sweep that can delete a system.
-#
-# WHEN IT RUNS
-# ------------
-# Not on a timer. The brain decides, against a gate the person configured
-# (`ronoctua_brain::runner::judge`: RAM, CPU stall, battery) — which is what
-# makes "at four in the morning, if the machine is not busy" one rule and not
-# two. `systemd.user.timers` would be a second schedule that knows nothing about
-# load, and the two would disagree on exactly the night it mattered.
+# WHAT IS HERE, AND WHAT IS NOT
+# -----------------------------
+# The UNITS that sweep the cache and empty the trash are the brain's modules
+# now, each in its folder with its own `module.nix`
+# (`crates/ronoctua-brain/modules/`): the brain decides when, against a gate
+# the person configured, and each can be switched off alone
+# (`ronoctua.brain.modules.<id>.enable`). What stays here is what is not a
+# module's: the catalogue's OPTIONS — whether the machine throws cached
+# things away at all (the default of those two modules' switches), and after
+# how long — which those units read, and the one rule about builds that holds
+# on every machine whether anything sweeps or not.
 {
   config,
   lib,
@@ -39,160 +27,9 @@
 }:
 
 let
-  cfg = config.ronoctua.cache;
   # THE POLICY IS THE CATALOGUE'S, and this reads the same file the Rust table
   # is generated from. Two spellings of twenty days is one of them going stale.
   declared = import ../../assets/cache.nix;
-
-  # ONE UNIT, WRITTEN ONCE. The two differ in a description, a report file and
-  # one word; spelled twice they would drift, and the one that drifts is the one
-  # nobody reads — the rehearsal, which is exactly the one that has to behave
-  # identically to be worth anything.
-  sweepUnit =
-    {
-      what,
-      report,
-      execute,
-    }:
-    {
-      description = "ronoctua — ${what}";
-
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = lib.concatStringsSep " " (
-          [
-            "${ronoctua.cacheSweep}/bin/ronoctua-cache-sweep"
-            # THE ROOT IS NAMED, and it is the same `%C` the sandbox below
-            # opens. Left to the binary's own default it would read
-            # `$XDG_CACHE_HOME` from the environment, and a unit whose sandbox
-            # and whose walk disagree about which directory that is would fail
-            # in a way that reads as a bug in the walk. On btrfs `%C` is a
-            # subvolume of its own (`nix/modules/filesystem.nix`), so the walk's
-            # one device is the whole cache.
-            "--root %C"
-            # THE REPORT THE BRAIN WATCHES. `%t` is the user's runtime
-            # directory, which is where `ronoctua_brain::runner::reports_dir`
-            # looks — and the two agreeing is not a comment, it is
-            # `the-brain-reads-what-the-units-write`, which reads this line and
-            # that function. They disagreed once (the daemon looked in
-            # `/run/ronoctua-brain`, which nothing ever wrote), and the symptom
-            # was every run the brain started ending as `runaway` after its
-            # whole patience had gone by.
-            "--report %t/ronoctua-brain/${report}"
-            "--days ${toString cfg.keepDays}"
-            # THE ROOTS, ASKED OF NIX by store path. An entry holding a GC root
-            # — a `nix develop --profile` link under the cache — is kept, and
-            # without an answer every directory holding a link is.
-            "--nix-store ${config.nix.package}/bin/nix-store"
-          ]
-          # AND ONLY THE REAL ONE ACTS. The binary rehearses by default, so the
-          # word that deletes files is written once, in a unit, where a person
-          # reading `systemctl --user cat` can see it.
-          ++ lib.optional execute "--execute"
-        );
-
-        # IT COMPETES WITH EVERYTHING FOR THE DISK, so it yields. Same pair, and
-        # the same sentence, as the store's own collection in `memory.nix`.
-        CPUSchedulingPolicy = "idle";
-        IOSchedulingClass = "idle";
-
-        # `session.slice` for the brain's reason: `memory.nix` arms
-        # `ManagedOOMMemoryPressure=kill` on `app.slice`, and a sweep killed
-        # half way through is a cache in a state nobody planned.
-        Slice = "session.slice";
-        OOMPolicy = "stop";
-
-        # WHAT IT MAY TOUCH, SAID BY SYSTEMD and not only by the code.
-        #
-        # The walk already refuses to follow a link out of its root and to cross
-        # a filesystem. This is the second lock on the same door, and it is the
-        # one that still holds if the code is wrong: the only writable path in
-        # the whole filesystem is the cache directory itself. `ReadWritePaths`
-        # takes precedence over `ProtectHome`, which is what lets the two lines
-        # say "the home is read-only EXCEPT this".
-        ProtectSystem = "strict";
-        ProtectHome = "read-only";
-        ReadWritePaths = [
-          # `-`: a person with no `~/.cache` yet has nothing to sweep, and a
-          # path that is not there would fail the unit before it starts.
-          "-%C"
-          "%t/ronoctua-brain"
-        ];
-        # AND THE REPORT'S DIRECTORY EXISTS BEFORE THE SANDBOX IS BUILT. A
-        # `ReadWritePaths` naming a path that is not there fails the unit with
-        # 226/NAMESPACE before the program starts (measured with a transient
-        # unit), and nothing else made `%t/ronoctua-brain` but the update's
-        # script — so on a session where no update had run yet, the sweep never
-        # started and the brain waited out its whole patience. `Preserve`
-        # because three units and the update share it, and the brain reads it.
-        RuntimeDirectory = "ronoctua-brain";
-        RuntimeDirectoryPreserve = "yes";
-        PrivateDevices = true;
-        NoNewPrivileges = true;
-        RestrictSUIDSGID = true;
-        ProtectKernelTunables = true;
-        ProtectControlGroups = true;
-        RestrictNamespaces = true;
-        SystemCallFilter = [ "@system-service" ];
-        # NO NETWORK. The one socket it reaches is the Nix daemon's, a Unix
-        # socket on the filesystem, which `nix-store --gc --print-roots` asks
-        # which links are roots — and a network namespace does not hide those.
-        PrivateNetwork = true;
-        RestrictAddressFamilies = [ "AF_UNIX" ];
-      };
-    };
-  # THE TRASH'S OWN UNIT, and the differences from the sweep's are the point:
-  # another binary, another number, and `%S` rather than `%C` as the one
-  # writable path — a sweep that could reach the trash would be a cache cleaner
-  # deleting the only copy of somebody's file.
-  trashUnit =
-    {
-      what,
-      report,
-      execute,
-    }:
-    {
-      description = "ronoctua — ${what}";
-
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = lib.concatStringsSep " " (
-          [
-            "${ronoctua.emptyTrash}/bin/ronoctua-empty-trash"
-            "--data-home %S"
-            # THE SAME AGREEMENT the sweep above spells out, and the same check
-            # reads this line too.
-            "--report %t/ronoctua-brain/${report}"
-            "--days ${toString cfg.trashDays}"
-          ]
-          ++ lib.optional execute "--execute"
-        );
-
-        CPUSchedulingPolicy = "idle";
-        IOSchedulingClass = "idle";
-        Slice = "session.slice";
-        OOMPolicy = "stop";
-
-        ProtectSystem = "strict";
-        ProtectHome = "read-only";
-        ReadWritePaths = [
-          "%S"
-          "%t/ronoctua-brain"
-        ];
-        # The sweep's reason, above.
-        RuntimeDirectory = "ronoctua-brain";
-        RuntimeDirectoryPreserve = "yes";
-        PrivateDevices = true;
-        NoNewPrivileges = true;
-        RestrictSUIDSGID = true;
-        ProtectKernelTunables = true;
-        ProtectControlGroups = true;
-        RestrictNamespaces = true;
-        SystemCallFilter = [ "@system-service" ];
-        PrivateNetwork = true;
-        RestrictAddressFamilies = [ "AF_UNIX" ];
-      };
-    };
 in
 {
   options.ronoctua.cache = {
@@ -229,7 +66,21 @@ in
     };
   };
 
-  config = lib.mkMerge [
+  config = {
+    # WHETHER THE MACHINE THROWS CACHED THINGS AWAY AT ALL is the default of
+    # the two modules' own switches, and not a second switch around their
+    # units. It was a second switch: `enable = false` took the units away and
+    # told the brain nothing, so the brain went on scheduling both, started
+    # units that were no longer there and wrote a failure every cadence. Now
+    # the module's switch is the only one the units answer to (the loader's
+    # gate), and it is the one `RONOCTUA_BRAIN_OFF` is built from — so the
+    # rows are drawn refusing with the system's reason. A default and not a
+    # value: a machine may still switch one of the two back on by its own id.
+    ronoctua.brain.modules = lib.mkIf (!config.ronoctua.cache.enable) {
+      cache-sweep.enable = lib.mkDefault false;
+      trash-expire.enable = lib.mkDefault false;
+    };
+
     # EVERY PROJECT'S INTERMEDIATES LEAVE EVERY TREE — on every machine, and
     # whether the sweep runs or not: this is about where a build lands, not
     # about who cleans it.
@@ -248,48 +99,9 @@ in
     # `environment.d` reaches the user manager, and so every unit and every
     # scope the footer opens — a terminal, an editor, rust-analyzer. It is the
     # route NixOS itself takes for `PATH` (`50-systemd-path.conf`).
-    {
-      environment.sessionVariables.CARGO_BUILD_BUILD_DIR = ronoctua.cargoDirs.session.build;
-      environment.etc."environment.d/60-ronoctua-cargo.conf".text = ''
-        CARGO_BUILD_BUILD_DIR="${ronoctua.cargoDirs.session.build}"
-      '';
-    }
-
-    (lib.mkIf (cfg.enable && config.ronoctua.brain.enable) {
-      # TWO UNITS AND NOT A FLAG. The second walks and counts and deletes nothing,
-      # which is what `m e` on the brain's page asks for — and it earns its keep
-      # here more than it does for the update: *"how much would this take?"* is
-      # exactly the question one wants answered before letting something delete a
-      # hundred and fifty gibibytes. A flag crossing from the brain would be a
-      # flag somebody else could cross with.
-      systemd.user.services.ronoctua-cache-sweep-rehearsal = sweepUnit {
-        what = "rehearse sweeping cached files — deletes nothing";
-        report = "cache-sweep-rehearsal.json";
-        execute = false;
-      };
-
-      systemd.user.services.ronoctua-cache-sweep = sweepUnit {
-        what = "sweep cached files nothing has used";
-        report = "cache-sweep.json";
-        execute = true;
-      };
-
-      # AND THE TRASH, which is NOT a cache — what is in there is the only copy,
-      # which is why it has its own binary, its own number (four days, not forty)
-      # and its own writable path. The two live in one module because they are the
-      # same question asked of two directories: what may the machine throw away by
-      # itself, and after how long.
-      systemd.user.services.ronoctua-empty-trash-rehearsal = trashUnit {
-        what = "rehearse emptying the trash — deletes nothing";
-        report = "trash-expire-rehearsal.json";
-        execute = false;
-      };
-
-      systemd.user.services.ronoctua-empty-trash = trashUnit {
-        what = "empty the trash of what has been in it long enough";
-        report = "trash-expire.json";
-        execute = true;
-      };
-    })
-  ];
+    environment.sessionVariables.CARGO_BUILD_BUILD_DIR = ronoctua.cargoDirs.session.build;
+    environment.etc."environment.d/60-ronoctua-cargo.conf".text = ''
+      CARGO_BUILD_BUILD_DIR="${ronoctua.cargoDirs.session.build}"
+    '';
+  };
 }

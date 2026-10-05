@@ -896,7 +896,10 @@ fn storable(choice: &IconChoice, copy: &Path) -> IconChoice {
             .collect::<String>()
     };
     match choice {
-        IconChoice::Site { url } => IconChoice::Site { url: escaped(url) },
+        IconChoice::Site { url, page } => IconChoice::Site {
+            url: escaped(url),
+            page: page.as_deref().map(escaped),
+        },
         IconChoice::Dashboard { name, variant } => IconChoice::Dashboard {
             name: plain(name),
             variant: if matches!(variant.as_str(), "light" | "dark") {
@@ -962,6 +965,7 @@ mod tests {
             profile: DEFAULT_PROFILE.into(),
             icon: IconChoice::Site {
                 url: "https://web.whatsapp.com/favicon.ico".into(),
+                page: None,
             },
             prepared: Some(icon),
             category: Some("Network".into()),
@@ -1176,7 +1180,8 @@ mod tests {
         assert_eq!(
             app.icon,
             Some(IconChoice::Site {
-                url: "https://web.whatsapp.com/favicon.ico".into()
+                url: "https://web.whatsapp.com/favicon.ico".into(),
+                page: None,
             })
         );
         assert_eq!(app.icon_file.as_deref(), Some(icon_file.as_path()));
@@ -1470,6 +1475,7 @@ mod tests {
         );
         let site = IconChoice::Site {
             url: "https://a.example/i.png?q=a\\b\"c".into(),
+            page: None,
         };
         let kept = storable(&site, copy);
         let json = serde_json::to_string(&kept).unwrap();

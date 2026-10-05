@@ -77,6 +77,23 @@ pub(crate) mod path {
     }
 }
 
+/// A path that may be absent, through [`Raw`] — a job's secret.
+pub(crate) mod maybe_path {
+    use super::{PathBuf, Raw};
+    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer};
+
+    #[allow(clippy::ref_option)]
+    pub(crate) fn serialize<S: Serializer>(p: &Option<PathBuf>, s: S) -> Result<S::Ok, S::Error> {
+        p.as_deref().map(Raw::of).serialize(s)
+    }
+
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<PathBuf>, D::Error> {
+        Ok(Option::<Raw>::deserialize(d)?.map(PathBuf::from))
+    }
+}
+
 /// A list of paths, through [`Raw`].
 pub(crate) mod paths {
     use super::{PathBuf, Raw};

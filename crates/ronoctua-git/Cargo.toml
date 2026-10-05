@@ -1,0 +1,28 @@
+[package]
+name = "ronoctua-git"
+description = "The one boundary with git: the CLI by its store path, every call through one hardened command — for the file manager's git line and browser, and the belongings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE CLI, NOT A LIBRARY. git is already in the base closure; porcelain v2
+# with `-z` is a stable format; blame, renames, attributes and SHA-256
+# repositories are mature there. gix would add hundreds of crates and an HTTP
+# stack of its own (which `one-http-writer` refuses). So: no dependency at
+# all — `std::process` and the parsers here.
+[dependencies]
+
+# THE ASKPASS HELPER. git runs it for a remote over HTTPS with a token; it
+# prints the user name or the token, read from the `0600` file whose PATH is
+# all the environment carries. A binary of its own because git runs a
+# PROGRAM — a flag cannot answer a question. The one the system runs is
+# built apart from the workspace (`nix/git-askpass.nix`), so its path can be
+# compiled in; this target is what the tests run.
+[[bin]]
+name = "ronoctua-git-askpass"
+path = "src/bin/askpass.rs"
+
+[lints]
+workspace = true

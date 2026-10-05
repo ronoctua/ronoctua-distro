@@ -115,7 +115,26 @@ in
           jdk17 # what gradle and Studio expect
           androidSdk.androidsdk
         ]
+      )
+      # THE CODING AGENTS. nixpkgs' Claude Code wraps the vendor's binary with
+      # `DISABLE_AUTOUPDATER=1`, so it never replaces itself behind the
+      # generation's back (invariant 6); Codex is built from source. Their
+      # state is the person's, under `$HOME`, like any program's.
+      ++ lib.optionals cfg.agents (
+        with pkgs;
+        [
+          claude-code
+          codex
+        ]
       );
+
+    # THE LIFELINE'S "ASK AN AI" OPENS CLAUDE CODE by store path (the unit's
+    # `PATH` is minimal). It is set here, beside the package, and not in
+    # `scroll.nix` where the unit is declared: Claude Code is unfree, and a VM
+    # test imports `scroll.nix` with a `pkgs` the predicate never reaches.
+    systemd.user.services.ronoctua-lifeline.environment = lib.mkIf cfg.agents {
+      RONOCTUA_CLAUDE = "${pkgs.claude-code}/bin/claude";
+    };
 
     # ANDROID WANTS BOTH VARIABLES.
     #

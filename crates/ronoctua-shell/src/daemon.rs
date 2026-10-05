@@ -343,7 +343,7 @@ mod tests {
         // OURS. The id is English and the screen is not — which is the whole
         // point of the split, and the reason `glifos` used to be the label.
         // pt-BR: the VALUE of a text key, asserted — the screen's word.
-        assert_eq!(mode_label(&t, "br.ronoctua.glyphs", &[]), "glifos");
+        assert_eq!(mode_label(&t, "br.ronoctua.icons", &[]), "ícones");
         assert_eq!(mode_label(&t, "br.ronoctua.memory", &[]), "memória");
         // FOREIGN. Nobody can write a key for every program on earth, and
         // inventing a name for somebody else's software is worse than showing
@@ -357,11 +357,11 @@ mod tests {
         // End to end through the state, because `buffer_mode` used to take the
         // last component of EVERY app id — and that is what drew `glifos` raw.
         let (e, t) = (
-            with_focus(Some("*glifos*"), Some("br.ronoctua.glyphs")),
+            with_focus(Some("*Ícones*"), Some("br.ronoctua.icons")),
             texts(),
         );
         // pt-BR: the VALUE of a text key, asserted — the screen's word.
-        assert_eq!(buffer_mode(&e, &t, &[]), "glifos");
+        assert_eq!(buffer_mode(&e, &t, &[]), "ícones");
     }
 
     /// An entry of the catalogue, declaring (or not) a window class.
@@ -414,10 +414,10 @@ mod tests {
             "ghostty"
         );
         // OURS stay translated, whatever an entry declares.
-        let ours = [entry("x", "Not Ours", Some("br.ronoctua.glyphs"))];
+        let ours = [entry("x", "Not Ours", Some("br.ronoctua.icons"))];
         assert_eq!(
-            mode_label(&t, "br.ronoctua.glyphs", &ours),
-            t.t("mode-glyphs")
+            mode_label(&t, "br.ronoctua.icons", &ours),
+            t.t("mode-icons")
         );
     }
 

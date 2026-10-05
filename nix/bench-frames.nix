@@ -153,19 +153,19 @@ writeShellApplication {
       sleep 0.5
       env WAYLAND_DISPLAY="$display" ${ronoctua-shell}/bin/ronoctua-shell command notif-dismiss \
         >/dev/null 2>&1 || true
-      # THE NEXT LEADER MUST OPEN, NOT TOGGLE. The leader pressed again at the
-      # root of the default set hides the bars (`crate::hidden`), and nothing
-      # here closes the one just opened — so the loop moves it to the whole
-      # tree (`LEADER CTRL`), where the leader again starts over, as every
-      # opening measured here used to.
-      env WAYLAND_DISPLAY="$display" ${ronoctua-shell}/bin/ronoctua-shell command leader-set-full \
+      # THE NEXT LEADER MUST OPEN. The leader pressed again with its list open
+      # walks to the next set (`crate::hidden::leader_again`) and records no
+      # opening, so the one just opened is CLOSED, the way its `Esc` closes
+      # it — and every round measures one opening, which the count below
+      # holds the log to.
+      env WAYLAND_DISPLAY="$display" ${ronoctua-shell}/bin/ronoctua-shell command leader-close \
         >/dev/null 2>&1 || true
       sleep 0.4
     done
     sleep 1
 
     echo
-    python3 - "$dir" <<'PY'
+    python3 - "$dir" "$leaders" <<'PY'
     import pathlib, re, statistics as st, sys
 
     # QUOTES around the value: `tracing` adds them on a `Debug` field. It is
@@ -184,6 +184,14 @@ writeShellApplication {
 
     print("== section 5.2's targets ==")
     failed = False
+    # EVERY OPENING ASKED FOR IS ONE MEASURED. A p99 over whatever samples
+    # the log holds passed on ONE, when every leader after the first switched
+    # sets instead of opening: the count is part of the answer.
+    asked = int(sys.argv[2])
+    got = len(d.get("which-key", []))
+    if got != asked:
+        print(f"  NO  which-key: {got} openings measured, {asked} asked for")
+        failed = True
     for item_name, target_path in TARGETS.items():
         v = sorted(d.get(item_name, []))
         if not v:

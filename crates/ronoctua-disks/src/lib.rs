@@ -31,6 +31,17 @@
 //! Not one `Command::new`. Everything is the bus, which is why there is no
 //! `option_env!` here and no `disks-runs-by-path` check to go with it — that
 //! absence is a decision, and `nix/modules/disks.nix` says so.
+//!
+//! # An encrypted disk that is not the system's
+//!
+//! A LUKS container udisks does not mark `HintSystem` — a stick, an external
+//! drive — is a row of its own while it is LOCKED ([`Encrypted::Locked`]):
+//! the place one presses to be asked the passphrase. While it is open the
+//! container is not a row (`Skipped::Unlocked`) and what came out of it takes
+//! its place. The system's own (the encrypted root) stays what it was, a
+//! holder nobody opens from here. [`Manager::unlock`], [`Manager::lock`] and
+//! [`Manager::put_away`] are the three calls; a passphrase is a
+//! [`Secret`](ronoctua_consent::keys::Secret) and crosses only the bus.
 
 #![forbid(unsafe_code)]
 
@@ -178,6 +189,11 @@ pub struct Volume {
     pub behind: Option<String>,
     /// Who attached the loop, when it is one.
     pub set_up_by: Option<u32>,
+    /// For a LUKS container: the block that came out of it, while it is open.
+    ///
+    /// `Encrypted.CleartextDevice`, which udisks answers `/` for a container
+    /// that is locked — read here as `None`.
+    pub cleartext: Option<String>,
     /// `/etc/fstab` names this device.
     ///
     /// From `Block.Configuration`, which udisks fills with the fstab and
@@ -203,6 +219,20 @@ impl Volume {
         self.mounted_at.first().map(String::as_str)
     }
 
+    /// For a LUKS container this system opens — not the system's own, and of
+    /// type `crypto_LUKS` —: whether it is locked. `None` for everything else.
+    #[must_use]
+    pub fn encrypted(&self) -> Option<Encrypted> {
+        if !self.holds.encrypted || self.system || self.id_type != "crypto_LUKS" {
+            return None;
+        }
+        Some(if self.cleartext.is_some() {
+            Encrypted::Unlocked
+        } else {
+            Encrypted::Locked
+        })
+    }
+
     /// Is this the whole disk rather than one partition of it?
     ///
     /// It decides which questions are worth asking: a whole disk can be given a
@@ -224,6 +254,35 @@ impl Volume {
             &self.label
         }
     }
+}
+
+/// Whether a LUKS container is open — see [`Volume::encrypted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encrypted {
+    /// Locked: its row is the container, and mounting asks the passphrase.
+    Locked,
+    /// Open: its row is what came out of it.
+    Unlocked,
+}
+
+/// The container `v` came out of, when it came out of one this system opens
+/// — the answer that marks a row as the open side of an encrypted disk, and
+/// the container its ejection locks.
+#[must_use]
+pub fn container_of<'a>(v: &Volume, all: &'a [Volume]) -> Option<&'a Volume> {
+    let behind = v.behind.as_deref()?;
+    all.iter()
+        .find(|c| c.at == behind)
+        .filter(|c| c.encrypted().is_some())
+}
+
+/// The seal a ROW shows: a locked container's, or `Unlocked` for what came out
+/// of one this system opens. `None` for everything else, the encrypted root's
+/// cleartext included.
+#[must_use]
+pub fn seal_of(v: &Volume, all: &[Volume]) -> Option<Encrypted> {
+    v.encrypted()
+        .or_else(|| container_of(v, all).map(|_| Encrypted::Unlocked))
 }
 
 /// One whole reading of the machine.
@@ -345,6 +404,9 @@ pub enum Skipped {
     Holder,
     /// It is a loop somebody else attached.
     ForeignLoop,
+    /// It is an encrypted container that is open: what came out of it is the
+    /// row, in its place.
+    Unlocked,
 }
 
 /// Why this block is not a row — `None` means it IS one.
@@ -364,10 +426,20 @@ pub enum Skipped {
 ///    mount point.
 /// 4. **Somebody else's loop.** One the person attached themselves is an image
 ///    they went looking for, and hiding it would be hiding their own work.
+///
+/// And one exception, before the second clause: **a LUKS container that is
+/// not the system's** has no filesystem and is still a row while it is locked
+/// — it is where one asks to open it — and gives its place to what came out of
+/// it while it is open. The system's own stays a holder.
 #[must_use]
 pub fn skipped(v: &Volume, uid: u32) -> Option<Skipped> {
     if v.holds.partition_table {
         return Some(Skipped::WholeDisk);
+    }
+    match v.encrypted() {
+        Some(Encrypted::Locked) => return None,
+        Some(Encrypted::Unlocked) => return Some(Skipped::Unlocked),
+        None => {}
     }
     if !v.holds.filesystem {
         return Some(Skipped::NoFilesystem);
@@ -429,10 +501,14 @@ pub const CONTAINERS: [&str; 9] = [
 /// is a decision anybody can change from that screen.
 #[must_use]
 pub fn candidates(all: &[Volume], uid: u32) -> Vec<&Volume> {
+    // A LOCKED CONTAINER THIS SYSTEM OPENS IS A TARGET: a stick encrypted
+    // yesterday is formatted again today, and nothing lives inside it while
+    // it is locked. One that is open — or the system's own — is not.
+    let locked = |v: &Volume| v.encrypted() == Some(Encrypted::Locked);
     all.iter()
         .filter(|v| !(v.holds.loop_back && v.set_up_by != Some(uid)))
-        .filter(|v| !v.holds.encrypted && !v.holds.swap)
-        .filter(|v| !CONTAINERS.contains(&v.id_type.as_str()))
+        .filter(|v| (!v.holds.encrypted || locked(v)) && !v.holds.swap)
+        .filter(|v| locked(v) || !CONTAINERS.contains(&v.id_type.as_str()))
         .filter(|v| !v.read_only && !v.quiet)
         // AND NOTHING OF ZERO BYTES. Measured on a booted machine: udisks
         // publishes a floppy node and EIGHT unattached loop devices, all of
@@ -556,6 +632,9 @@ impl Manager {
                     .unwrap_or_default(),
                 drive: udisks::object_of(block.get("Drive")),
                 behind: udisks::object_of(block.get("CryptoBackingDevice")),
+                cleartext: faces
+                    .get(udisks::ENCRYPTED)
+                    .and_then(|e| udisks::object_of(e.get("CleartextDevice"))),
                 set_up_by: faces
                     .get(udisks::LOOP)
                     .and_then(|l| udisks::small_number_of(l.get("SetupByUID"))),
@@ -628,6 +707,96 @@ impl Manager {
         Ok(())
     }
 
+    /// Opens a LUKS container with `passphrase`, and answers the object path
+    /// of what came out of it.
+    ///
+    /// # Errors
+    ///
+    /// udisks refused. A passphrase that does not open it is refused as
+    /// [`Refusal::WrongPassphrase`] (see [`refusal`]) — udisks names that one
+    /// no differently from any other failure, so its words are read here.
+    pub fn unlock(&self, at: &str, passphrase: &ronoctua_consent::keys::Secret) -> Result<String> {
+        let container = udisks::EncryptedProxyBlocking::builder(&self.connection)
+            .path(at.to_owned())?
+            .build()?;
+        match container.unlock(passphrase.expose(), udisks::no_asking()) {
+            Ok(path) => Ok(path.as_str().to_owned()),
+            Err(zbus::Error::MethodError(name, said, _))
+                if name.as_str() == "org.freedesktop.UDisks2.Error.Failed"
+                    && said.as_deref().is_some_and(wrong_passphrase) =>
+            {
+                Err(anyhow::Error::new(WrongPassphrase))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Closes a LUKS container. What came out of it must not be mounted —
+    /// [`Manager::put_away`] unmounts first.
+    ///
+    /// # Errors
+    ///
+    /// udisks refused.
+    pub fn lock(&self, at: &str) -> Result<()> {
+        let container = udisks::EncryptedProxyBlocking::builder(&self.connection)
+            .path(at.to_owned())?
+            .build()?;
+        container.lock(udisks::no_asking())?;
+        Ok(())
+    }
+
+    /// Puts a volume away: unmounts it when it is mounted, locks the
+    /// container it came out of when it came out of one this system opens
+    /// (`lock_only`: and stops there), and — for an ejection — cuts the
+    /// power to its drive when the drive can be.
+    ///
+    /// THE STEPS IN THIS ORDER AND EACH ONLY AFTER THE ONE BEFORE CAME BACK:
+    /// cutting the power under a mounted filesystem is how a stick leaves with
+    /// a write half done, and locking under one is refused by udisks anyway.
+    /// The drive is found through the container for an open one — the
+    /// cleartext block has no drive of its own — and never by the volume's
+    /// own path, which is a block and not a drive.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal, which stops the rest.
+    pub fn put_away(&self, at: &str, lock_only: bool) -> Result<()> {
+        let rack = self.read()?;
+        // GONE ALREADY is put away already: what came out of a container
+        // disappears when the container is locked, and a caller that named
+        // both is not refused for the second.
+        let Some(volume) = rack.volumes.iter().find(|v| v.at == at) else {
+            return Ok(());
+        };
+        if volume.mounted() {
+            self.unmount(at)?;
+        }
+        // THE CONTAINER: the one this came out of, or this one itself when
+        // what was pressed is the container, open.
+        let container = container_of(volume, &rack.volumes)
+            .or_else(|| (volume.encrypted() == Some(Encrypted::Unlocked)).then_some(volume));
+        if let Some(c) = container {
+            if let Some(clear) = c.cleartext.as_deref()
+                && clear != at
+                && rack.volumes.iter().any(|v| v.at == clear && v.mounted())
+            {
+                self.unmount(clear)?;
+            }
+            self.lock(&c.at)?;
+        }
+        if lock_only {
+            return Ok(());
+        }
+        let drive =
+            attached_to(volume, &rack.volumes).and_then(|d| rack.drives.iter().find(|x| x.at == d));
+        if let Some(d) = drive
+            && d.can_power_off
+        {
+            self.power_off(&d.at)?;
+        }
+        Ok(())
+    }
+
     /// Writes a filesystem over a volume, or over a whole disk.
     ///
     /// # What this does NOT decide
@@ -645,16 +814,30 @@ impl Manager {
     /// the disk is gone — which is the point of the gesture, and the reason the
     /// buffer asks twice before it gets here.
     ///
+    /// # And `encrypt`
+    ///
+    /// With a passphrase the filesystem is written inside a LUKS2 container
+    /// (`encrypt.passphrase`, `encrypt.type = luks2`) — on the partition, or on
+    /// the one partition a whole disk gets. The passphrase goes in the call to
+    /// udisksd and nowhere else.
+    ///
     /// # Errors
     ///
     /// udisks refused: something is still mounted on it, or the session is not
     /// allowed to touch this device. The error carries its NAME — see
     /// [`refusal`].
-    pub fn format(&self, at: &str, filesystem: &str, label: &str, whole: bool) -> Result<()> {
+    pub fn format(
+        &self,
+        at: &str,
+        filesystem: &str,
+        label: &str,
+        whole: bool,
+        encrypt: Option<&ronoctua_consent::keys::Secret>,
+    ) -> Result<()> {
         let block = self.block(at)?;
 
         if !whole {
-            block.format(filesystem, self.recipe_options(label))?;
+            block.format(filesystem, self.recipe_options(label, encrypt))?;
             return Ok(());
         }
 
@@ -685,7 +868,7 @@ impl Manager {
                 "",
                 udisks::no_asking(),
                 filesystem,
-                self.recipe_options(label),
+                self.recipe_options(label, encrypt),
             ) {
                 Ok(_) => return Ok(()),
                 Err(zbus::Error::MethodError(name, _, _))
@@ -704,10 +887,21 @@ impl Manager {
     }
 
     /// The options a format call carries, on top of [`udisks::no_asking`].
-    fn recipe_options(&self, label: &str) -> HashMap<&'static str, zbus::zvariant::Value<'static>> {
+    fn recipe_options(
+        &self,
+        label: &str,
+        encrypt: Option<&ronoctua_consent::keys::Secret>,
+    ) -> HashMap<&'static str, zbus::zvariant::Value<'static>> {
         let mut options = udisks::no_asking();
         if !label.is_empty() {
             options.insert("label", zbus::zvariant::Value::new(label.to_owned()));
+        }
+        if let Some(passphrase) = encrypt {
+            options.insert(
+                "encrypt.passphrase",
+                zbus::zvariant::Value::new(passphrase.expose().to_owned()),
+            );
+            options.insert("encrypt.type", zbus::zvariant::Value::new("luks2"));
         }
         // WITHOUT THIS, AN MBR PARTITION HOLDING vfat IS TYPED `0x83`, Linux.
         // Windows then does not offer to open the stick and nothing anywhere
@@ -771,8 +965,46 @@ pub enum Refusal {
     NeedsAdmin,
     /// Something still has it open.
     Busy,
+    /// The passphrase does not open this container.
+    WrongPassphrase,
     /// Anything else. The caller carries udisks' own words alongside.
     Other,
+}
+
+/// A passphrase that did not open a container — carried through `anyhow` from
+/// [`Manager::unlock`] to [`refusal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WrongPassphrase;
+
+impl std::fmt::Display for WrongPassphrase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the passphrase does not open this container")
+    }
+}
+
+impl std::error::Error for WrongPassphrase {}
+
+/// Whether udisks' words about a failed unlock say the passphrase was wrong.
+///
+/// udisks answers a wrong passphrase with its generic `Error.Failed`
+/// (`Error unlocking /dev/sdb1: …`), and the words after it are
+/// libblockdev's: for the `EPERM` cryptsetup returns when no key slot opens,
+/// the pinned libblockdev (`src/plugins/crypto.c`, read from its source) says
+/// `Failed to activate device: Incorrect passphrase.`; older ones printed the
+/// errno (`Operation not permitted`), and cryptsetup's own is `No key
+/// available with this passphrase`. Read ONLY after an unlock: the same words
+/// after a mount mean something else.
+fn wrong_passphrase(said: &str) -> bool {
+    let said = said.to_ascii_lowercase();
+    [
+        "no key available",
+        "operation not permitted",
+        "incorrect passphrase",
+        "wrong passphrase",
+        "invalid passphrase",
+    ]
+    .iter()
+    .any(|w| said.contains(w))
 }
 
 /// Reads the refusal out of an error, whatever it is wrapped in.
@@ -781,6 +1013,11 @@ pub enum Refusal {
 /// name is on the `zbus::Error` underneath.
 #[must_use]
 pub fn refusal(e: &anyhow::Error) -> Refusal {
+    if e.chain()
+        .any(|c| c.downcast_ref::<WrongPassphrase>().is_some())
+    {
+        return Refusal::WrongPassphrase;
+    }
     for cause in e.chain() {
         if let Some(zbus::Error::MethodError(name, _, _)) = cause.downcast_ref::<zbus::Error>() {
             return match name.as_str() {
@@ -823,6 +1060,24 @@ pub fn watch<F>(on_change: F) -> Result<()>
 where
     F: Fn(Rack) + Send + 'static,
 {
+    watch_while(move |rack| {
+        on_change(rack);
+        true
+    })
+}
+
+/// [`watch`], for as long as `on_change` answers `true`: a reading answered
+/// with `false` ends the thread — for a screen that watches the disks only
+/// while it is open (the file picker), whose thread then goes at the next
+/// signal instead of living as long as the process.
+///
+/// # Errors
+///
+/// As [`watch`].
+pub fn watch_while<F>(on_change: F) -> Result<()>
+where
+    F: Fn(Rack) -> bool + Send + 'static,
+{
     let manager = Manager::fresh()?;
     std::thread::Builder::new()
         .name("ronoctua-disks".to_owned())
@@ -836,12 +1091,20 @@ where
                 return;
             };
             match manager.read() {
-                Ok(rack) => on_change(rack),
+                Ok(rack) => {
+                    if !on_change(rack) {
+                        return;
+                    }
+                }
                 Err(e) => tracing::warn!(error = %e, "the first reading of the disks failed"),
             }
             for _ in messages {
                 match manager.read() {
-                    Ok(rack) => on_change(rack),
+                    Ok(rack) => {
+                        if !on_change(rack) {
+                            return;
+                        }
+                    }
                     Err(e) => tracing::warn!(error = %e, "rereading the disks failed"),
                 }
             }
@@ -1169,6 +1432,150 @@ mod tests {
         assert!(!helper.mounted());
         assert_eq!(skipped(helper, ME), None);
         assert_eq!(helper.place(), None);
+    }
+
+    /// An external stick holding ONE LUKS2 partition — locked, or open with
+    /// what came out of it — beside the machine's own encrypted root.
+    fn with_a_luks_stick(open: bool) -> Rack {
+        let mut rack = fixture();
+        let stick = Drive {
+            at: "/drive/crypt".to_owned(),
+            vendor: "Kingston".to_owned(),
+            model: "DataTraveler".to_owned(),
+            bytes: 16_000_000_000,
+            bus: Bus::Usb,
+            removable: true,
+            ejectable: true,
+            can_power_off: true,
+            sort_key: "01hotplug/1700000001".to_owned(),
+        };
+        rack.volumes.push(Volume {
+            drive: Some(stick.at.clone()),
+            holds: Holding {
+                partition_table: true,
+                ..Holding::default()
+            },
+            ..block("/dev/sdb", "")
+        });
+        rack.volumes.push(Volume {
+            drive: Some(stick.at.clone()),
+            cleartext: open.then(|| "/block/dm-3".to_owned()),
+            holds: Holding {
+                filesystem: false,
+                encrypted: true,
+                partition: true,
+                ..Holding::default()
+            },
+            bytes: 15_999_000_000,
+            ..block("/dev/sdb1", "crypto_LUKS")
+        });
+        if open {
+            rack.volumes.push(Volume {
+                label: "COFRE".to_owned(),
+                behind: Some("/block/sdb1".to_owned()),
+                bytes: 15_980_000_000,
+                // SYSTEM, as udisks marks it: a device-mapper block has no
+                // drive of its own, and `update_hints` (udiskslinuxblock.c)
+                // clears `HintSystem` only for a drive that is removable or
+                // on USB, FireWire or a memory card. What came out of a stick
+                // is "system" by that rule — and still the stick's row.
+                system: true,
+                ..block("/dev/dm-3", "ext4")
+            });
+        }
+        rack.drives.push(stick);
+        rack.volumes.sort_by(|a, b| a.node.cmp(&b.node));
+        rack
+    }
+
+    #[test]
+    fn a_locked_stick_is_a_row_and_an_open_one_gives_its_place_to_what_came_out() {
+        let locked = with_a_luks_stick(false);
+        let rows = nodes(&listed(&locked.volumes, ME, false));
+        assert!(
+            rows.contains(&"/dev/sdb1".to_owned()),
+            "the locked container is not a row: {rows:?}"
+        );
+        let container = locked
+            .volumes
+            .iter()
+            .find(|v| v.node == "/dev/sdb1")
+            .unwrap();
+        assert_eq!(container.encrypted(), Some(Encrypted::Locked));
+        assert_eq!(seal_of(container, &locked.volumes), Some(Encrypted::Locked));
+        // THE SYSTEM'S OWN CONTAINER STAYS A HOLDER, locked or open: nobody
+        // opens the encrypted root from a sidebar.
+        assert!(!rows.contains(&"/dev/nvme0n1p2".to_owned()), "{rows:?}");
+        let root_container = locked
+            .volumes
+            .iter()
+            .find(|v| v.node == "/dev/nvme0n1p2")
+            .unwrap();
+        assert_eq!(root_container.encrypted(), None);
+        let root = locked
+            .volumes
+            .iter()
+            .find(|v| v.node == "/dev/dm-0")
+            .unwrap();
+        assert_eq!(
+            seal_of(root, &locked.volumes),
+            None,
+            "the root is not an open stick"
+        );
+
+        let open = with_a_luks_stick(true);
+        let rows = nodes(&listed(&open.volumes, ME, false));
+        assert!(
+            !rows.contains(&"/dev/sdb1".to_owned()),
+            "an open container is still a row: {rows:?}"
+        );
+        assert!(
+            rows.contains(&"/dev/dm-3".to_owned()),
+            "what came out is not a row: {rows:?}"
+        );
+        let clear = open.volumes.iter().find(|v| v.node == "/dev/dm-3").unwrap();
+        assert_eq!(seal_of(clear, &open.volumes), Some(Encrypted::Unlocked));
+        assert_eq!(
+            container_of(clear, &open.volumes).map(|c| c.node.as_str()),
+            Some("/dev/sdb1")
+        );
+        // AND IT IS FILED UNDER THE STICK, through the container.
+        assert_eq!(attached_to(clear, &open.volumes), Some("/drive/crypt"));
+    }
+
+    #[test]
+    fn a_locked_stick_can_be_formatted_again_and_an_open_one_cannot() {
+        let locked = with_a_luks_stick(false);
+        let offered = nodes(&candidates(&locked.volumes, ME));
+        assert!(offered.contains(&"/dev/sdb1".to_owned()), "{offered:?}");
+        assert!(
+            !offered.contains(&"/dev/nvme0n1p2".to_owned()),
+            "the root's container: {offered:?}"
+        );
+        let open = with_a_luks_stick(true);
+        let offered = nodes(&candidates(&open.volumes, ME));
+        assert!(
+            !offered.contains(&"/dev/sdb1".to_owned()),
+            "a container with a live device inside: {offered:?}"
+        );
+    }
+
+    #[test]
+    fn a_wrong_passphrase_is_named_by_udisks_words_and_nothing_else_is() {
+        // THE PINNED libblockdev's words, which udisks puts after its own.
+        assert!(wrong_passphrase(
+            "Error unlocking /dev/vdc1: Failed to activate device: Incorrect passphrase."
+        ));
+        assert!(wrong_passphrase(
+            "Error unlocking /dev/sdb1: Failed to activate device: Operation not permitted"
+        ));
+        assert!(wrong_passphrase("No key available with this passphrase."));
+        assert!(!wrong_passphrase(
+            "Error unlocking /dev/sdb1: Device /dev/sdb1 is busy"
+        ));
+        let e = anyhow::Error::new(WrongPassphrase).context("unlock");
+        assert_eq!(refusal(&e), Refusal::WrongPassphrase);
+        assert_eq!(refusal(&anyhow::anyhow!("something else")), Refusal::Other);
     }
 
     #[test]

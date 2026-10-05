@@ -1,19 +1,19 @@
 # `ronoctua-install --execute` runs against a real disk, and what it writes boots.
 #
-# # NOT WIRED INTO THE GATE YET — read `docs/PENDING.md` before touching it
+# # WIRED INTO THE GATE, among the slow ones (`tests/slow.nix`: it partitions a
+# # disk and reboots)
 #
-# It is NOT in `tests/checks.nix`, because a red check everybody learns to ignore
-# is worse than an honest gap. What it already does is worth keeping: it boots,
-# it reaches step 5 of 10, and getting there cost THREE defects of the installer
-# that no dry run could have shown — the working directory that was the store,
-# the hardware report `disko` needed before it existed, and the root disk that
-# was never formatted. All three are fixed.
+# It reached step 5 of 10, and getting there cost THREE defects of the
+# installer that no dry run could have shown — the working directory that was
+# the store, the hardware report `disko` needed before it existed, and the root
+# disk that was never formatted. All three are fixed.
 #
-# Where it stops now is COST, not a defect: `disko --flake` evaluates the whole
+# Where it stopped was COST, not a defect: `disko --flake` evaluates the whole
 # NixOS configuration inside the virtual machine, and 900 s of the driver's
-# default timeout is not enough. The next attempt raises that timeout and the
-# node's memory, and puts the disko script into `system.extraDependencies` so
-# the evaluation has less to do.
+# default timeout was not enough. So the installer's call has an hour
+# (`execute`'s own `timeout`), its node twice the memory, and the disk scripts
+# of the system it installs are in `system.extraDependencies` — what they run
+# is in the store before boot, and the evaluation builds nothing new.
 #
 # # Why this test and not more of `installer-dryrun`
 #
@@ -66,6 +66,13 @@ let
   # substituters, what is not in the store before boot cannot appear later.
   target = self.nixosConfigurations.minimal.config.system.build.toplevel;
 
+  # THE DISK SCRIPTS of the system the answers describe: `minimal` on this
+  # node's disk, the one line of `host.nix` they depend on.
+  disks =
+    (self.nixosConfigurations.minimal.extendModules {
+      modules = [ { ronoctua.disk = answers.RONOCTUA_INST_DISK; } ];
+    }).config.system.build;
+
   # THE PROFILE IS THE REDUCED ONE, and that is what makes this test affordable:
   # 6,9 GiB of closure to carry into a VM instead of 22,8. It is also the profile
   # the ISO seeds, so this exercises the path an install actually takes.
@@ -77,7 +84,11 @@ let
     RONOCTUA_INST_HOSTNAME = "noctua-teste";
     RONOCTUA_INST_PASSWORD = "test-password";
     RONOCTUA_INST_PASSPHRASE = "test-passphrase";
+    # THE FIFTEENTH ANSWER, which lands in the person's home and never in
+    # `host.nix`: an address alone, as the question accepts it.
+    RONOCTUA_INST_BELONGINGS = belongings;
   };
+  belongings = "git@example.org:someone/belongings.git";
   exports = lib.concatStringsSep " " (
     lib.mapAttrsToList (name: value: "${name}=${lib.escapeShellArg value}") answers
   );
@@ -94,6 +105,10 @@ let
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-installer-executes";
+  # THE INSTALL ALONE MAY TAKE THE HOUR its `execute` is given; the default
+  # global hour would end the test before the install's own timeout could
+  # print what it was doing.
+  globalTimeout = 2 * 3600;
 
   nodes = {
     installer =
@@ -123,6 +138,11 @@ pkgs.testers.runNixOSTest {
           options = [ "mode=0755" ];
         };
 
+        # TWICE THE COMMON MEMORY: `disko --flake` and `nixos-install` both
+        # evaluate the whole system in here, and the working copy of the flake
+        # lives in this node's RAM (a tmpfs root).
+        virtualisation.memorySize = lib.mkForce 8192;
+
         # NO SUBSTITUTERS. What the machine does not already have, it cannot get
         # — which is the point: an install that needs the network here is an
         # install that needs it on real hardware too.
@@ -134,6 +154,13 @@ pkgs.testers.runNixOSTest {
         # needs, and `flake.lock` names them without containing them.
         system.extraDependencies = [
           target
+          # WHAT DISKO RUNS, and what it runs with: the script `--mode
+          # destroy,format,mount` builds, and the legacy whole one — of the
+          # system the answers describe, on this node's disk (`minimal` alone
+          # names no disk: the installer's `host.nix` does). Built here, before
+          # boot, so the evaluation inside finds them.
+          disks.destroyFormatMount
+          disks.diskoScript
         ]
         ++ builtins.filter (p: p != null) (map (i: i.outPath or null) (builtins.attrValues self.inputs));
 
@@ -181,8 +208,15 @@ pkgs.testers.runNixOSTest {
         # output, and `succeed` raises before the next line can read the log.
         # That is the difference between an iteration that teaches something and
         # one that costs a quarter of an hour to say "it failed".
+        # AN HOUR: `disko --flake` evaluates the whole system in here, and the
+        # driver's own 900 s was where it stopped.
+        # AND IT STREAMS TO THE CONSOLE as well as to the file: a step that
+        # hangs is then seen hanging in the log, and not as an hour of silence
+        # ended by the timeout (the driver runs this under `pipefail`, so the
+        # status is the installer's).
         status, _ = installer.execute(
-            "${exports} ronoctua-install --execute < /dev/null > /tmp/install.log 2>&1"
+            "${exports} ronoctua-install --execute < /dev/null 2>&1 | tee /tmp/install.log > /dev/console",
+            timeout=3600,
         )
         # NOT named `log`: that name belongs to the driver's own logger, and
         # rebinding it to a string fails the driver's type check before the VM
@@ -215,6 +249,20 @@ pkgs.testers.runNixOSTest {
         # machine about to reboot into the installed system.
         installer.fail("test -e /tmp/disko-luks.key")
 
+    with subtest("the belongings' repository is in the person's home, theirs, and nowhere else"):
+        # THE ADDRESS ALONE, in `~/.config/ronoctua/belongings.json`, given to
+        # the user `nixos-install` made — never root's, or the view could not
+        # change it; and never in `host.nix`, which describes the machine.
+        kept = installer.succeed("cat /mnt/home/noctua/.config/ronoctua/belongings.json")
+        assert "${belongings}" in kept, kept
+        assert "${belongings}" not in host
+        uid = installer.succeed("grep '^noctua:' /mnt/etc/passwd | cut -d: -f3").strip()
+        for made in (".config", ".config/ronoctua", ".config/ronoctua/belongings.json"):
+            owner = installer.succeed(f"stat -c %u /mnt/home/noctua/{made}").strip()
+            assert owner == uid, f"{made} is owned by {owner}, not the user ({uid})"
+        mode = installer.succeed("stat -c %a /mnt/home/noctua/.config/ronoctua/belongings.json").strip()
+        assert mode == "644", f"belongings.json is {mode}"
+
     with subtest("the resume_offset came out of the swapfile, and not out of a guess"):
         # Computed AFTER the swap file exists, and the one answer the installer
         # produces instead of asking. Zero would be accepted by the kernel and
@@ -238,6 +286,10 @@ pkgs.testers.runNixOSTest {
         machine.succeed("test -d /persist")
         # The reduced profile: the applications are not there.
         machine.fail("command -v google-chrome-stable")
+        # AND THE BELONGINGS' SETTINGS ARE THE PERSON'S, on the running system.
+        assert machine.succeed(
+            "stat -c %U /home/noctua/.config/ronoctua/belongings.json"
+        ).strip() == "noctua"
 
     machine.shutdown()
   '';

@@ -293,6 +293,81 @@ pub fn epoch_of(year: i64, month: u32, day: u32) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
+/// An instant as a person TYPES one back: `2026-09-30 14:05:09`, in this
+/// zone, seconds included.
+///
+/// The one shape the info panel prefills its "modified" question with and
+/// [`instant_of`] reads back, so what the question offers is by construction
+/// something it accepts. ISO 8601's order and not the language's: it is the
+/// shape that sorts, that every `touch -d` in the world takes, and that has no
+/// month-before-day ambiguity to translate.
+#[must_use]
+pub fn typed(secs: i64, zone: &Zone) -> String {
+    let c = civil(secs, zone);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        c.year, c.month, c.day, c.hour, c.minute, c.second
+    )
+}
+
+/// What a person typed as a date — `YYYY-MM-DD`, with `HH:MM` or `HH:MM:SS`
+/// after a space or a `T` — as seconds since the epoch, read in this zone.
+///
+/// `None` for anything else: a date this cannot read is refused, never
+/// guessed at (a month past twelve, a minute past fifty-nine, a word). A
+/// date alone is its midnight.
+///
+/// # Local time back to an instant, in two steps
+///
+/// The zone's offset depends on the instant, and the instant is what is being
+/// worked out. The first guess takes the offset at the local reading as if it
+/// were an instant; the second asks again at that guess — which is what keeps
+/// a time typed on the day the clocks move from landing an hour out.
+#[must_use]
+pub fn instant_of(text: &str, zone: &Zone) -> Option<i64> {
+    let text = text.trim();
+    let (date, time) = match text.split_once(['T', ' ']) {
+        Some((d, t)) => (d, Some(t.trim())),
+        None => (text, None),
+    };
+    let mut parts = date.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: u32 = parts.next()?.parse().ok()?;
+    let day: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=9999).contains(&year) {
+        return None;
+    }
+    let days = epoch_of(year, month, day)?;
+    // A DAY THE MONTH DOES NOT HAVE is refused, and `epoch_of` would roll the
+    // 31st of April into May: the calendar's own inverse says whether the day
+    // exists.
+    if civil_from_days(days) != (year, month, day) {
+        return None;
+    }
+    let (hour, minute, second) = match time {
+        None => (0, 0, 0),
+        Some(t) => {
+            let mut t = t.split(':');
+            let hour: i64 = t.next()?.parse().ok()?;
+            let minute: i64 = t.next()?.parse().ok()?;
+            let second: i64 = t.next().map_or(Some(0), |s| s.parse().ok())?;
+            if t.next().is_some()
+                || !(0..24).contains(&hour)
+                || !(0..60).contains(&minute)
+                || !(0..60).contains(&second)
+            {
+                return None;
+            }
+            (hour, minute, second)
+        }
+    };
+    let local = days
+        .checked_mul(86_400)?
+        .checked_add(hour * 3600 + minute * 60 + second)?;
+    let guess = local - i64::from(zone.offset_at(local));
+    Some(local - i64::from(zone.offset_at(guess)))
+}
+
 /// Howard Hinnant's `civil_from_days`, exact for the whole proleptic Gregorian
 /// range. It is arithmetic and not a table, which is why it needs no data and
 /// cannot go stale.
@@ -318,6 +393,41 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_typed_date_reads_back_as_the_instant_that_wrote_it() {
+        let zone = Zone::utc();
+        for secs in [0_i64, 1_759_240_000, -86_399, 951_782_400] {
+            let text = typed(secs, &zone);
+            assert_eq!(instant_of(&text, &zone), Some(secs), "{text}");
+        }
+        // The shapes a person types, and the midnight a date alone means.
+        assert_eq!(instant_of("1970-01-02", &zone), Some(86_400));
+        assert_eq!(instant_of("1970-01-01T00:01", &zone), Some(60));
+        assert_eq!(instant_of(" 1970-01-01 00:00:05 ", &zone), Some(5));
+    }
+
+    #[test]
+    fn a_date_that_does_not_exist_is_refused() {
+        let zone = Zone::utc();
+        for bad in [
+            "",
+            "yesterday",
+            "2026-04-31",
+            "2026-13-01",
+            "2026-02-29",
+            "2026-01-01 24:00",
+            "2026-01-01 10:60",
+            "2026-01-01 10:00:61",
+            "2026-01-01 10",
+            "2026-01-01-02",
+            "0-01-01",
+        ] {
+            assert_eq!(instant_of(bad, &zone), None, "{bad:?}");
+        }
+        // And the day a leap year has is a day.
+        assert!(instant_of("2024-02-29", &zone).is_some());
+    }
 
     #[test]
     fn the_calendar_is_exact_at_the_places_it_usually_is_not() {

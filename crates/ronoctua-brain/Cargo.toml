@@ -35,10 +35,48 @@ ronoctua-protocol = { path = "../ronoctua-protocol" }
 # jumps without a fixture.
 ronoctua-files = { path = "../ronoctua-files" }
 # THE MACHINE'S OWN CLOCK, in the one crate that talks to `timedated`. The
-# `clock-sync` watch reads three properties and, when nothing is keeping the
-# clock, turns the network time client on. A second reader of `timedatectl`
+# clock's watch (a module) reads three properties and, when nothing is keeping
+# the clock, turns the network time client on. A second reader of `timedatectl`
 # would be a second answer about one clock.
 ronoctua-clock = { path = "../ronoctua-clock" }
+# THE JOURNAL, through the one crate that follows it. The watch thread runs
+# ONE `journalctl --follow` for every module that asked for a match, by the
+# store path the unit hands in (`RONOCTUA_JOURNALCTL`) — never a second
+# reader of the journal here.
+ronoctua-journal = { path = "../ronoctua-journal" }
+# A CHIME, through the one crate that knows PipeWire's programs: `pw-play` by
+# the store path the unit's environment names, never compiled in — so this
+# line adds no PipeWire to the binary's closure.
+ronoctua-audio = { path = "../ronoctua-audio" }
+# A PERSON'S FILE — what a module lets them choose, under its config
+# directory — is written through the one crate that writes one: read with
+# `parsed` before it is written whole, so a file that does not parse is
+# refused and never replaced by a default.
+ronoctua-store = { path = "../ronoctua-store" }
+# THE VIDEO CATALOGUE'S LAST SCAN, read-only (`read::Catalog`), for the module
+# that schedules its scanner: what the danger mark and the page say.
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "db" ] }
+# WHETHER THERE IS A WAY OUT, and WHETHER THE POWER SAVER IS ON — from the
+# crates that speak NetworkManager and power-profiles-daemon, for a module
+# that needs the network and waits while the person saves energy.
+ronoctua-network = { path = "../ronoctua-network" }
+ronoctua-power = { path = "../ronoctua-power" }
+# THE SECURITY CENTRE'S FILES AND WORDS, for the module that watches it:
+# the status and settings the root helper writes, the window's end and the
+# firewall's log prefix. WITHOUT `authority`: the brain never links the sudo
+# door (`sudo-door-is-one`).
+ronoctua-security = { path = "../ronoctua-security" }
+# WHERE crun KEEPS ITS FOLDERS, for the `containers` module: the one crate
+# that knows podman says it (`runtime_dir`), and nothing here runs podman.
+ronoctua-containers = { path = "../ronoctua-containers" }
+# THE BELONGINGS' FILES, as their own crate reads them (`prefs`: serde and
+# the XDG roots, never `age`): the reminder module reads what the person chose
+# and how the last sync ended.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+# THE SUPER INDEX'S STATUS AND SETTINGS (the module that keeps the index): its
+# shapes and two small files, WITHOUT its engine — the brain never links
+# tantivy; the unit it starts is the one writer.
+ronoctua-index = { path = "../ronoctua-index", default-features = false }
 anyhow.workspace = true
 tracing.workspace = true
 # The wire, and the two files. One JSON object per line on the socket, for the

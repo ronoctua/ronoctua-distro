@@ -43,6 +43,10 @@ pub mod meter;
 pub mod pipewire;
 pub mod prefs;
 
+// THE CHIME a reminder rings with, at the crate's door: `pw-play` is one of
+// PipeWire's programs, and this crate is where those are known.
+pub use pipewire::chime;
+
 use anyhow::Result;
 use std::sync::mpsc;
 

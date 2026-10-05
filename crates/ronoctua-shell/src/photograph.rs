@@ -60,13 +60,39 @@ use crate::player_window::{Door as Which, Outbox, Player, Stage};
 const USAGE: &str = "\
 usage: ronoctua-shell photograph [options] [steps]
 
-  --door <door>         window or column              (default: window)
+  --door <door>         window, column, footer-settings, update, files,
+                        git, icons, calc, video-metrics, security,
+                        containers, belongings, display, clipboard, curtain,
+                        lifeline or footer (default: window);
+                        footer-settings is the footer's own settings in
+                        their window (`LEADER s r w`), no player's door;
+                        update is the update's window (`LEADER s u w`), over
+                        `--report` and `--journal`; calc is the calculator's
+                        window over an empty history of its own, which keys
+                        and clicks fill; every other one reads the rest of
+                        the line itself (see `photograph --door <door>
+                        --help`)
+  --modeline <file>     the footer's preferences as `modeline.json` keeps
+                        them, for footer-settings — never this machine's
+                        (default: the defaults); a copy is what a key
+                        changes, and the file given is left as it was
+  --unwritable          footer-settings over a directory that will not take
+                        the file, so a key that changes a setting draws the
+                        refusal
+  --report <file>       for update: one half's report, as its runner writes
+                        it (`<step> TAB <verdict> TAB <seconds>` a line) —
+                        repeatable, and never this machine's
+                                     (default: none, every step still to come)
+  --journal <file>      for update: what the two journals said, a line each,
+                        as `journalctl -o cat` prints them — never this
+                        machine's                    (default: nothing said)
   --size <size>         the column's: large, medium, small or bar
                                                       (default: medium)
   --screen <px>         the column's screen, in logical pixels: it clamps
                         the column and refuses a size that leaves the
                         windows no room          (default: no screen at all)
-  --stage <stage>       off, only, maximized or small (default: off);
+  --stage <stage>       off, only, maximized, small or listing (default:
+                        off);
                         a column shows only `off` and `only`, `maximized`
                         wants the screen's size (--width and --height), and
                         `small` is a size of its own, and takes none
@@ -86,9 +112,25 @@ usage: ronoctua-shell photograph [options] [steps]
                         (`player-favourites.json`) — never this machine's
   --recent <file>       the played lately, the same way
                         (`player-recent.json`)          (default: none of either)
-  --places <dir>        the file browser's places are in this folder
-                        (Music, Videos) and not in this machine's; a walk
-                        that opens the browser without it is refused
+  --places <dir>        the file picker's home, and its places the folders
+                        in it (Music, Videos…), never this machine's; a
+                        walk that opens the picker without it is refused
+  --websites <file>     the website page's addresses played lately, as it
+                        keeps them (`player-websites.json`) — never this
+                        machine's                      (default: none)
+  --catalog <dir>       the player's catalogue is this folder's, never this
+                        machine's (`--make-catalog <dir>` writes one there,
+                        with posters, and ends)
+  --ranking <file>      the video catalogue the ranking's pages read
+                        (`LEADER p k`), never this machine's; without it
+                        they read none, and say so
+  --pam <answer>        how a password typed for the adult catalogue is
+                        answered: right, wrong, absent (no lock service) or
+                        unavailable (default: none, nothing answers)
+  --handed <file>       the window was opened for the listing's whole
+                        screen, handed everything of the catalogue's
+                        person's source (`--make-catalog`'s) in the `main`
+                        or the `adult` file, as a footer's `F` hands it
   --out <file>          where to write                (default: door.png)
   --columns <n>         the window's width, in cells
   --lines <n>           the height, in lines
@@ -130,6 +172,11 @@ would; that is how a page that only exists after walking to it is reached:
   --refused <file>      a directory's list the player refused at once:
                         {\"query\":{...},\"trouble\":{...}} — as the answer
                         to its find comes back to the door that asked
+  --overrule <file>     a refusal the person may overrule, as the answer to
+                        the ask it refused comes back to the door:
+                        {\"again\":{...},\"trouble\":{...}} — the ask that
+                        overrules it (a put without `once`, a save with
+                        `force`) and the refusal; the door asks, \"no\" first
   --key <notation>      a key, as the keymap writes it: SPC, RET, <down>,
                         C-<left>, o
   --hover <col,line>    rests the pointer on a cell of the surface
@@ -146,6 +193,17 @@ would; that is how a page that only exists after walking to it is reached:
   --let-go              the held button comes up where the drag left it
   --rest                the controls over a picture time out, as they do
                         when nobody touches them
+  --open <page>         a page of the player opened over the one on screen,
+                        by its own key (its title, `player-page-…`): the
+                        walk the row that opens it would take
+                        (`player-pages-fit-every-size` photographs every page
+                        this way; the home is the frame without it)
+  --list-pages          print the key of every page `--open` opens, one a
+                        line, and end
+  --edit <file>         a text of several lines opened over the page,
+                        holding the file's words — what a view's \"edit here\"
+                        opens (`text_area`); the keys and clicks after it
+                        type and place the caret
 
 A cell is counted from the surface's own corner, margins included, and one
 outside the surface is refused. A step that closes the door — `Esc` from the
@@ -202,6 +260,12 @@ enum Step {
     LetGo,
     /// The controls' time runs out (`Player::rest`).
     Rest,
+    /// A page of the player opened over the one on screen, as the row that
+    /// opens it would (`Player::open_page`).
+    Open(crate::player::PageId),
+    /// A text of several lines opened over the page, holding these words
+    /// (`player::View::edit_text`).
+    Text(String),
     /// A state from the player: the door's first, or its answer to a step.
     State(Box<State>),
     /// The queue's outline, as the player says it.
@@ -213,6 +277,17 @@ enum Step {
     /// A directory's list the player REFUSED at once, as the answer to its
     /// `find` comes back to the door that asked (`player::Told::Listing`).
     Refused(Box<(ronoctua_player::find::Query, ronoctua_player::wire::Trouble)>),
+    /// A refusal the person may OVERRULE, as the player answers the ask it
+    /// refused (`player::Told::Asks`): the ask that overrules it and why.
+    Overrule(Box<(ronoctua_player::wire::Ask, ronoctua_player::wire::Trouble)>),
+}
+
+/// What `--overrule` reads: the ask that overrules the refusal, and the
+/// refusal.
+#[derive(serde::Deserialize)]
+struct Overruled {
+    again: ronoctua_player::wire::Ask,
+    trouble: ronoctua_player::wire::Trouble,
 }
 
 /// What `--refused` reads: the list asked, and the player's refusal of it.
@@ -244,6 +319,18 @@ enum Measure {
 #[derive(Debug)]
 struct Asked {
     door: Which,
+    /// A native door that is no player's (`--door footer-settings`), drawn
+    /// in place of the player's window.
+    native: Option<Native>,
+    /// `--modeline`: the preferences the footer's settings draw.
+    modeline: Option<std::path::PathBuf>,
+    /// The footer's settings over a directory that refuses the write
+    /// (`--unwritable`).
+    unwritable: bool,
+    /// `--report`: the update window's halves' reports, in the order given.
+    reports: Vec<std::path::PathBuf>,
+    /// `--journal`: what the update window's journals said.
+    journal: Option<std::path::PathBuf>,
     size: Option<Size>,
     screen: Option<u32>,
     stage: Stage,
@@ -252,8 +339,21 @@ struct Asked {
     outputs: Vec<crate::player_lane::Known>,
     kept: Vec<ronoctua_lookup::keys::Key>,
     favourites: Vec<ronoctua_broadcast::picks::Pick>,
+    /// The website page's addresses played lately (`--websites`).
+    websites: Vec<String>,
     recent: Vec<ronoctua_broadcast::picks::Pick>,
     places: Option<std::path::PathBuf>,
+    /// `--catalog`: the player's catalogue the door reads, never this
+    /// machine's.
+    catalog: Option<std::path::PathBuf>,
+    /// `--ranking`: the video catalogue the ranking reads, never this
+    /// machine's (`crate::player_ranking`).
+    ranking: Option<std::path::PathBuf>,
+    /// `--pam`: how a password typed for the adult catalogue is answered.
+    pam: Option<Result<(), ronoctua_pam::Refusal>>,
+    /// `--handed`: the window opened for the listing's stage on a listing of
+    /// this file, handed over.
+    handed: Option<ronoctua_broadcast::catalog::Store>,
     steps: Vec<Step>,
     out: std::path::PathBuf,
     width: Option<Measure>,
@@ -362,6 +462,11 @@ fn desk_of(raw: &str, file: &str) -> Result<ronoctua_player::find::Desk> {
 fn parse(words: &[String]) -> Result<Asked> {
     let mut me = Asked {
         door: Which::Window,
+        native: None,
+        modeline: None,
+        unwritable: false,
+        reports: Vec::new(),
+        journal: None,
         size: None,
         screen: None,
         stage: Stage::Off,
@@ -370,8 +475,13 @@ fn parse(words: &[String]) -> Result<Asked> {
         outputs: Vec::new(),
         kept: Vec::new(),
         favourites: Vec::new(),
+        websites: Vec::new(),
         recent: Vec::new(),
         places: None,
+        catalog: None,
+        ranking: None,
+        pam: None,
+        handed: None,
         steps: Vec::new(),
         out: std::path::PathBuf::from("door.png"),
         width: None,
@@ -400,7 +510,81 @@ fn parse(words: &[String]) -> Result<Asked> {
                 me.door = match value()?.as_str() {
                     "window" => Which::Window,
                     "column" => Which::Column,
-                    other => bail!("`{other}` is not a door; the doors are window and column"),
+
+                    // THE UPDATE'S WINDOW, a native door of its own: it rides
+                    // the window's walk, over the reports and the journal
+                    // given, and is drawn instead of the player.
+                    "update" => {
+                        me.native = Some(Native::Update);
+                        Which::Window
+                    }
+
+                    // THE FILE MANAGER'S WINDOW has a camera of its own, and
+                    // it takes the rest of the words (`crate::files_photograph`).
+                    "files" => crate::files_photograph::taken(words.as_slice()),
+
+                    // THE FOOTER'S SETTINGS, a native door of its own: it rides
+                    // the window's walk and is drawn instead of the player.
+                    "footer-settings" => {
+                        me.native = Some(Native::FooterSettings);
+                        Which::Window
+                    }
+
+                    // THE GIT BROWSER'S WINDOW, a camera of its own over the
+                    // repository `--dir` is in (`crate::git_photograph`).
+                    "git" => crate::git_photograph::taken(words.as_slice()),
+
+                    // THE ICONS APP'S WINDOW has a camera of its own too, and
+                    // it takes the rest of the words (`crate::icons_photograph`).
+                    "icons" => crate::icons_photograph::taken(words.as_slice()),
+
+                    // THE CALCULATOR'S WINDOW, a native door of its own over a
+                    // history of its own: it rides the window's walk.
+                    "calc" => {
+                        me.native = Some(Native::Calc);
+                        Which::Window
+                    }
+
+                    // THE VIDEO CATALOGUE'S WINDOW has a camera of its own, over a copy of
+                    // the catalogue it is given (`crate::video_metrics_photograph`).
+                    "video-metrics" => crate::video_metrics_photograph::taken(words.as_slice()),
+
+                    // THE SECURITY CENTRE'S WINDOW has a camera of its own, over a scene
+                    // handed in whole (`crate::security_window::photographed`).
+                    "security" => crate::security_window::photographed(words.as_slice()),
+
+                    // THE CONTAINERS' WINDOW has a camera of its own, over a
+                    // stand-in podman (`crate::containers_photograph`).
+                    "containers" => crate::containers_photograph::taken(words.as_slice()),
+
+                    // THE BELONGINGS' WINDOW has a camera of its own, and it
+                    // takes the rest of the words (`crate::belongings_photograph`).
+                    "belongings" => crate::belongings_photograph::taken(words.as_slice()),
+
+                    // THE SEARCH'S WINDOW AND COLUMN have a camera of their own,
+                    // over an index built for it and a fixture for what the
+                    // network would answer (`crate::fast_access_photograph`).
+                    "fast-access" => crate::fast_access_photograph::taken(words.as_slice()),
+
+                    // THE SCREENS' WINDOW, THE CLIPBOARD'S, THE RESIZER'S
+                    // CURTAIN AND THE LIFELINE share a camera over a scene
+                    // handed in whole (`crate::scene_photograph`).
+                    "display" | "clipboard" | "curtain" | "lifeline" => {
+                        crate::scene_photograph::taken(words.as_slice())
+                    }
+                    // THE FOOTER ITSELF, over a stand-in compositor
+                    // (`crate::footer_photograph`).
+                    "footer" => crate::footer_photograph::taken(words.as_slice()),
+
+                    // FOUR SYSTEM WINDOWS have a camera of their own, over planted
+                    // machines (`crate::system_photograph`).
+                    "network" | "bluetooth" | "locale" | "camera-settings" => {
+                        crate::system_photograph::taken(words.as_slice())
+                    }
+
+                    other => bail!(
+                        "`{other}` is not a door; the doors are window, column, footer-settings, update, files, git, icons, calc, video-metrics, security, containers, belongings, network, bluetooth, locale, camera-settings, display, clipboard, curtain, lifeline and footer"
+                    ),
                 };
             }
             "--size" => {
@@ -418,8 +602,10 @@ fn parse(words: &[String]) -> Result<Asked> {
                     "only" => Stage::Only,
                     "maximized" => Stage::Maximized,
                     "small" => Stage::Small,
+                    "listing" => Stage::Listing,
                     other => bail!(
-                        "`{other}` is not a stage; the stages are off, only, maximized and small"
+                        "`{other}` is not a stage; the stages are off, only, maximized, small \
+                         and listing"
                     ),
                 };
             }
@@ -458,6 +644,26 @@ fn parse(words: &[String]) -> Result<Asked> {
                 })?;
                 me.steps.push(Step::Refused(Box::new((r.query, r.trouble))));
             }
+            "--overrule" => {
+                let file = value()?;
+                let raw = std::fs::read_to_string(&file)
+                    .with_context(|| format!("could not read `{file}`"))?;
+                let r: Overruled = serde_json::from_str(&raw).with_context(|| {
+                    format!("`{file}` is not an ask and the refusal it overrules")
+                })?;
+                me.steps
+                    .push(Step::Overrule(Box::new((r.again, r.trouble))));
+            }
+            "--websites" => {
+                let file = value()?;
+                let raw = std::fs::read_to_string(&file)
+                    .with_context(|| format!("could not read `{file}`"))?;
+                let kept: crate::player_website::Addresses = serde_json::from_str(&raw)
+                    .with_context(|| {
+                        format!("`{file}` is not a list of addresses as the website page keeps one")
+                    })?;
+                me.websites = kept.addresses;
+            }
             "--favourites" | "--recent" => {
                 let file = value()?;
                 let raw = std::fs::read_to_string(&file)
@@ -492,6 +698,63 @@ fn parse(words: &[String]) -> Result<Asked> {
                 let dir = std::path::PathBuf::from(value()?);
                 ensure!(dir.is_dir(), "`--places {}` is not a folder", dir.display());
                 me.places = Some(dir);
+            }
+            // THE PLAYER'S CATALOGUE, a folder of its own — made with
+            // `--make-catalog` — and how the adult lock's password is
+            // answered (`crate::player_catalog`).
+            "--catalog" => {
+                let dir = std::path::PathBuf::from(value()?);
+                ensure!(
+                    dir.is_dir(),
+                    "`--catalog {}` is not a folder",
+                    dir.display()
+                );
+                me.catalog = Some(dir);
+            }
+            // THE VIDEO CATALOGUE THE RANKING READS (`crate::player_ranking`).
+            "--ranking" => {
+                let file = std::path::PathBuf::from(value()?);
+                ensure!(
+                    file.is_file(),
+                    "`--ranking {}` is not a file",
+                    file.display()
+                );
+                me.ranking = Some(file);
+            }
+            "--list-pages" => {
+                for page in crate::player::PageId::PAGES {
+                    println!("{}", page.key());
+                }
+                std::process::exit(0);
+            }
+            "--make-catalog" => {
+                let dir = std::path::PathBuf::from(value()?);
+                crate::player_catalog::write_fixture(&dir).map_err(|t| {
+                    anyhow::anyhow!("the catalogue was not made in {}: {t:?}", dir.display())
+                })?;
+                println!("made a catalogue in {}", dir.display());
+                std::process::exit(0);
+            }
+            "--pam" => {
+                use ronoctua_pam::Refusal;
+                me.pam = Some(match value()?.as_str() {
+                    "right" => Ok(()),
+                    "wrong" => Err(Refusal::Wrong),
+                    "absent" => Err(Refusal::NoService),
+                    "unavailable" => Err(Refusal::Unavailable),
+                    other => bail!(
+                        "`--pam {other}` is not an answer; the answers are right, wrong, absent \
+                         and unavailable"
+                    ),
+                });
+            }
+            "--handed" => {
+                use ronoctua_broadcast::catalog::Store;
+                me.handed = Some(match value()?.as_str() {
+                    "main" => Store::Main,
+                    "adult" => Store::Adult,
+                    other => bail!("`--handed {other}` is no file; the files are main and adult"),
+                });
             }
             "--frame" => {
                 let said = value()?;
@@ -576,6 +839,12 @@ fn parse(words: &[String]) -> Result<Asked> {
                 me.scale = number("--scale", &value()?, 1..=most)?;
             }
             "--list" => me.list = true,
+            "--modeline" => {
+                me.modeline = Some(std::path::PathBuf::from(value()?));
+            }
+            "--unwritable" => me.unwritable = true,
+            "--report" => me.reports.push(std::path::PathBuf::from(value()?)),
+            "--journal" => me.journal = Some(std::path::PathBuf::from(value()?)),
             "--key" => {
                 let notation = value()?;
                 let key = ronoctua_keymap::Key::parse(&notation)
@@ -629,11 +898,32 @@ fn parse(words: &[String]) -> Result<Asked> {
                     click: flag == "--click-at",
                 });
             }
+            "--open" => {
+                let key = value()?;
+                let page = crate::player::PageId::by_key(&key).with_context(|| {
+                    format!(
+                        "`--open {key}` names no page of the player: a page is named by its \
+                         own key, its title (`player-page-…`)"
+                    )
+                })?;
+                me.steps.push(Step::Open(page));
+            }
             "--let-go" => me.steps.push(Step::LetGo),
             "--rest" => me.steps.push(Step::Rest),
+            "--edit" => {
+                let file = value()?;
+                let words = std::fs::read_to_string(&file)
+                    .with_context(|| format!("could not read `{file}`"))?;
+                me.steps.push(Step::Text(words));
+            }
             other => bail!("unknown option `{other}`.\n\n{USAGE}"),
         }
     }
+    // THE UPDATE WINDOW'S FIXTURES, on a door that reads none of them.
+    ensure!(
+        me.native == Some(Native::Update) || (me.reports.is_empty() && me.journal.is_none()),
+        "`--report` and `--journal` are the update window's (`--door update`)"
+    );
     // WHAT A DOOR CANNOT BE is refused, never quietly dropped: a photograph
     // of something nobody asked for is worse than none.
     match me.door {
@@ -660,6 +950,7 @@ fn parse(words: &[String]) -> Result<Asked> {
                  with `--width` and `--height` (or `--columns` and `--lines`)"
             );
         }
+
         Which::Column => {
             ensure!(
                 me.width.is_none(),
@@ -686,27 +977,167 @@ fn once(slot: &mut Option<Measure>, given: Measure, cells: &str, px: &str) -> Re
     Ok(())
 }
 
+/// A native door that is no player's, which the photograph draws in the
+/// player window's place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Native {
+    /// The footer's own settings, in their window.
+    FooterSettings,
+    /// The update's window, over the reports and the journal given.
+    Update,
+    /// The calculator's window.
+    Calc,
+}
+
+impl Native {
+    /// Drives and draws it, over the preferences `--modeline` gave — never
+    /// this machine's.
+    fn shoot(self, texts: ronoctua_i18n::Texts, scale: i32, asked: &Asked) -> Result<()> {
+        ensure!(
+            asked.size.is_none() && asked.stage == Stage::Off,
+            "`--size` and `--stage` are the player's; this door takes neither"
+        );
+        match self {
+            // THE UPDATE'S WINDOW over what the units would have written and
+            // the journals said — the files given, never this machine's — and
+            // a key that would start or answer something kept, not done
+            // (`update_window::photographed`).
+            Self::Update => {
+                ensure!(
+                    asked.modeline.is_none() && !asked.unwritable,
+                    "`--modeline` and `--unwritable` are the footer's settings' (`--door footer-settings`)"
+                );
+                let halves = asked
+                    .reports
+                    .iter()
+                    .map(|f| {
+                        std::fs::read_to_string(f)
+                            .with_context(|| format!("could not read `{}`", f.display()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let said = match &asked.journal {
+                    Some(f) => std::fs::read_to_string(f)
+                        .with_context(|| format!("could not read `{}`", f.display()))?,
+                    None => String::new(),
+                };
+                let ui = Ui::detached(texts, (1, 1), scale)?;
+                let content = crate::update_window::photographed(&halves, &said);
+                shoot(Detached::new(ui, content), asked)
+            }
+
+            Self::FooterSettings => {
+                // A COPY IN A DIRECTORY OF ITS OWN, which is what a key
+                // changes: the window writes the file it reads, and this
+                // machine's `modeline.json` is the bars of the session the
+                // photograph runs in.
+                let dir = std::env::temp_dir().join(format!(
+                    "ronoctua-photograph-modeline-{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("could not make `{}`", dir.display()))?;
+                if let Some(file) = &asked.modeline {
+                    let raw = std::fs::read_to_string(file)
+                        .with_context(|| format!("could not read `{}`", file.display()))?;
+                    serde_json::from_str::<crate::adapt::Prefs>(&raw)
+                        .with_context(|| format!("`{}` is not a modeline.json", file.display()))?;
+                    std::fs::write(dir.join(crate::adapt::FILE), raw)
+                        .with_context(|| format!("could not copy `{}`", file.display()))?;
+                }
+                let lock = |mode: u32| {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
+                };
+                if asked.unwritable {
+                    // THE OWNER'S BUG, made here: a directory the person can
+                    // read and not write, as `/persist` made `~/.config/ronoctua`.
+                    lock(0o555).context("could not make the copy's directory read-only")?;
+                }
+                let store = ronoctua_store::Store::at(Some(dir.clone()), crate::adapt::FILE);
+                let ui = Ui::detached(texts, (1, 1), scale)?;
+                let content = crate::footer_settings_window::FooterSettingsWindow::over(store);
+                let shot = shoot(Detached::new(ui, content), asked);
+                let _ = lock(0o755);
+                let _ = std::fs::remove_dir_all(&dir);
+                shot
+            }
+            Self::Calc => {
+                ensure!(
+                    asked.modeline.is_none() && !asked.unwritable,
+                    "`--modeline` and `--unwritable` are the footer's settings'"
+                );
+                // A HISTORY OF ITS OWN, in a directory of its own: what `RET`
+                // keeps is written, and this machine's `calc.json` is the
+                // person's.
+                let dir = std::env::temp_dir()
+                    .join(format!("ronoctua-photograph-calc-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("could not make `{}`", dir.display()))?;
+                let store = ronoctua_store::Store::at(Some(dir.clone()), crate::calc::FILE);
+                let ui = Ui::detached(texts, (1, 1), scale)?;
+                let content =
+                    crate::calc_window::CalcWindow::over(store, crate::calc_window::Reach::Kept);
+                let shot = shoot(Detached::new(ui, content), asked);
+                let _ = std::fs::remove_dir_all(&dir);
+                shot
+            }
+        }
+    }
+}
+
+impl Photographed for crate::calc_window::CalcWindow {
+    fn player(&mut self) -> Option<&mut Player> {
+        None
+    }
+}
+
+impl Photographed for crate::footer_settings_window::FooterSettingsWindow {
+    fn player(&mut self) -> Option<&mut Player> {
+        None
+    }
+}
+
+impl Photographed for crate::update_window::UpdateWindow {
+    fn player(&mut self) -> Option<&mut Player> {
+        None
+    }
+
+    fn past_the_door(&self) -> Vec<String> {
+        self.would_have()
+    }
+}
+
 /// A door the player is in, as the photograph drives it.
 trait Photographed: Content {
-    /// The player inside.
-    fn player(&mut self) -> &mut Player;
+    /// The player inside — `None` for a door that is no player's (the
+    /// footer's settings), whose walk takes keys and the pointer and no
+    /// daemon's answer.
+    fn player(&mut self) -> Option<&mut Player>;
 
     /// The size the compositor would configure it at now, from the one it
     /// was asked at: a column's width follows the size it is drawn at.
     fn configured(&self, asked: (u32, u32)) -> (u32, u32) {
         asked
     }
+
+    /// What a door that is no player's would have asked past itself, a line
+    /// each, as the photograph prints it — the player's own is its outbox.
+    fn past_the_door(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 impl Photographed for Player {
-    fn player(&mut self) -> &mut Player {
-        self
+    fn player(&mut self) -> Option<&mut Player> {
+        Some(self)
     }
 }
 
 impl Photographed for Column<Player> {
-    fn player(&mut self) -> &mut Player {
-        &mut self.tenant
+    fn player(&mut self) -> Option<&mut Player> {
+        Some(&mut self.tenant)
     }
 
     fn configured(&self, asked: (u32, u32)) -> (u32, u32) {
@@ -742,6 +1173,17 @@ pub fn run(words: &[String]) -> Result<()> {
     }
     let scale = i32::from(asked.scale);
     let places = asked.places.clone();
+    outbox.catalog.clone_from(&asked.catalog);
+    outbox.ranking.clone_from(&asked.ranking);
+    outbox.pam = asked.pam;
+    // A NATIVE DOOR THAT IS NO PLAYER'S, over the preferences it was given.
+    if let Some(native) = asked.native {
+        return native.shoot(texts, scale, &asked);
+    }
+    ensure!(
+        asked.modeline.is_none() && !asked.unwritable,
+        "`--modeline` and `--unwritable` are the footer's settings' (`--door footer-settings`)"
+    );
     match asked.door {
         Which::Footer => bail!("the footer is photographed in the VM (`nix run .#shot`)"),
         Which::Window => {
@@ -749,6 +1191,7 @@ pub fn run(words: &[String]) -> Result<()> {
             let d = Detached::new(ui, Player::detached(Which::Window, outbox, places));
             shoot(d, &asked)
         }
+
         Which::Column => {
             let ui = Ui::detached(texts, (1, 1), scale)?;
             let size = asked.size.unwrap_or(Size::Medium);
@@ -895,11 +1338,14 @@ fn frames_of(step: &Step, entered: &mut bool, ui: &Ui) -> Vec<Vec<PointerEvent>>
         Step::Key(_)
         | Step::LetGo
         | Step::Rest
+        | Step::Open(_)
+        | Step::Text(_)
         | Step::State(_)
         | Step::Queue(_)
         | Step::Sheet(_)
         | Step::Desk(_)
-        | Step::Refused(_) => {
+        | Step::Refused(_)
+        | Step::Overrule(_) => {
             return Vec::new();
         }
     };
@@ -954,29 +1400,69 @@ fn walk<C: Photographed, F>(
     if !asked.outputs.is_empty() {
         let here = asked.outputs.first().map(|k| k.connector.clone());
         let ui = &mut d.ui;
-        d.content
-            .player()
-            .given_screens(ui, asked.outputs.clone(), here);
+        if let Some(p) = d.content.player() {
+            p.given_screens(ui, asked.outputs.clone(), here);
+        }
     }
     // THE PERSON'S KEYS, as given: a photograph reads none of this machine's.
-    d.content.player().keys_given(asked.kept.clone());
-    // AND THE FAVOURITES AND THE PLAYED LATELY, the same way.
-    d.content
-        .player()
-        .picks_given(asked.favourites.clone(), asked.recent.clone());
+    if let Some(p) = d.content.player() {
+        p.keys_given(asked.kept.clone());
+        // AND THE FAVOURITES AND THE PLAYED LATELY, the same way.
+        p.picks_given(asked.favourites.clone(), asked.recent.clone());
+        // AND THE WEBSITE PAGE'S ADDRESSES.
+        p.websites_given(asked.websites.clone());
+    }
     let mut steps = asked.steps.iter().peekable();
     while let Some(
-        step
-        @ (Step::State(_) | Step::Queue(_) | Step::Sheet(_) | Step::Desk(_) | Step::Refused(_)),
+        step @ (Step::State(_)
+        | Step::Queue(_)
+        | Step::Sheet(_)
+        | Step::Desk(_)
+        | Step::Refused(_)
+        | Step::Overrule(_)),
     ) = steps.peek()
     {
         let ui = &mut d.ui;
-        heard(d.content.player(), ui, step);
+        let Some(p) = d.content.player() else {
+            bail!(
+                "`{}` is an answer of the player, and this door is no player's",
+                told(step)
+            );
+        };
+        heard(p, ui, step);
         steps.next();
     }
     if asked.stage != Stage::Off {
         let ui = &mut d.ui;
-        d.content.player().stage_to(ui, asked.stage);
+        if let Some(p) = d.content.player() {
+            p.stage_to(ui, asked.stage);
+        }
+    }
+    // A WINDOW OPENED FOR THE LISTING'S STAGE on what a door handed over —
+    // the fixture's person's source, everything of it — as `wired` opens one.
+    if let Some(store) = asked.handed {
+        use ronoctua_broadcast::catalog::Scope;
+        ensure!(
+            asked.catalog.is_some(),
+            "`--handed` is a listing of the catalogue: give it one with `--catalog`"
+        );
+        let ui = &mut d.ui;
+        let Some(p) = d.content.player() else {
+            bail!("`--handed` opens the player's window, and this door is no player's");
+        };
+        let source = "p1790000000";
+        p.opened_on(
+            ui,
+            crate::player_catalog::Handed {
+                listing: crate::player_catalog::Listing::of(
+                    store,
+                    source,
+                    Scope::AllCategories,
+                    None,
+                ),
+                source: source.to_owned(),
+            },
+        );
     }
     d.turn();
     // THE FIRST FRAME, as a door draws one: what the pointer and the keys
@@ -994,7 +1480,9 @@ fn walk<C: Photographed, F>(
             "the door closed at the step before `{}`, and a step after it reaches nothing",
             told(step)
         );
-        d.content.player().wait(APART);
+        if let Some(p) = d.content.player() {
+            p.wait(APART);
+        }
         match step {
             Step::Key(key) => d.press(*key),
             Step::Hover { .. } | Step::Click { .. } | Step::Drag { .. } | Step::Point { .. } => {
@@ -1029,11 +1517,38 @@ fn walk<C: Photographed, F>(
             }
             Step::Rest => {
                 let ui = &mut d.ui;
-                d.content.player().rest(ui);
+                if let Some(p) = d.content.player() {
+                    p.rest(ui);
+                }
             }
-            Step::State(_) | Step::Queue(_) | Step::Sheet(_) | Step::Desk(_) | Step::Refused(_) => {
+            Step::Text(words) => {
                 let ui = &mut d.ui;
-                heard(d.content.player(), ui, step);
+                let Some(p) = d.content.player() else {
+                    bail!("`--edit` opens a text in the player, and this door is no player's");
+                };
+                p.edit_text(ui, words);
+            }
+            Step::Open(page) => {
+                let ui = &mut d.ui;
+                let Some(p) = d.content.player() else {
+                    bail!("`--open` opens a page of the player, and this door is no player's");
+                };
+                p.open_page(ui, *page);
+            }
+            Step::State(_)
+            | Step::Queue(_)
+            | Step::Sheet(_)
+            | Step::Desk(_)
+            | Step::Refused(_)
+            | Step::Overrule(_) => {
+                let ui = &mut d.ui;
+                let Some(p) = d.content.player() else {
+                    bail!(
+                        "`{}` is an answer of the player, and this door is no player's",
+                        told(step)
+                    );
+                };
+                heard(p, ui, step);
             }
         }
         d.turn();
@@ -1066,13 +1581,16 @@ fn heard(player: &mut Player, ui: &mut Ui, step: &Step) {
         Step::Sheet(sheet) => player.sheet_arrived(ui, (**sheet).clone()),
         Step::Desk(desk) => player.desk_arrived(ui, (**desk).clone()),
         Step::Refused(r) => player.listing_refused(ui, r.0.clone(), r.1.clone()),
+        Step::Overrule(r) => player.overrule_asked(ui, r.0.clone(), r.1.clone()),
         Step::Key(_)
         | Step::Hover { .. }
         | Step::Click { .. }
         | Step::Point { .. }
         | Step::Drag { .. }
         | Step::LetGo
-        | Step::Rest => {}
+        | Step::Rest
+        | Step::Open(_)
+        | Step::Text(_) => {}
     }
 }
 
@@ -1091,18 +1609,23 @@ fn told(step: &Step) -> String {
         Step::Drag { from, to } => format!("--drag {},{}:{},{}", from.0, from.1, to.0, to.1),
         Step::LetGo => "--let-go".to_owned(),
         Step::Rest => "--rest".to_owned(),
+        Step::Open(page) => format!("--open {}", page.key()),
+        Step::Text(_) => "--edit".to_owned(),
         Step::State(_) => "--state".to_owned(),
         Step::Queue(_) => "--queue".to_owned(),
         Step::Sheet(_) => "--sheet".to_owned(),
         Step::Desk(_) => "--desk".to_owned(),
         Step::Refused(_) => "--refused".to_owned(),
+        Step::Overrule(_) => "--overrule".to_owned(),
     }
 }
 
 /// What the walk left undone that was asked — refused, never dropped: a
 /// still no picture took, and a browser on this machine's own folders.
 fn nothing_was_dropped<C: Photographed>(d: &mut Detached<C>, asked: &Asked) -> Result<()> {
-    let player = d.content.player();
+    let Some(player) = d.content.player() else {
+        return Ok(());
+    };
     ensure!(
         asked.places.is_some() || !player.browsing(),
         "the walk opened the file browser, and its places are this machine's own folders — a \
@@ -1143,7 +1666,8 @@ fn said_past_the_door<C: Photographed>(d: &mut Detached<C>) -> Result<Vec<String
     for launch in d.ui.launches() {
         lines.push(format!("would have started: {launch:?}"));
     }
-    let Some(out) = d.content.player().outbox() else {
+    lines.extend(d.content.past_the_door());
+    let Some(out) = d.content.player().and_then(|p| p.outbox()) else {
         return Ok(lines);
     };
     for ask in &out.asked {
@@ -1193,6 +1717,16 @@ fn said_past_the_door<C: Photographed>(d: &mut Detached<C>) -> Result<Vec<String
     for key in &out.keys_forgotten {
         lines.push(format!("would have forgotten the key: {}", key.file()));
     }
+    for change in &out.websites {
+        lines.push(format!("would have kept the website address: {change:?}"));
+    }
+    for (hosts, on) in &out.hosts_let {
+        lines.push(format!(
+            "would have {} the hosts: {}",
+            if *on { "let" } else { "stopped letting" },
+            hosts.join(", ")
+        ));
+    }
     Ok(lines)
 }
 
@@ -1224,8 +1758,10 @@ fn shoot<C: Photographed>(mut d: Detached<C>, asked: &Asked) -> Result<()> {
 
     if asked.list {
         print_the_list(&d.ui, &composed);
-        for (members, (column, line), (x, y)) in d.content.player().globe_marks_at() {
-            println!("globe mark {members:?} at {column},{line} px {x:.1},{y:.1}");
+        if let Some(p) = d.content.player() {
+            for (members, (column, line), (x, y)) in p.globe_marks_at() {
+                println!("globe mark {members:?} at {column},{line} px {x:.1},{y:.1}");
+            }
         }
         for line in &past {
             println!("{line}");
@@ -1752,6 +2288,52 @@ mod tests {
                 "would have opened the stage's window: Maximized",
                 "would have opened the stage's window: Maximized"
             ]
+        );
+    }
+
+    /// FAILS IF: the update's window is not a door of this camera, its two
+    /// fixtures are dropped or taken out of order, they are taken on a door
+    /// that does not read them, or a key of its walk reaches the machine
+    /// instead of being said.
+    #[test]
+    fn the_updates_window_is_a_door_and_what_it_would_ask_is_said() {
+        let a = parse(&words(&[
+            "--door",
+            "update",
+            "--report",
+            "root.tsv",
+            "--report",
+            "person.tsv",
+            "--journal",
+            "said.txt",
+            "--key",
+            "u",
+        ]))
+        .expect("understood");
+        assert_eq!((a.door, a.native), (Which::Window, Some(Native::Update)));
+        assert_eq!(
+            a.reports,
+            [
+                std::path::PathBuf::from("root.tsv"),
+                std::path::PathBuf::from("person.tsv")
+            ]
+        );
+        assert_eq!(a.journal, Some(std::path::PathBuf::from("said.txt")));
+        for door in ["window", "footer-settings"] {
+            let refused = parse(&words(&["--door", door, "--report", "root.tsv"]))
+                .expect_err("a report on a door that reads none");
+            assert!(refused.to_string().contains("update window's"), "{refused}");
+        }
+
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let ui = Ui::detached(texts, (800, 600), 1).expect("a detached ui");
+        let mut d = Detached::new(ui, crate::update_window::photographed(&[], ""));
+        d.press(ronoctua_keymap::Key::parse("u").expect("a key"));
+        let said = said_past_the_door(&mut d).expect("said");
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].starts_with("would have asked for a run of "),
+            "{said:?}"
         );
     }
 }

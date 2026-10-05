@@ -14,6 +14,17 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+# A SEARCH OF YOUTUBE takes the person's pass for the host yt-dlp asks
+# (`search::SEARCH_HOST`): nothing is started for a host nobody let.
+ronoctua-consent = { path = "../ronoctua-consent" }
+# Where the words of a search may be cut: between grapheme clusters, the
+# tree's one rule (`ronoctua_protocol::cells_of`).
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [lints]
 workspace = true

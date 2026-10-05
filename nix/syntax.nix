@@ -1,6 +1,6 @@
 # The syntax table, from `assets/syntax.nix` to a Rust table.
 #
-# Same machine as `nix/updates.nix`, and for the same reasons: the declaration
+# Same machine as the update's `sequence.nix`, and for the same reasons: the declaration
 # is the source, the Rust is derived, and a guard that has never refused
 # anything has not been tested.
 #
@@ -103,7 +103,7 @@ let
       buildPhase =
         let
           # A shell FUNCTION and not a command string, for the reason
-          # `nix/updates.nix` and `nix/glyphgen.nix` both record: interpolating
+          # the update's `sequence.nix` and `nix/glyphgen.nix` both record: interpolating
           # a multi-line string and then appending `> file` puts the
           # redirection on a line of its own, where it applies to nothing.
           cmd = ''

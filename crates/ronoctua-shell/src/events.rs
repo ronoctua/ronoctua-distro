@@ -5,7 +5,8 @@
 //! The owner's choice (2026-09-28): a camera or a microphone opening and
 //! closing, the camera's own recording and stream, a Bluetooth device, a
 //! network, a tunnel or the aeroplane coming and going, the charger, a
-//! program installed — and the disk making room by itself — are EVENTS — facts about the machine that are worth one
+//! program installed — and what a brain module tells, the disk making room by
+//! itself among them — are EVENTS — facts about the machine that are worth one
 //! line and nothing more. The band is where something arrives that may want an
 //! answer; a fact that goes by is what the minibuffer's line already does for
 //! the shell's own answers (the echo), so an event is said there, in its
@@ -110,10 +111,6 @@ pub const TOR_DOWN: &str = "tor-down";
 pub const CHARGER_PLUGGED: &str = "charger-plugged";
 /// The charger stopped delivering.
 pub const CHARGER_UNPLUGGED: &str = "charger-unplugged";
-/// The disk was short and the brain's relief made room.
-pub const DISK_RELIEVED: &str = "disk-relieved";
-/// The disk was short, and after the relief it still is.
-pub const DISK_STILL_SHORT: &str = "disk-still-short";
 
 /// The programs of OURS that hold a camera, by the name `/proc` gives them.
 ///
@@ -148,6 +145,11 @@ pub struct Event {
     pub app: &'static str,
     /// The arguments its two sentences take, by name.
     pub args: Vec<(&'static str, String)>,
+    /// The COUNTS among them, which cross to Fluent as numbers: a selector
+    /// with a numeric branch handed the string `"1"` looks for a variant
+    /// called `1`, finds none and falls to the default without a word
+    /// (`numeric-selectors-get-numbers`). A brain module's event carries them.
+    pub counts: Vec<(&'static str, i64)>,
     /// What its action opens, when it opens something — the desktop id of
     /// the program an install put in the launcher ([`launch_of`]).
     pub opens: Option<String>,
@@ -161,6 +163,7 @@ impl Event {
             tag,
             app,
             args: Vec::new(),
+            counts: Vec::new(),
             opens: None,
         }
     }
@@ -182,21 +185,29 @@ impl Event {
         e
     }
 
-    /// The arguments, as the localiser takes them.
-    fn pairs(&self) -> Vec<(&str, &str)> {
-        self.args.iter().map(|(n, v)| (*n, v.as_str())).collect()
+    /// The arguments, as the localiser takes them — the counts as numbers.
+    fn pairs(&self) -> Vec<(&str, ronoctua_i18n::Arg<'_>)> {
+        self.args
+            .iter()
+            .map(|(n, v)| (*n, ronoctua_i18n::Arg::Text(v.as_str())))
+            .chain(
+                self.counts
+                    .iter()
+                    .map(|(n, v)| (*n, ronoctua_i18n::Arg::Number(*v))),
+            )
+            .collect()
     }
 
     /// What the line says: the entry's summary.
     #[must_use]
     pub fn summary(&self, texts: &ronoctua_i18n::Texts) -> String {
-        texts.t_with(&format!("notif-{}-summary", self.tag), &self.pairs())
+        texts.t_args(&format!("notif-{}-summary", self.tag), &self.pairs())
     }
 
     /// The entry's body — read only when the event goes to the band.
     #[must_use]
     pub fn body(&self, texts: &ronoctua_i18n::Texts) -> String {
-        texts.t_with(&format!("notif-{}-body", self.tag), &self.pairs())
+        texts.t_args(&format!("notif-{}-body", self.tag), &self.pairs())
     }
 }
 
@@ -389,7 +400,6 @@ const OPPOSITES: &[(&str, &str, Option<&str>)] = &[
     (STREAMING_STARTED, STREAMING_STOPPED, None),
     (AIRPLANE_ON, AIRPLANE_OFF, None),
     (CHARGER_PLUGGED, CHARGER_UNPLUGGED, None),
-    (DISK_RELIEVED, DISK_STILL_SHORT, None),
     (TAILNET_UP, TAILNET_DOWN, None),
     (TOR_UP, TOR_DOWN, None),
     (NETWORK_CONNECTED, NETWORK_LOST, Some("network")),
@@ -593,11 +603,9 @@ pub struct Watch {
     tailnet: Edge<bool>,
     tor: Edge<bool>,
     charger: Edge<Option<bool>>,
-    /// When the brain's last relief of the disk ended.
-    relief: Edge<Option<i64>>,
-    /// Whether "still short" was said and nothing since made room: said once
-    /// per shortness, never once per relief.
-    said_short: bool,
+    /// The last event of the brain's modules already heard, by its number —
+    /// and nothing before the first mind, which is only the baseline.
+    told: Edge<u64>,
 }
 
 /// Whether this machine is on its tailnet, when tailscaled ANSWERED.
@@ -837,35 +845,106 @@ impl Watch {
         }
     }
 
-    /// The disk's relief, as the brain's mind carries it. News when a NEW one
-    /// arrives — the first mind is the baseline, so a relief from before the
-    /// footer started is not said again, and a brain that restarted and
-    /// forgot is no relief at all. `mark` is the language's decimal mark.
+    /// What the brain's MODULES told, as the mind carries it (`Mind.events`,
+    /// a ring numbered from the daemon's start): news when its number is past
+    /// the last one heard.
     ///
-    /// "STILL SHORT" ONCE: what fills the disk then is the person's to choose,
-    /// and the sentence that says so does not need saying again after every
-    /// relief that finds the same — unread, each one would pile up in the
-    /// band. It is said again only after a relief has made room.
-    pub fn disk(&mut self, r: Option<&ronoctua_brain::Relieved>, mark: char) -> Vec<Event> {
-        let was = self.relief.saw(r.map(|r| r.at));
-        let (Some(_), Some(r)) = (was, r) else {
+    /// # Generic, and it names no module
+    ///
+    /// The tag is the event's catalogue entry — `<module>-<event>`, merged
+    /// into the notifications table by the brain's generator — and its
+    /// sentences are that entry's `notif-<tag>-summary` and `-body`, with the
+    /// event's values formatted here (`mind_wire::arg_text`). Who says it is
+    /// the module's own name. A tag the catalogue does not know is REFUSED —
+    /// said nowhere, and said so in the log — rather than drawn as a sentence
+    /// nobody declared.
+    ///
+    /// # What a module says twice is the module's to decide
+    ///
+    /// Said once per number, and nothing more: whether a second "still
+    /// short" is news is a rule of the module that tells it, kept where it
+    /// knows why. A footer that remembered one module's rule would be a
+    /// footer naming that module.
+    ///
+    /// # The first mind is the baseline
+    ///
+    /// For the reason every source here gives: the footer starting is not the
+    /// events of the last half hour happening again. And a brain that
+    /// restarted numbers from one again, which is a new baseline, not news.
+    pub fn of_brain(
+        &mut self,
+        mind: &ronoctua_brain::Mind,
+        zone: &ronoctua_files::when::Zone,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Event> {
+        let newest = mind.events.iter().map(|e| e.seq).max().unwrap_or(0);
+        let Some(heard) = self.told.saw(newest) else {
             return Vec::new();
         };
-        let free = format!("{}{mark}{}", r.free_per_mille / 10, r.free_per_mille % 10);
-        let said = std::mem::replace(&mut self.said_short, r.short);
-        if r.short {
-            if said {
-                return Vec::new();
+        if newest < heard {
+            return Vec::new();
+        }
+        let fresh: Vec<&ronoctua_brain::mind::Said> =
+            mind.events.iter().filter(|e| e.seq > heard).collect();
+        if fresh.is_empty() {
+            return Vec::new();
+        }
+        let book = ronoctua_notify::Book::distro();
+        let mut out = Vec::new();
+        for said in fresh {
+            if let Some(e) = brain_event(said, mind, &book, zone, texts) {
+                out.push(e);
             }
-            vec![Event::of(DISK_STILL_SHORT, key::NOTIF_DISK_APP).about("free", free)]
-        } else {
-            vec![
-                Event::of(DISK_RELIEVED, key::NOTIF_DISK_APP)
-                    .about("freed", crate::network::readable_bytes(r.freed_bytes, mark))
-                    .about("free", free),
-            ]
+        }
+        out
+    }
+}
+
+/// One event of a brain module, as the line says it — or none, for a tag the
+/// catalogue does not know.
+fn brain_event(
+    said: &ronoctua_brain::mind::Said,
+    mind: &ronoctua_brain::Mind,
+    book: &ronoctua_notify::Book,
+    zone: &ronoctua_files::when::Zone,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<Event> {
+    if book.entry(&said.tag).is_none() {
+        tracing::warn!(tag = %said.tag, "a brain event with no catalogue entry; not said");
+        return None;
+    }
+    let tag = crate::brain::interned(&said.tag)?;
+    // WHO SAYS IT: the module whose id the tag begins with — the longest,
+    // since one module's id can be the start of another's — by its own name.
+    let app = mind
+        .tasks
+        .iter()
+        .filter(|t| {
+            said.tag
+                .strip_prefix(t.id.as_str())
+                .is_some_and(|rest| rest.starts_with('-'))
+        })
+        .max_by_key(|t| t.id.len())
+        .map(|t| {
+            if t.name_key.is_empty() {
+                format!("brain-task-{}", t.id)
+            } else {
+                t.name_key.clone()
+            }
+        })
+        .and_then(|k| crate::brain::interned(&k))
+        .unwrap_or(key::CMD_BRAIN_OPEN);
+    let mut e = Event::of(tag, app);
+    for (name, arg) in &said.args {
+        let name = crate::brain::interned(name)?;
+        match arg {
+            ronoctua_brain::module::Arg::Number(n) => e.counts.push((name, *n)),
+            other => e
+                .args
+                .push((name, crate::mind_wire::arg_text(other, zone, texts))),
         }
     }
+    Some(e)
 }
 
 #[cfg(test)]
@@ -1180,71 +1259,70 @@ mod tests {
         }
     }
 
-    fn relief(
-        at: i64,
-        freed_bytes: u64,
-        free_per_mille: u16,
-        short: bool,
-    ) -> ronoctua_brain::Relieved {
-        ronoctua_brain::Relieved {
-            at,
-            freed_bytes,
-            free_per_mille,
-            short,
-        }
-    }
-
-    /// FAILS IF: a relief the footer found when it started is said again, a
-    /// new one is not said, the freed bytes and the free share are not in its
-    /// words in the language's own decimal mark, a disk still short is said as
-    /// relieved, or a brain that restarted and forgot is taken as news.
+    /// FAILS IF: what a brain module told is said before the first mind —
+    /// which is only the baseline — or twice, or a tag the catalogue does not
+    /// know is said at all, or a brain that restarted and numbers from one is
+    /// taken for news.
     #[test]
-    fn the_disk_says_what_its_relief_made_and_only_once() {
-        let mut w = Watch::default();
-        let old = relief(100, 5, 120, false);
-        assert!(
-            w.disk(Some(&old), '.').is_empty(),
-            "the first mind is the baseline"
-        );
-        assert!(w.disk(Some(&old), '.').is_empty(), "the same relief twice");
-        // A MARK NO LANGUAGE USES, so what comes out is visibly the one
-        // handed in and not a separator written into the format.
-        let made = w.disk(Some(&relief(200, 12_340_000_000, 153, false)), '#');
-        assert_eq!(tags(&made), vec![DISK_RELIEVED]);
-        assert_eq!(arg(&made[0], "freed"), Some("12#3 GB"));
-        assert_eq!(arg(&made[0], "free"), Some("15#3"));
-        let short = w.disk(Some(&relief(300, 0, 42, true)), '.');
-        assert_eq!(tags(&short), vec![DISK_STILL_SHORT]);
-        assert_eq!(arg(&short[0], "free"), Some("4.2"));
-        // STILL SHORT AGAIN is not news: said once, until room is made.
-        assert!(
-            w.disk(Some(&relief(400, 0, 40, true)), '.').is_empty(),
-            "\"still short\" was said twice in a row"
-        );
-        assert_eq!(
-            tags(&w.disk(Some(&relief(500, 9, 160, false)), '.')),
-            vec![DISK_RELIEVED]
-        );
-        assert_eq!(
-            tags(&w.disk(Some(&relief(600, 0, 41, true)), '.')),
-            vec![DISK_STILL_SHORT],
-            "a new shortness after room was made was not said"
-        );
-        assert!(
-            w.disk(None, '.').is_empty(),
-            "a brain that forgot is no relief"
-        );
-        // AND THE SENTENCES EXIST, with their numbers in them.
+    fn a_brain_modules_events_are_said_once_after_the_baseline() {
+        use ronoctua_brain::mind::Said;
+        use ronoctua_brain::module::Arg;
         let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        // A TAG THE CATALOGUE KNOWS, from whichever compiled module tells
+        // something with a notification — the footer names none.
+        let book = ronoctua_notify::Book::distro();
+        let told = ronoctua_brain::compiled::EVENTS
+            .iter()
+            .map(|(_, e)| e.tag)
+            .find(|tag| book.entry(tag).is_some())
+            .expect("no compiled brain module tells anything the catalogue knows");
+        let said = |seq: u64, tag: &str| Said {
+            seq,
+            tag: tag.to_owned().into(),
+            args: vec![
+                ("freed".into(), Arg::Bytes(12_340_000_000)),
+                ("free".into(), Arg::PerMille(153)),
+            ],
+        };
+        let mind = |events: Vec<Said>| ronoctua_brain::Mind {
+            events,
+            ..ronoctua_brain::Mind::default()
+        };
+        let mut w = Watch::default();
         assert!(
-            made[0].summary(&t).contains("12#3 GB"),
-            "{}",
-            made[0].summary(&t)
+            w.of_brain(&mind(vec![said(3, told)]), &zone, &t).is_empty(),
+            "the first mind is the baseline, and it was said"
         );
-        assert!(short[0].body(&t).contains("4.2"), "{}", short[0].body(&t));
-        // A NEWER ONE CONTRADICTS the other: the line does not say "still short"
-        // after the room was made.
-        assert!(contradicts(&made[0], &short[0]));
+        let heard = w.of_brain(&mind(vec![said(3, told), said(4, told)]), &zone, &t);
+        assert_eq!(tags(&heard), vec![told]);
+        // ITS VALUES WERE FORMATTED HERE, in the language's units.
+        assert_eq!(arg(&heard[0], "free"), Some("15.3"));
+        assert_eq!(arg(&heard[0], "freed"), Some("12.3 GB"));
+        // AND ITS SENTENCE IS THE CATALOGUE ENTRY'S, in the language.
+        assert_eq!(
+            heard[0].summary(&t),
+            t.t_args(
+                &format!("notif-{told}-summary"),
+                &[
+                    ("freed", ronoctua_i18n::Arg::Text("12.3 GB")),
+                    ("free", ronoctua_i18n::Arg::Text("15.3")),
+                ]
+            )
+        );
+        // AND NOT TWICE.
+        assert!(w.of_brain(&mind(vec![said(4, told)]), &zone, &t).is_empty());
+        // A TAG NOBODY DECLARED is refused, not said.
+        assert!(
+            w.of_brain(&mind(vec![said(5, "fixture-nothing-declared")]), &zone, &t)
+                .is_empty()
+        );
+        // A BRAIN THAT RESTARTED numbers from one again: a new baseline.
+        assert!(w.of_brain(&mind(vec![said(1, told)]), &zone, &t).is_empty());
+        assert_eq!(
+            tags(&w.of_brain(&mind(vec![said(2, told)]), &zone, &t)),
+            vec![told]
+        );
     }
 
     /// FAILS IF: the charger is not said when it is plugged or pulled, is
@@ -1654,8 +1732,6 @@ mod tests {
         TOR_DOWN,
         CHARGER_PLUGGED,
         CHARGER_UNPLUGGED,
-        DISK_RELIEVED,
-        DISK_STILL_SHORT,
         crate::surface::BLUETOOTH_CONNECTED,
         crate::surface::BLUETOOTH_DISCONNECTED,
         crate::surface::SOFTWARE_INSTALLED,

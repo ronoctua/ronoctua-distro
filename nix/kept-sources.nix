@@ -79,6 +79,7 @@
 {
   lib,
   linkFarm,
+  fetchurl,
   writeShellApplication,
   nix,
   coreutils,
@@ -103,7 +104,7 @@ let
     ++ map (d: {
       name = "download-${d.name}";
       path = d;
-    }) downloads
+    }) (downloads ++ lib.attrValues (import ./test-vectors.nix { inherit fetchurl; }))
   );
 in
 writeShellApplication {

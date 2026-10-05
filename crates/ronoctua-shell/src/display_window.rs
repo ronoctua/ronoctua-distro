@@ -43,7 +43,7 @@
 use crate::door::{Canvas, Content, Door, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
-    reexports::calloop::{self, channel},
+    reexports::calloop::channel,
     seat::keyboard::{KeyEvent, Modifiers},
 };
 
@@ -150,23 +150,35 @@ pub fn host_it() -> Result<()> {
             view.without_a_watch();
         }
         Ok(Display {
-            handle: w.handle.clone(),
             view,
             snapshot: ronoctua_display::Snapshot::default(),
             screens,
             tick: tick_sender,
             ticking: false,
-            said: 0,
             _watch: watch,
         })
     })
 }
 
+/// The window, DETACHED, over a reading handed in whole — what
+/// `crate::scene_photograph` draws. No reader thread and no watch: an order
+/// is said to have no thread to go to, and nothing on this machine is read.
+pub(crate) fn photographed(snapshot: ronoctua_display::Snapshot) -> Display {
+    let (tick, _) = channel::channel::<()>();
+    let mut view = crate::display::View::fresh();
+    view.saw_a_reading();
+    Display {
+        view,
+        snapshot,
+        screens: None,
+        tick,
+        ticking: false,
+        _watch: None,
+    }
+}
+
 /// The window: the view, and what it reads.
-struct Display {
-    /// The loop, for the one-shot timer that takes a message off the line —
-    /// see [`Display::say`].
-    handle: calloop::LoopHandle<'static, Door<Self>>,
+pub(crate) struct Display {
     view: crate::display::View,
     /// The last reading, from this process's own threads.
     snapshot: ronoctua_display::Snapshot,
@@ -177,13 +189,6 @@ struct Display {
     /// Whether a second is already on its way, so two questions in a row do
     /// not leave two timers running.
     ticking: bool,
-    /// How many messages have been said, so a timer only clears its own.
-    ///
-    /// The footer's line fades after `ECHO_SECONDS` and this one did not: it
-    /// sat until the next keypress, which on a window somebody is reading
-    /// rather than typing in is for ever. `files_window::say` carries the same
-    /// pair and the owner's report that produced it.
-    said: u64,
     _watch: Option<ronoctua_files::notice::Notice>,
 }
 
@@ -368,7 +373,7 @@ impl Display {
     /// its own message line, and closing means leaving.
     fn doing(&mut self, ui: &mut Ui, doing: crate::display::Doing) {
         if let Some(said) = doing.said {
-            self.say(ui, said);
+            ui.say(said);
         }
         if let Some(order) = doing.order {
             self.order(ui, order);
@@ -384,7 +389,7 @@ impl Display {
             Some(h) => h.send(order),
             None => {
                 let said = ui.texts.t(ronoctua_i18n::key::DISPLAY_NO_THREAD);
-                self.say(ui, said);
+                ui.say(said);
             }
         }
     }
@@ -395,6 +400,9 @@ impl Display {
         ui.message = None;
         // THE WIDTH THIS WINDOW DRAWS AT, so the key acts on the row on
         // screen — see `display::View::key`.
+        // A HELD KEY WALKS THE ROW AND WRITES NOTHING (`View::hold`): the
+        // write is owed to the key coming up, in `released`.
+        self.view.hold(ui.repeating);
         let errand = self.view.key(
             press,
             &self.snapshot,
@@ -403,56 +411,6 @@ impl Display {
             &ui.texts,
         );
         self.apply(ui, errand);
-    }
-
-    /// Puts a sentence on the message line, and takes it off again.
-    ///
-    /// **THE ONE PLACE** a message is set in this door, which is the shape the
-    /// file manager's window arrived at the hard way: nine assignments there
-    /// meant nine chances to forget what a message needs, and all nine had
-    /// forgotten the same thing — the message never went away. The owner found
-    /// it with `copy the path`, where the footer's `copied` fades after three
-    /// seconds and that door's stayed for the rest of the session.
-    ///
-    /// # Why a one-shot timer, and not a clock
-    ///
-    /// Because the clock this window HAS is armed only while a countdown runs
-    /// (see the module header), and a message can outlive one — or arrive with
-    /// no question at all. A clock kept for the message would be a wake-up per
-    /// second for the life of the window, which is the property the countdown
-    /// is arranged to avoid. A one-shot keeps it exactly — a window with
-    /// nothing to say wakes not once — and pays for the three seconds after a
-    /// message, which is the only time there is anything to do.
-    ///
-    /// The same three seconds as the footer, from the same constant: a message
-    /// that lingered here and not there would be two answers to "how long is a
-    /// message on screen".
-    fn say(&mut self, ui: &mut Ui, text: String) {
-        tracing::info!(echo = %text, "message line");
-        ui.message = Some(text);
-        self.said = self.said.wrapping_add(1);
-        let mine = self.said;
-        let armed = self.handle.insert_source(
-            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(
-                crate::surface::ECHO_SECONDS,
-            )),
-            move |_, (), door: &mut Door<Self>| {
-                // ONLY ITS OWN. Between arming and firing the line may have
-                // been replaced or cleared by a key; wiping whatever is there
-                // would take a newer sentence down early.
-                if door.content.said == mine {
-                    door.ui.message = None;
-                    door.ui.ask_paint();
-                }
-                calloop::timer::TimeoutAction::Drop
-            },
-        );
-        if let Err(e) = armed {
-            // NOT SILENT, and the message STAYS. A line that outstays its
-            // welcome is a smaller failure than one that vanishes because a
-            // timer could not be hung, and the log says which happened.
-            tracing::warn!(error = %e, "no timer for the message line; it will stay");
-        }
     }
 
     fn view_rows(&self, ui: &Ui) -> Vec<crate::display::Row> {
@@ -510,6 +468,12 @@ impl Content for Display {
         {
             self.pressed(ui, press);
         }
+    }
+
+    /// THE HELD KEY CAME UP: a place walked to under it is written, once.
+    fn released(&mut self, ui: &mut Ui, _: &KeyEvent) {
+        let errand = self.view.let_go(&self.snapshot);
+        self.apply(ui, errand);
     }
 
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {

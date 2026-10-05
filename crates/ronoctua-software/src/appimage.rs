@@ -686,8 +686,8 @@ pub struct Sidecar {
 
 /// `ours()/appimage`: one directory per key, holding the sidecar and the
 /// icon. Named by the source's word, which is also why it is not `appimages`
-/// — that is an update step's id, and a step is named in one place only
-/// (`update-has-one-list`).
+/// — that is an update step's id, and a step is named in one place only (the
+/// update's brain module checks it).
 #[must_use]
 pub fn sidecars_dir(roots: &Roots) -> PathBuf {
     roots.ours().join(Source::AppImage.word())

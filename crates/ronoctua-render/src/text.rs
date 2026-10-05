@@ -173,6 +173,21 @@ pub enum Size {
     /// the middle of it. The run still names the line it would have
     /// occupied; `by` is the rest, which is always less than one line.
     Lowered(f32, Option<f32>),
+    /// A glyph at the size `.2`, its run starting `.0` px right of its
+    /// cell's left edge and lowered `.1` px from its line as [`Size::Lowered`]
+    /// lowers — ANY PIXEL in both axes.
+    ///
+    /// # Why a run ever needs any pixel across
+    ///
+    /// For a run whose MIDDLE has to fall on a point that is not a cell's
+    /// middle: the icons app grows its icon from the stage's centre, and a
+    /// character two cells wide (an emoji, a long arrow) centred on its first
+    /// cell stood half a glyph to the right of it — [`Size::OnTheCell`]
+    /// centres ONE cell's advance. The door works out where the run's left
+    /// edge goes and the renderer puts it there, which is the only way the
+    /// middle of a wide run lands on a pixel. The run still names the cell
+    /// and the line it would have occupied.
+    Placed(f32, f32, f32),
 }
 
 impl Size {
@@ -183,6 +198,7 @@ impl Size {
             Self::Grid => None,
             Self::Px(v) | Self::OnTheCell(v) | Self::Stacked(v, _) => Some(v),
             Self::Lowered(_, glyph) => glyph,
+            Self::Placed(_, _, v) => Some(v),
         }
     }
 
@@ -200,6 +216,7 @@ impl Size {
             Self::OnTheCell(v) => Self::OnTheCell(v * scale),
             Self::Stacked(v, n) => Self::Stacked(v * scale, n),
             Self::Lowered(by, glyph) => Self::Lowered(by * scale, glyph.map(|v| v * scale)),
+            Self::Placed(across, by, v) => Self::Placed(across * scale, by * scale, v * scale),
         }
     }
 
@@ -215,7 +232,7 @@ impl Size {
     pub fn stacked(self, grid: f32) -> f32 {
         match self {
             Self::Stacked(v, n) => f32::from(n) * v.mul_add(tokens::font::LINE_HEIGHT, -grid),
-            Self::Lowered(by, _) => by,
+            Self::Lowered(by, _) | Self::Placed(_, by, _) => by,
             _ => 0.0,
         }
     }
@@ -224,13 +241,15 @@ impl Size {
     ///
     /// Zero for everything but [`Size::OnTheCell`], where it is half the
     /// difference between the two advances — which is what "centred on the
-    /// cell" means once both advances are `size x cell_width_em`.
+    /// cell" means once both advances are `size x cell_width_em` — and
+    /// [`Size::Placed`], which says it.
     #[must_use]
     pub fn nudge(self, grid: f32) -> f32 {
         match self {
             Self::OnTheCell(v) | Self::Lowered(_, Some(v)) => {
                 (tokens::metrics::cell_width(grid) - tokens::metrics::cell_width(v)) / 2.0
             }
+            Self::Placed(across, _, _) => across,
             _ => 0.0,
         }
     }
@@ -408,7 +427,7 @@ pub struct Span {
 #[must_use]
 pub fn line_box(size: Size, grid: f32) -> f32 {
     match size {
-        Size::Grid | Size::OnTheCell(_) | Size::Lowered(..) => grid,
+        Size::Grid | Size::OnTheCell(_) | Size::Lowered(..) | Size::Placed(..) => grid,
         Size::Px(px) | Size::Stacked(px, _) => px * tokens::font::LINE_HEIGHT,
     }
 }
@@ -956,7 +975,7 @@ impl Text {
             // [`line_box`], which is the same rule and the only place it is
             // written. Two expressions of it are how the box and the metric
             // come to disagree, and the disagreement moves a whole line.
-            Size::OnTheCell(px) | Size::Lowered(_, Some(px)) => {
+            Size::OnTheCell(px) | Size::Lowered(_, Some(px)) | Size::Placed(_, _, px) => {
                 glyphon::Metrics::new(px, line_box(t.size.times(scale), lh))
             }
             Size::Lowered(_, None) => metric,
@@ -1135,6 +1154,21 @@ mod tests {
         // edge: the file manager's window draws every run at 20 px, and
         // centring each of them would jitter the columns against each other.
         assert_eq!(Size::Px(20.0).nudge(18.0), 0.0);
+    }
+
+    /// FAILS IF: a run placed at a pixel is not drawn there — its left edge
+    /// `across` right of its cell, its line box the grid's, lowered as
+    /// `Lowered` lowers — or the scale moves it off the same point.
+    #[test]
+    fn a_placed_run_is_drawn_at_its_pixel() {
+        let placed = Size::Placed(3.25, -1.5, 40.0);
+        assert!((placed.nudge(18.0) - 3.25).abs() < f32::EPSILON);
+        assert!((placed.stacked(LH) - -1.5).abs() < f32::EPSILON);
+        assert!((line_box(placed, LH) - LH).abs() < f32::EPSILON);
+        assert_eq!(placed.px(), Some(40.0));
+        let twice = placed.times(2.0);
+        assert!((twice.nudge(36.0) - 6.5).abs() < f32::EPSILON);
+        assert!((twice.stacked(LH * 2.0) - -3.0).abs() < f32::EPSILON);
     }
 
     #[test]

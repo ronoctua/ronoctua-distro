@@ -1,27 +1,25 @@
-//! THE DOOR: what a feature of the brain is, and what it has to answer.
+//! What a run is made of: when it is due, what may hold it, what it did, and
+//! the report it is watched through.
 //!
-//! # Five methods, and four of them are pure
+//! # Where the trait went
 //!
-//! [`Task::due`], [`Task::needs`], [`Task::countdown`] and [`Task::steps`] take
-//! no clock, open no file and spawn nothing — and neither does
-//! [`Task::wanted_now`], which reads the pulse it is handed. That is not tidiness — it is what
-//! lets a whole year of scheduling be tested in milliseconds, and it is the
-//! reason a bug in "when" can be found without a machine that is busy. Only
-//! [`Task::run`] touches the world, and it runs on the runner's thread, alone,
-//! where it is allowed to block.
+//! This file held THE DOOR — the `Task` trait every feature implemented. The
+//! door is now [`crate::module`]: a module answers [`crate::module::Module`],
+//! and a module that runs on a schedule answers [`crate::module::Scheduled`],
+//! which is the old `Task` minus what the manifest declares (its id, its
+//! defaults, its countdown, its kind and its gate). What stayed here is the
+//! vocabulary both halves speak — [`Due`], [`Verdict`], [`Hold`], [`Step`],
+//! [`Outcome`], [`RunRecord`] — and the [`Report`] a unit writes.
 //!
-//! # What a task does NOT decide
+//! # What a module does NOT decide
 //!
-//! - **Whether anything else is running.** At most one task runs at a time and
-//!   what comes due meanwhile waits in the queue. That is a property of
-//!   [`crate::runner`], so every feature added later inherits it without
-//!   writing a line — a task that implemented its own lock would be one that
-//!   forgot to.
+//! - **Whether anything else is running.** At most one run at a time, and what
+//!   comes due meanwhile waits in the queue. That is a property of
+//!   [`crate::runner`], so every module inherits it without writing a line.
 //! - **Whether the machine can afford it.** RAM, processor and battery are the
-//!   general gate, asked by the runner before [`Task::needs`] is even reached.
-//!   A task's own `needs` is for what only IT knows.
+//!   general gate, asked by the runner before `Scheduled::needs` is reached.
 //! - **How the person is warned.** The announcement and its countdown belong to
-//!   the runner; the task says how many seconds it wants and nothing else.
+//!   the runner; the manifest says how many seconds and nothing else.
 //! - **What the person reads.** Everything that leaves here is a WORD — an id,
 //!   a hold's name, a step's id — and whoever has the bundle makes a sentence
 //!   out of it (invariant 8).
@@ -41,209 +39,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::moment::Moment;
-use crate::prefs::Prefs;
-use crate::pulse::Pulse;
 
-/// One thing the machine does by itself.
-///
-/// The five places to touch when adding one are listed in this crate's own
-/// header, and they are five because of this trait: everything else — the
-/// queue, the gate, the announcement, the journal, the socket and the screen —
-/// is already written and already watching.
-pub trait Task: Send + Sync {
-    /// The id: English, kebab-case, stable.
-    ///
-    /// It is the key of everything a person sees (`brain-task-<id>`), the key
-    /// of the entry in the preferences file, and the name in the journal.
-    /// Renaming one is renaming all three, which is why the registry refuses a
-    /// malformed one at construction rather than letting it reach a screen.
-    fn id(&self) -> &'static str;
-
-    /// When it wants to run, given what the person chose and when it last did.
-    ///
-    /// PURE: no clock — `now` is handed in — and no file. `last` is `None` when
-    /// it has never run, which is a first run and not an overdue one.
-    fn due(&self, now: Moment, prefs: &Prefs, last: Option<Moment>) -> Due;
-
-    /// Whether it may run right now, beyond the general gate.
-    ///
-    /// For what only this task knows. The general refusals — a busy machine, a
-    /// battery — are the runner's and are not repeated here; a task that
-    /// repeated them would be a second copy of a policy the person configured
-    /// in one place.
-    fn needs(&self, pulse: &Pulse, prefs: &Prefs) -> Verdict;
-
-    /// How many seconds the screen warns before it starts.
-    ///
-    /// `0` means it just runs, which is the right answer for anything that
-    /// interrupts nothing.
-    fn countdown(&self, prefs: &Prefs) -> u16;
-
-    /// Whether it repeats, or happens once and is then gone.
-    ///
-    /// # Why this exists before there is a one-shot task
-    ///
-    /// Because the list has to be able to SAY which is which before the first
-    /// one arrives. Add it the day a one-shot lands and every row on the page
-    /// changes meaning at once — a list that never distinguished two kinds is
-    /// a list a person has read as one kind. A glyph says it, and a colour
-    /// says it again, from the day there is nothing to distinguish.
-    ///
-    /// Every task today is a routine, which is why this has a default.
-    fn kind(&self) -> Kind {
-        Kind::Routine
-    }
-
-    /// What the DISTRO chose for it, when the person has chosen nothing.
-    ///
-    /// # Why a task gets a say in its own cadence
-    ///
-    /// Because [`crate::prefs::TaskPrefs::default`] is one struct for every
-    /// task — weekly, in the afternoon, with a minute of countdown — and that
-    /// is right for the one that rebuilds the system and wrong for a sweep that
-    /// interrupts nothing and wants a night every five days.
-    ///
-    /// Answering it inside `due` instead would be a LIE ON SCREEN: the brain's
-    /// row draws `interval_days` and `part_of_day` as `Prefs` resolved them, so
-    /// it would say "every seven days, afternoon" about a task running every
-    /// five at night. One answer, asked here, and the person's file still wins
-    /// over it — [`crate::prefs::Prefs::of_task`].
-    ///
-    /// The default is the distro's own default, which is what every task that
-    /// has no opinion should have.
-    fn defaults(&self) -> crate::prefs::TaskPrefs {
-        crate::prefs::TaskPrefs::default()
-    }
-
-    /// What it runs, in order — DATA, so the screen can draw it and the person
-    /// can switch one off.
-    ///
-    /// The default is empty: a task with nothing to show is the ordinary case.
-    /// What the steps MEAN is the flake's, not this crate's: the brain names
-    /// them and reads what came back (invariant 5).
-    fn steps(&self) -> &'static [Step] {
-        &[]
-    }
-
-    /// Whether the MACHINE wants it now, whatever the calendar says.
-    ///
-    /// # Why a second way to come due
-    ///
-    /// Because [`Task::due`] answers from a calendar, and some work has no
-    /// calendar: a disk running short is a state of the machine, and the answer
-    /// to it is "now", not "tonight". This reads the pulse the runner already
-    /// took — the heartbeat reads the filesystems anyway — so it arms no clock
-    /// of its own (event, not clock: nothing tells a process that a disk is
-    /// filling, and the tick is already there).
-    ///
-    /// PURE like `due`: the pulse and the clock are handed in. `last` is the
-    /// last time it ran, for a task that must rest between two runs.
-    ///
-    /// The default is `false`: every calendar task comes due through `due`.
-    fn wanted_now(
-        &self,
-        _now: Moment,
-        _pulse: &Pulse,
-        _prefs: &Prefs,
-        _last: Option<Moment>,
-    ) -> bool {
-        false
-    }
-
-    /// Whether the general gate — memory, processor, battery — may hold it.
-    ///
-    /// `true` for everything that can wait for a quieter machine, which is
-    /// everything but a relief: holding one until the build that fills the
-    /// disk is over is holding it until the disk is full. A task that answers
-    /// `false` also goes to the HEAD of the queue ([`crate::mind::Shared::queue_first`]):
-    /// behind a task the gate is holding, it would be held all the same.
-    fn gated(&self) -> bool {
-        true
-    }
-
-    /// Do it. On the runner's thread, alone, and it may block.
-    ///
-    /// The [`Report`] is how it learns what happened: it is the file the unit
-    /// writes as it goes, and watching it is a `stat` on a beat — not
-    /// `journalctl`, not `systemctl show` in a loop.
-    fn run(&self, report: &Report) -> Outcome;
-}
-
-/// Something the brain wants said, without anybody having asked.
-///
-/// # Why a task can raise one at all
-///
-/// Because some tasks are WATCHES. A sweep and a rebuild report what they did
-/// and are done with it; a watch's whole output is a sentence, and a sentence
-/// that only appeared on a screen somebody had to open would be a watch nobody
-/// hears. The owner asked for the Emacs one to reach the band.
-///
-/// It is not a notification: it does not go to the bus, it does not queue, it
-/// does not expire on a clock. It is one line on the footer's own surface —
-/// the same line the countdown uses, which is already there and already
-/// clickable (invariant 14: there is no second chrome).
-///
-/// # Why it carries keys and not sentences
-///
-/// A notice crosses to a component and to the footer, and neither of them is
-/// allowed to invent words: `says` and `act` are text keys, translated by
-/// whoever draws. The same rule every other string on this path follows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct Notice {
-    /// Whose it is.
-    pub task: String,
-    /// What to say, as a text key.
-    pub says: String,
-    /// The COMMAND a button runs, when there is something to offer.
-    ///
-    /// `None` is a notice that only tells. That is not a lesser kind: the
-    /// standalone-Emacs one has no button on purpose, because what is open is
-    /// somebody's work and nothing here knows whether it is saved.
-    pub act: Option<String>,
-}
-
-/// What a relief of the disk did, for the line under the minibuffer.
-///
-/// # Why it travels in the mind
-///
-/// Because the person should hear it — "room made: 12 GB freed", or "the disk
-/// is still short" — and the footer only ever reads the mind. The footer says
-/// it once, when `at` moves (`ronoctua-shell`'s `events.rs`): the first mind a
-/// footer sees is its baseline, so a relief from before it started is not news.
-///
-/// NUMBERS AND NOT WORDS: the footer makes the sentence in the person's
-/// language (invariant 8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct Relieved {
-    /// When it ended — stamped by the runner, whose clock it is.
-    pub at: Moment,
-    /// How much free space it gained, in bytes: the largest gain among the
-    /// filesystems it measured (another process writing meanwhile can only
-    /// make this smaller than what was freed).
-    pub freed_bytes: u64,
-    /// How much of the fullest of them is free now, in per mille.
-    pub free_per_mille: u16,
-    /// Whether that is still under the floor — nothing more could be freed
-    /// without the person.
-    pub short: bool,
-}
-
-/// Whether a task repeats, or happens once and is then gone.
-///
-/// A `Copy` enum with no payload, for the reason [`OutcomeKind`] gives: what
-/// the screen wants is a glyph and a colour, and a shape that carried anything
-/// more would be a shape the WIT has to carry too.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Kind {
-    /// It comes round again.
-    #[default]
-    Routine,
-    /// It happens once and then it is gone.
-    Once,
-}
+/// Whether a module repeats, happens once, or only watches — the contract's
+/// [`crate::module::Kind`], named here too so every `task::Kind` keeps
+/// meaning what it meant.
+pub use crate::module::Kind;
 
 /// Whether a task wants to run, and when.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,9 +120,9 @@ impl Hold {
     }
 }
 
-/// One thing a task runs, as the screen draws it.
+/// One thing a module's run does, as the screen draws it.
 ///
-/// A `&'static` table on the task, and never something read from the
+/// A `&'static` table on the module (`Module::steps`), and never something read from the
 /// preferences: the person may switch a step OFF, which is a set of ids, and
 /// nothing they can write introduces a command. A configuration file that could
 /// name what runs would be a configuration file that can run anything.
@@ -340,6 +140,12 @@ pub struct Step {
     /// Whether the distro ships it switched on. A step the person turned off
     /// differs from this, and the screen says which of the two it is looking at.
     pub on_by_default: bool,
+    /// The text key of its name, so no screen builds one out of the id: the
+    /// module that owns the step declares it (a generated table, for the one
+    /// module with steps today) and it crosses the wire beside the id.
+    pub name_key: &'static str,
+    /// The text key of the line under the cursor, declared the same way.
+    pub does_key: &'static str,
 }
 
 /// How one step ended, as the unit reported it.
@@ -404,6 +210,14 @@ pub enum OutcomeKind {
     /// the activity log a wall of "RAM is busy" with everything that actually
     /// happened buried in it.
     Held,
+    /// Nothing ran: a module wrote down something it NOTICED
+    /// ([`crate::module::Ctx::record`]) — a process the kernel killed, an
+    /// error in the journal.
+    ///
+    /// Like `Held`, it is not a run and moves no schedule
+    /// ([`crate::journal::Journal::last`]). What it says is in
+    /// [`RunRecord::says`], with its values.
+    Noted,
 }
 
 impl OutcomeKind {
@@ -415,6 +229,7 @@ impl OutcomeKind {
             Self::Failed => "failed",
             Self::Skipped => "skipped",
             Self::Held => "held",
+            Self::Noted => "noted",
         }
     }
 }
@@ -441,9 +256,27 @@ pub struct RunRecord {
     pub trouble: String,
     /// What each step did.
     pub steps: Vec<StepOutcome>,
+    /// What a `Noted` record says, as a text key. Empty for every other kind.
+    pub says: String,
+    /// The values of that sentence, formatted by whoever draws it.
+    pub args: crate::module::Args,
 }
 
 impl RunRecord {
+    /// A record of something a module noticed, at `at`.
+    #[must_use]
+    pub fn noted(module: &str, at: Moment, noted: crate::module::Noted) -> Self {
+        Self {
+            task: module.to_owned(),
+            began: at,
+            ended: at,
+            kind: OutcomeKind::Noted,
+            says: noted.says.into_owned(),
+            args: noted.args,
+            ..Self::default()
+        }
+    }
+
     /// A record of an outcome that already happened.
     #[must_use]
     pub fn of(task: &str, began: Moment, ended: Moment, outcome: Outcome) -> Self {
@@ -515,25 +348,6 @@ pub struct Report {
     beat: Duration,
     stop: Arc<AtomicBool>,
     rehearsal: bool,
-    /// What the run wants said on the brain's line, if anything.
-    ///
-    /// # Why it comes back through here
-    ///
-    /// Because `Task::run` takes `&self` and returns an `Outcome`, and a
-    /// notice is neither: it is not what the run DID. The two other ways out
-    /// were a fourth `Outcome` variant, which would make every reader of an
-    /// outcome learn about notices, and a second method on the trait, which a
-    /// task could not answer because it has nowhere to remember what it just
-    /// found.
-    ///
-    /// The report is already the channel a run talks back through, and it is
-    /// already shared across the thread that watches. One more slot on it
-    /// costs nothing and adds no vocabulary anywhere else.
-    said: Arc<std::sync::Mutex<Option<Notice>>>,
-    /// What a relief of the disk did, when this run was one — the same channel
-    /// as `said`, for the same reason: it is not what the run's steps did, and
-    /// the task has nowhere else to put it.
-    relieved: Arc<std::sync::Mutex<Option<Relieved>>>,
 }
 
 /// How watching ended.
@@ -561,8 +375,6 @@ impl Report {
             beat,
             stop,
             rehearsal: false,
-            said: Arc::new(std::sync::Mutex::new(None)),
-            relieved: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -575,9 +387,9 @@ impl Report {
 
     /// Whether this run is a rehearsal — a dry run that changes nothing.
     ///
-    /// # Why it is on the REPORT and not on the task
+    /// # Why it is on the REPORT and not on the module
     ///
-    /// Because it is a property of this run and not of the feature. A task is a
+    /// Because it is a property of this run and not of the feature. A module is a
     /// stateless description of something the machine does; putting a mode on
     /// it would mean two runs of the same feature writing to the same field,
     /// and the second one reading whatever the first left there. The report is
@@ -595,36 +407,6 @@ impl Report {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Says something on the brain's line when this run is over.
-    ///
-    /// `None` clears it, which is how a watch that finds nothing wrong takes
-    /// its own line down — a notice that had to be cancelled by a second call
-    /// would be a line that stayed up after the thing it was about was fixed.
-    pub fn say(&self, notice: Option<Notice>) {
-        if let Ok(mut slot) = self.said.lock() {
-            *slot = notice;
-        }
-    }
-
-    /// What it said, for the runner to publish.
-    #[must_use]
-    pub fn said(&self) -> Option<Notice> {
-        self.said.lock().ok().and_then(|s| s.clone())
-    }
-
-    /// Records what a relief of the disk did. The runner stamps `at`.
-    pub fn relieve(&self, relieved: Relieved) {
-        if let Ok(mut slot) = self.relieved.lock() {
-            *slot = Some(relieved);
-        }
-    }
-
-    /// What a relief did, for the runner to publish.
-    #[must_use]
-    pub fn relieved(&self) -> Option<Relieved> {
-        self.relieved.lock().ok().and_then(|r| *r)
     }
 
     /// What the file says now, or `None` when it is not there or is half
@@ -794,12 +576,28 @@ mod tests {
     }
 
     #[test]
+    fn a_note_is_a_record_that_ran_nothing_and_says_what_it_noticed() {
+        let r = RunRecord::noted(
+            "fixture",
+            500,
+            crate::module::Noted::of("fixture-killed")
+                .with("unit", crate::module::Arg::Text("a.service".to_owned())),
+        );
+        assert_eq!(r.kind, OutcomeKind::Noted);
+        assert_eq!((r.began, r.ended), (500, 500));
+        assert_eq!(r.says, "fixture-killed");
+        assert_eq!(r.args.len(), 1);
+        assert!(r.steps.is_empty() && r.why.is_empty() && r.trouble.is_empty());
+        assert_eq!(OutcomeKind::Noted.word(), "noted");
+    }
+
+    #[test]
     fn a_word_of_ours_and_a_machines_sentence_do_not_end_up_in_the_same_field() {
         // The screen draws one through the bundle and the other verbatim.
         // Putting both in one field is how `brain-why-runaway` ends up printed
         // in front of somebody, in brackets.
         let ours = RunRecord::of(
-            "system-update",
+            "made-up",
             1,
             2,
             Outcome::Failed {
@@ -811,7 +609,7 @@ mod tests {
         assert!(ours.trouble.is_empty());
 
         let theirs = RunRecord::of(
-            "system-update",
+            "made-up",
             1,
             2,
             Outcome::Failed {

@@ -168,6 +168,7 @@ pub const fn refusal_key(why: Refusal) -> &'static str {
         Refusal::SessionDown => key::SOFTWARE_REFUSAL_SESSION_DOWN,
         Refusal::WillNotParse => key::SOFTWARE_REFUSAL_WILL_NOT_PARSE,
         Refusal::WrongUser => key::SOFTWARE_REFUSAL_WRONG_USER,
+        Refusal::NotLet => key::SOFTWARE_REFUSAL_NOT_LET,
     }
 }
 

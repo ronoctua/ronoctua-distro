@@ -30,7 +30,11 @@
 use crate::moment::Moment;
 
 /// What the machine is doing right now, as one reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+///
+/// NOT `Copy`: it carries the filesystems it measured ([`Pulse::rooms`]), a
+/// list — handed by reference to whoever judges it, and cloned only where a
+/// copy is kept (the mind).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Pulse {
     /// When it was taken.
@@ -59,11 +63,18 @@ pub struct Pulse {
     /// `statvfs` is microseconds. It does not cross to the screen (`mind_wire`
     /// lists what does).
     pub disk_free_per_mille: Option<u16>,
-    /// Whether any of those filesystems is under its FLOOR — a share of it,
-    /// capped at a size (`tasks/space.rs`), so it is a question about bytes
-    /// and not the per mille above. `tasks/space.rs` starts a relief on it.
-    /// `None` when neither could be measured.
-    pub disk_short: Option<bool>,
+    /// The size and the free space of each of those filesystems that could be
+    /// measured, in the order of [`disks`] — empty when none could.
+    ///
+    /// # Bytes, and no verdict
+    ///
+    /// Whether a disk is SHORT, or NEARLY FULL, is a module's question: a
+    /// share of it with a cap, from the cache catalogue, which the module that
+    /// answers it reads. The pulse used to carry the verdict, and that made the
+    /// core name the one module that asked it. It carries what was measured
+    /// instead, and every module that has a question about the disk asks it of
+    /// the same reading.
+    pub rooms: Vec<Room>,
 }
 
 /// Whoever can answer "how busy is this machine".
@@ -132,7 +143,8 @@ pub fn disks() -> Vec<std::path::PathBuf> {
 }
 
 /// One filesystem's size and what of it is free, in bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
 pub struct Room {
     /// How big it is.
     pub total: u64,
@@ -206,7 +218,7 @@ impl Meter for Machine {
             cpu_stall: ronoctua_memory::machine::cpu_pressure(&self.places).map(|p| p.some10),
             on_battery: ronoctua_memory::machine::on_battery(&self.places),
             disk_free_per_mille: fullest(&rooms),
-            disk_short: crate::tasks::space::short_of(&rooms),
+            rooms: rooms.into_iter().flatten().collect(),
         }
     }
 }
@@ -216,13 +228,16 @@ impl Meter for Machine {
 /// Here and not inside `mod tests`, because the runner's tests need it too and
 /// a fake that lives inside one module's test block is a fake that gets copied.
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Fake(pub Pulse);
 
 #[cfg(test)]
 impl Meter for Fake {
     fn read(&self, at: Moment) -> Pulse {
-        Pulse { at, ..self.0 }
+        Pulse {
+            at,
+            ..self.0.clone()
+        }
     }
 }
 
@@ -247,7 +262,7 @@ mod tests {
         assert_eq!(p.cpu_stall, None, "it invented a CPU reading");
         assert_eq!(p.on_battery, None, "it invented a battery reading");
         assert_eq!(p.disk_free_per_mille, None, "it invented a disk reading");
-        assert_eq!(p.disk_short, None, "it invented a disk verdict");
+        assert!(p.rooms.is_empty(), "it invented a filesystem");
     }
 
     #[test]
@@ -271,14 +286,23 @@ mod tests {
         assert!(alone.is_some(), "the temporary directory has no filesystem");
         assert_eq!(read.disk_free_per_mille, alone);
         assert!(read.disk_free_per_mille.is_some_and(|pm| pm <= 1000));
-        assert!(read.disk_short.is_some(), "a measured disk was not judged");
+        // THE ONE THAT ANSWERED, and only it: the path that is not there is
+        // no room at all, never a room of zero bytes.
+        assert_eq!(
+            read.rooms,
+            rooms(std::slice::from_ref(&here))
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+            "the measured filesystem is not the one carried"
+        );
         // AND NOTHING MEASURABLE IS NONE, never a zero that would start a
         // relief on a machine nobody measured.
         let none = Machine::at(nowhere)
             .measuring(vec![std::path::PathBuf::from("/does-not-exist")])
             .read(1);
         assert_eq!(none.disk_free_per_mille, None);
-        assert_eq!(none.disk_short, None, "a disk nobody measured was judged");
+        assert!(none.rooms.is_empty(), "a disk nobody measured was carried");
     }
 
     #[test]

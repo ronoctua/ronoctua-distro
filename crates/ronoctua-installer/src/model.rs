@@ -36,7 +36,7 @@
 
 use ronoctua_i18n::key;
 
-/// The questions. **Fourteen, and the test counts them.**
+/// The questions. **Fifteen, and the test counts them.**
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Question {
     /// Which disk to install on. It erases everything.
@@ -111,6 +111,20 @@ pub enum Question {
     Wifi,
     /// Its password. It only appears when a network has been chosen.
     WifiPassword,
+    /// The private repository the person's belongings are kept in — optional.
+    ///
+    /// # Why it is asked here
+    ///
+    /// Because only the person knows it, and it is what turns a new machine
+    /// into THEIR machine: the first sync after the installation restores the
+    /// configuration another machine kept (`LEADER s v`). Empty is a choice —
+    /// no repository, or one set later from the view.
+    ///
+    /// The address alone, never a credential (`user:pass@` is refused, and so
+    /// are `http://` and a local path). It is written into the PERSON'S home
+    /// (`~/.config/ronoctua/belongings.json`, owned by them), never into
+    /// `host.nix`: it is theirs, and `host.nix` describes the machine.
+    Belongings,
 }
 
 impl Question {
@@ -133,7 +147,7 @@ impl Question {
     /// the passphrase is typed blind, is not echoed, and cannot be corrected
     /// later — typing it on the wrong layout is the one mistake here with no
     /// recovery.
-    pub const ALL_KEYS: [Self; 14] = [
+    pub const ALL_KEYS: [Self; 15] = [
         Self::Language,
         Self::Disk,
         // WHICH installation, right after WHERE it goes. It comes before the
@@ -153,6 +167,9 @@ impl Question {
         // language so the network list already appears in the chosen language.
         Self::Wifi,
         Self::WifiPassword,
+        // THE BELONGINGS LAST OF WHAT IS TYPED: optional, and the one answer
+        // about the person rather than the machine.
+        Self::Belongings,
         Self::ResumeOffset,
     ];
 
@@ -179,6 +196,7 @@ impl Question {
             Self::ResumeOffset => key::INST_RESUME_OFFSET,
             Self::Wifi => key::INST_WIFI,
             Self::WifiPassword => key::INST_WIFI_PASSWORD,
+            Self::Belongings => key::INST_BELONGINGS,
         }
     }
 
@@ -202,6 +220,7 @@ impl Question {
             // The network's help line also serves the password: what it
             // says — that the password does not enter the repository — matters more here.
             Self::WifiPassword => key::INST_WIFI_HELP,
+            Self::Belongings => key::INST_BELONGINGS_HELP,
         }
     }
 
@@ -267,7 +286,13 @@ impl Question {
         // reason: empty is a CHOICE. `gb` with no variant is the right answer —
         // both variants it has put a dead accent on level 1 — and a keyboard whose
         // layout already carries the accents wants no Compose key stealing one.
-        matches!(self, Self::Wifi | Self::KeyboardVariant | Self::ComposeKey)
+        //
+        // The belongings too: no repository is an answer, and the view sets one
+        // later.
+        matches!(
+            self,
+            Self::Wifi | Self::KeyboardVariant | Self::ComposeKey | Self::Belongings
+        )
     }
 
     /// Whether this screen should be SKIPPED, given the answers so far.
@@ -305,6 +330,8 @@ pub enum Invalid {
     WifiPasswordTooShort,
     /// A profile that is neither of the two.
     UnknownProfile,
+    /// A repository address the belongings may not use.
+    Belongings(ronoctua_belongings::prefs::Invalid),
 }
 
 impl std::fmt::Display for Invalid {
@@ -321,6 +348,21 @@ impl std::fmt::Display for Invalid {
             Self::UnknownLanguage => "the language is not available",
             Self::UnknownLayout => "the keyboard layout does not exist in xkeyboard-config",
             Self::WifiPasswordTooShort => "a WPA network password is at least 8 characters",
+            Self::Belongings(why) => {
+                use ronoctua_belongings::prefs::Invalid as Why;
+                match why {
+                    Why::Empty => "it cannot be left empty",
+                    Why::CredentialsInAddress => {
+                        "the address carries a user and password; give the address alone, and \
+                         the key or token later, from the belongings view"
+                    }
+                    Why::PlainHttp => {
+                        "an http:// address sends the access in the clear; use https:// or ssh"
+                    }
+                    Why::NotRemote => "a local path or file:// is not a remote repository",
+                    Why::Unknown => "the address is git@host:path, ssh://… or https://…",
+                }
+            }
         };
         f.write_str(s)
     }
@@ -699,6 +741,14 @@ pub fn validate_it(
                 return Err(Invalid::WifiPasswordTooShort);
             }
         }
+        // THE ADDRESS ALONE: a credential in it would sit in a plain file and
+        // in git's config; `http://` sends the access in the clear.
+        Question::Belongings => {
+            if !answer.is_empty() {
+                ronoctua_belongings::prefs::repository_is_plain(answer)
+                    .map_err(Invalid::Belongings)?;
+            }
+        }
         Question::Password | Question::ResumeOffset | Question::Wifi => {}
     }
     Ok(())
@@ -735,6 +785,9 @@ pub struct Answers {
     pub wifi_ssid: String,
     /// Its password. It **never** enters the `host.nix` (section 9).
     pub wifi_password: String,
+    /// The belongings' repository. Empty = none. It never enters `host.nix`:
+    /// it is written into the person's home.
+    pub belongings: String,
 }
 
 impl Answers {
@@ -755,6 +808,7 @@ impl Answers {
             Question::Profile => &self.profile,
             Question::Wifi => &self.wifi_ssid,
             Question::WifiPassword => &self.wifi_password,
+            Question::Belongings => &self.belongings,
             Question::ResumeOffset => "",
         }
     }
@@ -775,6 +829,7 @@ impl Answers {
             Question::Profile => self.profile = v,
             Question::Wifi => self.wifi_ssid = v,
             Question::WifiPassword => self.wifi_password = v,
+            Question::Belongings => self.belongings = v,
             Question::ResumeOffset => {}
         }
     }
@@ -791,7 +846,7 @@ mod tests {
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
 
     #[test]
-    fn there_are_exactly_fourteen_questions() {
+    fn there_are_exactly_fifteen_questions() {
         // Milestone 8's CRITERION still holds: one asks what ONLY THE PERSON
         // knows, and nothing beyond. One more question is a decision the project
         // handed back to the person after already making it (section 7.1).
@@ -811,11 +866,15 @@ mod tests {
         // So not asking meant installing on someone else's layout, and the
         // moment one finds out is while typing the disk's passphrase: not
         // echoed, and not correctable afterwards.
-        assert_eq!(Question::ALL_KEYS.len(), 14);
+        //
+        // THE BELONGINGS' REPOSITORY is the fifteenth, optional: where the
+        // person keeps their configuration is theirs alone to know, and it is
+        // what makes the new machine theirs at its first sync.
+        assert_eq!(Question::ALL_KEYS.len(), 15);
         let mut views: Vec<_> = Question::ALL_KEYS.to_vec();
         views.sort();
         views.dedup();
-        assert_eq!(views.len(), 14, "there is a repeated question in the list");
+        assert_eq!(views.len(), 15, "there is a repeated question in the list");
     }
 
     #[test]
@@ -886,6 +945,7 @@ mod tests {
                     | Question::ResumeOffset
                     | Question::Wifi
                     | Question::KeyboardVariant
+                    | Question::Belongings
             );
             assert_eq!(
                 q.default_answer().is_some(),
@@ -959,6 +1019,48 @@ mod tests {
         // not because the person knows it. Empty is not an error.
         assert!(Question::ResumeOffset.computed());
         assert!(validate_it(Question::ResumeOffset, "", LANGUAGES, LAYOUTS).is_ok());
+    }
+
+    /// FAILS IF: an address the belongings may use is refused, or one with a
+    /// credential, `http://` or a local path is taken — or empty is refused.
+    #[test]
+    fn the_belongings_take_a_plain_remote_and_nothing_else() {
+        use ronoctua_belongings::prefs::Invalid as Why;
+        assert!(Question::Belongings.optional());
+        assert!(!Question::Belongings.secret_one());
+        assert!(validate_it(Question::Belongings, "", LANGUAGES, LAYOUTS).is_ok());
+        for good in [
+            "git@example.org:someone/belongings.git",
+            "ssh://git@example.org/someone/belongings.git",
+            "https://example.org/someone/belongings.git",
+        ] {
+            assert!(
+                validate_it(Question::Belongings, good, LANGUAGES, LAYOUTS).is_ok(),
+                "{good}"
+            );
+        }
+        for (bad, why) in [
+            (
+                "https://someone:hunter2@example.org/b.git",
+                Why::CredentialsInAddress,
+            ),
+            ("http://example.org/b.git", Why::PlainHttp),
+            ("file:///srv/b.git", Why::NotRemote),
+            ("/srv/b.git", Why::NotRemote),
+            ("example.org", Why::Unknown),
+        ] {
+            assert_eq!(
+                validate_it(Question::Belongings, bad, LANGUAGES, LAYOUTS),
+                Err(Invalid::Belongings(why)),
+                "{bad}"
+            );
+            assert!(!Invalid::Belongings(why).to_string().is_empty());
+        }
+        assert_eq!(
+            Question::Belongings.variable(),
+            "RONOCTUA_INST_BELONGINGS",
+            "the terminal-less mode's variable is derived from the label"
+        );
     }
 
     #[test]

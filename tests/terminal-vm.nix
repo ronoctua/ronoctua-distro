@@ -30,6 +30,15 @@
 # — not the screen — whether the window floats. A rule copied into this file
 # would prove that a rule written here works, which nobody doubts; what is in
 # doubt is whether what the shell EMITS matches the `app_id` the window SETS.
+#
+# AND THE CALCULATOR, LAST
+# ------------------------
+# The same generated rules open the calculator's window FLOATING and compact
+# (`crates/ronoctua-shell/src/floating.rs`), and its header's control — `C-f`,
+# typed into it — asks the compositor, through the contract
+# (`back_in_the_layout`, `float_centred`), to tile it and to float it again.
+# Only a real compositor says whether the window it found by its own pid and
+# `app_id` moved.
 {
   pkgs,
   lib,
@@ -271,5 +280,85 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u monitor --no-pager")
         for bad in ["panicked", "drawing the frame failed"]:
             assert bad not in journal, f"the monitor reported: {bad}"
+
+    with subtest("the calculator opens FLOATING, and its header's control tiles it"):
+        import time
+
+        # THE SOCKET IN ITS ENVIRONMENT: the window asks the compositor to
+        # move it through the contract, and the contract finds the compositor
+        # by this variable, as the session gives it to every program.
+        machine.succeed(
+            "systemd-run --unit=calc ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
+            "--setenv=RUST_LOG=ronoctua_shell=debug "
+            "${ronoctua-shell}/bin/ronoctua-shell calc"
+        )
+        try:
+            machine.wait_until_succeeds(
+                f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree "
+                "| grep br.ronoctua.calc > /dev/null",
+                timeout=60,
+            )
+        except Exception:
+            print(machine.execute("journalctl -u calc --no-pager")[1])
+            raise
+        assert windows_by_app_id(sock)["br.ronoctua.calc"]["floating"], (
+            "the generated rule did not make the calculator float; it opened in the layout"
+        )
+        # WHERE AND HOW BIG THE RULE OPENED IT: what the control must give it
+        # back. Read once it stops moving — a floating window is placed by a
+        # transaction.
+        def settled_rect():
+            last = None
+            for _ in range(30):
+                now = windows_by_app_id(sock)["br.ronoctua.calc"]["rect"]
+                if now == last:
+                    return now
+                last = now
+                time.sleep(1)
+            return last
+
+        opened = settled_rect()
+        print(f"the rule opened the calculator at {opened}")
+
+        def calc_floats(wanted, what):
+            # THE COMPOSITOR'S ANSWER, asked until it says so — a move is a
+            # layout's transaction, not an instant.
+            for _ in range(30):
+                if windows_by_app_id(sock)["br.ronoctua.calc"]["floating"] == wanted:
+                    return
+                time.sleep(1)
+            raise AssertionError(
+                f"{what}\n" + machine.execute("journalctl -u calc --no-pager")[1]
+            )
+
+        # THE KEYBOARD ON THE CALCULATOR, and its control typed: `C-f`.
+        machine.succeed(
+            f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg '[app_id=br.ronoctua.calc] focus'"
+        )
+        focus_compositor()
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+f")
+        calc_floats(False, "the header's control did not put the calculator back in the layout")
+
+        # AND AGAIN: it floats, at its row's size, in the middle of the room.
+        machine.succeed(
+            f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg '[app_id=br.ronoctua.calc] focus'"
+        )
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+f")
+        calc_floats(True, "the header's control did not float the calculator again")
+        # AT THE SIZE AND PLACE THE RULE OPENED IT AT: the control and the
+        # rule read one row of `floating.rs` and speak one unit. A pixel or
+        # two of rounding is the compositor's, not a second size.
+        again = settled_rect()
+        print(f"the control floated the calculator again at {again}")
+        for k in ("x", "y", "width", "height"):
+            assert abs(again[k] - opened[k]) <= 2, (
+                f"floated again at {again}, but the rule opened it at {opened} — "
+                "the rule and the control are two sizes for one window"
+            )
+        journal = machine.succeed("journalctl -u calc --no-pager")
+        for bad in ["panicked", "refused the calculator's place"]:
+            assert bad not in journal, f"the calculator reported: {bad}"
   '';
 }

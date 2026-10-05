@@ -242,7 +242,11 @@ pub(super) fn open_draft(location: &str, field: Field, shared: &Shared) -> Say {
     match can {
         Some(ronoctua_tags::Can::Yes(_)) => {}
         Some(ronoctua_tags::Can::No(why)) => return refuse(why),
-        None => return refuse(Why::NoPlace),
+        None => {
+            return refuse(Why::NoWriter {
+                container: sheet.container,
+            });
+        }
     }
     let original = tags::checked(field, sheet.value(field));
     let target = sheet.location.to_string_lossy().into_owned();

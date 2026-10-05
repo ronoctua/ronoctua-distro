@@ -41,8 +41,6 @@
   # saying why.
   lyrebird,
   snowflake,
-  # The update sequence, generated from `assets/updates.nix`.
-  updatesRs,
   # The cache policy, generated from `assets/cache.nix`.
   cacheRs,
   # The camera's effects, generated from `assets/camera-effects.nix`.
@@ -74,7 +72,6 @@
   bottom,
   ncurses,
   fontconfig,
-  libarchive,
   zsh,
   polkit,
   nix,
@@ -84,9 +81,6 @@
   ghosttyVt,
   torrentShim,
   tzdata,
-  bufferGlyphs,
-  bufferUnicode,
-  bufferLucide,
   bufferMemory,
   bufferKeyboard,
   bufferTransfers,
@@ -108,6 +102,22 @@
   broadcastRs,
   tonguesRs,
   primaryFontFile,
+
+  # The brain's modules as Rust, generated from their folders — see
+  # `nix/brain-modules-rs.nix`.
+  brainModulesRs,
+
+  # The offline English dictionary (`nix/wordsgen.nix`), for the tests only:
+  # see `RONOCTUA_WORDS` in the tests' environment below.
+  wordsData,
+  # The three icon tables in one directory (`nix/iconset.nix`), read at RUN time.
+  iconset,
+  # The calculator's unit table (`nix/unitsgen.nix`), compiled in.
+  unitsRs,
+
+  # What the belongings keep (`nix/belongings.nix`), compiled in.
+  belongingsRs,
+
   src,
 }:
 
@@ -232,7 +242,11 @@ let
     # reach the code the CLI ships instead of skipping the half of the crate
     # that is behind the two features. `--locked` is crane's own default,
     # restated because this line replaces it.
-    cargoExtraArgs = "--locked --features ronoctua-software/net,ronoctua-software/draw";
+    #
+    # AND THE VIDEO-METRICS SCANNER'S `net`, for the same reason: its binary
+    # requires it (`[[bin]] required-features`), and without it the tests and
+    # clippy stop at the catalogue and never reach the scanner.
+    cargoExtraArgs = "--locked --features ronoctua-software/net,ronoctua-software/draw,ronoctua-video-metrics/net";
 
     nativeBuildInputs = [ pkg-config ];
     # These DO belong here: the dependencies themselves link against them —
@@ -242,6 +256,13 @@ let
       libxkbcommon
       vulkan-loader
       libGL
+      # THE CATALOGUES' DATABASE (the player's channels, video-metrics): rusqlite
+      # links the system's SQLite, which carries FTS5, instead of compiling a
+      # bundled copy — no C build in the dependency layer.
+      pkgs.sqlite
+      # THE PASSWORD CHECK of `ronoctua-pam`, which links libpam and talks to it
+      # through its conversation callback; the password never crosses a process.
+      pkgs.linux-pam
     ];
   };
 
@@ -282,14 +303,6 @@ let
     # rendered file is installed, because a keyd that refuses its config is a
     # keyboard with no leader on a machine somebody is holding.
     RONOCTUA_KEYD = "${keyd}/bin/keyd";
-    # THE UPDATE SEQUENCE, and the brain reads it rather than declaring one.
-    #
-    # `assets/updates.nix` is the ONE place the sequence lives. The brain used
-    # to carry three steps of its own, with their own ids and their own copies
-    # of the command lines — and they were DISJOINT from the twelve the table
-    # declares, so a run that stopped at `flake-update` drew a bracketed key on
-    # screen. Two files saying what the update does is one file too many.
-    RONOCTUA_UPDATES_RS = "${updatesRs}/updates.rs";
     # THE CACHE POLICY, and three crates read it rather than three crates
     # deciding. How long a cached file may live is the sweep's business, how
     # often it happens is the brain's, and when a thumbnail is remade is the
@@ -561,15 +574,14 @@ let
     RONOCTUA_FC_CACHE = "${fontconfig}/bin/fc-cache";
     RONOCTUA_RESCUE_SHELL = "${zsh}/bin/zsh";
     RONOCTUA_PKTTYAGENT = "${polkit}/bin/pkttyagent";
-    # WHAT THE FILE MANAGER SPAWNS. Same route, same reason.
+    # WHAT THE ARCHIVES RUN. Same route, same reason.
     #
-    # `bsdtar` and not one tool per format: it reads and writes more formats
-    # than the rest of `nix/modules/archives.nix` put together, and one
-    # command line then serves `.tar.zst`, `.tar.gz` and `.zip` — the three the
-    # menu offers. Its own program is 440 KB; what its closure adds beyond what
-    # the system already carries is measured by `iso-is-measured`, not
-    # assumed.
-    RONOCTUA_BSDTAR = "${libarchive}/bin/bsdtar";
+    # `bsdtar` writes and reads the tar family for `ronoctua-archive` — the
+    # one crate that runs it, beside 7zz and unrar (the file manager's
+    # packing went there, through the transfer queue). Its own program is
+    # 440 KB; what its closure adds beyond what the system already carries is
+    # measured by `iso-is-measured`, not assumed. Its store path comes from
+    # `nix/archive-tools.nix`, with the other two (liblz4 linked in).
     # The discard pass of an overwriting delete — the one step that reaches the
     # SSD controller, and the reason `Verb::Trim` exists. It needs root, so it
     # goes through the same narrow unit as the other three.
@@ -596,6 +608,57 @@ let
     # It is read from the ENVIRONMENT instead (`crates/.../apps.rs`), set by
     # `nix/modules/icons.nix` and by `nix/dev.nix`. It can be: unlike `setsid`
     # or the wasm buffers, this is data the shell can do without.
+
+    # THE BRAIN'S MODULES: one `<id>/manifest.rs` per folder under
+    # `crates/ronoctua-brain/modules/`, the registry `all.rs`, and `ids.txt` —
+    # which the crate's `build.rs` compares with the folders it sees, refusing
+    # a stale environment rather than compiling a module list that is not the
+    # tree's. A directory, for `RONOCTUA_I18N_DIR`'s reason.
+    RONOCTUA_BRAIN_MODULES_DIR = "${brainModulesRs}";
+
+    # THE CALCULATOR'S UNITS, generated from `assets/units.nix`. In `generated`
+    # and not at run time: it is CODE — the table the engine matches words and
+    # factors against — and a few dozen kilobytes that change when a unit does.
+    RONOCTUA_UNITS_RS = "${unitsRs}/units.rs";
+
+    # WHAT THE SECURITY CENTRE'S ROOT HELPER RUNS, by store path: sudo resets
+    # the environment and a unit's `PATH` is minimal. `visudo` checks the
+    # passwordless window's line BEFORE it can be read (a sudoers syntax error
+    # locks every sudo out, the rescue included); `nft` checks and applies the
+    # person's table. `systemctl` and `systemd-run` are already above.
+    RONOCTUA_VISUDO = "${pkgs.sudo}/bin/visudo";
+    RONOCTUA_NFT = "${pkgs.nftables}/bin/nft";
+
+    # sys-boundaries: THE PROGRAMS OF THREE BOUNDARY CRATES, baked like
+    # `RONOCTUA_XDG_OPEN` (a store path the binary carries, never a name on a
+    # unit's minimal `PATH`). `ronoctua-git` runs git (and ssh, for a remote
+    # over SSH); `ronoctua-archive` runs 7zz and unrar besides `bsdtar` above,
+    # both under `RONOCTUA_SETSID`. Each crate reads the environment first, so
+    # a test or a unit can point it elsewhere. Podman is NOT here: it is read
+    # at run time (`nix/modules/containers.nix`), because a baked path would
+    # put podman's closure into every profile, the minimal one included.
+    RONOCTUA_GIT = "${pkgs.git}/bin/git";
+    RONOCTUA_SSH = "${pkgs.openssh}/bin/ssh";
+    # git's askpass helper, BUILT APART from the workspace so the workspace can
+    # carry its path: every program linking `ronoctua-git`, extracted or not,
+    # finds it (see `nix/git-askpass.nix`).
+    RONOCTUA_GIT_ASKPASS = "${
+      import ./git-askpass.nix { inherit pkgs rustToolchain; }
+    }/bin/ronoctua-git-askpass";
+    inherit (import ./archive-tools.nix { inherit pkgs; })
+      RONOCTUA_7ZZ
+      RONOCTUA_UNRAR
+      RONOCTUA_BSDTAR
+      ;
+
+    # WHAT THE BELONGINGS KEEP, generated from `assets/belongings.nix`. In
+    # `generated`: it is CODE — the rules the engine walks the home with — and
+    # a few kilobytes that change when a rule does.
+    RONOCTUA_BELONGINGS_RS = "${belongingsRs}/belongings.rs";
+    # THE DEPLOY KEY'S MAKER, by store path, for `RONOCTUA_SSH`'s reason:
+    # openssh is already in the closure through it.
+    RONOCTUA_SSH_KEYGEN = "${pkgs.openssh}/bin/ssh-keygen";
+
   };
 
   # What compiles OUR code needs both halves.
@@ -622,15 +685,12 @@ let
   #
   # # And why the reference does not simply disappear
   #
-  # Because it must not. Whoever installs this has to get the six components
+  # Because it must not. Whoever installs this has to get the components
   # WITHOUT compiling them — that is the whole point of the ISO's seed. So the
   # reference moves one derivation UP: `shell` below is what carries it, and
   # what the system, the VMs and the nested loop all run. `iso-carries-the-seed`
-  # and `profile-minimal-closes` name the six, and would say so if they left.
+  # and `profile-minimal-closes` name them, and would say so if they left.
   bufferComponents = {
-    RONOCTUA_BUFFER_GLYPHS = "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm";
-    RONOCTUA_BUFFER_UNICODE = "${bufferUnicode}/lib/ronoctua_buffer_unicode.wasm";
-    RONOCTUA_BUFFER_LUCIDE = "${bufferLucide}/lib/ronoctua_buffer_lucide.wasm";
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
     RONOCTUA_BUFFER_KEYBOARD = "${bufferKeyboard}/lib/ronoctua_buffer_keyboard.wasm";
     RONOCTUA_BUFFER_TRANSFERS = "${bufferTransfers}/lib/ronoctua_buffer_transfers.wasm";
@@ -689,6 +749,13 @@ let
     # a keymap from, so a layout offered is a layout that exists. Read as DATA
     # (`ronoctua_keyboards::layouts_in`); absence offers only the machine's own.
     RONOCTUA_XKB_LIST = "${pkgs.xkeyboard_config}/share/X11/xkb/rules/evdev.lst";
+
+    # THE ICON TABLES, at run time for `RONOCTUA_ATLAS`'s reason: ~9 MB that a
+    # font release or a lexicon edit re-bakes, and no compilation reads.
+    # Absence is a refusal the icons app draws (`icons-why-no-variable`), not an
+    # error. `iconset-is-at-run-time` holds it here.
+    RONOCTUA_ICONSET = "${iconset}";
+
   };
 
   # The dependencies, compiled once.
@@ -819,7 +886,7 @@ rec {
     '';
   };
 
-  # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the six components.
+  # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the components.
   #
   # This is what the module's `ExecStart`, `nix run .#dev` and every VM test
   # point at; `workspace` is what the driven tests and the benchmarks call by
@@ -1080,6 +1147,85 @@ rec {
     patchelf --shrink-rpath $out/bin/ronoctua-disk-relief
   '';
 
+  # THE SUPER INDEX'S UNIT, extracted for the brain's reason: it is a unit
+  # that lives for days in the background, and its closure should be the
+  # indexer (tantivy, the preview's text readers, SQLite for the video
+  # catalogue) and never the desktop — no renderer, no wasm runtime, no
+  # graphics libraries, which `--shrink-rpath` takes back out of the rpath the
+  # workspace's `postFixup` gave every binary.
+  index = pkgs.runCommand "ronoctua-index" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-index $out/bin/
+    chmod +w $out/bin/ronoctua-index
+    patchelf --shrink-rpath $out/bin/ronoctua-index
+  '';
+
+  # THE VIDEO CATALOGUE'S SCANNER, extracted for the brain's reason: it is a
+  # unit that asks YouTube every few hours, and its closure is SQLite, the HTTP
+  # client and the feed reader — never the desktop the workspace would bring.
+  # yt-dlp is not in it: the unit hands it in by store path, inside the
+  # `mkIf` that decides whether the package exists (`nix/modules/video-metrics.nix`).
+  videoMetrics =
+    pkgs.runCommand "ronoctua-video-metrics" { nativeBuildInputs = [ pkgs.patchelf ]; }
+      ''
+        mkdir -p $out/bin
+        cp ${workspace}/bin/ronoctua-video-metrics $out/bin/
+        chmod +w $out/bin/ronoctua-video-metrics
+        patchelf --shrink-rpath $out/bin/ronoctua-video-metrics
+      '';
+
+  # THE SECURITY CENTRE'S ROOT HELPER, extracted for the file manager's
+  # reason and a sharper one: it runs as ROOT, from sudo and from four units
+  # (the table at boot, the shields, the window's expiry and the sleep hook),
+  # and the whole workspace would put the renderer, wgpu and the wasm runtime
+  # there. Its `[[bin]]` links `ronoctua-security`, serde, zbus and rustix,
+  # and cites `visudo`, `nft`, `systemctl` and `systemd-run`.
+  #
+  # NOT in `atRunTime`, and that is load-bearing: the devshell reads that
+  # table, and a path extracted from the workspace there would make entering
+  # the shell build the workspace. The session gets it from
+  # `nix/modules/security.nix` (`RONOCTUA_SECURITY_ROOT`).
+  securityRoot =
+    pkgs.runCommand "ronoctua-security-root" { nativeBuildInputs = [ pkgs.patchelf ]; }
+      ''
+        mkdir -p $out/bin
+        cp ${workspace}/bin/ronoctua-security-root $out/bin/
+        chmod +w $out/bin/ronoctua-security-root
+        # The graphics rpath belongs to the footer; this program opens no window.
+        patchelf --shrink-rpath $out/bin/ronoctua-security-root
+      '';
+
+  # THE QUEUE'S CHILD FOR `Work::Scan`: one file sent to VirusTotal, its
+  # analysis waited for. A `[[bin]]` of `ronoctua-lookup` (TLS, multipart in
+  # `ronoctua-http::web`), extracted so the queue's daemon starts it by store
+  # path (`RONOCTUA_SCAN`, set beside the security module's import) and never
+  # carries TLS itself — nor the desktop.
+  scan = pkgs.runCommand "ronoctua-scan" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-scan $out/bin/
+    chmod +w $out/bin/ronoctua-scan
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-scan
+  '';
+
+  # THE BELONGINGS' CLI, extracted for the software CLI's reason: the queue
+  # runs it for every sync, and it links `age` — which must stay out of the
+  # queue and the footer. Its `[[bin]]` requires `crypt`, a DEFAULT feature
+  # of `ronoctua-belongings` the three consumers take off by name; the day
+  # the default goes, the refusal below says why instead of `cp`.
+  belongings = pkgs.runCommand "ronoctua-belongings" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    if [ ! -x ${workspace}/bin/ronoctua-belongings ]; then
+      echo "the workspace built no ronoctua-belongings: its [[bin]] requires the" >&2
+      echo "feature crypt, and no member of the build enabled it" >&2
+      exit 1
+    fi
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-belongings $out/bin/
+    chmod +w $out/bin/ronoctua-belongings
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-belongings
+  '';
+
   # Tests. A separate derivation so it can say WHAT broke.
   #
   # AND THE FIVE PROGRAMS, which is a defect being closed and not a nicety.
@@ -1144,6 +1290,45 @@ rec {
       # step. Without it, every such test panics with `NoWaylandLib` here and
       # passes in the dev shell, which has the library on its path.
       LD_LIBRARY_PATH = lib.makeLibraryPath [ wayland ];
+
+      # THE OFFLINE ENGLISH DICTIONARY (`nix/wordsgen.nix`), so
+      # `the_real_dictionary_answers_in_a_few_reads` reads the converted
+      # WordNet instead of returning early and proving nothing. Not in
+      # `atRunTime`: the installed session gets it from `nix/modules/words.nix`,
+      # on the profile that carries it.
+      RONOCTUA_WORDS = "${wordsData}";
+      # AND THE ICON TABLES, so `ronoctua-iconset`'s tests search the real
+      # tables — `house` at U+E0F5, the twenty-three double-width arrows —
+      # instead of refusing for want of the variable.
+      RONOCTUA_ICONSET = "${iconset}";
+      # AND THE ZONE FILES, so the calculator's `now in Tokyo` is asked of
+      # tzdata and not skipped.
+      RONOCTUA_ZONEINFO = "${tzdata}/share/zoneinfo";
+
+      # AND A KERNEL FOR THE FIREWALL'S SNAPSHOTS. `nft -c` talks to the
+      # kernel, which a build may not; in a user and network namespace of its
+      # own it may, and nothing outside can be touched. Without this the test
+      # that puts every snapshot through `nft` returns early and proves
+      # nothing — the trap above, again.
+      RONOCTUA_UNSHARE = "${util-linux}/bin/unshare";
+
+      # sys-boundaries: the programs the boundary crates' tests run for real
+      # (`ronoctua-git` on fixture repositories, `ronoctua-archive` with the
+      # passwords on stdin). Also baked through `generated`; set here at run
+      # time too, as the five above are, so the tests read what they would
+      # read in a unit.
+      RONOCTUA_GIT = "${pkgs.git}/bin/git";
+      RONOCTUA_SSH = "${pkgs.openssh}/bin/ssh";
+      RONOCTUA_SETSID = "${util-linux}/bin/setsid";
+      # `script`, a terminal for `a_hostile_repository_runs_nothing`: git
+      # starts a pager only on one, and the test shows the pager door open.
+      RONOCTUA_SCRIPT = "${util-linux}/bin/script";
+      inherit (import ./archive-tools.nix { inherit pkgs; })
+        RONOCTUA_7ZZ
+        RONOCTUA_UNRAR
+        RONOCTUA_BSDTAR
+        ;
+
     }
   );
 

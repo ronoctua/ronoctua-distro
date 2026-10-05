@@ -164,6 +164,9 @@ pub enum Target {
     DropPlace(usize),
     /// Turn one of a place's four things on or off. `usize` is which place.
     Shows(usize, Shown),
+    /// Choose a place's two currencies — its own, and the one it is worth
+    /// in. `RET` asks for the pair.
+    Currency(usize),
     /// Ask this host, or stop asking it.
     Ask(Source),
 }
@@ -616,7 +619,13 @@ pub struct View {
     /// Whether the brain's clock watch is on, or `None` when the brain could
     /// not be asked. The row is then drawn REFUSING and says why — a switch
     /// that silently did nothing would be worse than no switch.
-    watched: Option<bool>,
+    ///
+    /// HANDED IN, never asked for here: the footer reads it out of the mind
+    /// it already streams, and the window asks off its loop
+    /// ([`ask_the_brain`]). A view drawn by two doors holds no socket — and
+    /// it held one: every open, every switch and every language change asked
+    /// the brain twice on the loop's own thread, half a second each at worst.
+    watched: Option<Watched>,
     /// And what the fetcher last found, which is where the sources' section
     /// gets "did anybody answer" from. READ and not parsed: a cache that will
     /// not parse costs a sentence, and the rows are still drawn.
@@ -639,7 +648,9 @@ impl View {
             world: ronoctua_world::store::store().read(),
             machine: machine_clock(),
             machine_zone: zone_named(&machine_clock().zone),
-            watched: watched_by_the_brain(),
+            // NOT KNOWN YET, and said as such — not as a brain that is not
+            // running — until the door hands it in.
+            watched: Some(Watched::Asking),
             from: Some(from),
         };
         // THE CURSOR STARTS ON A ROW ONE CAN ACT ON, and it did not.
@@ -671,13 +682,21 @@ impl View {
         self.cursor = self.cursor.min(acting(&rows).count().saturating_sub(1));
     }
 
-    /// Re-reads everything: the files, the machine's clock and the brain.
-    /// Called after this door changed something.
+    /// Re-reads the files and the machine's clock. Called after this door
+    /// changed something. The brain's watch is not read here: it is handed in
+    /// ([`View::set_watched`]).
     pub fn reread(&mut self) {
         self.machine = machine_clock();
         self.machine_zone = zone_named(&self.machine.zone);
-        self.watched = watched_by_the_brain();
         self.reread_files();
+    }
+
+    /// What the brain's clock watch is, as the door learned it — and whether
+    /// that changed what the view draws.
+    pub fn set_watched(&mut self, watched: Option<Watched>) -> bool {
+        let moved = self.watched != watched;
+        self.watched = watched;
+        moved
     }
 
     /// Re-reads the FILES alone — the language, the dates' shape and the
@@ -714,7 +733,7 @@ impl View {
     /// The same, against rows already built.
     fn place_on(&self, rows: &[Row]) -> Option<String> {
         let n = match acting(rows).nth(self.cursor).map(|r| &r.target)? {
-            Target::Shows(n, _) | Target::DropPlace(n) => *n,
+            Target::Shows(n, _) | Target::DropPlace(n) | Target::Currency(n) => *n,
             _ => return None,
         };
         self.glance.places().get(n).map(|p| p.zone.clone())
@@ -888,6 +907,20 @@ impl View {
                     Target::Shows(n, shown),
                 );
             }
+            // ITS CURRENCIES, which the rate is between: the place's own and
+            // the one it is worth in, chosen here — `RET` asks for the pair.
+            b.pair(
+                texts.t(key::LOCALE_CURRENCY),
+                if has_a_pair(place) {
+                    texts.t_with(
+                        key::LOCALE_CURRENCY_PAIR,
+                        &[("from", &place.currency), ("into", &place.rate_in)],
+                    )
+                } else {
+                    texts.t(key::LOCALE_CURRENCY_NONE)
+                },
+                Target::Currency(n),
+            );
             // AN ACTION, with no value. See `Builder::act`.
             b.act(texts.t(key::LOCALE_DROP_PLACE), Target::DropPlace(n));
         }
@@ -1000,20 +1033,22 @@ impl View {
         b.pair(
             texts.t(key::LOCALE_WATCHED),
             texts.t(match self.watched {
-                Some(true) => key::LOCALE_AUTOMATIC_ON,
-                Some(false) => key::LOCALE_AUTOMATIC_OFF,
-                None => key::LOCALE_ZONE_UNKNOWN,
+                Some(Watched::Set(true)) => key::LOCALE_AUTOMATIC_ON,
+                Some(Watched::Set(false) | Watched::BySystem) => key::LOCALE_AUTOMATIC_OFF,
+                Some(Watched::Asking) | None => key::LOCALE_ZONE_UNKNOWN,
             }),
-            if self.watched.is_some() {
+            if matches!(self.watched, Some(Watched::Set(_))) {
                 Target::Watched
             } else {
                 Target::Nothing
             },
         );
-        b.note(if self.watched.is_some() {
-            key::LOCALE_WATCHED_DOES
-        } else {
-            key::LOCALE_WATCHED_UNKNOWN
+        // THE SYSTEM'S "OFF" IS SAID AND NOT OFFERED: the brain refuses the
+        // switch, so the row says why in the words the module's own row uses.
+        b.note(match self.watched {
+            Some(Watched::Set(_) | Watched::Asking) => key::LOCALE_WATCHED_DOES,
+            Some(Watched::BySystem) => key::LOCALE_WATCHED_SYSTEM_OFF,
+            None => key::LOCALE_WATCHED_UNKNOWN,
         });
 
         // THE DATE AND THE TIME, in the MACHINE's own zone: this section is
@@ -1163,12 +1198,21 @@ impl View {
                 if shown == Shown::Weather && !place.weather && !place.has_a_coordinate() {
                     return Errand::Ask(Asking::Weather(place.zone));
                 }
+                // AND A PAIR OF CURRENCIES IS WHAT THE RATE NEEDS — a place
+                // somebody added has none, and the switch asks rather than
+                // flipping to a line that never draws.
+                if shown == Shown::Rate && !place.rate && !has_a_pair(&place) {
+                    return Errand::Ask(Asking::Rate(place.zone));
+                }
                 self.glance_changes(GlanceChange::Show {
                     on: !shown.of(&place),
                     zone: place.zone,
                     shown,
                 })
             }
+            Target::Currency(n) => self.glance.places().get(n).map_or(Errand::Nothing, |p| {
+                Errand::Ask(Asking::Currency(p.zone.clone()))
+            }),
             Target::Ask(source) => self.glance_changes(GlanceChange::Ask {
                 source,
                 on: !source.asked(&self.glance),
@@ -1177,7 +1221,7 @@ impl View {
             // is on the other side is a system bus or the brain's socket, and
             // a view drawn by two doors holds neither.
             Target::Automatic => Errand::Automatic(!self.machine.automatic),
-            Target::Watched => Errand::Watch(!self.watched.unwrap_or(true)),
+            Target::Watched => Errand::Watch(self.watched != Some(Watched::Set(true))),
             Target::MachineDate => Errand::Ask(Asking::MachineDate),
             Target::MachineTime => Errand::Ask(Asking::MachineTime),
             Target::MachineZone => Errand::Ask(Asking::MachineZone),
@@ -1247,7 +1291,6 @@ impl View {
     }
 }
 
-#[cfg(test)]
 impl View {
     /// A view over a PLANTED machine and the distro's own places, and not
     /// this one's: a test that read the developer's own timedated, brain and
@@ -1271,9 +1314,19 @@ impl View {
                 now: 1_788_000_000,
             },
             machine_zone: ronoctua_files::when::Zone::utc(),
-            watched: Some(true),
+            watched: Some(Watched::Set(true)),
             from: Some(crate::language::Source::Default),
         };
+        me.settle();
+        me
+    }
+
+    /// The planted view with the glance's places given — what the
+    /// photograph draws a place's currencies over.
+    pub(crate) fn planted_with(places: Vec<ronoctua_world::prefs::Wanted>) -> Self {
+        let mut me = Self::planted(false);
+        me.glance.places = places;
+        me.glance.chosen = true;
         me.settle();
         me
     }
@@ -1448,50 +1501,95 @@ pub fn zone_is_declared() -> bool {
     std::env::var_os("RONOCTUA_TIME_ZONE").is_some_and(|v| !v.is_empty())
 }
 
-/// Turns the brain's clock watch on, or off. Answers whether it was done.
-///
-/// # Why the WHOLE preferences go back
-///
-/// Because that is the wire this daemon has: `Ask::Tune` carries every
-/// preference, so there is one shape to validate instead of one message per
-/// field. The screen has the mind in front of it and sends back what it wants
-/// — and the DAEMON is what writes the file, which is what keeps this switch
-/// and the task's own page from being two writers of one truth.
-#[must_use]
-pub fn watch_the_clock(on: bool) -> bool {
-    use ronoctua_brain::wire::{Ask, Say};
-    let Ok(Say::Mind { mind }) = ronoctua_brain::client::ask(&Ask::Look) else {
-        return false;
-    };
-    let mut prefs = mind.prefs.clone();
-    let task = prefs
-        .tasks
-        .entry(ronoctua_brain::tasks::clock::ID.to_owned())
-        .or_default();
-    task.enabled = on;
-    ronoctua_brain::client::tell(&Ask::Tune {
-        prefs: Box::new(prefs),
-    })
-    .map_err(|e| tracing::warn!(error = %e, "the clock watch could not be switched"))
-    .is_ok()
+/// The brain's clock watch, as its row in the mind says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watched {
+    /// On or off, and the person's to flip — here or on the module's page.
+    Set(bool),
+    /// Switched off by the SYSTEM (`ronoctua.brain.modules.<id>.enable =
+    /// false`): the brain refuses the switch, so there is none here, and the
+    /// row says why.
+    BySystem,
+    /// Not known yet: the door has asked, and the answer is on its way. Drawn
+    /// as not known, with no switch — and not as a brain that is not running,
+    /// which would be a sentence that is false for a moment.
+    Asking,
 }
 
-/// Is the brain's clock watch on? `None` when the brain could not be asked.
+/// What a watch's row says, from its two fields: whether it is on, and the
+/// word it gives instead of a moment.
+#[must_use]
+pub fn watched_of(enabled: bool, why_not: &str) -> Watched {
+    if why_not == ronoctua_brain::registry::SYSTEM_OFF {
+        Watched::BySystem
+    } else {
+        Watched::Set(enabled)
+    }
+}
+
+/// The ask that turns the brain's clock watch on, or off.
 ///
-/// ONE TRUTH, TWO DOORS: the switch is the task's own `enabled`, which the
-/// daemon owns and writes — so this asks it rather than keeping a copy, and
-/// the task's page in the brain's buffer flips the very same field.
-fn watched_by_the_brain() -> Option<bool> {
-    let said = ronoctua_brain::client::ask(&ronoctua_brain::wire::Ask::Look).ok()?;
-    let ronoctua_brain::wire::Say::Mind { mind } = said else {
-        return None;
-    };
-    Some(
-        mind.prefs
-            .tasks
-            .get(ronoctua_brain::tasks::clock::ID)
-            .is_none_or(|t| t.enabled),
-    )
+/// ONE KNOB OF ONE MODULE — `Ask::Set` with `Knob::Enabled` — and never the
+/// whole preferences: the old `Ask::Tune` sent every preference back, built
+/// from the shared default where the module had no entry yet, and switching
+/// the watch off and on from here turned a six-hour watch into a weekly run
+/// with a minute of countdown. The DAEMON writes the file, resolved over what
+/// the module declared, so this switch and the module's own page are one
+/// truth with two doors.
+#[must_use]
+pub fn the_clocks_switch(on: bool) -> ronoctua_brain::wire::Ask {
+    ronoctua_brain::wire::Ask::Set {
+        task: ronoctua_brain::compiled::clock_sync::ID.to_owned(),
+        knob: ronoctua_brain::wire::Knob::Enabled(on),
+    }
+}
+
+/// What the brain's clock watch is, read out of a mind the door already has:
+/// `None` for no mind — the brain is not running, or has not spoken — or a
+/// mind with no such row.
+#[must_use]
+pub fn watched_in(mind: Option<&ronoctua_brain::Mind>) -> Option<Watched> {
+    let row = mind?.task(ronoctua_brain::compiled::clock_sync::ID)?;
+    Some(watched_of(row.enabled, &row.why_not))
+}
+
+/// What a door heard back from the brain about the clock's watch.
+#[derive(Debug)]
+pub struct Heard {
+    /// Its answer to the switch — `None` when nothing was switched.
+    pub answer: Option<crate::mind_wire::Answer>,
+    /// And the watch as it stands after it: `None` when the brain could not
+    /// be asked.
+    pub watched: Option<Watched>,
+}
+
+/// Switches the brain's clock watch — or, with `None`, only reads it — OFF
+/// THE LOOP, and hands what was heard to `back` on that thread. `false` when
+/// no thread could start, which the door says at once: nothing would ever come
+/// back to say anything else.
+///
+/// ONE THREAD, TWO ASKS: the switch, and then a look at the mind, so the door
+/// draws the watch as the brain now has it — a refusal leaves it as it was.
+/// Each ask can wait half a second on the socket, which is why neither is
+/// ever made on a door's loop.
+pub fn ask_the_brain(switch: Option<bool>, back: impl FnOnce(Heard) + Send + 'static) -> bool {
+    std::thread::Builder::new()
+        .name("clock-watch".into())
+        .spawn(move || {
+            let answer = switch.map(|on| {
+                crate::mind_wire::answer_from(
+                    ronoctua_brain::client::ask(&the_clocks_switch(on)),
+                    None,
+                )
+            });
+            let watched = match ronoctua_brain::client::ask(&ronoctua_brain::wire::Ask::Look) {
+                Ok(ronoctua_brain::wire::Say::Mind { mind }) => watched_in(Some(&*mind)),
+                _ => None,
+            };
+            back(Heard { answer, watched });
+        })
+        .map_err(|e| tracing::error!(error = %e, "could not start the clock watch's ask"))
+        .is_ok()
 }
 
 /// Is there a readable zone file by this name?
@@ -1548,6 +1646,8 @@ pub fn took(asking: &Asking, said: &str) -> Result<bool, &'static str> {
         Asking::Place => took_a_place(said),
         Asking::Where(zone) => took_a_coordinate(zone, said, false),
         Asking::Weather(zone) => took_a_coordinate(zone, said, true),
+        Asking::Currency(zone) => took_a_currency(zone, said, false),
+        Asking::Rate(zone) => took_a_currency(zone, said, true),
         Asking::MachineDate => took_a_system_date(said),
         Asking::MachineTime => took_a_system_time(said),
         Asking::MachineZone => took_a_system_zone(said),
@@ -1638,6 +1738,131 @@ pub fn took_a_coordinate(
     })
 }
 
+/// Whether a place has the two currencies a rate is between.
+#[must_use]
+pub fn has_a_pair(place: &ronoctua_world::prefs::Wanted) -> bool {
+    !place.currency.is_empty() && !place.rate_in.is_empty()
+}
+
+/// The two currencies typed — `EUR BRL`, `eur → brl`, `EUR/BRL` — as the
+/// codes the rate's source knows, or `None`.
+///
+/// THE CODES ARE THE ECB'S (`ronoctua_calc::units::CURRENCY_CODES`, the list
+/// the calculator's rates read): the glance's first rate source is the ECB's
+/// own mirror, and a pair it does not quote is a line that never draws. Three
+/// letters each side, in any case, anything between them.
+#[must_use]
+pub fn currency_pair(said: &str) -> Option<(String, String)> {
+    let words: Vec<String> = said
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let [from, into] = words.as_slice() else {
+        return None;
+    };
+    let known = |c: &str| ronoctua_calc::units::CURRENCY_CODES.contains(&c);
+    (from != into && known(from) && known(into)).then(|| (from.clone(), into.clone()))
+}
+
+/// A place's two currencies, typed — and with `and_the_rate` the rate's
+/// switch goes on too, which is what asked.
+///
+/// # Errors
+///
+/// The text key of what is wrong with it.
+pub fn took_a_currency(zone: &str, said: &str, and_the_rate: bool) -> Result<(), &'static str> {
+    let (from, into) = currency_pair(said).ok_or(ronoctua_i18n::key::LOCALE_NOT_A_CURRENCY_PAIR)?;
+    let store = ronoctua_world::prefs::store();
+    let mut prefs = parsed_glance(&store)?;
+    let mut places = prefs.places();
+    let Some(place) = places.iter_mut().find(|p| p.zone == zone) else {
+        return Err(ronoctua_i18n::key::LOCALE_PLACE_GONE);
+    };
+    place.currency = from;
+    place.rate_in = into;
+    if and_the_rate {
+        place.rate = true;
+    }
+    prefs.places = places;
+    prefs.chosen = true;
+    store.write(&prefs).map_err(|e| {
+        tracing::warn!(error = %e, "the currencies could not be written");
+        ronoctua_i18n::key::LOCALE_NOT_WRITTEN
+    })
+}
+
+/// Whether a zone's name fits what is typed: the whole name begins with it,
+/// or one of its parts does — `Lis` fits `Europe/Lisbon`, `york` fits
+/// `America/New_York` — in any case, a space standing for the underscore.
+#[must_use]
+pub fn fits(zone: &str, typed: &str) -> bool {
+    let typed = typed.trim().replace(' ', "_").to_lowercase();
+    if typed.is_empty() {
+        return false;
+    }
+    let zone = zone.to_lowercase();
+    zone.starts_with(&typed)
+        || zone.split('/').any(|part| {
+            part.starts_with(&typed) || part.split('_').any(|word| word.starts_with(&typed))
+        })
+}
+
+/// Every zone this system can read, out of tzdb's own list (`zone1970.tab`
+/// in `RONOCTUA_ZONEINFO`, the directory every zone is read from) — read
+/// once a process, the list the installer offers too.
+fn all_zones() -> &'static [String] {
+    static ZONES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    ZONES.get_or_init(|| {
+        let Some(root) = std::env::var_os("RONOCTUA_ZONEINFO") else {
+            return Vec::new();
+        };
+        let root = std::path::PathBuf::from(root);
+        let text = ["zone1970.tab", "zone.tab"]
+            .iter()
+            .find_map(|f| std::fs::read_to_string(root.join(f)).ok())
+            .unwrap_or_default();
+        zones_of_tab(&text)
+    })
+}
+
+/// The zone names of a `zone1970.tab`: the third field of every line that is
+/// not a comment, sorted.
+#[must_use]
+pub fn zones_of_tab(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = text
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split('\t').nth(2))
+        .map(|z| z.trim().to_owned())
+        .filter(|z| !z.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The zones that fit what is typed, best first: a name that BEGINS with it
+/// before a name with a part that does, each alphabetical. The completer of
+/// the three zone questions (`line::completer_of`), in both doors.
+#[must_use]
+pub fn zones_matching(typed: &str) -> Vec<String> {
+    zones_matching_in(all_zones(), typed)
+}
+
+/// [`zones_matching`], over a list the caller gives.
+#[must_use]
+pub fn zones_matching_in<Z: AsRef<str>>(all: &[Z], typed: &str) -> Vec<String> {
+    let lowered = typed.trim().replace(' ', "_").to_lowercase();
+    let mut fit: Vec<&str> = all
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|z| fits(z, typed))
+        .collect();
+    fit.sort_by_key(|z| (!z.to_lowercase().starts_with(&lowered), *z));
+    fit.into_iter().map(str::to_owned).collect()
+}
+
 /// The glance's file as it is NOW, for a writer — or the key of a refusal
 /// when it will not parse.
 ///
@@ -1720,6 +1945,11 @@ pub enum Asking {
     /// Where this place is, asked by its weather switch: a place with no
     /// coordinate cannot have weather, and the answer turns the switch on.
     Weather(String),
+    /// The two currencies of this place, asked by its currency row.
+    Currency(String),
+    /// The same, asked by the rate's switch: a place with no pair cannot
+    /// have a rate, and the answer turns the switch on.
+    Rate(String),
     /// A date for the MACHINE's clock.
     MachineDate,
     /// A time for the MACHINE's clock.
@@ -1737,6 +1967,7 @@ impl Asking {
             Self::Zone => "locale-zone",
             Self::Place => "locale-place",
             Self::Where(_) | Self::Weather(_) => "locale-where",
+            Self::Currency(_) | Self::Rate(_) => "locale-currency",
             Self::MachineDate => "locale-system-date",
             Self::MachineTime => "locale-system-time",
             Self::MachineZone => "locale-system-zone",
@@ -2508,6 +2739,83 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a place with no currencies turns its rate on without asking
+    /// which two, or its currency row stops asking for the pair.
+    #[test]
+    fn the_rate_and_the_currency_row_ask_for_two_currencies() {
+        let (t, z) = (texts(), utc());
+        let mut v = view();
+        let mut places = v.glance.places();
+        places.push(ronoctua_world::prefs::Wanted {
+            zone: "Europe/Lisbon".to_owned(),
+            ..ronoctua_world::prefs::Wanted::default()
+        });
+        let n = places.len() - 1;
+        v.glance.places = places;
+        v.glance.chosen = true;
+        v.cursor = at(&v, &Target::Shows(n, Shown::Rate));
+        assert_eq!(
+            v.press(Press::Enter, &z, &t),
+            Errand::Ask(Asking::Rate("Europe/Lisbon".to_owned()))
+        );
+        v.cursor = at(&v, &Target::Currency(n));
+        assert_eq!(
+            v.press(Press::Enter, &z, &t),
+            Errand::Ask(Asking::Currency("Europe/Lisbon".to_owned()))
+        );
+        // BOTH ARE ONE QUESTION, answered under one command in both doors.
+        assert_eq!(Asking::Rate(String::new()).command(), "locale-currency");
+        assert_eq!(Asking::Currency(String::new()).command(), "locale-currency");
+        // AND THE ROW SAYS NONE IS CHOSEN, in words.
+        let rows = v.rows(DECIDING_WIDTH, &z, &t);
+        let row = rows
+            .iter()
+            .find(|r| r.target == Target::Currency(n))
+            .expect("the currency row");
+        let drawn: String = row.fields.iter().map(|f| f.text.as_str()).collect();
+        assert!(
+            drawn.contains(&t.t(ronoctua_i18n::key::LOCALE_CURRENCY_NONE)),
+            "{drawn}"
+        );
+    }
+
+    /// FAILS IF: a pair the rates do not quote is taken, or a pair written
+    /// any of the ways a person writes one is refused.
+    #[test]
+    fn a_currency_pair_is_two_codes_the_rates_know() {
+        for said in ["EUR BRL", "eur brl", "EUR→BRL", "eur/brl", " EUR - BRL "] {
+            assert_eq!(
+                currency_pair(said),
+                Some(("EUR".to_owned(), "BRL".to_owned())),
+                "{said}"
+            );
+        }
+        for said in ["EUR", "EUR EUR", "EUR XYZ", "EURO REAL", "EUR BRL GBP", ""] {
+            assert_eq!(currency_pair(said), None, "{said}");
+        }
+    }
+
+    /// FAILS IF: typing a part of a zone's name stops offering it — `Lis`
+    /// offers `Europe/Lisbon`, a part after the slash or the underscore
+    /// counts — or a name that BEGINS with the typing is not offered first.
+    #[test]
+    fn a_zone_is_offered_by_any_part_of_its_name() {
+        let tab = "# a comment\nPT\t+3843-00908\tEurope/Lisbon\nUS\t+404251-0740023\tAmerica/New_York\nPE\t-1203-07703\tAmerica/Lima\nGB\t+513030-0000731\tEurope/London\n";
+        let all = zones_of_tab(tab);
+        assert_eq!(all.len(), 4);
+        assert_eq!(zones_matching_in(&all, "Lis"), ["Europe/Lisbon"]);
+        assert_eq!(zones_matching_in(&all, "york"), ["America/New_York"]);
+        assert_eq!(zones_matching_in(&all, "new y"), ["America/New_York"]);
+        assert_eq!(
+            zones_matching_in(&all, "Europe/L"),
+            ["Europe/Lisbon", "Europe/London"]
+        );
+        // A NAME THAT BEGINS WITH IT FIRST: `America` before a part.
+        assert_eq!(zones_matching_in(&all, "ame")[0], "America/Lima");
+        assert!(zones_matching_in(&all, "").is_empty());
+        assert!(zones_matching_in(&all, "zzz").is_empty());
+    }
+
     /// EVERY host is NAMED on screen — the fallbacks too — and each source can
     /// be stopped.
     ///
@@ -3068,5 +3376,102 @@ mod tests {
                 "`{bad}` was accepted as a coordinate"
             );
         }
+    }
+
+    /// THE CLOCK'S SWITCH IS ONE KNOB OF THE MODULE, and a system that
+    /// switched the module off leaves no switch here.
+    ///
+    /// THE DEFECT THIS CATCHES: the whole preferences sent back (`Tune`),
+    /// built from the shared default — a six-hour watch switched off and on
+    /// from this page came back weekly with a minute of countdown — and a row
+    /// that offered a switch the brain was going to refuse.
+    #[test]
+    fn the_clocks_switch_is_one_knob_and_the_systems_off_is_said() {
+        use ronoctua_brain::wire::{Ask, Knob};
+        match the_clocks_switch(false) {
+            Ask::Set { task, knob } => {
+                assert_eq!(task, ronoctua_brain::compiled::clock_sync::ID);
+                assert_eq!(knob, Knob::Enabled(false));
+            }
+            other => panic!("the switch sends {other:?}"),
+        }
+        assert!(matches!(
+            the_clocks_switch(true),
+            Ask::Set {
+                knob: Knob::Enabled(true),
+                ..
+            }
+        ));
+        assert_eq!(watched_of(true, ""), Watched::Set(true));
+        assert_eq!(watched_of(false, "off"), Watched::Set(false));
+        assert_eq!(
+            watched_of(false, ronoctua_brain::registry::SYSTEM_OFF),
+            Watched::BySystem
+        );
+
+        // AND THE ROW: on, the switch; switched off by the system, "off" with
+        // the reason and nothing to press.
+        let t = texts();
+        let words = |row: &Row| -> String {
+            row.fields
+                .iter()
+                .map(|f| f.text.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let label = t.t(ronoctua_i18n::key::LOCALE_WATCHED);
+        let mut v = view();
+        let on = v.rows(DECIDING_WIDTH, &utc(), &t);
+        let row = on
+            .iter()
+            .find(|r| words(r).contains(&label))
+            .expect("the watch's row");
+        assert_eq!(row.target, Target::Watched);
+        v.watched = Some(Watched::BySystem);
+        let off = v.rows(DECIDING_WIDTH, &utc(), &t);
+        let row = off
+            .iter()
+            .find(|r| words(r).contains(&label))
+            .expect("the watch's row");
+        assert_eq!(row.target, Target::Nothing, "a switch the brain refuses");
+        assert!(words(row).contains(&t.t(ronoctua_i18n::key::LOCALE_AUTOMATIC_OFF)));
+        // THE REASON, in a note that may wrap: its first words are enough.
+        let said = t.t(ronoctua_i18n::key::LOCALE_WATCHED_SYSTEM_OFF);
+        let first: String = said
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            off.iter().any(|r| words(r).contains(&first)),
+            "the system's reason is not on the page"
+        );
+
+        // NOT KNOWN YET — the window asked, off its loop — is not known, with
+        // no switch, and not "the brain is not running", which it may be.
+        assert!(v.set_watched(Some(Watched::Asking)));
+        assert!(
+            !v.set_watched(Some(Watched::Asking)),
+            "the same answer moved the view"
+        );
+        let asking = v.rows(DECIDING_WIDTH, &utc(), &t);
+        let row = asking
+            .iter()
+            .find(|r| words(r).contains(&label))
+            .expect("the watch's row");
+        assert_eq!(row.target, Target::Nothing, "a switch before the answer");
+        let gone: String = t
+            .t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN)
+            .split_whitespace()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            !asking.iter().any(|r| words(r).contains(&gone)),
+            "a brain on its way was said to be absent"
+        );
+        // AND NO MIND IS A BRAIN THAT COULD NOT BE ASKED.
+        assert_eq!(watched_in(None), None);
+        assert_eq!(watched_in(Some(&ronoctua_brain::Mind::default())), None);
     }
 }

@@ -84,10 +84,11 @@ pub struct Fold {
     ///
     /// Nothing in that chain is wrong on its own. What is wrong is that the
     /// HEIGHT of a band is downstream of what the pointer is resting on. So
-    /// the band is measured once, when it opens, and keeps that height until
-    /// it closes: a message shorter than the band is drawn inside it with
-    /// blank rows under it, and a message longer than it scrolls, which is
-    /// what the bar is already for.
+    /// the band is measured when it opens and never SHRINKS until it closes:
+    /// a message shorter than the band is drawn inside it with blank rows
+    /// under it. A longer one grows it, up to the ceiling ([`settle`]) — a
+    /// height that only grows cannot turn round — and past the ceiling it
+    /// scrolls, which is what the bar is already for.
     ///
     /// The owner asked for exactly this — *"o espaço de múltiplas linhas deve
     /// continuar como está, e dentro desse espaço será mostrada a mensagem"*.
@@ -153,10 +154,10 @@ impl Fold {
 ///
 /// Then he found what "follows the content" costs when the content is the
 /// LINE, which changes under the pointer: a layout loop, described in full on
-/// [`Fold::held`]. So the measurement happens once, at [`settle`], and this
-/// reads the answer back. The cost of the first trade is paid and the loop is
-/// not: the height still fits what was opened, and nothing the pointer does
-/// changes it.
+/// [`Fold::held`]. So the measurement happens at [`settle`] — at the opening,
+/// and after it only to grow — and this reads the answer back. The cost of
+/// the first trade is paid and the loop is not: the height fits the longest
+/// thing it held, and nothing the pointer does makes it turn round.
 #[must_use]
 pub const fn rows(fold: Fold) -> u16 {
     if !fold.open {
@@ -165,25 +166,47 @@ pub const fn rows(fold: Fold) -> u16 {
     fold.held
 }
 
-/// Measures the opened band ONCE, from the wrap the painter came to.
+/// Measures the opened band from the wrap the painter came to: once when it
+/// opens, and again only to GROW.
 ///
 /// Answers whether the height changed, which is what tells the door to ask the
 /// compositor for a new size — see the doors' settling pass. It is a no-op
-/// while the band is shut, and a no-op once it has an answer: that is what
-/// makes it a measurement rather than a feedback path.
+/// while the band is shut.
+///
+/// # Why it grows, and never shrinks, while it is held open (2026-09-30)
+///
+/// It was measured once and then never again, which is what ended the loop
+/// [`Fold::held`] is written about — and the owner found the other half of
+/// that bargain: with the drawer held open, a LONGER hint arriving (the
+/// pointer moving to another mark) was cut to the height the first one had
+/// opened at, and its rest scrolled in a drawer that could have shown it.
+/// So a content that wraps to MORE rows grows the band, up to the ceiling;
+/// a shorter one is drawn inside it with blank rows under it, as before. A
+/// height that only grows, and stops at [`tokens::space::MODELINE_FOLDLINES`],
+/// cannot turn round: the loop needed the band to shrink AND grow back. And
+/// the door moves the pointer it remembers by what the band moved it
+/// (`Footer::pointer_follows_the_drawer`), so what is under a still hand is
+/// what is under it on the screen.
 ///
 /// `wrapped` is how many rows the text came to at the width it is drawn at;
-/// one of them is the line itself, so the band under it is one fewer. The
-/// ceiling is [`tokens::space::MODELINE_FOLDLINES`], and past it the text
-/// scrolls — which is where the bar comes from.
+/// one of them is the line itself, so the band under it is one fewer. Past the
+/// ceiling the text scrolls — which is where the bar comes from.
 pub fn settle(fold: &mut Fold, wrapped: usize) -> bool {
-    if !fold.open || fold.measured || wrapped == 0 {
+    if !fold.open || wrapped == 0 {
         return false;
     }
     let under = wrapped.saturating_sub(1);
     let want = u16::try_from(under)
         .unwrap_or(u16::MAX)
         .min(tokens::space::MODELINE_FOLDLINES);
+    if fold.measured {
+        // HELD OPEN: only a longer content moves it, and only up.
+        if want > fold.held {
+            fold.held = want;
+            return true;
+        }
+        return false;
+    }
     // A LINE THAT FITS OPENS INTO NO ROWS: the control is always drawn now,
     // and opening a line that fits is how the sentence about the key under
     // the pointer is asked for — it goes straight under the line, with no
@@ -550,6 +573,58 @@ pub fn teaching(texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
 /// pointer. Not a command of the registry: nothing runs it, it is walked.
 pub const WALK: &str = "fold-walk";
 
+/// The compositor's deed that binds `Ctrl+↑/↓` to the drawer while a hint too
+/// long for the line is on it (`Footer::keep_the_fold_keys`) — and the one
+/// that gives the keys back (`assets/compositor-deeds.nix`). Both name the
+/// DEFAULT mode, whatever mode is on: a bare run-time bind lands in the
+/// active mode and replaces that mode's own `Ctrl+Up`/`Ctrl+Down`.
+pub const KEYS_HOLD: &str = "wm-fold-keys-hold";
+
+/// See [`KEYS_HOLD`].
+pub const KEYS_FREE: &str = "wm-fold-keys-free";
+
+/// The commands the held keys run (`KEYS_HOLD`): `Ctrl+↓` and `Ctrl+↑`.
+pub const BOUND: [&str; 2] = ["minibuffer-fold-open", "minibuffer-fold-close"];
+
+/// A key the footer asked for, pressed with NO FOOTER to take it: the keys
+/// are given back to the windows.
+///
+/// # Why here
+///
+/// The footer gives them back when the hint goes and on its first frame —
+/// but a footer that died holding them leaves `Ctrl+↑/↓` bound to a socket
+/// nobody listens on, for as long as it stays dead (the lifeline's reign).
+/// The first press that finds nobody is the one moment that knows, and it
+/// costs that one press: the next reaches the window.
+pub fn nobody_took(id: &str) {
+    if !BOUND.contains(&id) {
+        return;
+    }
+    let Some(spoken) = ronoctua_scroll::deeds::spoken_of(KEYS_FREE) else {
+        return;
+    };
+    match crate::daemon::open_the_compositor().and_then(|mut wm| wm.deed(&spoken.deed, None)) {
+        Ok(()) => tracing::info!(id, "no footer took the drawer's key: the keys went back"),
+        Err(e) => tracing::warn!(error = %e, id, "the drawer's keys could not be given back"),
+    }
+}
+
+/// Where a pointer that did not move is, in the surface's own coordinates,
+/// once the drawer went from `was` rows to `now`.
+///
+/// The footer is anchored at the screen's bottom and laid out from its top,
+/// and the drawer is its bottom rows: a drawer that grows by one row moves
+/// the surface's top one line up the screen, and a hand that stayed is one
+/// line further DOWN the surface. The compositor re-sends the pointer only
+/// once the new size is applied and its animation ends, so the footer moves
+/// the position it remembers itself, in the frame that moved it
+/// (`Footer::pointer_follows_the_drawer`) — by this, and nothing else; the
+/// compositor's motion, when it comes, is absolute and replaces it.
+#[must_use]
+pub fn pointer_after(y: f64, was: u16, now: u16, line: f64) -> f64 {
+    (f64::from(now) - f64::from(was)).mul_add(line, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,6 +689,136 @@ mod tests {
         let mut again = fold;
         assert!(!settle(&mut again, 1), "the height was asked a second time");
         assert_eq!(again, fold);
+    }
+
+    /// FAILS IF: a drawer held open does not grow for a longer content — the
+    /// rest of a longer hint scrolled inside the first one's height — or
+    /// grows past the ceiling, or shrinks for a shorter one.
+    #[test]
+    fn a_longer_content_grows_a_held_drawer_and_a_shorter_one_does_not_shrink_it() {
+        let short = prose(&"word ".repeat(6));
+        let long = prose(&"word ".repeat(18));
+        let mut fold = open_over(&short, 20);
+        let first = rows(fold);
+        assert!(
+            settle(&mut fold, wrap_pieces(&long, 20).len()),
+            "it did not grow"
+        );
+        assert!(rows(fold) > first);
+        let grown = rows(fold);
+        assert!(
+            !settle(&mut fold, wrap_pieces(&short, 20).len()),
+            "it shrank"
+        );
+        assert_eq!(rows(fold), grown);
+        let huge = prose(&"word ".repeat(500));
+        settle(&mut fold, wrap_pieces(&huge, 20).len());
+        assert_eq!(rows(fold), tokens::space::MODELINE_FOLDLINES);
+    }
+
+    /// FAILS IF: a still pointer over a held drawer makes the band move for
+    /// ever — the owner's loop — or the position the footer remembers stops
+    /// being where the hand IS on the surface once the drawer moved under it
+    /// ([`pointer_after`], what `Footer::pointer_follows_the_drawer` moves it
+    /// by). A pointer that rests is sampled over many frames, not one: a
+    /// single reading does not see a loop.
+    ///
+    /// The model is the footer's, in the SCREEN's lines: the surface is
+    /// anchored at the bottom, laid out from its top — region, modeline,
+    /// minibuffer, then the drawer — so its top moves up the screen by what
+    /// the drawer grows, and the hand does not move at all. The content on
+    /// the line is what the row under the REMEMBERED position explains, and
+    /// it is as hostile as it can be: every row explains itself with a
+    /// sentence of a different length, so any row change is a content change.
+    #[test]
+    fn a_still_pointer_over_a_held_drawer_is_stable() {
+        const ABOVE: u16 = 14;
+        const SCREEN: u16 = 40;
+        let line = 19.0;
+        let explains = |row: u16| prose(&"word ".repeat(4 + usize::from(row % 7) * 9));
+        for hand in (SCREEN - ABOVE - 1)..SCREEN {
+            let mut fold = Fold::default();
+            fold.toggle();
+            // WHERE THE HAND IS on the surface, from the screen: its line less
+            // the surface's top, which is the screen's bottom less the height.
+            let truth = |fold: Fold| {
+                f64::from(hand + ABOVE + 1 + rows(fold)) * line - f64::from(SCREEN) * line
+            };
+            let mut remembered = truth(fold);
+            let mut heights = Vec::new();
+            for _frame in 0..200 {
+                // What the footer answers for is the row it REMEMBERS the hand on.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let row = (remembered / line).floor().max(0.0) as u16;
+                let before = rows(fold);
+                settle(&mut fold, wrap_pieces(&explains(row), 20).len());
+                remembered = pointer_after(remembered, before, rows(fold), line);
+                assert!(
+                    (remembered - truth(fold)).abs() < 1e-6,
+                    "the footer remembers the hand at {remembered}, and it is at {} \
+                     (hand on line {hand}, drawer {before} -> {})",
+                    truth(fold),
+                    rows(fold)
+                );
+                heights.push(rows(fold));
+            }
+            // IT SETTLES: the last half of the frames never moved it.
+            let tail = &heights[100..];
+            assert!(
+                tail.windows(2).all(|w| w[0] == w[1]),
+                "the band still moves under a still pointer (hand {hand}): {:?}",
+                &heights[..20]
+            );
+            // AND IT MOVED A BOUNDED NUMBER OF TIMES, all of them up.
+            let changes = heights.windows(2).filter(|w| w[0] != w[1]).count();
+            assert!(changes <= usize::from(tokens::space::MODELINE_FOLDLINES));
+            assert!(heights.windows(2).all(|w| w[0] <= w[1]));
+        }
+        // AND THE ARITHMETIC ITSELF: a drawer that grew moves the hand down
+        // the surface, one that shrank (closing) moves it up, one that stayed
+        // leaves it.
+        assert!((pointer_after(100.0, 1, 3, line) - (100.0 + 2.0 * line)).abs() < 1e-9);
+        assert!((pointer_after(100.0, 3, 0, line) - (100.0 - 3.0 * line)).abs() < 1e-9);
+        assert!((pointer_after(100.0, 2, 2, line) - 100.0).abs() < 1e-9);
+    }
+
+    /// FAILS IF: a key the default mode binds BARE — an emergency key or a
+    /// media key (`export-binds`; every chord there carries the prefix,
+    /// `Mod4` or the nested loop's `Alt`) — is `Ctrl+Up` or `Ctrl+Down` with
+    /// nothing else held, or a deed of the drawer's keys stops naming the
+    /// default mode. The drawer's keys are bound over that mode's list while
+    /// a cut hint is on the line and REMOVED after ([`KEYS_FREE`]), so one of
+    /// its own there would be gone until the config is read again. Both
+    /// spellings count: `Control` and `Ctrl` are one modifier.
+    #[test]
+    fn the_drawers_keys_take_nothing_of_the_default_mode() {
+        let bare = |key: &str| {
+            let parts: Vec<String> = key.split('+').map(str::to_lowercase).collect();
+            parts.len() == 2
+                && matches!(parts[0].as_str(), "ctrl" | "control")
+                && matches!(parts[1].as_str(), "up" | "down")
+        };
+        assert!(bare("Ctrl+Up") && bare("Control+Down") && !bare("Mod4+Ctrl+Up"));
+        let mut seen = 0;
+        for (key, _, _) in crate::actions::emergency() {
+            assert!(!bare(key), "the emergency key {key} is one of the drawer's");
+            seen += 1;
+        }
+        for (key, _, _) in crate::actions::media() {
+            assert!(!bare(key), "the media key {key} is one of the drawer's");
+            seen += 1;
+        }
+        assert!(seen > 5, "a sweep that saw {seen} keys saw nothing");
+        // AND THE DEEDS NAME THE DEFAULT MODE, each of their commands.
+        for id in [KEYS_HOLD, KEYS_FREE] {
+            let spoken = ronoctua_scroll::deeds::spoken_of(id).expect("a deed of this build");
+            for command in spoken.text.split(';') {
+                assert!(
+                    command.trim().starts_with("mode \"default\" "),
+                    "`{id}` binds in whatever mode is on: `{command}`"
+                );
+            }
+        }
     }
 
     #[test]
@@ -690,8 +895,9 @@ mod tests {
         fold.toggle();
         assert!(!settle(&mut fold, wrap_pieces(&text, 40).len()));
         assert_eq!(rows(fold), 0);
-        // AND IT IS MEASURED ONCE: a second settle asks nothing again.
-        assert!(!settle(&mut fold, 5));
+        // AND THE SAME LINE ASKS NOTHING AGAIN: a second settle over it is
+        // no change. Only a longer content grows it (`settle`).
+        assert!(!settle(&mut fold, wrap_pieces(&text, 40).len()));
         assert_eq!(rows(fold), 0);
     }
 

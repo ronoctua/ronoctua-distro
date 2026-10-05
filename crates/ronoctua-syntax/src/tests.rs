@@ -800,3 +800,119 @@ fn whole_text_offsets_are_absolute() {
         "an offset ran past the text"
     );
 }
+
+/// FAILS IF: the content of a `<script>` or a `<style>` is prose again — the
+/// markup scanner stops handing it to its own language, or hands back
+/// offsets of the piece and not of the line.
+#[test]
+fn script_and_style_are_drawn_in_their_own_language() {
+    let html = Language::Html.grammar();
+    let text = "<script>const n = 1; // done</script><p>const</p>";
+    let seen = painted(text, &one(text, html));
+    assert!(seen.contains(&(Role::Tag, "script")), "{seen:?}");
+    assert!(seen.contains(&(Role::Keyword, "const")), "{seen:?}");
+    assert!(seen.contains(&(Role::Number, "1")), "{seen:?}");
+    // THE COMMENT STOPS AT THE CLOSING TAG, which is markup again.
+    assert!(seen.contains(&(Role::Comment, "// done")), "{seen:?}");
+    // AND AFTER IT, PROSE IS PROSE: the second `const` is not a keyword.
+    let keywords = seen.iter().filter(|(r, _)| *r == Role::Keyword).count();
+    assert_eq!(keywords, 1, "{seen:?}");
+
+    let style = "<STYLE type=\"text/css\">a { color: red; }</STYLE>";
+    let seen = painted(style, &one(style, html));
+    assert!(seen.contains(&(Role::Tag, "STYLE")), "{seen:?}");
+    assert!(
+        seen.iter()
+            .any(|(r, t)| *r == Role::Property && *t == "color"),
+        "{seen:?}"
+    );
+}
+
+/// FAILS IF: an embedded language does not carry across lines — the state
+/// forgets which element is open, or what its language left open.
+#[test]
+fn an_embedded_language_carries_across_lines() {
+    let html = Language::Html.grammar();
+    let (first, carried) = line("<script>", html, State::fresh());
+    assert!(!carried.is_fresh(), "the element's content is still open");
+    assert!(painted("<script>", &first).contains(&(Role::Tag, "script")));
+
+    // A BLOCK COMMENT OPENED INSIDE IT stays a comment on the next line.
+    let (_, carried) = line("let a = 2; /* half", html, carried);
+    let (middle, carried) = line("still comment */ return a;", html, carried);
+    let seen = painted("still comment */ return a;", &middle);
+    assert!(
+        seen.contains(&(Role::Comment, "still comment */")),
+        "{seen:?}"
+    );
+    assert!(seen.contains(&(Role::Keyword, "return")), "{seen:?}");
+
+    let end = "</script> <b>let</b>";
+    let (last, carried) = line(end, html, carried);
+    let seen = painted(end, &last);
+    assert!(seen.contains(&(Role::Tag, "script")), "{seen:?}");
+    assert!(
+        !seen.iter().any(|(r, _)| *r == Role::Keyword),
+        "markup again: {seen:?}"
+    );
+    assert!(carried.is_fresh(), "the element closed");
+
+    // A SELF-CLOSED SCRIPT HOLDS NOTHING, and what follows is markup.
+    let (_, carried) = line("<script src=\"a.js\" />", html, State::fresh());
+    assert!(carried.is_fresh());
+}
+
+/// FAILS IF: a row of the second wave stops being reachable by its type or
+/// by a fence's tag — the rows are data only, and this is what proves the
+/// data reached the table.
+#[test]
+fn the_second_wave_is_reached_by_type_and_by_tag() {
+    for (mime, id) in [
+        ("text/x-erlang", "erlang"),
+        ("text/x-elixir", "elixir"),
+        ("text/x-common-lisp", "lisp"),
+        ("text/x-emacs-lisp", "lisp"),
+        ("text/x-scheme", "lisp"),
+        ("text/x-ocaml", "ocaml"),
+        ("text/x-crystal", "crystal"),
+        ("text/julia", "julia"),
+        ("text/x-fortran", "fortran"),
+        ("text/x-verilog", "verilog"),
+        ("text/x-vhdl", "vhdl"),
+        ("text/tcl", "tcl"),
+        ("text/x-groovy", "groovy"),
+        ("text/x-gradle", "groovy"),
+        ("text/x-dsrc", "d"),
+        ("text/x-vala", "vala"),
+        ("text/x-nim", "nim"),
+        ("text/x-qml", "qml"),
+        ("text/x-gherkin", "gherkin"),
+        ("text/x-rpm-spec", "rpm-spec"),
+        ("text/x-gettext-translation", "gettext"),
+        ("text/x-pascal", "pascal"),
+        ("text/x-adasrc", "ada"),
+        ("application/vnd.dart", "dart"),
+        ("application/vnd.coffeescript", "coffeescript"),
+        ("text/x-matlab", "matlab"),
+        ("text/x-cobol", "cobol"),
+        ("text/x-eiffel", "eiffel"),
+    ] {
+        assert_eq!(of_mime(mime).map(Language::id), Some(id), "{mime}");
+    }
+    assert_eq!(of_tag("elixir").map(Language::id), Some("elixir"));
+    assert_eq!(of_tag("ml").map(Language::id), Some("ocaml"));
+
+    // AND A LINE OF ONE IS COLOURED, not a grey wall.
+    fn seen_in<'a>(id: &str, text: &'a str) -> Vec<(Role, &'a str)> {
+        let language = of_tag(id).expect("a tag");
+        painted(text, &one(text, language.grammar()))
+    }
+    let ocaml = "let rec f x = (* why *) x";
+    let seen = seen_in("ocaml", ocaml);
+    assert!(seen.contains(&(Role::Keyword, "rec")), "{seen:?}");
+    assert!(seen.contains(&(Role::Comment, "(* why *)")), "{seen:?}");
+    let elixir = "defmodule A do # x";
+    let seen = seen_in("elixir", elixir);
+    assert!(seen.contains(&(Role::Keyword, "defmodule")), "{seen:?}");
+    assert!(seen.contains(&(Role::Comment, "# x")), "{seen:?}");
+}

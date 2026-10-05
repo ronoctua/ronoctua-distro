@@ -333,6 +333,156 @@ pub fn place_near(atlas: &Atlas<'_>, at: Point) -> Option<(Named, u32)> {
     best.map(|(name, metres, _)| (name, metres))
 }
 
+/// Every named place of the table: its name, where it is and its weight
+/// (the population rank the generator kept, which breaks a tie).
+#[must_use]
+pub fn places(atlas: &Atlas<'_>) -> Vec<(Named, Point, u16)> {
+    let bytes = atlas.places_bytes();
+    let mut c = Cursor::of(bytes);
+    let Some(count) = c.u32().map(|n| n as usize) else {
+        return Vec::new();
+    };
+    let records_at = c.at + (CELLS_LON * CELLS_LAT + 1) * 4;
+    let names_at = records_at + count * 12;
+    let mut out = Vec::with_capacity(count.min(1 << 16));
+    for k in 0..count {
+        let Some(b) = bytes.get(records_at + k * 12..records_at + k * 12 + 12) else {
+            break;
+        };
+        let lon = lon_of(i16::from_le_bytes([b[0], b[1]]));
+        let lat = lat_of(i16::from_le_bytes([b[2], b[3]]));
+        let pop = u16::from_le_bytes([b[6], b[7]]);
+        let name_at = u32::from_le_bytes([b[8], b[9], b[10], b[11]]) as usize;
+        let mut nc = Cursor::of(bytes);
+        nc.at = names_at + name_at;
+        if let Some(name) = nc.short() {
+            out.push((name, Point { lat, lon }, pop));
+        }
+    }
+    out
+}
+
+/// A name as it is compared: lower case, and the marks of the Latin letters
+/// a feed may leave out taken off — `São Paulo` is `sao paulo`, `Brașov`
+/// `brasov` and `Muğla` `mugla`, as a feed that wrote them bare spelled
+/// them. A combining mark (a name written decomposed) goes too, and the
+/// letters that are two (`ß`, `æ`, `œ`) are written as two.
+#[must_use]
+pub fn folded(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.trim().chars().flat_map(char::to_lowercase) {
+        match bare(c) {
+            Bare::One(b) => out.push(b),
+            Bare::Two(a, b) => {
+                out.push(a);
+                out.push(b);
+            }
+            Bare::None => {}
+        }
+    }
+    out
+}
+
+/// What a lower-case letter is without its marks.
+enum Bare {
+    /// One letter.
+    One(char),
+    /// A letter that is two (`ß` is `ss`).
+    Two(char, char),
+    /// A combining mark: nothing.
+    None,
+}
+
+/// A lower-case letter of Latin-1 and Latin Extended-A (and the comma-below
+/// letters of Romanian, in Extended-B) without its marks; any other
+/// character as it is.
+const fn bare(c: char) -> Bare {
+    Bare::One(match c {
+        '\u{300}'..='\u{36f}' => return Bare::None,
+        'ß' => return Bare::Two('s', 's'),
+        'æ' => return Bare::Two('a', 'e'),
+        'œ' => return Bare::Two('o', 'e'),
+        'þ' => return Bare::Two('t', 'h'),
+        'ĳ' => return Bare::Two('i', 'j'),
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'ǎ' => 'a',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
+        'ð' | 'ď' | 'đ' => 'd',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
+        'ĥ' | 'ħ' => 'h',
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' | 'ǐ' => 'i',
+        'ĵ' => 'j',
+        'ķ' | 'ĸ' => 'k',
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => 'l',
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'ŉ' | 'ŋ' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'ơ' | 'ǒ' => 'o',
+        'ŕ' | 'ŗ' | 'ř' => 'r',
+        'ś' | 'ŝ' | 'ş' | 'š' | 'ș' | 'ſ' => 's',
+        'ţ' | 'ť' | 'ŧ' | 'ț' => 't',
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'ư' | 'ǔ' => 'u',
+        'ŵ' => 'w',
+        'ý' | 'ÿ' | 'ŷ' => 'y',
+        'ź' | 'ż' | 'ž' => 'z',
+        '-' | '\'' | '’' => ' ',
+        other => other,
+    })
+}
+
+/// Where the place named `name` is, IN THE COUNTRY `iso` — a TV feed's city
+/// (C5): the named places of the table are not kept by country, so each one
+/// that bears the name ([`folded`]) is asked which country it is in
+/// ([`country_at`]), and the weightiest of those in `iso` answers. `None` for
+/// a name no place of that country bears.
+#[must_use]
+pub fn place_named(atlas: &Atlas<'_>, iso: [u8; 2], name: &str) -> Option<Point> {
+    let wanted = folded(name);
+    if wanted.is_empty() {
+        return None;
+    }
+    places(atlas)
+        .into_iter()
+        .filter(|(n, ..)| folded(n) == wanted)
+        .filter(|(_, at, _)| in_country(atlas, *at, iso))
+        .max_by_key(|(_, _, pop)| *pop)
+        .map(|(_, at, _)| at)
+}
+
+/// How far a place on the coast may be from its country's drawn land, in
+/// degrees: the borders are quantised to the grid, and a harbour city —
+/// Lisbon, Rio — sits a few kilometres out to sea on them.
+const COAST_DEGREES: f32 = 0.15;
+
+/// Whether `at` is in the country `iso` — on its land, or just off the coast
+/// of it ([`COAST_DEGREES`]) when it is in no country at all. A point that
+/// is inside ANOTHER country is that country's, however near the border.
+#[must_use]
+pub fn in_country(atlas: &Atlas<'_>, at: Point, iso: [u8; 2]) -> bool {
+    match country_at(atlas, at, Tongue::English) {
+        Some((_, code, _)) => code == iso,
+        None => {
+            let d = COAST_DEGREES;
+            [
+                (d, 0.0),
+                (-d, 0.0),
+                (0.0, d),
+                (0.0, -d),
+                (d, d),
+                (-d, -d),
+                (d, -d),
+                (-d, d),
+            ]
+            .iter()
+            .any(|(dlat, dlon)| {
+                let near = Point {
+                    lat: at.lat + dlat,
+                    lon: at.lon + dlon,
+                };
+                country_at(atlas, near, Tongue::English).is_some_and(|(_, code, _)| code == iso)
+            })
+        }
+    }
+}
+
 /// Everything about where a coordinate is.
 #[must_use]
 pub fn address(atlas: &Atlas<'_>, at: Point, tongue: Tongue) -> Address {

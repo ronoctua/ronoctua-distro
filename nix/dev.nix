@@ -83,6 +83,12 @@
 }:
 
 let
+  # THE PO TOKEN MINTER, the same derivation the flake hands the modules
+  # (`nix/pot-provider.nix`): the loop's player and queue mint as an installed
+  # machine with the media profile does, or YouTube is not what is being
+  # tried here.
+  potProvider = callPackage ./pot-provider.nix { };
+
   # The chords, generated from the shell's command table — the same ones as in
   # production, only with a different prefix.
   binds = callPackage ./compositor-binds.nix { inherit ronoctua-shell; };
@@ -1209,6 +1215,17 @@ let
       # through it (`ronoctua_ytdlp::flat`), and mpv's own hook finds it the
       # same way.
       export RONOCTUA_YT_DLP="${yt-dlp}/bin/yt-dlp"
+      # AND THE PO TOKEN'S THREE, all of them, as the installed units carry
+      # them where the media profile is (`nix/modules/transfers.nix`): with
+      # two of the three yt-dlp loads no minter, and a YouTube video that
+      # plays on an installed machine would be refused here
+      # (`ronoctua_ytdlp::pot_flags`).
+      # The minter's own three (`potProvider.environment`), never spelled here.
+      ${lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (
+          name: value: "export ${name}=${lib.escapeShellArg value}"
+        ) potProvider.environment
+      )}
       export RONOCTUA_FILES_START="${import ./files-start.nix}"
       # AND WHAT THE SIDEBAR STARTS WITH — the same two files the installed
       # system resolves, for the same reason: there is no NixOS here to read an
@@ -1390,9 +1407,11 @@ let
               if cargo build --profile loop -p ronoctua-shell --bin ronoctua-shell \
                    -p ronoctua-rescue --bin ronoctua-rescue \
                    -p ronoctua-transfers --bin ronoctua-transfers \
+                   -p ronoctua-belongings --bin ronoctua-belongings \
                    -p ronoctua-brain --bin ronoctua-brain \
                    -p ronoctua-studio --bin ronoctua-studio \
-                   -p ronoctua-player-engine --bin ronoctua-player 2>&1 | tail -20; then
+                   -p ronoctua-player-engine --bin ronoctua-player \
+                   -p ronoctua-tags --bin ronoctua-tags 2>&1 | tail -20; then
                 export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/loop/ronoctua-shell"
                 restart_footer
               else

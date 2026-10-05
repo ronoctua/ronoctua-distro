@@ -27,7 +27,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::mind::Mind;
-use crate::prefs::Prefs;
+use crate::prefs::{Gate, PartOfDay};
 
 /// What a client asks the brain for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,16 +79,91 @@ pub enum Ask {
         /// Which.
         task: String,
     },
-    /// Replace the preferences with these, and write them down.
+    /// Change ONE preference of one task, resolved over the module's own
+    /// defaults.
     ///
-    /// The WHOLE record, and not one field: the screen has the mind in front of
-    /// it and sends back what it wants, so there is one shape to validate
-    /// instead of one message per preference. The daemon is what writes the
-    /// file — the component touches no disk (invariant 11).
-    Tune {
-        /// All of them.
-        prefs: Box<Prefs>,
+    /// # Why one knob and not the whole record
+    ///
+    /// Because the whole record (the old `Tune`, gone once every door moved
+    /// here) is what let three places write a task's preferences from the
+    /// SHARED default (`Prefs::mine`): a screen that
+    /// switched a watch off and on again sent back a weekly cadence with a
+    /// minute of countdown the watch never had. One knob is applied by the
+    /// daemon, which is the one place that knows the module's defaults.
+    ///
+    /// A knob a module does not have — a cadence for a module that keeps no
+    /// calendar, a step it does not declare — is refused with a sentence.
+    Set {
+        /// Which task, by id.
+        task: String,
+        /// Which preference, and its value.
+        knob: Knob,
     },
+    /// Replace the general gate — the other half of what the old `Tune` did.
+    Gate {
+        /// The whole gate: three numbers, one policy.
+        gate: Gate,
+    },
+    /// Do one of a module's actions (`<module>-<action>`). Refused with a
+    /// sentence when the module or the action is unknown, a row action has no
+    /// row or an action that asks has no answer; declined by the MODULE with
+    /// the text key of its reason (`<module>-why-<word>`, `brain-why-<word>`)
+    /// in [`Say::Declined`].
+    Act {
+        /// Whose, by id.
+        module: String,
+        /// Which action, by its id inside the module.
+        action: String,
+        /// The row of the module's screen it was asked on, by the row's id.
+        row: Option<String>,
+        /// What the person typed, for an action that asks first.
+        answer: Option<String>,
+    },
+    /// Put a notice away until it is news again — only one its declaration
+    /// lets be dismissed, and only while it is up.
+    Dismiss {
+        /// Whose, by id.
+        module: String,
+        /// Which notice, by its id inside the module.
+        notice: String,
+    },
+    /// Put a notice off for a while — one of the snoozes it offers, only
+    /// while it is up.
+    Snooze {
+        /// Whose, by id.
+        module: String,
+        /// Which notice.
+        notice: String,
+        /// For how long — one of the snoozes the notice offers.
+        minutes: u16,
+    },
+    /// A module's own page, now: answered with [`Say::Screen`]. A page asks
+    /// when the task's `screen-generation` moved, never on a clock.
+    Screen {
+        /// Whose, by id.
+        module: String,
+    },
+}
+
+/// WHICH preference, and its VALUE — the brain's side of the WIT's `knob`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Knob {
+    /// Days between runs.
+    IntervalDays(u16),
+    /// Which stretch of the day.
+    PartOfDay(PartOfDay),
+    /// Whether it runs on its own at all.
+    Enabled(bool),
+    /// One step, on or off.
+    Step {
+        /// Which step, by id.
+        id: String,
+        /// Whether it is to run.
+        on: bool,
+    },
+    /// Every step back to what the distro ships.
+    ResetSteps,
 }
 
 /// What the brain says back.
@@ -114,6 +189,24 @@ pub enum Say {
     Refused {
         /// In the daemon's own words.
         why: String,
+    },
+    /// A module declined an [`Ask::Act`], and this key says why — a case of
+    /// its own, and not the words of [`Say::Refused`], so the door knows to
+    /// TRANSLATE it (invariant 8) and can say it in the door that asked.
+    Declined {
+        /// The text key of the reason: `<module>-why-<word>`, or
+        /// `brain-why-<word>` for a word of the core's.
+        key: String,
+    },
+    /// A module's own page, as asked by [`Ask::Screen`] — rows of DATA, never
+    /// carried in the mind.
+    Screen {
+        /// Whose, by id.
+        module: String,
+        /// The generation it is, so a page that asked twice keeps the newer.
+        generation: u64,
+        /// The rows.
+        screen: crate::module::Screen,
     },
 }
 
@@ -180,14 +273,14 @@ pub fn read_line<T: DeserializeOwned>(from: &mut impl BufRead) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mind::{Announcement, Standing, StepState, TaskState};
-    use crate::prefs::PartOfDay;
+    use crate::mind::{ActionState, Announcement, Posted, Said, Standing, StepState, TaskState};
+    use crate::module::{Arg, Cell, Item, Level, Mark, MarkId, Row, Section, Tone};
+    use crate::prefs::Prefs;
     use crate::task::{Hold, OutcomeKind, RunRecord, StepOutcome};
 
     fn a_mind() -> Mind {
         Mind {
             journal: Vec::new(),
-            notice: None,
             now: 1_700_000_000,
             pulse: crate::pulse::Pulse {
                 at: 1_700_000_000,
@@ -200,11 +293,14 @@ mod tests {
                 cpu_stall: None,
                 on_battery: Some(false),
                 disk_free_per_mille: Some(87),
-                disk_short: Some(false),
+                rooms: vec![crate::pulse::Room {
+                    total: 256_000_000_000,
+                    free: 22_272_000_000,
+                }],
             },
             tasks: vec![TaskState {
                 kind: crate::task::Kind::Routine,
-                id: "system-update".to_owned(),
+                id: "made-up".to_owned(),
                 standing: Standing::Queued,
                 enabled: true,
                 interval_days: 7,
@@ -214,7 +310,7 @@ mod tests {
                 why_not: String::new(),
                 history: Vec::new(),
                 last: Some(RunRecord {
-                    task: "system-update".to_owned(),
+                    task: "made-up".to_owned(),
                     began: 1_699_000_000,
                     ended: 1_699_003_000,
                     kind: OutcomeKind::Failed,
@@ -227,6 +323,8 @@ mod tests {
                         seconds: 3000,
                         trouble: "it did not work".to_owned(),
                     }],
+                    says: String::new(),
+                    args: Vec::new(),
                 }),
                 steps: vec![StepState {
                     id: "build".to_owned(),
@@ -234,12 +332,25 @@ mod tests {
                     needs_root: true,
                     on: true,
                     on_by_default: true,
+                    name_key: "update-build".to_owned(),
+                    does_key: "update-build-does".to_owned(),
+                }],
+                calendar: true,
+                name_key: "brain-task-made-up".to_owned(),
+                does_key: "brain-task-made-up-does".to_owned(),
+                why_key: String::new(),
+                screen_generation: 3,
+                actions: vec![ActionState {
+                    id: "keep".to_owned(),
+                    label: "cmd-made-up-keep".to_owned(),
+                    row: false,
+                    asks: Some("ask-made-up-keep".to_owned()),
                 }],
             }],
-            queue: vec!["system-update".to_owned()],
+            queue: vec!["made-up".to_owned()],
             running: String::new(),
             announcement: Some(Announcement {
-                task: "system-update".to_owned(),
+                task: "made-up".to_owned(),
                 total_seconds: 60,
                 deadline: 1_700_000_060,
                 why: "due".to_owned(),
@@ -247,12 +358,52 @@ mod tests {
             prefs: Prefs::default(),
             rehearsing: None,
             postponed: None,
-            relieved: Some(crate::task::Relieved {
-                at: 1_700_000_030,
-                freed_bytes: 12_345_678_901,
-                free_per_mille: 87,
-                short: true,
-            }),
+            // THE MODULES' HALF, every kind of it: what a module publishes has
+            // to come back from a line of JSON EQUAL, borrowed constants and
+            // all.
+            notices: vec![Posted {
+                module: "fixture".to_owned(),
+                what: crate::module::Notice {
+                    id: "due".into(),
+                    says: "fixture-says-due".into(),
+                    args: vec![
+                        ("freed".into(), Arg::Bytes(12_345)),
+                        ("when".into(), Arg::Moment(1_700_000_000)),
+                        ("free".into(), Arg::PerMille(87)),
+                        ("what".into(), Arg::Key("fixture-what".into())),
+                        ("typed".into(), Arg::Text("water the plants".to_owned())),
+                        ("count".into(), Arg::Number(-3)),
+                    ],
+                    level: Level::Alarm,
+                    since: 1_699_999_000,
+                    controls: vec!["forget".into()],
+                    dismiss: true,
+                    snooze: vec![5, 10, 60].into(),
+                },
+            }],
+            marks: vec![Posted {
+                module: "fixture".to_owned(),
+                what: Mark {
+                    id: MarkId::of("full", "fixture-full", "fixture-mark-full"),
+                    tone: Tone::Danger,
+                    count: 2,
+                    act: Some("forget".into()),
+                },
+            }],
+            events: vec![Said {
+                seq: 7,
+                tag: "fixture-emptied".into(),
+                args: vec![("freed".into(), Arg::Bytes(1))],
+            }],
+            items: vec![Posted {
+                module: "fixture".to_owned(),
+                what: Item {
+                    id: "r-1".to_owned(),
+                    label: Cell::Data("call the plumber".to_owned()),
+                    at: 1_700_086_400,
+                    act: None,
+                },
+            }],
         }
     }
 
@@ -277,27 +428,74 @@ mod tests {
             Ask::Look,
             Ask::Watch,
             Ask::Run {
-                task: "system-update".to_owned(),
+                task: "made-up".to_owned(),
                 rehearsal: false,
             },
             Ask::Run {
-                task: "system-update".to_owned(),
+                task: "made-up".to_owned(),
                 rehearsal: true,
             },
             Ask::Abort {
-                task: "system-update".to_owned(),
+                task: "made-up".to_owned(),
             },
             Ask::Proceed,
             Ask::Postpone,
             Ask::Toggle {
-                task: "system-update".to_owned(),
+                task: "made-up".to_owned(),
                 step: "collect-garbage".to_owned(),
             },
             Ask::Reset {
-                task: "system-update".to_owned(),
+                task: "made-up".to_owned(),
             },
-            Ask::Tune {
-                prefs: Box::new(Prefs::default()),
+            Ask::Set {
+                task: "made-up".to_owned(),
+                knob: Knob::IntervalDays(14),
+            },
+            Ask::Set {
+                task: "made-up".to_owned(),
+                knob: Knob::PartOfDay(PartOfDay::Night),
+            },
+            Ask::Set {
+                task: "made-up".to_owned(),
+                knob: Knob::Enabled(false),
+            },
+            Ask::Set {
+                task: "made-up".to_owned(),
+                knob: Knob::Step {
+                    id: "collect-garbage".to_owned(),
+                    on: false,
+                },
+            },
+            Ask::Set {
+                task: "made-up".to_owned(),
+                knob: Knob::ResetSteps,
+            },
+            Ask::Gate {
+                gate: crate::prefs::Gate::default(),
+            },
+            Ask::Act {
+                module: "fixture".to_owned(),
+                action: "forget".to_owned(),
+                row: Some("r-1".to_owned()),
+                answer: None,
+            },
+            Ask::Act {
+                module: "fixture".to_owned(),
+                action: "new".to_owned(),
+                row: None,
+                answer: Some("tomorrow 9:00 water the plants".to_owned()),
+            },
+            Ask::Dismiss {
+                module: "fixture".to_owned(),
+                notice: "due".to_owned(),
+            },
+            Ask::Snooze {
+                module: "fixture".to_owned(),
+                notice: "due".to_owned(),
+                minutes: 10,
+            },
+            Ask::Screen {
+                module: "fixture".to_owned(),
             },
         ] {
             round_trip(&ask);
@@ -312,6 +510,60 @@ mod tests {
         round_trip(&Say::Refused {
             why: "I do not know that task".to_owned(),
         });
+        round_trip(&Say::Declined {
+            key: "fixture-why-when-empty".to_owned(),
+        });
+        // A CASE OF ITS OWN on the wire, never a `refused` a door would draw
+        // untranslated.
+        let line = serde_json::to_string(&Say::Declined {
+            key: "k".to_owned(),
+        })
+        .expect("encode");
+        assert_eq!(line, r#"{"say":"declined","key":"k"}"#);
+        round_trip(&Say::Screen {
+            module: "fixture".to_owned(),
+            generation: 4,
+            screen: crate::module::Screen {
+                sections: vec![Section {
+                    heading: "fixture-heading".into(),
+                    rows: vec![Row {
+                        id: "one".to_owned(),
+                        label: Cell::Key("fixture-row".into()),
+                        value: Cell::Count(3),
+                        note: Cell::Empty,
+                        tone: Tone::Watching,
+                        act: None,
+                        also: Some("ignore".into()),
+                    }],
+                }],
+            },
+        });
+    }
+
+    #[test]
+    fn the_whole_record_is_no_longer_an_ask() {
+        // THE OLD `Tune` IS GONE: a door that still sent every preference back
+        // is refused at the line, and never writes a module's preferences
+        // from the shared default again.
+        let old = r#"{"ask":"tune","prefs":{}}"#;
+        assert!(
+            serde_json::from_str::<Ask>(old).is_err(),
+            "a tune still reads"
+        );
+    }
+
+    #[test]
+    fn a_mind_from_before_the_modules_still_reads() {
+        // A LINE FROM AN OLDER DAEMON (a footer restarted before its brain):
+        // a line without any of the modules' fields is still a mind, and a
+        // task row without them is still a row — with a calendar, which every
+        // task before the modules kept. Its one-line `notice` is ignored.
+        let old = r#"{"now":5,"tasks":[{"id":"made-up","kind":"routine","standing":"idle","enabled":true,"interval-days":7,"part-of-day":"afternoon","next":0,"hold":null,"why-not":"","last":null,"steps":[{"id":"build","command":"x","needs-root":true,"on":true,"on-by-default":true}]}],"notice":{"task":"t","says":"k","act":null}}"#;
+        let mind: Mind = serde_json::from_str(old).expect("an old mind no longer reads");
+        assert!(mind.notices.is_empty() && mind.marks.is_empty());
+        assert!(mind.tasks[0].calendar);
+        assert!(mind.tasks[0].name_key.is_empty());
+        assert!(mind.tasks[0].steps[0].name_key.is_empty());
     }
 
     #[test]

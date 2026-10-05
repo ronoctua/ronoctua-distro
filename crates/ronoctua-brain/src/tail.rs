@@ -282,7 +282,7 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(Copier);
         let (_, before) = global().after(0);
         tracing::subscriber::with_default(subscriber, || {
-            tracing::warn!(task = "clock-sync", ram = 31_u16, "a tick-shaped test line");
+            tracing::warn!(task = "fixture", ram = 31_u16, "a tick-shaped test line");
         });
         let (new, _) = global().after(before);
         let mine = new
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(mine.level, Level::Warn);
         assert!(
             mine.text
-                .ends_with(": a tick-shaped test line task=\"clock-sync\" ram=31"),
+                .ends_with(": a tick-shaped test line task=\"fixture\" ram=31"),
             "{}",
             mine.text
         );

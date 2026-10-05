@@ -60,6 +60,7 @@
 use std::ffi::OsString;
 use std::io::{Read as _, Write as _};
 use std::mem::MaybeUninit;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -110,6 +111,16 @@ pub enum Pace {
     /// changes are a person's keystrokes.
     AtOnce,
 }
+
+/// The most directories one watch holds under its trees
+/// ([`Notice::on_dirs`]).
+///
+/// A tree is watched directory by directory — inotify has no recursive
+/// watch — and each one is a watch out of `max_user_watches`. A repository's
+/// `refs` is a handful of folders; a mirror that fetched every pull request
+/// is thousands, and a bound is what keeps one browser from spending the
+/// session's watches. Past it the rest are not heard, and the log says so.
+pub const TREE_MOST: usize = 512;
 
 /// The read buffer, in bytes.
 ///
@@ -192,14 +203,44 @@ impl Notice {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        Self::raise(sidebar, None, Pace::Coalesced, on_stir)
+        Self::raise(
+            sidebar.map(Path::to_path_buf).into_iter().collect(),
+            Vec::new(),
+            None,
+            Pace::Coalesced,
+            on_stir,
+        )
     }
 
-    /// The one constructor behind the two doors: a fixed directory (the
-    /// sidebar's, or the file's), an optional name that narrows what counts,
-    /// and the thread.
+    /// Watches SEVERAL FIXED DIRECTORIES, whole — a repository's git
+    /// directory, today — and SEVERAL TREES: a directory and every directory
+    /// under it, the ones made later included (a repository's `refs`, where
+    /// a branch called `feature/x` is a folder `feature` that did not exist
+    /// before it was pushed).
+    ///
+    /// The same thread, doorbell and `Drop` as [`Notice::watching`], with no
+    /// listing to point and no name to narrow by: every event in any of them
+    /// counts. A directory that does not exist is skipped with a warning, as
+    /// a listing that went away is, and the others go on reporting. A tree
+    /// holds at most [`TREE_MOST`] directories: past it, the rest are not
+    /// heard, and the log says so.
+    ///
+    /// # Errors
+    ///
+    /// As [`Notice::watching`].
+    pub fn on_dirs<F>(dirs: &[PathBuf], trees: &[PathBuf], pace: Pace, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        Self::raise(dirs.to_vec(), trees.to_vec(), None, pace, on_stir)
+    }
+
+    /// The one constructor behind the doors: the fixed directories (the
+    /// sidebar's, the file's, or a repository's), the trees, an optional name
+    /// that narrows what counts, and the thread.
     fn raise<F>(
-        fixed: Option<&Path>,
+        fixed: Vec<PathBuf>,
+        trees: Vec<PathBuf>,
         only: Option<OsString>,
         pace: Pace,
         on_stir: F,
@@ -225,7 +266,6 @@ impl Notice {
             let _ = rustix::fs::fcntl_setfl(&ring, flags | rustix::fs::OFlags::NONBLOCK);
         }
         let (orders, told) = mpsc::channel();
-        let sidebar = fixed.map(Path::to_path_buf);
         std::thread::Builder::new()
             .name("ronoctua-notice".to_owned())
             .spawn(move || {
@@ -234,7 +274,9 @@ impl Notice {
                     ring: reader,
                     told,
                     listing: None,
-                    sidebar,
+                    fixed,
+                    trees,
+                    grown: Vec::new(),
                     only,
                     pace,
                     held: Vec::new(),
@@ -270,7 +312,13 @@ impl Notice {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        Self::raise(Some(dir), Some(OsString::from(name)), pace, on_stir)
+        Self::raise(
+            vec![dir.to_path_buf()],
+            Vec::new(),
+            Some(OsString::from(name)),
+            pace,
+            on_stir,
+        )
     }
 
     /// Points the watch at a directory.
@@ -349,8 +397,15 @@ struct Watcher {
     /// The directory on screen.
     listing: Option<PathBuf>,
     /// The directory the sidebar persists into — or, for [`Notice::on_file`],
-    /// the one the file lives in. Fixed for the life of the watch.
-    sidebar: Option<PathBuf>,
+    /// the one the file lives in, or [`Notice::on_dirs`]'s. Fixed for the
+    /// life of the watch.
+    fixed: Vec<PathBuf>,
+    /// The trees [`Notice::on_dirs`] was given: each root and every directory
+    /// under it.
+    trees: Vec<PathBuf>,
+    /// Every directory held under a tree, by its watch — so a directory made
+    /// inside one is known to be a tree's, and is held in its turn.
+    grown: Vec<(i32, PathBuf)>,
     /// The one file name that counts, when the watch is on a file. `None`
     /// means every event in a held directory is ours.
     only: Option<OsString>,
@@ -526,22 +581,59 @@ impl Watcher {
             // the kernel, and asking again is `EINVAL`. Nothing to report.
             let _ = inotify::remove_watch(&self.fd, wd);
         }
-        for dir in [self.listing.clone(), self.sidebar.clone()]
-            .into_iter()
-            .flatten()
-        {
-            match inotify::add_watch(&self.fd, &dir, WANTED) {
-                Ok(wd) => {
-                    if !self.held.contains(&wd) {
-                        self.held.push(wd);
-                    }
+        self.grown.clear();
+        let dirs: Vec<PathBuf> = self.listing.iter().chain(&self.fixed).cloned().collect();
+        for dir in &dirs {
+            let _ = self.hold(dir);
+        }
+        for root in self.trees.clone() {
+            self.grow(&root);
+        }
+    }
+
+    /// Asks for one directory, and gives back its watch.
+    fn hold(&mut self, dir: &Path) -> Option<i32> {
+        match inotify::add_watch(&self.fd, dir, WANTED) {
+            Ok(wd) => {
+                if !self.held.contains(&wd) {
+                    self.held.push(wd);
                 }
-                // Not fatal and not silent. A directory just deleted, one that
-                // cannot be read, and a machine at its watch limit all land here,
-                // and in every case the door goes on working — it simply stops
-                // hearing about this one.
-                Err(e) => {
-                    tracing::warn!(error = %e, directory = %dir.display(), "could not watch the directory");
+                Some(wd)
+            }
+            // Not fatal and not silent. A directory just deleted, one that
+            // cannot be read, and a machine at its watch limit all land here,
+            // and in every case the door goes on working — it simply stops
+            // hearing about this one.
+            Err(e) => {
+                tracing::warn!(error = %e, directory = %dir.display(), "could not watch the directory");
+                None
+            }
+        }
+    }
+
+    /// Holds `root` and every directory under it — a tree's, or a directory
+    /// just made inside one. Symbolic links are not followed: a link out of
+    /// the tree is not the tree.
+    fn grow(&mut self, root: &Path) {
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            if self.grown.iter().any(|(_, d)| d == &dir) {
+                continue;
+            }
+            if self.grown.len() >= TREE_MOST {
+                tracing::warn!(directory = %dir.display(), most = TREE_MOST, "a tree too large to hear whole; this part of it is not watched");
+                return;
+            }
+            let Some(wd) = self.hold(&dir) else {
+                continue;
+            };
+            self.grown.push((wd, dir.clone()));
+            let Ok(each) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in each.flatten() {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    todo.push(e.path());
                 }
             }
         }
@@ -551,6 +643,11 @@ impl Watcher {
     fn drain(&mut self, buffer: &mut [MaybeUninit<u8>]) -> bool {
         let mut ours = false;
         let mut gone: Vec<i32> = Vec::new();
+        // DIRECTORIES MADE INSIDE A TREE, held once the kernel's queue is read
+        // — before the door is told, so whatever lands in them after this is
+        // heard, and whatever landed before is on disk for the reading the
+        // report asks for.
+        let mut born: Vec<PathBuf> = Vec::new();
         {
             let mut reader = inotify::Reader::new(&self.fd, buffer);
             loop {
@@ -585,6 +682,13 @@ impl Watcher {
                 if !self.held.contains(&wd) {
                     continue;
                 }
+                if flags.contains(inotify::ReadFlags::ISDIR)
+                    && flags.intersects(inotify::ReadFlags::CREATE | inotify::ReadFlags::MOVED_TO)
+                    && let Some((_, parent)) = self.grown.iter().find(|(w, _)| *w == wd)
+                    && let Some(name) = event.file_name()
+                {
+                    born.push(parent.join(std::ffi::OsStr::from_bytes(name.to_bytes())));
+                }
                 // A WATCH ON ONE FILE hears the whole directory and keeps the
                 // one name; the rest is the sidebar file, a scratch file, and
                 // whatever else lives beside it.
@@ -597,6 +701,10 @@ impl Watcher {
             }
         }
         self.held.retain(|wd| !gone.contains(wd));
+        self.grown.retain(|(wd, _)| !gone.contains(wd));
+        for dir in born {
+            self.grow(&dir);
+        }
         ours
     }
 }
@@ -1049,5 +1157,90 @@ mod tests {
             past(&seen, was, PATIENCE) > was,
             "the watched file was replaced and nothing said so"
         );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a repository watched in one of its places. A
+    // commit moves `refs/heads/<branch>` and a `git add` rewrites the index in
+    // the git directory itself, so a watch on only one of them leaves the git
+    // line stale after the other — and a missing folder (a fresh repository
+    // has no `logs/`) must not take the others down with it.
+    fn several_fixed_directories_each_report_and_a_missing_one_is_skipped() {
+        let git = scratch("dirs-git");
+        let heads = git.join("refs/heads");
+        std::fs::create_dir_all(&heads).unwrap();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let _notice = Notice::on_dirs(
+            &[git.clone(), heads.clone(), git.join("logs")],
+            &[],
+            Pace::AtOnce,
+            move || {
+                mine.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+        )
+        .unwrap();
+        assert!(
+            armed(&seen, &git),
+            "the git directory's watch never came alive"
+        );
+        assert!(armed(&seen, &heads), "the refs' watch never came alive");
+        let was = seen.load(Ordering::SeqCst);
+        ronoctua_xdg::write_atomically(&heads, "main", b"0123\n").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "a branch moved and nothing said so"
+        );
+        let _ = std::fs::remove_dir_all(&git);
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a tree watched only as it was when the watch
+    // began. Pushing `feature/x` makes `refs/remotes/origin/feature` and
+    // writes the branch INSIDE it; a watch on the folders that existed hears
+    // the folder being made and nothing written into it afterwards — the
+    // arrows of the git line stale from the second push on.
+    fn a_tree_hears_the_directories_made_in_it_after_the_watch_began() {
+        let refs = scratch("tree-refs");
+        let origin = refs.join("remotes/origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let _notice = Notice::on_dirs(&[], std::slice::from_ref(&refs), Pace::AtOnce, move || {
+            mine.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .unwrap();
+        // A DIRECTORY THAT WAS THERE, deep in the tree.
+        assert!(
+            armed(&seen, &origin),
+            "the tree's inner folder was not heard"
+        );
+        // AND ONE MADE NOW, two levels at once — its making is heard where
+        // it was made, and then the report is let go of, so that what is
+        // counted next is only what is written INSIDE it.
+        let feature = origin.join("feature/deeper");
+        std::fs::create_dir_all(&feature).unwrap();
+        settled(&seen);
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(feature.join("x"), b"0123\n").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "a folder made in the tree after the watch began was never heard"
+        );
+        // NOT A LINK OUT OF IT.
+        let outside = scratch("tree-outside");
+        std::os::unix::fs::symlink(&outside, refs.join("out")).unwrap();
+        settled(&seen);
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(outside.join("far"), b"x").unwrap();
+        assert_eq!(
+            past(&seen, was, Duration::from_millis(300)),
+            was,
+            "a link out of the tree was followed"
+        );
+        let _ = std::fs::remove_dir_all(&refs);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

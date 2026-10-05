@@ -58,6 +58,12 @@ pub const INPUT: &str = "org.bluez.Input1";
 /// An audio stream, on a child object of the device.
 pub const TRANSPORT: &str = "org.bluez.MediaTransport1";
 
+/// A device that shares its network — a phone's PAN. Read here, never
+/// written: the link is NetworkManager's to make (see `ronoctua_network`'s
+/// `Manager::tether`), and this is where the Bluetooth view learns the
+/// interface it made.
+pub const NETWORK: &str = "org.bluez.Network1";
+
 /// One object's properties, as the manager hands them back.
 pub type Faces = HashMap<String, OwnedValue>;
 

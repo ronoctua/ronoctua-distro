@@ -317,6 +317,7 @@ pub(crate) fn streams(probed: &Probed, can: impl Fn(&ProbedStream) -> Can) -> Ve
                 hearing: s.hearing,
                 attached: s.attached,
                 can: can(s),
+                uid: None,
             })
         })
         .collect()
@@ -512,7 +513,7 @@ mod tests {
         assert_eq!(get(TechKey::ChannelLayout), Some("5.1"));
         assert_eq!(get(TechKey::Programs), None);
 
-        let s = streams(&p, |_| Can::No(Why::NoPlace));
+        let s = streams(&p, |_| Can::No(Why::AttachmentIsNotAStream));
         assert_eq!(s.len(), 5);
         assert_eq!(s[0].lang, None, "`und` is no language");
         assert_eq!(s[0].title.as_deref(), Some("Main"));

@@ -58,15 +58,16 @@ DOTTED_CIRCLE = "◌"
 #
 # THESE NAMES ARE THE SAME ONES THE `.ftl` SHOWS. There they are keys (because they
 # get translated); here they become search TAGS. They are two representations of the same
-# fact, and what keeps the two from diverging is the `symbols-filters` check: the
-# label the panel shows has to find, when typed into the search, the whole
+# fact, and what keeps the two from diverging is
+# `ronoctua-iconset`'s test `every_panel_label_finds_its_whole_category_in_every_language`: the
+# label the app shows has to find, when typed into the search, the whole
 # family.
 #
 # Unicode's 25 general categories become SEVEN families because nobody
 # searches for "Sk" or for "Modifier Symbol" — one searches for "simbolo". The
 # separator and the control fall into "other": that is 27 characters in all, and a
 # panel option for each would be more lines than information.
-# The FIRST element is the ID — it becomes `unicode-family-<id>`, and that is why it is
+# The FIRST element is the ID — it becomes `icons-family-<id>`, and that is why it is
 # English (invariant 18). The SECOND is the Portuguese search tag: whoever types
 # `family:simbolo` still finds it, because a search tag is interface text
 # and not a name. The third is the label.
@@ -269,9 +270,10 @@ def shape_to_one_glyph(font_file: pathlib.Path, emojis: list[dict]) -> list[str]
 #
 # THESE NAMES ARE THE SAME ONES THE `.ftl` SHOWS in the panel, and here they become
 # search TAGS. They are two representations of the same fact, and what keeps the two from
-# diverging is the `symbols-filters` check: the label one reads has to find,
-# when typed into the search, the whole group.
-# The FIRST element is the ID — it builds `unicode-group-<id>` and that is why it is
+# diverging is
+# `ronoctua-iconset`'s test `every_panel_label_finds_its_whole_category_in_every_language`: the label
+# one reads has to find, when typed into the search, the whole group.
+# The FIRST element is the ID — it builds `icons-group-<id>` and that is why it is
 # English (invariant 18). The other two are SEARCH: English tags and the Portuguese
 # label, and both still find the whole group.
 EMOJI_GROUPS = {
@@ -296,7 +298,7 @@ EMOJI_GROUPS = {
 #
 # Like the families and the groups, these ids are the same ones the `.ftl` shows: the
 # label one reads has to find, when typed into the search, the whole tone.
-# The FIRST element is the ID (it builds `unicode-tone-<id>`, hence English); the second
+# The FIRST element is the ID (it builds `icons-tone-<id>`, hence English); the second
 # is the Portuguese search form; the third, the label.
 TONES = {
     0x1F3FB: ("light", {"en": "light skin tone", "pt": "Clara claro pele tone"}),
@@ -340,7 +342,7 @@ def emoji_lines(emojis: list[dict], cldr: dict[str, dict], subtags: list[str]) -
         # inside the tag, so `risonho` finds `rosto risonho`.
         # The FAMILY also goes in as a tag, as with the others: the `Emoji` label
         # the panel shows has to find, when typed into the search, the whole
-        # family — and it is the `symbols-filters` check that ties the two together.
+        # family — and it is the iconset's panel-label test that ties the two together.
         tone = tone_of(e["seq"])
         t_words = next((v[1] for v in TONES.values() if v[0] == tone), {}) if tone else {}
         tags = {}
@@ -469,7 +471,7 @@ def build_index(
             tokens += words_of(other)
         tags, found = translate(tokens, lexicon, subtags, no_translation)
         # BOTH FORMS OF THE FAMILY, in every language: the accented LABEL, which
-        # is what the panel shows and what the `symbols-filters` check types,
+        # is what the app shows and what the iconset's panel-label test types,
         # and the unaccented form, which is what one writes in a
         # `family:simbolo` filter. Sending only one breaks the other — the first
         # version of this sent only the label, and inverting the tuple swapped
@@ -477,7 +479,7 @@ def build_index(
         #
         # A LIST, and added WHOLE — never through `words_of`, which splits on
         # `[^A-Za-z0-9]` and would cut `símbolo` into `s` and `mbolo`. That is
-        # exactly what a first pass at this did, and `symbols-filters` caught
+        # exactly what a first pass at this did, and the label check caught
         # it: the panel showed "Símbolo" and the search found 230 of 3,658.
         for language in subtags:
             tags[language].update(fam_words.get(language, fam_words[SOURCE]))

@@ -19,6 +19,7 @@
 //! **It launches nothing.** It returns `(program, arguments)`, which is exactly
 //! what `open_foreign` receives.
 
+pub mod defaults;
 pub mod desktop;
 pub mod exec;
 pub mod fold;
@@ -164,6 +165,14 @@ pub fn scan_in(dirs: &[PathBuf], language: &str) -> Vec<DesktopEntry> {
 #[must_use]
 pub fn scan(language: &str) -> Vec<DesktopEntry> {
     scan_in(&directories(), language)
+}
+
+/// The defaults the environment's `mimeapps.list` files choose, most
+/// important first — see [`defaults::Defaults`] for the order and what it is
+/// for. Read now, from the files; nothing is kept between calls.
+#[must_use]
+pub fn defaults() -> defaults::Defaults {
+    defaults::Defaults::read_from(&defaults::Places::of_environment().lists())
 }
 
 /// The entry that declares it opens a window with this `app_id`.

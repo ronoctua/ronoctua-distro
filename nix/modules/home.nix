@@ -134,8 +134,8 @@ in
         # name from, and a check compares the two.
         extraConfig = {
           SCREENSHOT = "${home}/${dirs.screenshot}";
-          # THE ELEVENTH, the player's music videos — read by the shell as
-          # `XDG_MUSIC_VIDEO_DIR` (`player_browse::places`).
+          # THE ELEVENTH, the music videos — declared as `XDG_MUSIC_VIDEO_DIR`
+          # beside the other user directories, and made by being declared.
           MUSIC_VIDEO = "${home}/${dirs.musicVideo}";
         };
       };

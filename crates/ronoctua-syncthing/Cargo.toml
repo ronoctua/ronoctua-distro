@@ -31,6 +31,10 @@ serde = { workspace = true }
 serde_json.workspace = true
 ronoctua-http = { path = "../ronoctua-http" }
 ronoctua-store = { path = "../ronoctua-store" }
+# THE SHARED VOCABULARY OF A DECLARED SETTING — the kind, the ring's turn, the
+# number's nudge and a word's key — which Tor, ClipCascade and Atuin already
+# read. It has no dependencies of its own.
+ronoctua-options = { path = "../ronoctua-options" }
 
 [lints]
 workspace = true

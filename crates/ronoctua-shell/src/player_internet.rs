@@ -223,6 +223,8 @@ fn key_label(key: Key, texts: &ronoctua_i18n::Texts) -> String {
         Key::OpenSubtitlesAccount => key::PLAYER_KEY_OPENSUBTITLES_ACCOUNT,
         Key::Tmdb => key::PLAYER_KEY_TMDB,
         Key::SubDl => key::PLAYER_KEY_SUBDL,
+        // The security centre's; the page lists only its own (`Key::scope`).
+        Key::VirusTotal => key::SECURITY_ONLINE_VT_KEY,
     })
 }
 
@@ -234,6 +236,7 @@ fn key_words(key: Key, texts: &ronoctua_i18n::Texts) -> String {
         Key::OpenSubtitlesAccount => key::PLAYER_KEY_WORDS_OPENSUBTITLES_ACCOUNT,
         Key::Tmdb => key::PLAYER_KEY_WORDS_TMDB,
         Key::SubDl => key::PLAYER_KEY_WORDS_SUBDL,
+        Key::VirusTotal => key::SECURITY_ONLINE_VT_KEY,
     })
 }
 
@@ -252,7 +255,7 @@ const fn directory_key(d: Directory) -> &'static str {
 
 /// Whether the person let every one of `services` by a press.
 fn consented(prefs: &ronoctua_player::prefs::Preferences, services: &[Service]) -> bool {
-    services.iter().all(|s| prefs.consented.contains(s))
+    services.iter().all(|s| prefs.pressed(*s))
 }
 
 /// A let or not let, in words.
@@ -307,6 +310,14 @@ impl View {
         // each, its name, and UNDER IT the hosts it asks — a line of the row
         // of its own, whole: a host cut mid-word in a narrow door named
         // nobody.
+        // THE LYRICS' TRANSLATOR, among those that ask on their own: once
+        // their translation is on (`T`), every song's lyrics go to it with
+        // no press — its host let, or no longer, by the distro's consent
+        // file, host by host (`ronoctua_consent`).
+        // WHO TRANSLATES is the person's to choose — MyMemory, DeepL or a
+        // LibreTranslate server — and the consent row names the chosen one's
+        // hosts (`crate::player_translator`).
+        self.translator_rows(b);
         b.heading(key::PLAYER_HEADING_WHEN_ASKED);
         let joiner = b.t(key::PLAYER_SET_JOINER);
         for services in CONSENTS {
@@ -352,7 +363,11 @@ impl View {
         }
         // THE PERSON'S KEYS: whether each is kept, never what it is.
         b.heading(key::PLAYER_HEADING_KEYS);
-        for k in Key::ALL {
+        // THE PLAYER'S KEYS ONLY: the security centre's is on its own page.
+        for k in Key::ALL
+            .into_iter()
+            .filter(|k| k.scope() == ronoctua_lookup::Scope::Player)
+        {
             let sent = b.texts.t_with(
                 key::PLAYER_KEY_SENT_TO,
                 &[("host", ronoctua_player::prefs::host_of(k.service()))],
@@ -889,5 +904,55 @@ mod tests {
             v.key(Press::Enter, Some(&s), 80, &t),
             Errand::ForgetKey(Key::Tmdb)
         );
+    }
+
+    /// FAILS IF: the lyrics' translator stops having its switch on the
+    /// Internet page — naming its host, saying whether it is let — or leaves
+    /// the group that asks on its own (with `T` on, every song's lyrics go to
+    /// it unpressed); or a press stops letting the host, and a second one
+    /// taking it back, merged into the consent file (`Errand::LetHosts`).
+    #[test]
+    fn the_translator_is_a_switch_of_the_internet_page() {
+        let t = texts();
+        let s = State::default();
+        let mut v = on_the_internet_page(&s);
+        let rows = v.rows(Some(&s), 80, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Translator)
+            .expect("the translator's switch");
+        let title = |k: &str| {
+            rows.iter()
+                .position(|r| r.heading && r.fields.first().is_some_and(|f| f.text == t.t(k)))
+                .expect(k)
+        };
+        let (own, pressed) = (
+            title(ronoctua_i18n::key::PLAYER_HEADING_ON_THEIR_OWN),
+            title(ronoctua_i18n::key::PLAYER_HEADING_WHEN_ASKED),
+        );
+        assert!(own < at && at < pressed, "{own} < {at} < {pressed}");
+        assert_eq!(
+            rows[at].fields.last().map(|f| f.text.clone()),
+            Some(t.t(ronoctua_i18n::key::PLAYER_CONSENT_NOT_ALLOWED))
+        );
+        let host_line: String = rows[at..]
+            .iter()
+            .take(3)
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(
+            host_line.contains(ronoctua_words::MYMEMORY_HOST),
+            "the host is not named: {host_line}"
+        );
+        v.grabbed(at);
+        for on in [true, false] {
+            match v.key(Press::Enter, Some(&s), 80, &t) {
+                Errand::LetHosts { hosts, on: now, .. } => {
+                    assert_eq!(hosts, [ronoctua_words::MYMEMORY_HOST.to_owned()]);
+                    assert_eq!(now, on);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
     }
 }

@@ -399,10 +399,10 @@ fn kebab(name: &str) -> String {
     out.trim_end_matches('-').to_owned()
 }
 
-fn read_formats(fd: &File) -> Vec<Format> {
+fn read_formats(fd: &File, kind: u32) -> Vec<Format> {
     let mut formats = Vec::new();
     for n in 0..64 {
-        let Some(desc) = v4l2::enum_fmt(fd, n) else {
+        let Some(desc) = v4l2::enum_fmt(fd, kind, n) else {
             break;
         };
         let fourcc = fourcc_text(desc.pixelformat);
@@ -555,11 +555,18 @@ pub fn read(node: &Path) -> Option<Camera> {
     let card = v4l2::text(&cap.card);
     let bus = v4l2::text(&cap.bus_info);
     let driver = v4l2::text(&cap.driver);
-    let formats = if single {
-        read_formats(&fd)
-    } else {
-        Vec::new()
-    };
+    // A MULTI-PLANAR NODE'S FORMATS ARE READ TOO, under its own buffer
+    // type: what it offers is drawn — its sizes and rates — beside the
+    // sentence that says ffmpeg's V4L2 input cannot open it
+    // (`camera-about-cannot-stream`). It was a camera with no formats at all.
+    let formats = read_formats(
+        &fd,
+        if single {
+            v4l2::BUF_TYPE_CAPTURE
+        } else {
+            v4l2::BUF_TYPE_CAPTURE_MPLANE
+        },
+    );
     let controls = read_controls(&fd);
     let ours = driver.contains("loopback") && card == OUR_LABEL;
     let kind = if ours {

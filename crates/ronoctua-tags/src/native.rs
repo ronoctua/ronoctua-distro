@@ -459,13 +459,59 @@ pub(crate) fn has_place(format: TagFormat, field: Field) -> bool {
     let tag_type = tag_type_of(format);
     match field {
         Field::Season | Field::Episode => format == TagFormat::Mp4,
+        // ID3v2's DESCRIPTION is a user text frame (`described_in_id3`).
+        Field::Description if format == TagFormat::Id3v2 => true,
         other => keys_of(other).iter().any(|k| k.map_key(tag_type).is_some()),
     }
+}
+
+/// The description a user text frame of ID3v2 is kept under: `TXXX:DESCRIPTION`,
+/// what the taggers that write one (Mp3tag, foobar2000, Kid3) call it.
+///
+/// # Why a user text frame
+///
+/// ID3v2 has no frame of its own for what a film or an episode is about —
+/// `TDES` is iTunes' PODCAST description, and lofty's generic half has no
+/// key for a description in ID3v2 at all — so an MP3 had no place for the
+/// field, and the row said so. A user text frame is the place every other
+/// tagger uses, and lofty keeps it in the tag's remainder, untouched by the
+/// generic half: it is read and written here on the concrete tag.
+const ID3_DESCRIPTION: &str = "DESCRIPTION";
+
+/// The ID3v2 tag's description, read from its user text frame (any case).
+fn id3_description(id3: &Id3v2Tag) -> Option<String> {
+    id3.into_iter().find_map(|frame| match frame {
+        Frame::UserText(f) if f.description.eq_ignore_ascii_case(ID3_DESCRIPTION) => {
+            Some(f.content.trim().to_owned()).filter(|c| !c.is_empty())
+        }
+        _ => None,
+    })
+}
+
+/// The description written into an ID3v2 tag's user text frame — every
+/// spelling of the frame taken out first, so one is left — or taken out.
+fn described_in_id3(tag: Native, fields: &[(Field, Option<String>)]) -> Native {
+    let Native::Id3v2(mut id3) = tag else {
+        return tag;
+    };
+    for (_, value) in fields.iter().filter(|(f, _)| *f == Field::Description) {
+        id3.retain(|frame| {
+            !matches!(frame, Frame::UserText(f) if f.description.eq_ignore_ascii_case(ID3_DESCRIPTION))
+        });
+        if let Some(value) = value {
+            let _ = id3.insert_user_text(ID3_DESCRIPTION.to_owned(), value.clone());
+        }
+    }
+    Native::Id3v2(id3)
 }
 
 /// A field's value in one tag.
 pub(crate) fn field_value(native: &Native, generic: &Generic, field: Field) -> Option<String> {
     match field {
+        Field::Description if matches!(native, Native::Id3v2(_)) => match native {
+            Native::Id3v2(id3) => id3_description(id3),
+            _ => None,
+        },
         Field::Season | Field::Episode => {
             let Native::Mp4(ilst) = native else {
                 return None;
@@ -534,7 +580,7 @@ fn remove_plain(g: &mut Generic, key: ItemKey) {
 /// What a field edit does to one tag's generic half.
 ///
 /// `strict` is for the tag the person is writing TO: a field it has no
-/// place for is [`Why::NoPlace`]. The others (ID3v1 beside ID3v2, APE
+/// place for is [`Why::NoFieldIn`]. The others (ID3v1 beside ID3v2, APE
 /// beside it) are kept in step where they can be and skipped where they
 /// cannot.
 fn set_generic(
@@ -544,8 +590,12 @@ fn set_generic(
     strict: bool,
 ) -> Result<(), Why> {
     let tag_type = g.tag_type();
+    let no_place =
+        || format_of(tag_type).map_or(Why::Unwritable, |format| Why::NoFieldIn { field, format });
     match field {
         Field::Season | Field::Episode => Ok(()),
+        // ON THE CONCRETE TAG, not here: `described_in_id3`.
+        Field::Description if tag_type == TagType::Id3v2 => Ok(()),
         Field::Track | Field::Disc => {
             let (n, t) = if field == Field::Track {
                 (ItemKey::TrackNumber, ItemKey::TrackTotal)
@@ -553,7 +603,7 @@ fn set_generic(
                 (ItemKey::DiscNumber, ItemKey::DiscTotal)
             };
             if n.map_key(tag_type).is_none() {
-                return if strict { Err(Why::NoPlace) } else { Ok(()) };
+                return if strict { Err(no_place()) } else { Ok(()) };
             }
             g.remove_key(n);
             g.remove_key(t);
@@ -569,7 +619,7 @@ fn set_generic(
         other => {
             let keys = keys_of(other);
             let Some(write_as) = keys.iter().find(|k| k.map_key(tag_type).is_some()) else {
-                return if strict { Err(Why::NoPlace) } else { Ok(()) };
+                return if strict { Err(no_place()) } else { Ok(()) };
             };
             for k in replaced_keys(other) {
                 remove_plain(g, *k);
@@ -580,7 +630,7 @@ fn set_generic(
                 && !g.push(TagItem::new(*write_as, ItemValue::Text(value.to_owned())))
                 && strict
             {
-                return Err(Why::NoPlace);
+                return Err(no_place());
             }
             Ok(())
         }
@@ -695,13 +745,15 @@ fn native_name(format: TagFormat, name: &str) -> Result<NativeName, Why> {
     // different is a name a READER listed that the grammar would write as
     // another tag (an atom `XID ` as a freeform) — not this row's to change.
     if own != name {
-        return Err(Why::NoPlace);
+        return Err(Why::BadName);
     }
     let name = own;
     let key = |tag_type: TagType, key: &str| match ItemKey::from_key(tag_type, key) {
         Some(k) if FIELD_ONLY_KEYS.contains(&k) => Err(Why::ReadOnlyView),
         Some(k) => Ok(NativeName::Key(k)),
-        None => Err(Why::NoPlace),
+        // A NAME THIS TAG'S KIND HAS NO ITEM FOR — a frame lofty does not
+        // know — is not one it takes as text.
+        None => Err(Why::BadName),
     };
     match format {
         TagFormat::Vorbis | TagFormat::Ape | TagFormat::RiffInfo => Ok(NativeName::Raw),
@@ -720,7 +772,7 @@ fn native_name(format: TagFormat, name: &str) -> Result<NativeName, Why> {
                     }),
                     // WXXX: an address with a description, which no reader
                     // of ours lists as text to change.
-                    _ => Err(Why::NoPlace),
+                    _ => Err(Why::NotText),
                 };
             }
             key(TagType::Id3v2, &name)
@@ -741,7 +793,7 @@ fn native_name(format: TagFormat, name: &str) -> Result<NativeName, Why> {
             }
             key(TagType::Mp4Ilst, &name)
         }
-        TagFormat::Id3v1 => Err(Why::NoPlace),
+        TagFormat::Id3v1 => Err(Why::TagReadOnly { format }),
     }
 }
 
@@ -779,19 +831,43 @@ pub(crate) struct Plan {
     pub native: Vec<NativeEdit>,
 }
 
-/// Applies a plan to a file opened read-write, and saves each tag it
-/// changed.
+/// The tags a plan makes of a file's: the ones it changes, as they will be
+/// saved, and the ones it leaves alone. Pure — nothing is written.
+pub(crate) struct Planned {
+    /// The file's main tag format.
+    primary: TagFormat,
+    /// The tags as they will be saved.
+    changed: Vec<Native>,
+    /// The tags nobody touches, as they were read.
+    untouched: Vec<Native>,
+}
+
+impl Planned {
+    /// Whether the plan leaves a FLAC's Vorbis comment with NOTHING in it —
+    /// no field, no named item, no picture: what lofty 0.25.4 cannot write
+    /// (the draft reads back with the old comment, and is refused). The
+    /// writer goes another way for it (`write::flac_by_blocks`).
+    pub(crate) fn empties_the_comment(&self, file_type: FileType) -> bool {
+        file_type == FileType::Flac
+            && self.changed.iter().any(|t| {
+                // THE VENDOR STRING is no item: lofty's generic tag carries it,
+                // and no row lists it.
+                t.format() == TagFormat::Vorbis
+                    && listing(t).is_empty()
+                    && t.generic().pictures().is_empty()
+            })
+    }
+}
+
+/// What `plan` makes of `opened`'s tags ([`Planned`]).
 ///
 /// # Errors
 ///
-/// [`Why::NoPlace`] when the file's main tag has no place for a field or a
-/// name, the checks' own refusals, and [`Why::Unwritable`] when lofty
-/// could not save.
-pub(crate) fn apply(file: &mut File, opened: Opened, plan: &Plan) -> Result<(), Why> {
+/// A field the main tag has no place for, a name it refuses.
+pub(crate) fn planned(opened: Opened, plan: &Plan) -> Result<Planned, Why> {
     let file_type = opened.file_type;
     let primary = file_type.primary_tag_type();
     let primary_format = format_of(primary).ok_or(Why::Unwritable)?;
-    let tail_before = flac_tail(file, file_type)?;
     let mut tags = opened.tags;
     if !tags.iter().any(|t| t.tag_type() == primary) {
         tags.insert(0, Native::empty(primary_format));
@@ -822,7 +898,7 @@ pub(crate) fn apply(file: &mut File, opened: Opened, plan: &Plan) -> Result<(), 
             untouched.push(tag);
             continue;
         }
-        let tag = edit_raw(tag, &natives)?;
+        let tag = described_in_id3(edit_raw(tag, &natives)?, &plan.fields);
         let mut failed: Option<Why> = None;
         let mut tag = tag.through(|g| {
             for (field, value) in &plan.fields {
@@ -851,22 +927,110 @@ pub(crate) fn apply(file: &mut File, opened: Opened, plan: &Plan) -> Result<(), 
             }
             match &mut tag {
                 Native::Mp4(ilst) => set_mp4_number(ilst, *field, value.as_deref())?,
-                _ if is_primary => return Err(Why::NoPlace),
+                _ if is_primary => {
+                    return Err(Why::NoFieldIn {
+                        field: *field,
+                        format,
+                    });
+                }
                 _ => {}
             }
         }
         changed.push(tag);
     }
-    for tag in &changed {
+    Ok(Planned {
+        primary: primary_format,
+        changed,
+        untouched,
+    })
+}
+
+/// The planned tags saved into `file`, one after the other.
+///
+/// # Errors
+///
+/// [`Why::Unwritable`] when lofty refuses one.
+pub(crate) fn save_planned(file: &mut File, planned: &Planned) -> Result<(), Why> {
+    for tag in &planned.changed {
         tag.save(file)?;
     }
+    Ok(())
+}
+
+/// A file ANOTHER WRITER (ffmpeg's remux) wrote a plan into, read back as a
+/// lofty write is ([`verify_planned`]) — and more: every item of every tag
+/// it rewrote is what was planned, name for name and value for value, in any
+/// order. A remux keeps what its muxer knows, and an atom or a comment it
+/// dropped would be lost without a word.
+///
+/// # Errors
+///
+/// [`Why::Unwritable`] when it does not read back as planned.
+pub(crate) fn verify_remuxed(
+    file: &mut File,
+    file_type: FileType,
+    plan: &Plan,
+    planned: &Planned,
+    tail: Option<u64>,
+) -> Result<(), Why> {
+    verify_planned(file, file_type, plan, planned, tail)?;
+    let reread = open(file, file_type).map_err(|_| Why::Unwritable)?;
+    let sorted = |t: &Native| {
+        let mut rows: Vec<(String, String)> = listing(t)
+            .into_iter()
+            .map(|r| (r.name.to_ascii_uppercase(), format!("{:?}", r.value)))
+            .collect();
+        rows.sort();
+        rows
+    };
+    for want in &planned.changed {
+        let got = reread
+            .tags
+            .iter()
+            .find(|t| t.format() == want.format())
+            .map_or_else(Vec::new, &sorted);
+        if got != sorted(want) {
+            tracing::warn!(
+                format = ?want.format(),
+                "the remux did not keep every item of the tag as planned"
+            );
+            return Err(Why::Unwritable);
+        }
+    }
+    Ok(())
+}
+
+/// A file a plan was written into — by lofty, or another writer — read back
+/// against what was planned ([`verify`]), its FLAC frames against `tail`, the
+/// bytes after the original's metadata.
+///
+/// # Errors
+///
+/// [`Why::Unwritable`] when it does not read back as planned.
+pub(crate) fn verify_planned(
+    file: &mut File,
+    file_type: FileType,
+    plan: &Plan,
+    planned: &Planned,
+    tail: Option<u64>,
+) -> Result<(), Why> {
     let expected = Expected {
-        primary: primary_format,
-        changed: &changed,
-        untouched: &untouched,
-        tail: tail_before,
+        primary: planned.primary,
+        changed: &planned.changed,
+        untouched: &planned.untouched,
+        tail,
     };
     verify(file, file_type, plan, &expected)
+}
+
+/// The bytes after a FLAC's metadata — the frames — or `None` for another
+/// file: what a write that only touches tags must leave as they were.
+///
+/// # Errors
+///
+/// [`Why::Unreadable`] for a FLAC whose blocks cannot be walked.
+pub(crate) fn frames_of(file: &mut File, file_type: FileType) -> Result<Option<u64>, Why> {
+    flac_tail(file, file_type)
 }
 
 /// What a draft must read back as.
@@ -953,11 +1117,28 @@ fn verify(
     for n in &plan.native {
         let got = find(n.format).map(|tag| match native_name(n.format, &n.name) {
             Ok(NativeName::Key(key)) => plain(&tag.generic(), key),
-            _ => listing(tag).into_iter().find_map(|t| match t.value {
-                TagValue::Text(v) if t.name.eq_ignore_ascii_case(&n.name) => Some(v),
-                TagValue::Cut { head, .. } if t.name.eq_ignore_ascii_case(&n.name) => Some(head),
-                _ => None,
-            }),
+            _ => {
+                // THE NAME AS WRITTEN FIRST, and only then another spelling
+                // of it: an ID3v2 user text frame's description is kept as it
+                // is spelled, and a `TXXX:description` beside a
+                // `TXXX:DESCRIPTION` is two frames.
+                let rows = listing(tag);
+                let value_of = |exact: bool| {
+                    rows.iter().find_map(|t| {
+                        let named = if exact {
+                            t.name == n.name
+                        } else {
+                            t.name.eq_ignore_ascii_case(&n.name)
+                        };
+                        match &t.value {
+                            TagValue::Text(v) if named => Some(v.clone()),
+                            TagValue::Cut { head, .. } if named => Some(head.clone()),
+                            _ => None,
+                        }
+                    })
+                };
+                value_of(true).or_else(|| value_of(false))
+            }
         });
         let got = got.flatten();
         let fits = match (&n.value, &got) {
@@ -1034,6 +1215,202 @@ fn flac_tail(file: &mut File, file_type: FileType) -> Result<Option<u64>, Why> {
     }
 }
 
+/// The atoms of an MP4's `ilst` that ffmpeg's mov muxer writes back as it
+/// read them (`-map_metadata 0`): the fields of `write::MP4_REMUX_FIELDS`
+/// and the cover. `©too` is written back by name (`encoding_tool`, see
+/// [`mp4_encoding_tool`]); any other atom — a freeform `----`, `gnre`, a
+/// store's ids — is one the remux would lose.
+const MP4_REMUX_ATOMS: [[u8; 4]; 15] = [
+    *b"\xa9nam",
+    *b"\xa9ART",
+    *b"\xa9alb",
+    *b"aART",
+    *b"\xa9wrt",
+    *b"\xa9day",
+    *b"\xa9gen",
+    *b"\xa9cmt",
+    *b"\xa9lyr",
+    *b"desc",
+    *b"tvsh",
+    *b"trkn",
+    *b"disk",
+    *b"covr",
+    *b"\xa9too",
+];
+
+/// Whether a remux of this MP4 would lose an item of its `ilst` — one
+/// [`MP4_REMUX_ATOMS`] does not list. What lofty does not list (a `uuid`
+/// box beside the `moov`) is not seen here, and is the read-back's to
+/// catch.
+pub(crate) fn mp4_remux_drops(opened: &Opened) -> bool {
+    opened.tags.iter().any(|t| match t {
+        Native::Mp4(ilst) => ilst.into_iter().any(|atom| match atom.ident() {
+            AtomIdent::Fourcc(b) => !MP4_REMUX_ATOMS.contains(b),
+            AtomIdent::Freeform { .. } => true,
+        }),
+        _ => false,
+    })
+}
+
+/// An MP4's `©too` — the program that made it — as text: ffmpeg reads it
+/// as `encoder`, and with `+bitexact` writes it back only when told it as
+/// `encoding_tool`.
+pub(crate) fn mp4_encoding_tool(opened: &Opened) -> Option<String> {
+    opened.tags.iter().find_map(|t| match t {
+        Native::Mp4(ilst) => {
+            ilst.get(&AtomIdent::Fourcc(*b"\xa9too"))?
+                .data()
+                .find_map(|d| match d {
+                    AtomData::UTF8(s) | AtomData::UTF16(s) => Some(s.clone()),
+                    _ => None,
+                })
+        }
+        _ => None,
+    })
+}
+
+/// A FLAC's front, read whole: the bytes before its `fLaC` (an ID3v2 tag),
+/// each metadata block as its kind and body, and where its frames begin.
+pub(crate) struct FlacFront {
+    /// What comes before `fLaC`, as it was.
+    pub(crate) before: Vec<u8>,
+    /// Every metadata block, in order: its kind (the header's low seven
+    /// bits) and its body.
+    pub(crate) blocks: Vec<(u8, Vec<u8>)>,
+    /// The offset of the first frame.
+    pub(crate) frames_at: u64,
+}
+
+/// A FLAC's metadata block that is its Vorbis comment.
+pub(crate) const FLAC_VORBIS_COMMENT: u8 = 4;
+/// A FLAC's metadata block that is a picture.
+pub(crate) const FLAC_PICTURE: u8 = 6;
+/// The longest body a FLAC metadata block's 24-bit length can say.
+const FLAC_BLOCK_MOST: usize = (1 << 24) - 1;
+
+/// A FLAC's [`FlacFront`].
+///
+/// # Errors
+///
+/// [`Why::Unreadable`] for what is not a FLAC, or a block chain that runs
+/// past the file.
+pub(crate) fn flac_front(file: &mut File) -> Result<FlacFront, Why> {
+    use std::io::{Read as _, SeekFrom};
+    let len = file.metadata().map_err(|_| Why::Unreadable)?.len();
+    let mut head = [0_u8; 10];
+    file.seek(SeekFrom::Start(0)).map_err(|_| Why::Unreadable)?;
+    file.read_exact(&mut head).map_err(|_| Why::Unreadable)?;
+    let mut at: u64 = 0;
+    if &head[..3] == b"ID3" {
+        let size = head[6..10]
+            .iter()
+            .fold(0_u64, |acc, b| (acc << 7) | u64::from(b & 0x7F));
+        let footer = if head[5] & 0x10 != 0 { 10 } else { 0 };
+        at = 10 + size + footer;
+    }
+    if at + 4 > len {
+        return Err(Why::Unreadable);
+    }
+    let mut before = vec![0_u8; usize::try_from(at).map_err(|_| Why::Unreadable)?];
+    file.seek(SeekFrom::Start(0)).map_err(|_| Why::Unreadable)?;
+    file.read_exact(&mut before).map_err(|_| Why::Unreadable)?;
+    let mut magic = [0_u8; 4];
+    file.read_exact(&mut magic).map_err(|_| Why::Unreadable)?;
+    if &magic != b"fLaC" {
+        return Err(Why::Unreadable);
+    }
+    at += 4;
+    let mut blocks = Vec::new();
+    loop {
+        let mut header = [0_u8; 4];
+        file.seek(SeekFrom::Start(at))
+            .map_err(|_| Why::Unreadable)?;
+        file.read_exact(&mut header).map_err(|_| Why::Unreadable)?;
+        let size = u32::from_be_bytes([0, header[1], header[2], header[3]]);
+        at += 4 + u64::from(size);
+        if at > len {
+            return Err(Why::Unreadable);
+        }
+        let mut body = vec![0_u8; size as usize];
+        file.read_exact(&mut body).map_err(|_| Why::Unreadable)?;
+        blocks.push((header[0] & 0x7F, body));
+        if header[0] & 0x80 != 0 {
+            return Ok(FlacFront {
+                before,
+                blocks,
+                frames_at: at,
+            });
+        }
+    }
+}
+
+/// `front`'s metadata as a FLAC whose Vorbis comment has NOTHING in it:
+/// the comment keeps its vendor string and holds no item, every picture
+/// block goes (the plan has none), and every other block — stream info,
+/// seek table, cue sheet, application, padding — is copied byte for byte,
+/// in its place. What lofty 0.25.4 cannot write, and what a remux would
+/// lose (ffmpeg's FLAC muxer keeps no cue sheet, seek table or application
+/// block).
+///
+/// # Errors
+///
+/// [`Why::Unreadable`] for a Vorbis comment whose vendor string runs past
+/// its block.
+pub(crate) fn flac_emptied(front: &FlacFront) -> Result<Vec<u8>, Why> {
+    let mut kept: Vec<(u8, Vec<u8>)> = Vec::with_capacity(front.blocks.len());
+    for (kind, body) in &front.blocks {
+        match *kind {
+            FLAC_PICTURE => {}
+            FLAC_VORBIS_COMMENT => {
+                let vendor_len = body
+                    .get(..4)
+                    .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                    .map(u32::from_le_bytes)
+                    .ok_or(Why::Unreadable)? as usize;
+                let vendor = body.get(4..4 + vendor_len).ok_or(Why::Unreadable)?;
+                let mut emptied = Vec::with_capacity(8 + vendor_len);
+                emptied.extend_from_slice(&body[..4]);
+                emptied.extend_from_slice(vendor);
+                emptied.extend_from_slice(&0_u32.to_le_bytes());
+                kept.push((*kind, emptied));
+            }
+            _ => kept.push((*kind, body.clone())),
+        }
+    }
+    let mut out = front.before.clone();
+    out.extend_from_slice(b"fLaC");
+    let last = kept.len().saturating_sub(1);
+    for (i, (kind, body)) in kept.iter().enumerate() {
+        if body.len() > FLAC_BLOCK_MOST {
+            return Err(Why::Unreadable);
+        }
+        let flag = if i == last { 0x80 } else { 0 };
+        let size = u32::try_from(body.len()).map_err(|_| Why::Unreadable)?;
+        let [_, a, b, c] = size.to_be_bytes();
+        out.extend_from_slice(&[flag | kind, a, b, c]);
+        out.extend_from_slice(body);
+    }
+    Ok(out)
+}
+
+/// The tags of `planned` other than the FLAC's Vorbis comment, saved into
+/// `file` by lofty — an ID3v2 tag in front of a FLAC whose comment was
+/// emptied by [`flac_emptied`].
+///
+/// # Errors
+///
+/// [`Why::Unwritable`] when lofty refuses one.
+pub(crate) fn save_besides_the_comment(file: &mut File, planned: &Planned) -> Result<(), Why> {
+    for tag in planned
+        .changed
+        .iter()
+        .filter(|t| t.format() != TagFormat::Vorbis)
+    {
+        tag.save(file)?;
+    }
+    Ok(())
+}
+
 /// Whether a format can hold pictures at all.
 const fn tag_holds_pictures(format: TagFormat) -> bool {
     matches!(
@@ -1071,7 +1448,7 @@ fn edit_raw(tag: Native, edits: &[&NativeEdit]) -> Result<Native, Why> {
                 ape.remove(&e.name);
                 if let Some(v) = &e.value {
                     let item = ApeItem::new(e.name.clone(), ItemValue::Text(v.clone()))
-                        .map_err(|_| Why::NoPlace)?;
+                        .map_err(|_| Why::BadName)?;
                     ape.insert(item);
                 }
             }

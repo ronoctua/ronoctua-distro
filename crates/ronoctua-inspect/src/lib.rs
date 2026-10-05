@@ -33,6 +33,9 @@
 
 #![forbid(unsafe_code)]
 
+// WHAT A FILE SAYS ABOUT ITSELF, CHANGED — the one place exiftool writes: the
+// info panel's editable details and taking the place out of a photograph.
+pub mod amend;
 // WHAT A DOCUMENT SAYS — the office formats, which are zips of XML, and the
 // three old ones, which need a program.
 // A WORD 97 DOCUMENT, read out of the piece table that says where its text is.
@@ -51,6 +54,9 @@ pub mod motion;
 // A FILESYSTEM INSIDE A FILE — what `.doc`, `.xls` and `.ppt` are made of.
 pub mod ole;
 pub mod pixels;
+// WHAT A FILE SAYS, as plain text: the super index reads a file with the
+// preview's own readers, without the panel's cuts and colours.
+pub mod plain;
 pub mod playlist;
 // A PRESENTATION, read out of those records rather than out of a program that
 // answered nothing.

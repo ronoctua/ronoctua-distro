@@ -924,6 +924,7 @@ fn listed_set(set: &Set, out: &mut Vec<Entry>) {
             title: set.name.clone(),
             seconds: None,
             written: lead.source.clone(),
+            attributes: None,
         });
     }
 }
@@ -943,6 +944,7 @@ fn listed(item: &Item, out: &mut Vec<Entry>) {
             title: title.clone(),
             seconds: *seconds,
             written: location.clone(),
+            attributes: None,
         }),
         Item::Set { set, .. } => listed_set(set, out),
         Item::Playlist { entries, .. } => {
@@ -955,6 +957,7 @@ fn listed(item: &Item, out: &mut Vec<Entry>) {
             title: stream.title.clone(),
             seconds: None,
             written: stream.url.clone(),
+            attributes: None,
         }),
     }
 }

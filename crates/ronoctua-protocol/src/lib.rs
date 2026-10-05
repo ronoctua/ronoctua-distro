@@ -791,6 +791,9 @@ pub struct Plan {
     pub label: String,
     /// Wipe the partition table and lay down a single partition first.
     pub whole_disk: bool,
+    /// Write it inside a LUKS2 container. The passphrase is the HOST's to ask
+    /// — twice, on its own line — and is never a field of this record.
+    pub encrypt: bool,
 }
 
 /// What the buffer asks the host to do.
@@ -853,6 +856,32 @@ pub enum Request {
     Proceed,
     /// Not now — it comes back at its next moment. The target is ignored.
     Postpone,
+
+    /// THE MODULES'. Each is still a verb plus ONE index into a list the host
+    /// just sent, and the host checks it against that list.
+    ///
+    /// Show this task's module screen: the target is the 1-based task index,
+    /// `0` stops watching. The host asks the brain for the screen whenever the
+    /// task's `screen_generation` moves, and pushes it
+    /// ([`Input::ModuleScreen`]).
+    WatchScreen,
+    /// The action on a row: the target is the 1-based index of the row in the
+    /// last [`ModuleScreen`], counted across its sections in order.
+    ActRow,
+    /// The row's SECOND action ([`ModuleRow::also`]), by the same index.
+    ActRowAlso,
+    /// One of the watched task's [`TaskState::actions`], by its 1-based index.
+    /// One that asks first opens the host's question line; the answer goes
+    /// with it.
+    ActPage,
+    /// Put away the notice at this 1-based index of the last
+    /// [`Mind::notices`].
+    DismissNotice,
+    /// Put it off by the first snooze it offers.
+    SnoozeNotice,
+    /// Do the FIRST control the notice at this 1-based index offers — the
+    /// strip's own button, and `, n` on the page.
+    ActNotice,
 }
 
 impl Request {
@@ -889,7 +918,14 @@ impl Request {
             | Self::RehearseTask
             | Self::AbortTask
             | Self::Proceed
-            | Self::Postpone => Capability::Brain,
+            | Self::Postpone
+            | Self::WatchScreen
+            | Self::ActRow
+            | Self::ActRowAlso
+            | Self::ActPage
+            | Self::DismissNotice
+            | Self::SnoozeNotice
+            | Self::ActNotice => Capability::Brain,
             Self::Refresh
             | Self::ScanRam
             | Self::ScanDisk
@@ -936,6 +972,16 @@ pub enum Engine {
     Media,
     /// BitTorrent, through the session the queue owns.
     Torrent,
+    /// A region's streets: a download, then a baking.
+    Atlas,
+    /// The person's programs: the software center's command line.
+    Software,
+    /// A file sent to VirusTotal.
+    Scan,
+    /// The person's containers: a pull, a build, compose.
+    Container,
+    /// The person's belongings: their sync.
+    Belongings,
 }
 
 /// Where a job is in its life.
@@ -990,6 +1036,14 @@ pub enum Errand {
     Subtitles,
     /// Download a torrent.
     Torrent,
+    /// Put files into an archive that exists.
+    ArchiveAdd,
+    /// Take members out of an archive, rewriting it without them.
+    ArchiveRemove,
+    /// Read every member of an archive and check it.
+    ArchiveTest,
+    /// Write an archive again in another format.
+    ArchiveConvert,
 }
 
 /// What `done` and `total` are counted in.
@@ -1210,6 +1264,9 @@ pub enum OutcomeKind {
     /// runner looks every thirty seconds, and a line per look would be a wall
     /// of "RAM is busy" with everything that actually happened buried in it.
     Held,
+    /// Nothing ran: a module wrote down something it noticed. Not a run
+    /// either, and it moves no schedule.
+    Noted,
 }
 
 /// Whether a task repeats, or happens once and is then gone.
@@ -1220,6 +1277,8 @@ pub enum TaskKind {
     Routine,
     /// It happens once and then it is gone.
     Once,
+    /// It runs nothing on a schedule: it listens, and publishes what it heard.
+    Watch,
 }
 
 /// Which stretch of the person's day a task prefers.
@@ -1316,6 +1375,22 @@ pub struct RunRecord {
     pub trouble: String,
     /// What became of each step.
     pub steps: Vec<StepOutcome>,
+    /// THE KEYS, so the component never builds one out of an id — a module's
+    /// words are its own (`<module>-why-<word>`), and a key built by
+    /// convention on this side is a key nobody declared.
+    ///
+    /// The task's name.
+    pub task_key: String,
+    /// The name of the step it stopped at. Empty when [`RunRecord::at`] is.
+    pub at_key: String,
+    /// The key of [`RunRecord::why`]. Empty when `why` is.
+    pub why_key: String,
+    /// What a [`OutcomeKind::Noted`] record says, as a key. Empty for every
+    /// other kind.
+    pub says: String,
+    /// The sentence the host made of it with its values — the component
+    /// cannot format a size or a moment.
+    pub says_text: String,
 }
 
 /// One thing a task runs, as the screen draws it.
@@ -1338,6 +1413,26 @@ pub struct TaskStep {
     /// Sending the default makes "changed" an `!=` anybody can do and leaves
     /// one authority for it.
     pub on_by_default: bool,
+    /// The key of its name, declared by the module that owns the step — never
+    /// built out of the id on this side.
+    pub name_key: String,
+    /// The key of the line under the cursor.
+    pub does_key: String,
+}
+
+/// SOMETHING A PERSON CAN ASK OF A MODULE BY NAME — the registry command
+/// `<module>-<id>`, offered on its page, beside a notice, or on a row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModuleAction {
+    /// Its id inside the module: what [`Request::ActPage`], [`Request::ActRow`]
+    /// and a notice's control hand back.
+    pub id: String,
+    /// `cmd-<module>-<id>`.
+    pub label_key: String,
+    /// Whether it acts on a ROW of the module's screen.
+    pub row: bool,
+    /// The key of the question it asks first; empty when it asks none.
+    pub asks_key: String,
 }
 
 /// One task, as the screen draws it.
@@ -1388,6 +1483,22 @@ pub struct TaskState {
     pub history: Vec<RunRecord>,
     /// What it runs.
     pub steps: Vec<TaskStep>,
+    /// Whether it keeps a calendar. A page draws the cadence and the window
+    /// only when it does: a relief that comes due when the disk is short has
+    /// neither.
+    pub calendar: bool,
+    /// The key of its name — `brain-task-<id>`, declared by its module.
+    pub name_key: String,
+    /// The key of the sentence that says what it does.
+    pub does_key: String,
+    /// The key of [`TaskState::why_not`]. Empty when that is.
+    pub why_key: String,
+    /// THE MODULE'S PAGE MOVED when this does: a page that shows the module's
+    /// screen asks for it again ([`Request::WatchScreen`]), and never on a
+    /// clock. The screen itself is not in the mind.
+    pub screen_generation: u64,
+    /// What a person can ask of it by name, in the manifest's order.
+    pub actions: Vec<ModuleAction>,
 }
 
 /// The warning that something is about to happen.
@@ -1453,7 +1564,9 @@ pub struct Mind {
     /// `ronoctua-brain` — and a screen that stepped by one would take
     /// twenty-three presses to get from a month to a week.
     pub cadence: Vec<u16>,
-    /// Everything the brain has done, newest first, across every task.
+    /// Everything the brain has done, newest first, across every task —
+    /// FOLDED: consecutive records that say the same thing are one row, and
+    /// the row opens into them (`ronoctua_brain::journal::grouped`).
     ///
     /// A task's own `history` answers *how has this one been going*; this
     /// answers *what has this machine been doing*, which is the question the
@@ -1461,8 +1574,8 @@ pub struct Mind {
     /// one has a FLOOR (a monthly task keeps its last ten however much else
     /// happens) and this one has a CEILING. Neither can be cut out of the
     /// other.
-    pub activity: Vec<RunRecord>,
-    /// How many runs that list keeps — not how many it holds today.
+    pub activity_rows: Vec<ActivityRow>,
+    /// How many records that list folds at most — not how many it holds today.
     ///
     /// A policy of the daemon's, crossing for the same reason `cadence` does.
     /// The activity block's title is a window onto this number, and a screen
@@ -1474,23 +1587,194 @@ pub struct Mind {
     /// heading is a window onto this number and the owner asked it to say so.
     /// It is `journal::RECENT`, the brain's floor on pruning.
     pub recent: u32,
-    /// Something the brain wants said, without anybody having asked.
-    ///
-    /// The band's line. `task` empty means there is nothing — the same shape
-    /// [`Mind::announcement`] beside it uses, and for the same reason: a
-    /// record crosses the WIT and an `Option` does not.
-    pub notice: Notice,
+    /// EVERY NOTICE every module raised, in the order the strip ranks them:
+    /// an alarm first, then danger, warn and info, the newest first among
+    /// equals. Empty is a machine with nothing to say.
+    pub notices: Vec<Notice>,
 }
 
-/// Something the brain wants said, without anybody having asked.
+/// SOMETHING A MODULE WANTS SAID, without anybody having asked.
+///
+/// A key and the sentence the host made of it: a component cannot format a
+/// size or a moment, and a key with holes in it is not something it can draw.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Notice {
-    /// Whose it is. Empty when there is no notice at all.
-    pub task: String,
-    /// What to say, as a text key.
+    /// Whose it is, by the module's id.
+    pub module: String,
+    /// Its id inside the module.
+    pub id: String,
+    /// What it says, as a text key.
     pub says: String,
-    /// The command a button runs. Empty for a notice that only tells.
+    /// The sentence, already made in the person's language.
+    pub says_text: String,
+    /// Each value, already formatted.
+    pub args: Vec<NoticeArg>,
+    /// How loud.
+    pub level: NoticeLevel,
+    /// Since when it has been true, in epoch seconds.
+    pub since: u64,
+    /// The same moment, already formatted.
+    pub since_text: String,
+    /// Actions offered beside it.
+    pub controls: Vec<ModuleAction>,
+    /// Whether it may be put away.
+    pub dismissable: bool,
+    /// The snoozes it offers, in minutes; the first is the strip's.
+    pub snooze: Vec<u16>,
+}
+
+/// HOW LOUD A NOTICE IS. The order is the strip's precedence, quietest first:
+/// an alarm beats even the countdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum NoticeLevel {
+    /// Worth saying.
+    #[default]
+    Info,
+    /// Something is wrong.
+    Warn,
+    /// Something is wrong and costs something now.
+    Danger,
+    /// It rings, and it stays until a person answers it.
+    Alarm,
+}
+
+/// One value of a notice's sentence, by its name, formatted by the host.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NoticeArg {
+    /// The Fluent variable.
+    pub name: String,
+    /// The value, as the person reads it.
+    pub text: String,
+}
+
+/// ONE ROW OF THE ACTIVITY LOG: consecutive records that say the same thing,
+/// folded. Forty holds for a busy RAM are one row — "Last: <when>", how many,
+/// and the first — that opens into all of them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ActivityRow {
+    /// What the row draws: the newest of them.
+    pub newest: RunRecord,
+    /// How many records it folds; `1` is one that stands alone.
+    pub repeats: u32,
+    /// When the newest of them happened, formatted.
+    pub last_text: String,
+    /// When the oldest of them happened, formatted.
+    pub first_text: String,
+    /// All of them, NEWEST FIRST, `newest` included.
+    pub members: Vec<RunRecord>,
+}
+
+// ---------------------------------------------------------------------------
+// A MODULE'S OWN PAGE, as rows of DATA — asked for when its task's
+// `screen_generation` moves ([`Request::WatchScreen`]) and pushed by the host
+// through [`Input::ModuleScreen`]. Never carried in the [`Mind`]: a page nobody
+// is looking at costs nothing. Field order is the WIT's, for the reason written
+// above the survey's structs.
+// ---------------------------------------------------------------------------
+
+/// The colour of a row, by MEANING — one token each on the host's side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrainTone {
+    /// Nothing to worry about.
+    #[default]
+    Quiet,
+    /// Something is being followed.
+    Watching,
+    /// Look soon.
+    Warning,
+    /// Look now.
+    Danger,
+    /// The module's own emphasis.
+    Accent,
+}
+
+/// A moment: the number for the arithmetic, the text for the date.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Timed {
+    /// Epoch seconds.
+    pub at: u64,
+    /// Already formatted, in the machine's zone.
+    pub text: String,
+}
+
+/// A size: the number for the arithmetic, the text in the person's units and
+/// decimal mark.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Measured {
+    /// How many bytes.
+    pub bytes: u64,
+    /// Already formatted.
+    pub text: String,
+}
+
+/// One cell of a module's row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ScreenCell {
+    /// Nothing.
+    #[default]
+    Empty,
+    /// A text key.
+    Key(String),
+    /// Data, drawn as it is — including what a person typed.
+    Data(String),
+    /// A moment.
+    Moment(Timed),
+    /// A count.
+    Count(u64),
+    /// A size.
+    Bytes(Measured),
+}
+
+/// One row of a module's page.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModuleRow {
+    /// Its id inside the module — DATA; the host hands it back to the module
+    /// when the row's action is asked for.
+    pub id: String,
+    /// What it is.
+    pub label: ScreenCell,
+    /// Its value.
+    pub value: ScreenCell,
+    /// A quieter line about it.
+    pub note: ScreenCell,
+    /// Its colour, by meaning.
+    pub tone: BrainTone,
+    /// The id of the action a press runs; empty is a row that only tells.
     pub act: String,
+    /// The id of its SECOND action, on a key of its own; empty when it has
+    /// none.
+    pub also: String,
+}
+
+/// One titled block of a module's page.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModuleSection {
+    /// Its title, as a key.
+    pub heading: String,
+    /// Its rows.
+    pub rows: Vec<ModuleRow>,
+}
+
+/// A module's own page.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModuleScreen {
+    /// Whose, by the task's id in the last [`Mind`].
+    pub module: String,
+    /// The `screen_generation` it answers.
+    pub generation: u64,
+    /// In order.
+    pub sections: Vec<ModuleSection>,
+    /// Why there is no page, as a sentence the host made — the brain refused
+    /// it, or did not answer. Empty when the page came.
+    pub refused: String,
+}
+
+impl ModuleScreen {
+    /// Its rows, counted across the sections in order — the list a
+    /// [`Request::ActRow`] index points into.
+    pub fn rows(&self) -> impl Iterator<Item = &ModuleRow> {
+        self.sections.iter().flat_map(|s| s.rows.iter())
+    }
 }
 
 /// One step, switched on or off by the id the last [`Mind`] gave.
@@ -2890,6 +3174,13 @@ pub enum Input {
     /// go out of step, and a few hundred short lines cost less than being
     /// wrong about which ones it has.
     Log(Vec<LogLine>),
+    /// A MODULE'S OWN PAGE, for a buffer that declared [`Capability::Brain`]
+    /// and asked for one ([`Request::WatchScreen`]): pushed when its
+    /// generation moves, and never on a clock.
+    ///
+    /// BOXED for the reason [`Input::Mind`] is: an enum is as big as its
+    /// largest variant, and the arrow keys would pay for a page of rows.
+    ModuleScreen(Box<ModuleScreen>),
     /// Where the pointer is resting, in the buffer's own cells.
     ///
     /// FLATTENED here and a `position` record on the wire, exactly as

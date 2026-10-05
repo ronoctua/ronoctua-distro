@@ -30,7 +30,8 @@
 # whole screen) into the output, `crop`, `changed`, `pixels_of`, `has_colour`,
 # `lacks_colour`, `rows_with_ink` measure, `token_hex(<token>)` is a colour of
 # the default theme, and `LINE`, `LINE_EXACT`, `CELL`, `FOOTER` are the grid.
-# The player: `start_player()` raises the daemon, `player(<ask>)` asks its
+# The player: `start_player()` raises the daemon (`tools=True`, on the stage
+# run with `--player-tools`, with the decoders' table), `player(<ask>)` asks its
 # socket, `look(<name>)` saves its whole state (a photograph's `--state`),
 # `frame_png(<lane>, <name>)` saves the frame it draws, and `MEDIA` is the
 # directory of files `tests/player-vm.nix` proves play (`film.mp4`,
@@ -56,6 +57,9 @@
   # The software centre's programs, from the table the installed system's
   # footer unit reads (`nix/software-tools.nix`).
   softwareTools,
+  # THE DECODERS' TABLE, only for the stage that asks for it
+  # (`nix run .#shot -- --player-tools <scene>`): see `playerTools` below.
+  withPlayerTools ? false,
 }:
 
 let
@@ -84,12 +88,34 @@ let
   # which a scene that plays `film.mp4` or `subbed.mkv` never uses (mpv
   # decodes both itself), and `player-tools.nix` evaluates nixpkgs a second
   # time for its one unfree decoder. The rest: the media (9.9 MiB), the
-  # daemon (6.9 MiB) and ffmpeg's `bin` (1.2 MiB). The table stays so a scene
-  # can open every file of `MEDIA`; whether it is worth it is the owner's
-  # call (`docs/PENDING.md`, 0.0003).
+  # daemon (6.9 MiB) and ffmpeg's `bin` (1.2 MiB). So the table is a second
+  # stage (decided 2026-10-04, C4): the default driver carries only ffmpeg,
+  # ffprobe and exiftool (the subtitles' merge and a file's tags, and paths
+  # every profile has already), `start_player()` raises the daemon with them,
+  # and only a scene that opens a decoder's format runs with `--player-tools`
+  # and asks `start_player(tools=True)`. The app builds that stage only when
+  # asked. The table's values are lazy: the default stage never evaluates the
+  # second nixpkgs of the unfree decoder.
   media = import ../tests/player-media.nix { inherit pkgs; };
   playerClient = ../tests/player-client.py;
-  playerTools = import ./player-tools.nix { inherit pkgs; };
+  playerTable = import ./player-tools.nix { inherit pkgs; };
+  playerBase = lib.getAttrs [
+    "RONOCTUA_FFMPEG"
+    "RONOCTUA_FFPROBE"
+    "RONOCTUA_EXIFTOOL"
+  ] playerTable;
+  playerDecoders =
+    if withPlayerTools then removeAttrs playerTable (builtins.attrNames playerBase) else { };
+  setenvOf =
+    table:
+    lib.concatMapStrings (line: ''"--setenv=${line} " '') (
+      lib.mapAttrsToList (name: value: "${name}=${value}") table
+    );
+  # THE OFFLINE ENGLISH DICTIONARY, as `nix/modules/words.nix` hands it to
+  # the installed player's unit: the stage's player is started by hand and
+  # inherits nothing, and a scene photographs what an installed full profile
+  # shows.
+  words = pkgs.callPackage ./wordsgen.nix { };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-shot";
@@ -207,15 +233,24 @@ pkgs.testers.runNixOSTest {
         print(f"took {name}")
 
 
-    def start_player():
+    def start_player(tools=False):
         """Raises the player's daemon as its unit does in a session, and
         waits for it to answer.
 
         BEFORE THE FOOTER ASKS FOR IT: a footer that finds no socket starts
-        the daemon beside itself (`client::ensure`), without the decoders'
-        table, and a scene would then photograph a player that cannot open
-        half of `MEDIA`.
+        the daemon beside itself (`client::ensure`), and a scene would then
+        photograph a daemon it did not start.
+
+        `tools=True` hands it the decoders' table, which only the stage run
+        with `--player-tools` carries: without it the daemon opens what mpv
+        decodes itself (`film.mp4`, `subbed.mkv`, `tone.flac`), and not the
+        formats only the table opens.
         """
+        if tools and not ${if withPlayerTools then "True" else "False"}:
+            raise RuntimeError(
+                "start_player(tools=True) needs the stage with the decoders' "
+                "table: nix run .#shot -- --player-tools <scene.py>"
+            )
         machine.succeed(
             "systemd-run --unit=player "
             "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
@@ -223,10 +258,10 @@ pkgs.testers.runNixOSTest {
             "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
             "--setenv=RUST_LOG=ronoctua_player=debug,ronoctua_player_engine=debug "
             "--setenv=RONOCTUA_SHELL=${ronoctua-shell}/bin/ronoctua-shell "
-            ${lib.concatMapStrings (line: ''"--setenv=${line} " '') (
-              lib.mapAttrsToList (name: value: "${name}=${value}") playerTools
-            )}
-            "${ronoctua-player}/bin/ronoctua-player"
+            "--setenv=RONOCTUA_WORDS=${words} "
+            ${setenvOf playerBase}
+            + ((${setenvOf playerDecoders} "") if tools else "")
+            + "${ronoctua-player}/bin/ronoctua-player"
         )
         # AN ANSWER, and not the socket's file: a socket whose server died
         # stays on the disk, and `[ -S ]` does not prove anyone listens.
@@ -395,8 +430,9 @@ pkgs.testers.runNixOSTest {
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
-    # THE ONE TEST THAT NEEDS THE BRAIN TO SPEAK: it photographs its line.
-    start_xvfb(brain=True)
+    # THE BRAIN IS QUIET HERE TOO: nothing starts by itself. A scene that
+    # photographs its line asks it for a run, or raises what it photographs.
+    start_xvfb()
     start_compositor("compositor", "${scroll}")
     sock = socket_of("compositor")
 

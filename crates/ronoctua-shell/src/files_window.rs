@@ -155,38 +155,18 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("could not hang the files channel: {e}"))?;
 
-        // THE FRAMES OF A MOVING FILE, on a channel of their own.
+        // THE PANELS' THREADS — the inspector, the film and the shape — each on
+        // a channel of its own, and all three heard in one place
+        // (`inspection::Threads`, `Files::panels_heard`). Their own and not the
+        // reports': a frame arrives ten times a second while a cursor rests on
+        // a video, and none of them is news about a directory.
         //
-        // Their own, and not the reports': a frame arrives ten times a second
-        // while a cursor rests on a video, and putting that through the channel
-        // that also carries "the directory changed" would make every one of those
-        // wake the parts of the door that read a directory.
-        //
-        // AND THE FRAME ARRIVING IS THE CLOCK. Neither door has a timer for this
-        // and neither gained one — the player sleeps for the frame's own delay and
-        // sends it, so when it stops, the wake-ups stop with it.
-        let (frames_sender, frames) = channel::channel::<crate::motion::Beat>();
-        w.handle
-            .insert_source(frames, |event, (), door: &mut Door<Files>| {
-                if let channel::Event::Msg(f) = event {
-                    door.content.view.played(f);
-                    door.ui.ask_paint();
-                }
-            })
-            .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
-
-        // AND THE VIEWS OF A SHAPE, on a channel of their own too, for the reason
-        // written just above about frames: a drag emits one every few tens of
-        // milliseconds and none of them is news about a directory.
-        let (turns_sender, turns) = channel::channel::<crate::stage::Beat>();
-        w.handle
-            .insert_source(turns, |event, (), door: &mut Door<Files>| {
-                if let channel::Event::Msg(b) = event {
-                    door.content.view.drew(b);
-                    door.ui.ask_paint();
-                }
-            })
-            .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
+        // AND THE FRAME ARRIVING IS THE CLOCK. Neither door has a timer for
+        // this and neither gained one — the player sleeps for the frame's own
+        // delay and sends it, so when it stops, the wake-ups stop with it.
+        let threads = crate::inspection::Threads::raise(&w.handle, |door: &mut Door<Files>, h| {
+            door.content.panels_heard(&mut door.ui, h);
+        })?;
 
         // AND THE GLOBE'S, on a third — for the same reason as the second: a drag
         // across the world emits a picture every few tens of milliseconds, and none
@@ -250,6 +230,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             side,
         );
 
+        let sender_for_git = sender.clone();
         let mut files = Files {
             // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
             // `wl_data_device_manager` — absence is not an error, and everything
@@ -259,9 +240,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             held: Modifiers::default(),
             view,
             catalogue,
-            looking: crate::files::inspector(sender.clone()),
-            playing: crate::motion::player(frames_sender),
-            turning: crate::stage::stage(turns_sender),
+            threads,
             spinning_globe: crate::globe::stage(globes_sender),
             thumbing: crate::thumbs::pool(
                 thumbs_sender.clone(),
@@ -272,7 +251,6 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             touring: crate::motion::player(tours_sender),
             wound: crate::thumbs::Wind(Vec::new()),
             sender,
-            said: 0,
             fold: crate::fold::Fold::default(),
             right_ctrl: false,
             fold_control: None,
@@ -288,6 +266,15 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
             handle: w.handle.clone(),
             walk_armed: false,
             notice,
+            in_place: false,
+            // THE GIT LINE'S KEEPER: the repository the folder is in, its git
+            // files watched, read on a thread of its own and heard as a
+            // report (`crate::git_line`).
+            git: Some(crate::git_line::Keeper::new({
+                let s = sender_for_git;
+                move |line| s.send(crate::files::Report::Git(Box::new(line))).is_ok()
+            })),
+            root_waiting: None,
         };
         // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
         // by now, so what this arms is the watch for everything that happens NEXT.
@@ -305,7 +292,7 @@ fn language() -> String {
 }
 
 /// The window: the manager, and the threads that draw into its panels.
-struct Files {
+pub(crate) struct Files {
     /// Entries carried out of the listing, and drops landing in it. See
     /// [`crate::carry`].
     carrying: Option<crate::carry::Carrying>,
@@ -318,18 +305,14 @@ struct Files {
     view: crate::files::View,
     catalogue: crate::apps::Catalogue,
     sender: channel::Sender<crate::files::Report>,
-    /// Where an ask for a preview and its facts is posted.
-    ///
-    /// `None` when the thread could not be raised: the panels then draw the
-    /// glyph and nothing else, which is honest, rather than the door refusing
-    /// to open.
-    looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
-    /// The thread that follows a moving file, when there is one to follow.
-    playing: Option<crate::motion::Player>,
+    /// The panels' threads: the inspector, the film and the shape. See
+    /// [`crate::inspection::Threads`].
+    threads: crate::inspection::Threads,
     /// The hands that make thumbnails, when the entries are side by side.
     ///
     /// `None` when not one could be raised: the grid then draws its glyphs and
-    /// nothing else, which is honest — the same shape `looking` has above.
+    /// nothing else, which is honest — the same shape the panels' inspector has
+    /// (`inspection::Threads`).
     thumbing: Option<std::sync::mpsc::Sender<crate::thumbs::Ask>>,
     /// The thread that walks the frames of what moves by itself.
     winding: Option<std::sync::mpsc::Sender<crate::thumbs::Wind>>,
@@ -345,13 +328,6 @@ struct Files {
     /// the layout every frame, and sending it every frame would wake a thread
     /// sixty times a second to be told nothing had changed.
     wound: crate::thumbs::Wind,
-    /// Which message is on screen, counted.
-    ///
-    /// A one-shot timer is armed for each one and fires three seconds later;
-    /// by then the message it was armed for may have been replaced or cleared,
-    /// and a timer that wiped whatever it found would take the NEW one down
-    /// early. It clears only its own.
-    said: u64,
     /// Whether line 0 is OPEN, and how far it is scrolled. See [`crate::fold`].
     ///
     /// The same state the footer keeps for the same line — this door's line 0
@@ -390,8 +366,6 @@ struct Files {
     /// tick when none is. Without the flag, every frame drawn while a long
     /// name is on screen would hang another timer on the loop.
     walk_armed: bool,
-    /// The thread that draws a shape at the angle it is being looked at.
-    turning: Option<crate::stage::Stage>,
     /// The thread that draws the globe. One per DOOR, because a door has one
     /// calloop and one channel; the pose is the view's.
     spinning_globe: Option<crate::globe::Stage>,
@@ -400,6 +374,20 @@ struct Files {
     /// `None` means the watch could not be armed and the fallback clock above
     /// is doing the work instead.
     notice: Option<ronoctua_files::notice::Notice>,
+    /// Whether an archive's listing and a member's extraction are done IN
+    /// PLACE, on this thread, rather than on one of their own — the
+    /// photograph's camera (`Files::detached`), whose report channel has no
+    /// loop behind it: a frame is then never taken before the listing it
+    /// shows has arrived.
+    in_place: bool,
+    /// The git line's keeper (`crate::git_line::Keeper`) — `None` in the
+    /// photograph, which reads the line on its own thread
+    /// ([`Files::inspect_now`]).
+    git: Option<crate::git_line::Keeper>,
+    /// A change only root may make, waiting for the password the sudo door
+    /// asked for — asked on this window's line
+    /// ([`crate::files::ROOT_PASSWORD`]).
+    root_waiting: Option<crate::files::Root>,
 }
 
 /// What the pointer that spoke last is resting on, copied out of its hand.
@@ -417,7 +405,7 @@ struct Pointed {
 
 /// What this window keeps for ONE pointer — see `crate::seats`.
 #[derive(Debug, Default)]
-struct PerSeat {
+pub(crate) struct PerSeat {
     /// Which LINE of the region the pointer is over.
     ///
     /// Kept beside the cell and beside the resolved target, because the band
@@ -540,13 +528,10 @@ impl Files {
     /// answers `None` when the answer is already in hand, so this is a cheap
     /// call and not a decision made here.
     fn look_again(&mut self, ui: &Ui) {
-        if let Some(queue) = self.looking.as_ref()
-            && let Some(ask) = self
-                .view
+        self.threads.look(|| {
+            self.view
                 .wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
-        {
-            let _ = queue.send(ask);
-        }
+        });
         self.thumbs_again(ui);
         self.follow_the_motion();
         self.follow_the_turn();
@@ -602,14 +587,9 @@ impl Files {
     /// the cursor can move a dozen ways and enumerating them is how a case
     /// gets missed. One question, one place.
     fn follow_the_motion(&mut self) {
-        let Some(player) = self.playing.as_mut() else {
-            return;
-        };
         // ONE QUESTION, ONE ANSWER, PASSED STRAIGHT ON — see the footer door's
         // twin, and the reason written there.
-        if let Some(ask) = self.view.wants_motion() {
-            player.tell(ask);
-        }
+        self.threads.play(|| self.view.wants_motion());
     }
 
     /// Starts, or stops, the thread that draws a shape.
@@ -619,11 +599,7 @@ impl Files {
     /// and from the panel being resized, and enumerating those is how one gets
     /// missed.
     fn follow_the_turn(&mut self) {
-        if let Some(stage) = self.turning.as_mut()
-            && let Some(ask) = self.view.wants_turn()
-        {
-            stage.tell(ask);
-        }
+        self.threads.turn(|| self.view.wants_turn());
         // AND THE GLOBE, asked in the same place and by the same rule: a value
         // diff, so a repeat costs nothing.
         if let Some(stage) = self.spinning_globe.as_mut()
@@ -669,7 +645,7 @@ impl Files {
             }
             Step::Say(e) => {
                 let m = ui.texts.t_with(e.key, &e.borrowed());
-                self.say(ui, m);
+                ui.say(m);
             }
             // THE OPENED LINE IS THE DOOR'S, and this is where the keyboard's
             // ask lands. The view holds the focus that reached the control and
@@ -685,6 +661,19 @@ impl Files {
                     self.fold.offset = usize::try_from(next.max(0)).unwrap_or(0).min(last);
                 }
             },
+            // THE CLIPBOARD, read off the loop as every window reads it
+            // (`Ui::paste`), and handed back to `Content::pasted`.
+            Step::Paste => {
+                ui.paste();
+                return;
+            }
+            // A SECRET, on this window's own line and masked — the footer
+            // asks the same one on its minibuffer. The answer comes back to
+            // `Content::answered`, and from there to the same view.
+            Step::Secret(id) => {
+                ui.ask(crate::line::Line::new(id, true, None));
+                return;
+            }
             Step::Do(doing) => {
                 // THE FOUR THAT SPAWN are the door's business; everything else
                 // is the same code the footer runs.
@@ -730,7 +719,7 @@ impl Files {
                                 ronoctua_i18n::key::FILES_SIDEBAR_GONE,
                                 &[("name", which.as_str())],
                             );
-                            self.say(ui, m);
+                            ui.say(m);
                         }
                         ui.ask_paint();
                         return;
@@ -745,7 +734,21 @@ impl Files {
                             ui.launch(&me.to_string_lossy(), &["buffer".to_owned(), w, id], None);
                         } else {
                             let m = ui.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER);
-                            self.say(ui, m);
+                            ui.say(m);
+                        }
+                        ui.ask_paint();
+                        return;
+                    }
+                    // CHECK WITH VIRUSTOTAL: the security centre's window,
+                    // checking the file — the same window the footer's door
+                    // opens, which asks its own questions.
+                    Doing::VirusTotal(path) => {
+                        if let Ok(me) = std::env::current_exe() {
+                            ui.launch(
+                                &me.to_string_lossy(),
+                                &crate::security::window_checking(&path),
+                                None,
+                            );
                         }
                         ui.ask_paint();
                         return;
@@ -766,6 +769,22 @@ impl Files {
                         ui.ask_paint();
                         return;
                     }
+                    // THE HISTORY, in a window of its own — this door's kind
+                    // of door (`git_browser_window`).
+                    Doing::History(root) => {
+                        if let Ok(me) = std::env::current_exe() {
+                            ui.launch(
+                                &me.to_string_lossy(),
+                                &[
+                                    "git-browser".to_owned(),
+                                    root.to_string_lossy().into_owned(),
+                                ],
+                                Some(&root.to_string_lossy()),
+                            );
+                        }
+                        ui.ask_paint();
+                        return;
+                    }
                     Doing::Copy(text) => {
                         let ok = crate::buffer::copy_to_clipboard(&text).is_ok();
                         let m = ui.texts.t(if ok {
@@ -773,8 +792,28 @@ impl Files {
                         } else {
                             ronoctua_i18n::key::FILES_NOT_COPIED
                         });
-                        self.say(ui, m);
+                        ui.say(m);
                         ui.ask_paint();
+                        return;
+                    }
+                    // IN PLACE, for the camera: the listing and the member are
+                    // what the frame shows, and there is no loop to wait on.
+                    Doing::Archive(
+                        doing @ (crate::files_archive::ArchiveDoing::List { .. }
+                        | crate::files_archive::ArchiveDoing::Open { .. }),
+                    ) if self.in_place => {
+                        let report = match doing {
+                            crate::files_archive::ArchiveDoing::List { archive, secret } => {
+                                crate::files_archive::list_now(&archive, secret.as_ref())
+                            }
+                            crate::files_archive::ArchiveDoing::Open {
+                                archive,
+                                member,
+                                secret,
+                            } => crate::files_archive::open_now(&archive, &member, secret.as_ref()),
+                            crate::files_archive::ArchiveDoing::Queue { .. } => return,
+                        };
+                        self.reported(ui, crate::files::Report::Archive(Box::new(report)));
                         return;
                     }
                     other => {
@@ -786,7 +825,7 @@ impl Files {
                             Errand::Done => self.view.reread(),
                             Errand::Say(e) => {
                                 let m = ui.texts.t_with(e.key, &e.borrowed());
-                                self.say(ui, m);
+                                ui.say(m);
                             }
                         }
                     }
@@ -807,7 +846,14 @@ impl Files {
     /// on every keypress honest.
     fn follow_the_place(&mut self) {
         if let Some(n) = self.notice.as_mut() {
-            n.look_at(self.view.where_());
+            // THE ARCHIVE'S OWN FOLDER while the view stands inside one: a
+            // path inside an archive is not on the disk to be watched.
+            n.look_at(self.view.watched());
+        }
+        // AND THE GIT LINE follows the folder into — and out of — a
+        // repository: a comparison of two paths when nothing moved.
+        if let Some(g) = self.git.as_mut() {
+            g.follow(self.view.where_());
         }
     }
 
@@ -824,7 +870,7 @@ impl Files {
                     Some((program, args, cwd)) => ui.launch(&program, &args, cwd.as_deref()),
                     None => {
                         let m = ui.texts.t(ronoctua_i18n::key::FILES_NO_EDITOR);
-                        self.say(ui, m);
+                        ui.say(m);
                     }
                 }
             }
@@ -837,7 +883,7 @@ impl Files {
                     ronoctua_i18n::key::FILES_NOTHING_OPENS,
                     &[("type", of_type)],
                 );
-                self.say(ui, m);
+                ui.say(m);
             }
         }
     }
@@ -850,7 +896,7 @@ impl Files {
             option_env!("RONOCTUA_RESCUE_SHELL"),
         ) else {
             let m = ui.texts.t(ronoctua_i18n::key::FILES_NO_PKEXEC);
-            self.say(ui, m);
+            ui.say(m);
             return;
         };
         ui.launch(
@@ -870,34 +916,34 @@ impl Files {
         match report {
             crate::files::Report::Done => self.view.reread(),
             crate::files::Report::Measured(name, bytes) => self.view.measured(&name, bytes),
-            crate::files::Report::Failed(why) => self.say(ui, why),
+            crate::files::Report::Failed(why) => ui.say(why),
             crate::files::Report::Refused(which, why) => {
                 if matches!(which, ronoctua_disks::Refusal::AlreadyMounted) {
                     self.view.reread();
                 } else {
                     let e = self.view.refusal_said(which, &why);
                     let m = ui.texts.t_with(e.key, &e.borrowed());
-                    self.say(ui, m);
+                    ui.say(m);
                 }
             }
             crate::files::Report::Mounted(at) => self.view.mounted(&at),
-            // WHAT IS INSIDE THE FILE. It arrives on the same channel as
-            // everything else a thread came back with, which is what keeps this
-            // door with one place to receive and not two.
-            crate::files::Report::Inspected(looked) => {
-                self.view.looked(*looked);
-                // AND THE PLAYER IS ASKED AGAIN, because THIS is the moment the
-                // answer arrives — and the answer is what says the file moves.
-                //
-                // Without it the player only ever started when the cursor moved
-                // AFTER the answer: on the file the cursor was already resting
-                // on, the wish became askable a fraction of a second too late
-                // and nothing ever asked again. The shots caught it —
-                // *"the preview drew the same pixels a second apart"* — and
-                // nothing else could have, because every unit test drives
-                // `wants_motion` by hand.
-                self.follow_the_motion();
-                self.follow_the_turn();
+            crate::files::Report::Said(e) => {
+                let m = ui.texts.t_with(e.key, &e.borrowed());
+                ui.say(m);
+            }
+            // THE SUDO DOOR WANTS THE PASSWORD: asked on THIS window's line,
+            // and the change goes on with it (`Content::answered`).
+            crate::files::Report::Password(change) => {
+                self.root_waiting = Some(change);
+                ui.ask(crate::line::Line::new(
+                    crate::files::ROOT_PASSWORD,
+                    true,
+                    None,
+                ));
+            }
+            crate::files::Report::Door(why) => {
+                let m = ui.texts.t(crate::security_words::refusal(why));
+                ui.say(m);
             }
             crate::files::Report::Racked(rack) => {
                 // AND THE SIDEBAR'S FILE, HERE. This process has no clock — a
@@ -925,12 +971,62 @@ impl Files {
                 if self.view.sidebar_stale() {
                     self.view.reread_sidebar();
                 }
+                // A FILE OF THE WORK TREE MOVED: the git line reads again.
+                if let Some(g) = self.git.as_ref() {
+                    g.nudge();
+                }
+            }
+            crate::files::Report::Git(line) => {
+                if !self.view.git_heard(*line) {
+                    return;
+                }
+            }
+            // A WRITER OF THE FACTS CAME BACK: the file is read again either
+            // way, and what it says — a refusal, the copy's name — is said
+            // here in the words the footer uses (`inspection_edit::sentence`).
+            crate::files::Report::Amended(amended) => {
+                self.view.reread();
+                if let Some(m) = crate::inspection_edit::sentence(&amended, &ui.texts) {
+                    ui.say(m);
+                }
+            }
+            // AN ARCHIVE'S ANSWER — a listing, a member out, a job refused —
+            // turned into a step by the same view the footer asks.
+            crate::files::Report::Archive(r) => {
+                let step = self.view.archive_reported(*r);
+                self.apply(ui, step);
             }
         }
         // A MOUNT MOVES THE VIEW. `Report::Mounted` goes into the directory it
         // just mounted, so the watch has to follow from here too and not only
         // from the key that was pressed.
         self.follow_the_place();
+        ui.ask_paint();
+    }
+
+    /// What the panels' threads came back with.
+    ///
+    /// WHAT IS INSIDE THE FILE, a frame of its film and a view of its shape,
+    /// heard in one place: `inspection::Threads` hangs the three channels and
+    /// hands each message here.
+    fn panels_heard(&mut self, ui: &mut Ui, heard: crate::inspection::Heard) {
+        if self.view.heard(heard) {
+            // AND THE PLAYER IS ASKED AGAIN, because THIS is the moment the
+            // answer arrives — and the answer is what says the file moves.
+            //
+            // Without it the player only ever started when the cursor moved
+            // AFTER the answer: on the file the cursor was already resting
+            // on, the wish became askable a fraction of a second too late
+            // and nothing ever asked again. The shots caught it —
+            // *"the preview drew the same pixels a second apart"* — and
+            // nothing else could have, because every unit test drives
+            // `wants_motion` by hand.
+            self.follow_the_motion();
+            self.follow_the_turn();
+            // THE PLACE IS FOLLOWED as after anything a thread came back
+            // with — see `Files::reported`.
+            self.follow_the_place();
+        }
         ui.ask_paint();
     }
 
@@ -1345,12 +1441,19 @@ impl Files {
         lit: &[(tokens::Color, Option<usize>)],
     ) -> Scene<'a> {
         let geo = self.geometry(ui);
+        // THE PREVIEW IS DECODED AT THIS SCREEN'S PIXELS, into the logical box
+        // the frame measures (`Panel::preview_scale`).
+        self.view.preview_at_scale(ui.scale);
+        // A QUESTION ON THE LINE — a password, a passphrase (`Ui::ask`) —
+        // takes line 0 whole, the way every window's header gives it up.
+        let question = crate::door::list::the_question(ui);
         // THE POINTER `here` — the one that spoke last — lights its field and
         // explains it; every pointer, the finger among them, lights its band.
         // A pointer on a drawn bar has no line here: see `PerSeat::on_bar`.
         let pointed = &self.pointed;
         Scene {
             geo,
+            question,
             message: ui.message.clone(),
             cell_under_pointer: pointed.cell,
             line_under_pointer: pointed.line,
@@ -1444,56 +1547,6 @@ impl Files {
         canvas.over.extend(tail);
         canvas.spans.extend(spans);
         canvas.pictures.extend(pictures);
-    }
-
-    /// Puts a sentence on the message line, and takes it off again.
-    ///
-    /// **THE ONE PLACE**, and there were nine. Nine assignments meant nine
-    /// chances to forget whatever a message needs, and one of them was already
-    /// forgotten by all nine: the message never went away. The owner found it
-    /// with `copy the path` — *"no filemanager versão janela, esse texto não
-    /// desapareceu"* — where the footer's `copied` fades after three seconds
-    /// and this door's stayed for the rest of the session.
-    ///
-    /// # Why a one-shot timer, and not a clock
-    ///
-    /// Because this window has no tick, deliberately: with several of them
-    /// open, a timer would be one wake-up per second per window for ever, and
-    /// the directory is watched by inotify precisely so that nothing has to
-    /// wake at rest (see the `Notice` above). A one-shot keeps that property
-    /// exactly — a window with nothing to say wakes not once — and pays for the
-    /// three seconds after a message, which is the only time there is anything
-    /// to do.
-    ///
-    /// The same three seconds as the footer, from the same constant: a message
-    /// that lingered here and not there would be two answers to "how long is a
-    /// message on screen".
-    fn say(&mut self, ui: &mut Ui, text: String) {
-        tracing::info!(echo = %text, "message line");
-        ui.message = Some(text);
-        self.said = self.said.wrapping_add(1);
-        let mine = self.said;
-        let armed = self.handle.insert_source(
-            calloop::timer::Timer::from_duration(std::time::Duration::from_secs(
-                crate::surface::ECHO_SECONDS,
-            )),
-            move |_, (), door: &mut Door<Self>| {
-                // ONLY ITS OWN. Between arming and firing the line may have
-                // been replaced or cleared by a key; wiping whatever is there
-                // would take a newer sentence down early.
-                if door.content.said == mine {
-                    door.ui.message = None;
-                    door.ui.ask_paint();
-                }
-                calloop::timer::TimeoutAction::Drop
-            },
-        );
-        if let Err(e) = armed {
-            // NOT SILENT, and the message STAYS. A line that outstays its
-            // welcome is a smaller failure than one that vanishes because a
-            // timer could not be hung, and the log says which happened.
-            tracing::warn!(error = %e, "no timer for the message line; it will stay");
-        }
     }
 
     /// A left click, on whatever cell it landed on.
@@ -1960,6 +2013,119 @@ impl Files {
     }
 }
 
+impl Files {
+    /// THE WINDOW WITH NO COMPOSITOR BEHIND IT — what `crate::files_photograph`
+    /// draws into a PNG.
+    ///
+    /// Everything a click or a key reaches is the production window's; what
+    /// it has not got is anything past the door. No drag leaves it (no data
+    /// device), no directory is watched, no disk is heard and no thread is
+    /// raised (`inspection::Threads::none`): the panels' answers are asked
+    /// for on the spot by [`Files::inspect_now`], and the clocks it hangs never
+    /// fire, because the loop they hang on is never run.
+    ///
+    /// AND NOTHING OF THIS MACHINE'S IS READ but the folder it opens on and
+    /// the sidebar it is handed: no roster (owners are numbers), UTC for every
+    /// date, no catalogue of programs and no trash — a photograph is the same
+    /// picture on every machine.
+    ///
+    /// # Errors
+    ///
+    /// When the process cannot make a socket pair or an event loop.
+    pub(crate) fn detached(
+        dir: &std::path::Path,
+        side: ronoctua_files::sidebar::Sidebar,
+        texts: std::rc::Rc<ronoctua_i18n::Texts>,
+    ) -> Result<Self> {
+        use anyhow::Context as _;
+        let (ours, _theirs) =
+            std::os::unix::net::UnixStream::pair().context("a socket pair for a detached door")?;
+        let conn = Connection::from_socket(ours).context("a connection over the pair")?;
+        let qh = conn.new_event_queue::<Door<Self>>().handle();
+        let handle = calloop::EventLoop::<'static, Door<Self>>::try_new()
+            .context("an event loop nobody runs")?
+            .handle();
+        let (sender, _reports) = channel::channel::<crate::files::Report>();
+        let view = crate::files::View::at(
+            dir,
+            ronoctua_files::who::Roster::default(),
+            ronoctua_files::when::Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            texts,
+            side,
+        );
+        let mut files = Self {
+            carrying: None,
+            qh,
+            held: Modifiers::default(),
+            view,
+            catalogue: std::sync::Arc::new(Vec::new()),
+            threads: crate::inspection::Threads::none(),
+            spinning_globe: None,
+            thumbing: None,
+            winding: None,
+            touring: None,
+            wound: crate::thumbs::Wind(Vec::new()),
+            sender,
+            fold: crate::fold::Fold::default(),
+            right_ctrl: false,
+            fold_control: None,
+            fold_lit: false,
+            fold_scroll: ronoctua_design::Scroll {
+                total: 0,
+                lines: 0,
+                offset: 0,
+                top: 0,
+            },
+            fold_wrapped: 0,
+            pointed: Pointed::default(),
+            handle,
+            walk_armed: false,
+            notice: None,
+            in_place: true,
+            git: None,
+            root_waiting: None,
+        };
+        // POINTED AT WHERE THE VIEW IS, as `host_it` points it — there is no
+        // watch here to point, and the door says so the same way.
+        files.follow_the_place();
+        Ok(files)
+    }
+
+    /// Hands the view a reading of the disks, as the udisks thread does —
+    /// what the camera gives it instead of a bus (`--luks`).
+    pub(crate) fn racked_now(&mut self, rack: &ronoctua_disks::Rack) {
+        self.view.racked(rack);
+    }
+
+    /// Asks the panels' question and hands the answer back AT ONCE, down the
+    /// path an answer from the inspector's thread takes.
+    ///
+    /// `true` when there was a question: the door then draws again, as it does
+    /// when an answer arrives.
+    pub(crate) fn inspect_now(&mut self, ui: &mut Ui) -> bool {
+        // THE GIT LINE, read on this thread for the photograph: the folder's
+        // repository, when it is in one and its line is not read yet.
+        if self.git.is_none()
+            && self.view.git_here().is_none()
+            && let Some(repo) = ronoctua_git::Repo::discover(self.view.where_())
+            && self.view.git_heard(crate::git_line::read(&repo))
+        {
+            return true;
+        }
+        let Some(ask) = self
+            .view
+            .wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
+        else {
+            return false;
+        };
+        let looked = crate::inspection::look(ask);
+        self.panels_heard(ui, crate::inspection::Heard::Looked(Box::new(looked)));
+        true
+    }
+}
+
 impl Content for Files {
     type Hand = PerSeat;
 
@@ -1973,8 +2139,62 @@ impl Content for Files {
         "*files*".to_owned()
     }
 
+    /// THE LANGUAGE MOVED, and the manager speaks it — the facts panel too,
+    /// which kept the sheet it had read in the old one.
+    fn language_changed(&mut self, ui: &mut Ui) {
+        self.view.speak(std::rc::Rc::clone(&ui.texts));
+        ui.ask_paint();
+    }
+
+    /// THE MANAGER'S STATE ON THE MODELINE, in its tone — a permission
+    /// question in `Warning` (`files::View::state`).
+    fn state(&self) -> Option<(&'static str, ronoctua_protocol::Tone)> {
+        Some(self.view.state())
+    }
+
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         self.key(ui, event, mods);
+    }
+
+    /// A SECRET the view asked for, typed on this window's line: the footer's
+    /// minibuffer hands the same answer to the same call — an archive's or a
+    /// disk's password — or the password the sudo door asked for, for a
+    /// change of owner, group or permissions.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        if crate::files_archive::QUESTIONS.contains(&id) {
+            let step = self.view.secret_answered(id, text);
+            self.apply(ui, step);
+        } else if id == crate::files::ROOT_PASSWORD
+            && let Some(change) = self.root_waiting.take()
+        {
+            let doing =
+                crate::files::Doing::RootProved(change, ronoctua_lookup::keys::Secret::new(text));
+            let clip = self.view.clip().clone();
+            if let crate::files::Errand::Say(e) =
+                crate::files::carry_out(doing, &self.sender, &clip)
+            {
+                let m = ui.texts.t_with(e.key, &e.borrowed());
+                ui.say(m);
+            }
+        }
+        ui.ask_paint();
+    }
+
+    /// The secret question was let go: nothing waits for it any more.
+    fn unanswered(&mut self, ui: &mut Ui, id: &'static str) {
+        if id == crate::files::ROOT_PASSWORD {
+            self.root_waiting = None;
+        } else {
+            self.view.secret_let_go(id);
+        }
+        ui.ask_paint();
+    }
+
+    /// THE CLIPBOARD, into the filter or the question's query — the footer
+    /// door's own `files::View::pasted`, on the same view.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        let step = self.view.pasted(text);
+        self.apply(ui, step);
     }
 
     /// THE DRAWER ON LINE 0 IS THIS WINDOW'S OWN (`crate::fold`, the footer's
@@ -2318,6 +2538,9 @@ pub(crate) struct Scene<'a> {
     pub texts: &'a ronoctua_i18n::Texts,
     /// What the last action had to say, if anything.
     pub message: Option<String>,
+    /// The question on line 0 while [`Ui::ask`] has one up — ahead of the
+    /// message and of the shortcuts, its `ESC` and `RET` clickable.
+    pub question: Option<Vec<crate::chrome::Piece>>,
     /// Which cell of the region the pointer is over.
     pub cell_under_pointer: Option<u16>,
     /// Which line of the region the pointer is over.
@@ -2427,13 +2650,18 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         .clone()
         .map(|t| vec![crate::chrome::Piece::said(t)])
         .or(does)
-        .or(explained);
+        .or(explained)
+        // A QUESTION TAKES THE LINE, and is drawn as the shortcuts are — its
+        // two keys are clicks.
+        .filter(|_| s.question.is_none());
     // THE LINE AS PIECES, whatever is on it — the same representation the
     // footer's minibuffer uses, and for the same reason: the drawer is drawn
     // by the painter that drew the line, so a key is the same colour three
     // rows down as it is on the first.
-    let hinting = second.is_none() && !s.view.filtering();
-    let line_pieces: Vec<crate::chrome::Piece> = if hinting {
+    let hinting = s.question.is_some() || (second.is_none() && !s.view.filtering());
+    let line_pieces: Vec<crate::chrome::Piece> = if let Some(asked) = s.question.clone() {
+        asked
+    } else if hinting {
         let mut out = s.view.hint(s.texts);
         // AND THE KEYS THAT OPEN AND WALK IT — see `fold::teaching`.
         out.extend(crate::fold::teaching(s.texts));
@@ -3059,7 +3287,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         Some((top, box_x, box_wide))
     });
     if let Some((top, _, box_wide)) = preview_box {
-        let air = f32::from(tokens::space::FILES_PICTUREAIR);
+        let air = crate::files::picture_air();
         let box_tall = (s.geo.metric.bottom() - f32::from(top) * line_px).max(0.0);
         s.view
             .measured_preview(box_wide - air - air, box_tall - air - air);
@@ -3144,10 +3372,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let gone = (place.map_or(0, |(_, _, cut)| cut) as f32 * line_px) as u32;
         // THE BOX THE PICTURE IS DRAWN IN, and not the box it was measured
-        // from — see `files::globe_texture`.
+        // from — see `files::globe_texture` — AT THIS SCREEN'S PIXELS, and so
+        // is how much of it scrolled away.
+        let by = s.view.preview_scale_now();
         s.view.measured_globe(
-            crate::files::globe_texture(area),
-            gone,
+            crate::files::globe_texture_at(area, by),
+            gone.saturating_mul(u32::try_from(by.max(1)).unwrap_or(1)),
             ronoctua_tokens::theme::palette(),
         );
     }
@@ -3798,6 +4028,7 @@ mod tests {
                 view: &mut view,
                 texts: &texts,
                 message: None,
+                question: None,
                 cell_under_pointer: None,
                 line_under_pointer: None,
                 hovers: Vec::new(),

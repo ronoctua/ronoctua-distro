@@ -182,6 +182,31 @@ pub trait PartitionTable {
     ) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 }
 
+/// A LUKS container: what opens it and what closes it again.
+///
+/// The passphrase travels in the CALL, over the system bus to udisksd — never
+/// in an argument of a program and never in a file. `auth.no_user_interaction`
+/// rides every call, for [`no_asking`]'s reason: a container the system owns
+/// (`encrypted-unlock-system`) answers with a refusal at once instead of
+/// waiting for an agent that is never going to register.
+#[zbus::proxy(
+    interface = "org.freedesktop.UDisks2.Encrypted",
+    default_service = "org.freedesktop.UDisks2"
+)]
+pub trait Encrypted {
+    /// Opens the container and answers the object path of what came out of
+    /// it — the cleartext block, which carries the filesystem.
+    fn unlock(
+        &self,
+        passphrase: &str,
+        options: HashMap<&str, Value<'_>>,
+    ) -> zbus::Result<OwnedObjectPath>;
+
+    /// Closes it. Refused while what came out of it is mounted — which is
+    /// why every caller here unmounts first.
+    fn lock(&self, options: HashMap<&str, Value<'_>>) -> zbus::Result<()>;
+}
+
 /// The physical thing a volume sits on.
 #[zbus::proxy(
     interface = "org.freedesktop.UDisks2.Drive",

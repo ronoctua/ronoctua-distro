@@ -1,0 +1,76 @@
+# WHAT WENT WRONG ON THE MACHINE, grouped, until somebody has seen it.
+#
+# A watch on the journal the core already follows: every entry at `err` or
+# worse, of the system's and the person's journals, from the moment it began
+# watching (on its first start, this boot's last few too). Entries of one kind
+# — the same unit saying the same thing with other numbers — are one row with
+# a count. While a kind is not seen yet, a mark on the modeline says how many
+# there are, in the colour of a watch. Why each is so is in `why.md`.
+{
+  what = "Group the journal's errors by unit and kind, and mark the modeline until they are seen.";
+
+  needs = {
+    root = false;
+    network = false;
+    # THIS BOOT, told apart from the ones before it, is the kernel's boot id
+    # (`/proc/sys/kernel/random/boot_id`), read through the one crate that may
+    # read `/proc`. And the kinds the person ignores are their file, written
+    # through the one crate that writes a person's file (read with `parsed`,
+    # never written over when it does not parse).
+    boundaries = [
+      "ronoctua-memory"
+      "ronoctua-store"
+    ];
+  };
+
+  # A WATCH: nothing to run, nothing to gate, nothing to announce.
+  schedule = null;
+
+  # The words it refuses with: the kind is not in its list any more
+  # (ignored, or forgotten while the page was open); a row's action asked by
+  # name, with no row; and the person's file of ignored kinds, which does not
+  # parse and is left as it is rather than written over.
+  whys = [
+    "gone"
+    "no-row"
+    "unreadable"
+  ];
+
+  glyphs = {
+    unseen = "md-file_alert_outline";
+  };
+
+  # ONE MARK, with the number of kinds not seen yet — and only while there is
+  # one (invariant 14). The colour of a watch, the gestures' glyph's. A click
+  # opens its page, where each kind is.
+  marks = {
+    unseen = {
+      glyph = "unseen";
+      hint = "journal-errors-mark-unseen";
+    };
+  };
+
+  # WHAT A PERSON DOES WITH A KIND. Each row of its page does ONE of them
+  # (the row's own action): a kind not seen yet is marked seen, a seen one is
+  # ignored from then on, and an ignored one is heard again. `seen-all` is the
+  # page's, for everything at once. All four are also commands, by name; the
+  # three a row's by name, with no row, say to choose one on the page.
+  actions = {
+    seen = {
+      row = true;
+    };
+    ignore = {
+      row = true;
+    };
+    unignore = {
+      row = true;
+    };
+    seen-all = { };
+  };
+
+  uses = [
+    "crates/ronoctua-journal"
+  ];
+
+  namedBy = { };
+}

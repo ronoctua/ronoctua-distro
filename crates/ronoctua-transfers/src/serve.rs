@@ -130,6 +130,9 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                     Engine::Torrent => crate::torrent::run(&mine, id, &switch, work),
                     Engine::Atlas => crate::atlas::run(&mine, id, &switch, work),
                     Engine::Software => crate::software::run(&mine, id, &switch, work),
+                    Engine::Scan => crate::scan::run(&mine, id, &switch, work),
+                    Engine::Container => crate::container::run(&mine, id, &switch, work),
+                    Engine::Belongings => crate::belongings::run(&mine, id, &switch, work),
                 })
             {
                 tracing::error!(error = %e, "could not start the job's thread");
@@ -360,6 +363,87 @@ mod tests {
             "a piece was left at the destination after the cancellation"
         );
         assert!(root.join("large.bin").exists(), "the original was touched");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stop_unwinds_the_copy_before_the_daemon_leaves() {
+        // WHAT `SIGTERM` DOES (`wind_down`): every switch to stop, and the
+        // wait until the copy has unwound — a copy that ends cancelled has
+        // removed what it wrote.
+        //
+        // A PIECE, PROVABLY, before the stop: a pause that lands before the
+        // copy opens its file leaves nothing to remove, and "nothing left"
+        // would then hold for a copy that never began. So the copy runs until
+        // its file has bytes and is held there, mid-file — and should it
+        // finish first on a fast disk, the attempt is thrown away and made
+        // again.
+        let root = scratch("stop");
+        let (shared, socket) = a_daemon(&root);
+        let size = ronoctua_files::watch::CHUNK * 6;
+        std::fs::write(root.join("large.bin"), vec![7u8; size]).unwrap();
+        let mut out = Vec::new();
+        let mut held = None;
+        for attempt in 0..10 {
+            let into = root.join(format!("into-{attempt}"));
+            std::fs::create_dir(&into).unwrap();
+            let Say::Took { id } = crate::client::ask_at(
+                &socket,
+                &Ask::Add {
+                    work: Work::Paste {
+                        paths: vec![root.join("large.bin")],
+                        into: into.clone(),
+                        moves: false,
+                    },
+                },
+            )
+            .unwrap() else {
+                panic!("the queue did not take the job");
+            };
+            let piece = into.join("large.bin");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !std::fs::metadata(&piece).is_ok_and(|m| m.len() > 0) {
+                assert!(Instant::now() < deadline, "the copy never began");
+                std::hint::spin_loop();
+            }
+            answer(&shared, &Ask::Pause { id }, &mut out).unwrap();
+            // A PAUSE DURING THE LAST BITE is a copy that still finishes —
+            // there is no switch after it — so the hold is read a moment
+            // later, against the bytes.
+            std::thread::sleep(Duration::from_millis(100));
+            let job = jobs_now(&socket)
+                .into_iter()
+                .find(|j| j.id == id)
+                .expect("the job");
+            let landed = std::fs::metadata(&piece).map_or(0, |m| m.len());
+            if job.stage == Stage::Paused && landed < size as u64 {
+                held = Some((id, into, piece));
+                break;
+            }
+            // FINISHED FIRST: the whole file, which is no piece.
+            until(&socket, id, Stage::Done);
+        }
+        let (id, into, piece) = held.expect("ten copies finished before a pause could hold one");
+        let partial = std::fs::metadata(&piece).expect("the piece").len();
+        assert!(
+            partial > 0 && partial < size as u64,
+            "not a piece: {partial} of {size} bytes"
+        );
+
+        assert!(
+            shared.wind_down(std::time::Duration::from_secs(10)),
+            "the copy did not unwind"
+        );
+        let (jobs, _) = shared.snapshot();
+        let job = jobs.iter().find(|j| j.id == id).expect("the job");
+        assert_eq!(job.stage, Stage::Cancelled, "{job:?}");
+        assert_eq!(
+            std::fs::read_dir(&into).unwrap().count(),
+            0,
+            "a piece was left at the destination after the stop"
+        );
+        // AND NOTHING AFOOT IS A STOP THAT RETURNS AT ONCE.
+        assert!(shared.wind_down(std::time::Duration::ZERO));
         let _ = std::fs::remove_dir_all(&root);
     }
 

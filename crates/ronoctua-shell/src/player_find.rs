@@ -722,9 +722,6 @@ const fn kind_word(kind: DeskKind) -> &'static str {
         DeskKind::Lyrics => "lyrics",
         DeskKind::Radio => "radio",
         DeskKind::Television => "television",
-        DeskKind::Channels => "channels",
-        DeskKind::Archive => "archive",
-        DeskKind::Lives => "lives",
     }
 }
 
@@ -1318,6 +1315,9 @@ pub const fn key_question(key: Key) -> &'static str {
         Key::OpenSubtitlesAccount => q::ACCOUNT_USER,
         Key::Tmdb => q::KEY_TMDB,
         Key::SubDl => q::KEY_SUBDL,
+        // THE SECURITY CENTRE'S KEY is asked on its own page, never here:
+        // the player lists only its own keys (`Key::scope`).
+        Key::VirusTotal => crate::security::VT_KEY,
     }
 }
 

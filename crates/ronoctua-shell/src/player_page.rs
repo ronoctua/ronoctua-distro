@@ -22,7 +22,7 @@
 //! leave it — and says so in a sentence (`player-page-gone`), never blank; and
 //! with no player answering at all it says that instead, as the home does.
 
-use crate::player::{Files, Purpose, View};
+use crate::player::{Purpose, View};
 use ronoctua_i18n::key;
 use ronoctua_player::wire::State;
 
@@ -32,9 +32,10 @@ pub enum PageId {
     /// What plays, the queue, and a row for every other page — the bottom of
     /// the stack.
     Home,
-    /// The files, for a purpose: into the queue, something to play together
-    /// with what plays, or a set or a queue to open.
-    Files(Purpose),
+    /// The FILE PICKER, for a purpose: into the queue, something to play
+    /// together with what plays, a set or a queue to open, a subtitle, a
+    /// cover, where a set or the queue is saved (`crate::file_picker`).
+    Pick(Purpose),
     /// The lanes of what plays — pictures, sounds, subtitles on one clock —
     /// and a row to pick another.
     Together,
@@ -114,17 +115,36 @@ pub enum PageId {
     Tv,
     /// TV channels — a country's or a search's: the listing its level holds.
     TvChannels,
-    /// CHANNELS BY THEME: a row a theme (`ronoctua_broadcast::table`).
+    /// CHANNELS BY THEME, on the local catalogue: one source at a time, its
+    /// themes and categories with how many each holds, and the adult ones
+    /// behind the person's password (`crate::player_catalog`).
     Channels,
-    /// One theme: its live TV, its films on the Internet Archive and what is
-    /// live on YouTube for it — three sections, each asked, allowed and
-    /// refused on its own.
-    Theme(&'static ronoctua_broadcast::table::Category),
+    /// A LISTING of the catalogue — a theme's, a category's, a search's: its
+    /// letters, its pages, its rings and its items, drawn as a list, in
+    /// columns or as posters. What it lists is the view's
+    /// (`player_catalog::Listing`).
+    Catalog,
+    /// The catalogue's SOURCES: the defaults, the person's, and the row that
+    /// adds one by its link (`crate::player_sources`).
+    Sources,
     /// What the person kept among the favourites — stations, channels,
     /// films, lives.
     Favourites,
     /// What played lately, as the player remembers it.
     Recent,
+    /// A VIDEO FROM A WEBSITE: a page's address, played now or queued, and
+    /// the addresses played lately (`crate::player_website`).
+    Website,
+    /// THE WHOLE QUEUE: the home shows a window of a long one around what
+    /// plays, and its row "Queue · N" opens this — every entry, with the
+    /// queue's own title and controls (`crate::player_queue`).
+    Queue,
+    /// THE RANKING of the video catalogue: its videos, best first, a page at
+    /// a time — a click puts one in the queue (`crate::player_ranking`).
+    Ranking,
+    /// One video of the ranking, by the view's choice: play it now, add it,
+    /// watch it in Chrome, download it, hide it, delete it.
+    RankedVideo,
 }
 
 /// A kind of the media one file carries — the wire's `audio`, `video` and
@@ -228,13 +248,17 @@ impl PageId {
     /// the lane and not the page (its arrows and `d` act on the lane): the
     /// test follows those rows too, and stands on lane 3 — the subtitles of
     /// the film it plays.
-    #[cfg(test)]
-    pub const PAGES: [Self; 36] = [
-        Self::Files(Purpose::Queue),
-        Self::Files(Purpose::Lane),
-        Self::Files(Purpose::Open),
-        Self::Files(Purpose::Subtitle),
-        Self::Files(Purpose::Cover),
+    ///
+    /// And what `photograph --open` names a page among ([`PageId::by_key`]),
+    /// which is how `player-pages-fit-every-size` photographs each one.
+    pub const PAGES: [Self; 43] = [
+        Self::Pick(Purpose::Queue),
+        Self::Pick(Purpose::Lane),
+        Self::Pick(Purpose::Open),
+        Self::Pick(Purpose::Subtitle),
+        Self::Pick(Purpose::Cover),
+        Self::Pick(Purpose::SaveSet),
+        Self::Pick(Purpose::SaveQueue),
         Self::Cover,
         Self::Streams,
         Self::Chapters,
@@ -263,10 +287,22 @@ impl PageId {
         Self::Tv,
         Self::TvChannels,
         Self::Channels,
-        Self::Theme(&ronoctua_broadcast::table::CATEGORIES[0]),
+        Self::Catalog,
+        Self::Sources,
         Self::Favourites,
         Self::Recent,
+        Self::Website,
+        Self::Queue,
+        Self::Ranking,
+        Self::RankedVideo,
     ];
+
+    /// The page whose own key (its title, [`PageId::key`]) is `key`, among
+    /// [`PageId::PAGES`]: how `photograph --open` names one.
+    #[must_use]
+    pub fn by_key(key: &str) -> Option<Self> {
+        Self::PAGES.into_iter().find(|p| p.key() == key)
+    }
 
     /// Its ONE key: the label of the row that opens it, and its title. The
     /// home's is the door's own title, which it is drawn under.
@@ -274,22 +310,24 @@ impl PageId {
     pub const fn key(self) -> &'static str {
         match self {
             Self::Home => key::PLAYER_TITLE,
-            Self::Files(Purpose::Queue) => key::PLAYER_PAGE_FILES,
-            Self::Files(Purpose::Lane) => key::PLAYER_PAGE_FILES_TOGETHER,
-            Self::Files(Purpose::Open) => key::PLAYER_PAGE_FILES_OPEN,
+            Self::Pick(Purpose::Queue) => key::PLAYER_PAGE_FILES,
+            Self::Pick(Purpose::Lane) => key::PLAYER_PAGE_FILES_TOGETHER,
+            Self::Pick(Purpose::Open) => key::PLAYER_PAGE_FILES_OPEN,
             Self::Together => key::PLAYER_PAGE_TOGETHER,
             Self::Internet => key::PLAYER_PAGE_INTERNET,
             Self::Machines => key::PLAYER_PAGE_MACHINES,
             Self::Tracks(TrackKind::Sound) => key::PLAYER_PAGE_SOUND,
             Self::Tracks(TrackKind::Picture) => key::PLAYER_PAGE_PICTURE,
             Self::Tracks(TrackKind::Subtitles) => key::PLAYER_PAGE_SUBTITLES,
-            Self::Files(Purpose::Subtitle) => key::PLAYER_PAGE_FILES_SUBTITLE,
+            Self::Pick(Purpose::Subtitle) => key::PLAYER_PAGE_FILES_SUBTITLE,
             Self::Ambience => key::PLAYER_PAGE_AMBIENCE,
             Self::AmbienceCredits => key::PLAYER_PAGE_AMBIENCE_CREDITS,
             Self::Lane(_) => key::PLAYER_PAGE_LANE,
             Self::Timeline => key::PLAYER_PAGE_TIMELINE,
             Self::Layout => key::PLAYER_PAGE_LAYOUT,
-            Self::Files(Purpose::Cover) => key::PLAYER_PAGE_FILES_COVER,
+            Self::Pick(Purpose::Cover) => key::PLAYER_PAGE_FILES_COVER,
+            Self::Pick(Purpose::SaveSet) => key::PLAYER_PAGE_PICK_SAVE_SET,
+            Self::Pick(Purpose::SaveQueue) => key::PLAYER_PAGE_PICK_SAVE_QUEUE,
             Self::Cover => key::PLAYER_PAGE_COVER,
             Self::Streams => key::PLAYER_PAGE_STREAMS,
             Self::Chapters => key::PLAYER_PAGE_CHAPTERS,
@@ -308,11 +346,14 @@ impl PageId {
             Self::Tv => key::PLAYER_PAGE_TV,
             Self::TvChannels => key::PLAYER_PAGE_TV_CHANNELS,
             Self::Channels => key::PLAYER_PAGE_CHANNELS,
-            // A THEME IS NAMED BY ITS OWN KEY, the one the table generates
-            // for it (`player-channels-<id>`): its row says it too.
-            Self::Theme(c) => c.key,
+            Self::Catalog => key::PLAYER_PAGE_CATALOG,
+            Self::Sources => key::PLAYER_PAGE_SOURCES,
             Self::Favourites => key::PLAYER_PAGE_FAVOURITES,
             Self::Recent => key::PLAYER_PAGE_RECENT,
+            Self::Website => key::PLAYER_PAGE_WEBSITE,
+            Self::Queue => key::PLAYER_PAGE_QUEUE,
+            Self::Ranking => key::PLAYER_PAGE_RANKING,
+            Self::RankedVideo => key::PLAYER_PAGE_RANKED_VIDEO,
         }
     }
 
@@ -321,22 +362,24 @@ impl PageId {
     pub const fn spot(self) -> &'static str {
         match self {
             Self::Home => "page-home",
-            Self::Files(Purpose::Queue) => "page-files",
-            Self::Files(Purpose::Lane) => "page-files-together",
-            Self::Files(Purpose::Open) => "page-files-open",
+            Self::Pick(Purpose::Queue) => "page-files",
+            Self::Pick(Purpose::Lane) => "page-files-together",
+            Self::Pick(Purpose::Open) => "page-files-open",
             Self::Together => "page-together",
             Self::Internet => "page-internet",
             Self::Machines => "page-machines",
             Self::Tracks(TrackKind::Sound) => "page-sound",
             Self::Tracks(TrackKind::Picture) => "page-picture",
             Self::Tracks(TrackKind::Subtitles) => "page-subtitles",
-            Self::Files(Purpose::Subtitle) => "page-files-subtitle",
+            Self::Pick(Purpose::Subtitle) => "page-files-subtitle",
             Self::Ambience => "page-ambience",
             Self::AmbienceCredits => "page-ambience-credits",
             Self::Lane(_) => "page-lane",
             Self::Timeline => "page-timeline",
             Self::Layout => "page-layout",
-            Self::Files(Purpose::Cover) => "page-files-cover",
+            Self::Pick(Purpose::Cover) => "page-files-cover",
+            Self::Pick(Purpose::SaveSet) => "page-save-set",
+            Self::Pick(Purpose::SaveQueue) => "page-save-queue",
             Self::Cover => "page-cover",
             Self::Streams => "page-streams",
             Self::Chapters => "page-chapters",
@@ -355,10 +398,14 @@ impl PageId {
             Self::Tv => "page-tv",
             Self::TvChannels => "page-tv-channels",
             Self::Channels => "page-channels",
-            // A THEME'S ROW is the theme's own: two themes are two rows.
-            Self::Theme(c) => c.key,
+            Self::Catalog => "page-catalog",
+            Self::Sources => "page-sources",
             Self::Favourites => "page-favourites",
             Self::Recent => "page-recent",
+            Self::Website => "page-website",
+            Self::Queue => "page-queue",
+            Self::Ranking => "page-ranking",
+            Self::RankedVideo => "page-ranked-video",
         }
     }
 
@@ -368,13 +415,27 @@ impl PageId {
         match (self, state) {
             // THE SWITCHES AND THE FILES ARE THE MACHINE'S, and a player that
             // is not running reads them when it starts.
-            (Self::Home | Self::Files(_) | Self::Internet, _) => Subject::Here,
+            (Self::Home | Self::Pick(_) | Self::Internet, _) => Subject::Here,
+            // AN ADDRESS IS TYPED with no player running: the one that plays
+            // it is started to play it.
+            (Self::Website, _) => Subject::Here,
             // THE LANGUAGES ARE THE VIEW'S CHOICE, there with or without a
             // player: the search that uses them asks it.
             (Self::Languages, _) => Subject::Here,
-            // THE THEMES ARE THE TABLE's, there with no player running: what
-            // each lists is asked of the player once one is opened.
-            (Self::Channels, _) => Subject::Here,
+            // THE CATALOGUE IS A FILE this door reads, there with no player
+            // running; only a reading of a source is the player's.
+            (Self::Channels | Self::Catalog, _) => Subject::Here,
+            // THE RANKING IS THE VIDEO CATALOGUE'S, a file this door reads:
+            // there with no player running — the one that plays a video is
+            // started to play it (`crate::player_ranking`).
+            (Self::Ranking | Self::RankedVideo, _) => Subject::Here,
+            // ITS SOURCES are the player's to keep: with none running, the
+            // page says so.
+            (Self::Sources, None) => Subject::NotRunning,
+            (Self::Sources, Some(_)) => Subject::Here,
+            // THE QUEUE is the player's: an empty one says so on its page.
+            (Self::Queue, None) => Subject::NotRunning,
+            (Self::Queue, Some(_)) => Subject::Here,
             // THE DIRECTORIES ARE ASKED OF THE PLAYER, which keeps their
             // lists — and the favourites and the played lately are played by
             // it: with none running, the page says so.
@@ -385,7 +446,6 @@ impl PageId {
                 | Self::Stations
                 | Self::Tv
                 | Self::TvChannels
-                | Self::Theme(_)
                 | Self::Favourites
                 | Self::Recent,
                 None,
@@ -397,7 +457,6 @@ impl PageId {
                 | Self::Stations
                 | Self::Tv
                 | Self::TvChannels
-                | Self::Theme(_)
                 | Self::Favourites
                 | Self::Recent,
                 Some(_),
@@ -490,7 +549,7 @@ impl PageId {
 
 /// One level of the stack: its page, where its cursor is, and the row of the
 /// level below that opened it.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Level {
     /// Which page.
     pub(crate) page: PageId,
@@ -500,8 +559,9 @@ pub struct Level {
     pub(crate) cell: usize,
     /// A person moved the cursor here: settling leaves it where it is.
     pub(crate) moved: bool,
-    /// The folder that is open, on a page of the files.
-    pub(crate) files: Option<Files>,
+    /// The file picker, on its page — its folder, what was typed, its own
+    /// cursor (`crate::file_picker`).
+    pub(crate) picker: Option<Box<crate::file_picker::FilePicker>>,
     /// The spot of the row that opened this page, on the level below — where
     /// `Esc` puts the cursor back.
     pub(crate) opened_from: Option<String>,
@@ -512,6 +572,10 @@ pub struct Level {
     /// THE ROWS NARROWED to a group of the globe's marks — its members — a
     /// second click on a group of several asked for (`crate::player_globe`).
     pub(crate) only: Option<Vec<u32>>,
+    /// A WORLD PAGE'S COUNTRIES A TO Z by their name in the person's
+    /// language, and not the most first (`O`, the glyph on their title):
+    /// the page's own, never kept past it.
+    pub(crate) by_name: bool,
 }
 
 impl Level {
@@ -523,10 +587,11 @@ impl Level {
             cursor: 1,
             cell: 0,
             moved: false,
-            files: None,
+            picker: None,
             opened_from: None,
             query: None,
             only: None,
+            by_name: false,
         }
     }
 }
@@ -554,7 +619,7 @@ impl View {
     }
 
     /// Opens `page` over the one on screen, remembering the row that opened
-    /// it; a page of the files opens where they were left. A page ALREADY IN
+    /// it; the picker's page opens where its purpose was left. A page ALREADY IN
     /// THE STACK is gone back to instead, and the pages over it close: `LEADER
     /// p m` and `k` pressed in turn stacked the same two pages without end,
     /// and `Esc` had to unwind every one of them.
@@ -563,8 +628,8 @@ impl View {
             self.levels.truncate(at + 1);
             return;
         }
-        let files = match page {
-            PageId::Files(purpose) => Some(self.files_where_left(purpose)),
+        let picker = match page {
+            PageId::Pick(purpose) => Some(Box::new(self.picker_for(purpose, None, String::new()))),
             _ => None,
         };
         // THE FILES BESIDE THE FILM are read again when the subtitles' page
@@ -577,10 +642,11 @@ impl View {
             cursor: 0,
             cell: 0,
             moved: false,
-            files,
+            picker,
             opened_from,
             query: crate::player_directory::listed_on(page),
             only: None,
+            by_name: false,
         });
         // A DIRECTORY'S PAGE ASKS FOR ITS LIST as it opens — the daemon's
         // desk is every door's, and another may hold something else on it.

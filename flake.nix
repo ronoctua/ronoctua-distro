@@ -127,7 +127,11 @@
 
       pkgs = import nixpkgs {
         inherit system;
-        overlays = [ inputs.rust-overlay.overlays.default ];
+        overlays = [
+          inputs.rust-overlay.overlays.default
+          # THE ONE yt-dlp, newer than the pinned nixpkgs' — see nix/yt-dlp.nix.
+          (import ./nix/yt-dlp.nix)
+        ];
       };
 
       # ---------------------------------------------------------------
@@ -162,6 +166,7 @@
       glyphdb = pkgs.callPackage ./nix/glyphgen.nix {
         inherit languages;
         inherit fonts;
+        brainGlyphs = brainModules.glyphs;
         iconTokensFile = ./assets/tokens/icons.nix;
         typographyFile = ./assets/tokens/typography.nix;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
@@ -222,6 +227,9 @@
             ++ broadcastRs.sources
             ++ [
               pkgs.bibata-cursors.src
+              # yt-dlp's tag, pinned by nix/yt-dlp.nix: an old tag is never
+              # taken down, but this keeps a rebuild from needing GitHub.
+              pkgs.yt-dlp.src
               segmentModel
               handModels.task
               # CHROME'S .deb, which Google's pool serves only while the release
@@ -300,6 +308,7 @@
       i18nRs = pkgs.callPackage ./nix/i18n.nix {
         i18nDir = ./assets/i18n;
         inherit languages;
+        brainFragments = brainModules.i18nFragments;
       };
 
       # THE THEMES, imported ONCE, like the languages. And the palettes, SOLVED
@@ -321,6 +330,7 @@
 
       tokensRs = pkgs.callPackage ./nix/tokens.nix {
         inherit glyphdb themed defaultTheme;
+        brainGlyphs = brainModules.glyphs;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
         categoryTableFile = ./assets/icons/category-glyphs.nix;
         typographyFile = ./assets/tokens/typography.nix;
@@ -332,6 +342,7 @@
       # reads the table cannot invent a field that is not in it.
       notificationsRs = pkgs.callPackage ./nix/notifications.nix {
         inherit glyphdb;
+        brainNotifications = brainModules.notifications;
         notificationsFile = ./assets/notifications.nix;
         # AND WHAT SOMEBODY SHARED. The shell writes this file — one filter at
         # a time, by name, after saying on screen that it becomes public — and
@@ -457,10 +468,8 @@
       # The native buffers, for `wasm32-wasip2`. After `rustToolchain`
       # because they use the SAME toolchain — the wasm target is already in it.
       buffers = pkgs.callPackage ./nix/buffers.nix {
-        inherit languages;
-        inherit unicodedb lucidedb;
         inherit wit;
-        inherit rustToolchain glyphdb;
+        inherit rustToolchain;
         inherit widthRs;
         # `ronoctua-design` names the highlighter as an OPTIONAL path
         # dependency, so cargo resolves it in every buffer's tree even where
@@ -498,6 +507,45 @@
         source = ./extension;
       };
 
+      # THE BRAIN'S MODULES, read out of their folders ONCE: the Rust registry
+      # below, the checks, the batteries' split, and — handed in by name —
+      # the texts (`i18nRs`), the glyphs (`glyphdb`, `tokensRs`) and the
+      # notifications (`notificationsRs`). Only `nix/modules/brain.nix`
+      # imports the loader again, for `imports`. See `nix/brain-modules.nix`.
+      brainModules = import ./nix/brain-modules.nix { inherit lib languages; };
+      brainModulesRs = pkgs.callPackage ./nix/brain-modules-rs.nix {
+        inherit brainModules rustToolchain languages;
+      };
+
+      # THE OFFLINE ENGLISH DICTIONARY: the Open English WordNet as two sorted
+      # TSV files `ronoctua_words` reads by binary search. Read at run time from
+      # `RONOCTUA_WORDS`, which `nix/modules/words.nix` sets on the full profile.
+      wordsData = pkgs.callPackage ./nix/wordsgen.nix { };
+      # THE ICON TABLES IN ONE DIRECTORY, for `ronoctua-iconset` — read at RUN
+      # time (`RONOCTUA_ICONSET`, `atRunTime` in `nix/rust.nix`). See
+      # `nix/iconset.nix`.
+      iconset = pkgs.callPackage ./nix/iconset.nix {
+        glyphdb = glyphdb.db;
+        lucidedb = lucidedb.db;
+        unicodedb = unicodedb.db;
+      };
+      # THE CALCULATOR'S UNITS, generated from `assets/units.nix`: the Rust
+      # table `ronoctua-calc` includes, and the refusal of a word that names two
+      # units or a unit a language has no words for. See `nix/unitsgen.nix`.
+      unitsTable = pkgs.callPackage ./nix/unitsgen.nix {
+        unitsFile = ./assets/units.nix;
+        inherit languages;
+      };
+      unitsRs = unitsTable.table;
+
+      # WHAT THE BELONGINGS KEEP, generated from `assets/belongings.nix`: the
+      # Rust table `ronoctua-belongings` includes, and the fixture that proves
+      # its generator refuses a broken table. See `nix/belongings.nix`.
+      belongingsTable = pkgs.callPackage ./nix/belongings.nix {
+        belongingsFile = ./assets/belongings.nix;
+      };
+      belongingsRs = belongingsTable.table;
+
       rust = pkgs.callPackage ./nix/rust.nix {
         inherit (inputs) crane;
         inherit
@@ -514,7 +562,6 @@
           torOptionsRs
           atuinOptionsRs
           keyboardsRs
-          updatesRs
           cacheRs
           cameraEffectsRs
           segmentModel
@@ -523,9 +570,6 @@
           compositorDeeds
           ;
         inherit (pkgs) xkeyboard_config;
-        bufferGlyphs = buffers.glyphs;
-        bufferUnicode = buffers.unicode;
-        bufferLucide = buffers.lucide;
         bufferMemory = buffers.memory;
         bufferKeyboard = buffers.keyboard;
         bufferTransfers = buffers.transfers;
@@ -551,6 +595,13 @@
           tonguesRs
           ;
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
+
+        inherit brainModulesRs;
+
+        inherit wordsData iconset unitsRs;
+
+        inherit belongingsRs;
+
         src = ./.;
       };
 
@@ -578,18 +629,6 @@
       diagnostics = pkgs.callPackage ./nix/diagnostics.nix {
         inherit scroll;
       };
-
-      # THE UPDATE TABLE, generated from `assets/updates.nix` — the same shape
-      # `assets/notifications.nix` has: one declaration, and from it the Rust
-      # table, the text keys both languages owe, and the refusal of a field
-      # that does not exist.
-      updatesTable = pkgs.callPackage ./nix/updates.nix {
-        updatesFile = ./assets/updates.nix;
-      };
-      # The Rust half of it, named on its own because that is what goes into the
-      # compilation's environment — the whole attrset also carries the negative
-      # fixture and the runner factory, neither of which belongs in a build.
-      updatesRs = updatesTable.table;
 
       # THE SOFTWARE CENTRE'S SEARCH INDEX, evaluated from the system's own
       # nixpkgs — so what the search shows is what `nix profile add nixpkgs#…`
@@ -657,14 +696,18 @@
       # sway's derivation and where wlroots is.
       scroll = pkgs.callPackage ./nix/scroll.nix { scrollSrc = inputs.scroll-src; };
 
-      # THE STAGE'S DRIVER, and the app that hands it a scene.
-      shotDriver =
+      # THE STAGE'S DRIVER, and the app that hands it a scene. Two stages:
+      # the default one without the player's decoders' table, and the one a
+      # scene asks for with `--player-tools` (`nix/shot.nix`, `playerTools`).
+      shotStage =
+        withPlayerTools:
         (pkgs.callPackage ./nix/shot.nix {
           inherit
             scroll
             fonts
             themed
             defaultTheme
+            withPlayerTools
             ;
           ronoctua-shell = rust.shell;
           ronoctua-brain = rust.brain;
@@ -672,6 +715,8 @@
           ronoctua-player = rust.player;
           inherit softwareTools;
         }).driver;
+      shotDriver = shotStage false;
+      shotToolsDriver = shotStage true;
       # The stage for OTHER PEOPLE'S apps (`--apps`): Flatpak, the portal and
       # a route out, and no footer — see the header of `nix/shot-apps.nix`.
       shotAppsDriver = (pkgs.callPackage ./nix/shot-apps.nix { inherit scroll; }).driver;
@@ -683,9 +728,15 @@
           if [ "''${1:-}" = "--apps" ]; then
             driver=${shotAppsDriver}
             shift
+          elif [ "''${1:-}" = "--player-tools" ]; then
+            # BUILT ONLY WHEN ASKED: the app carries the stage's derivation,
+            # not its output, so the decoders' table (+198 MiB) is paid by the
+            # scene that needs it and by no other run.
+            driver=$(nix-store --realise ${shotToolsDriver.drvPath})
+            shift
           fi
           if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-            echo "usage: nix run .#shot -- [--apps] <scene.py>" >&2
+            echo "usage: nix run .#shot -- [--apps | --player-tools] <scene.py>" >&2
             exit 2
           fi
           scene=$(realpath "$1")
@@ -745,7 +796,14 @@
         # THE WHOLE TABLE THE COMPILATION GETS, and not six values copied out of
         # it: the loop compiles the binary itself, so what it does not export the
         # binary does not have. See `nix/dev.nix`'s `bakedExports`.
-        inherit (rust) atRunTime generated;
+        inherit (rust) generated;
+        # And the offline dictionary, which the installed session gets from
+        # `nix/modules/words.nix` and never from `atRunTime` (a wrapper's
+        # `--set-default` would keep its 17 MB in every profile's closure):
+        # the loop pays it, as it pays mkvtoolnix's.
+        atRunTime = rust.atRunTime // {
+          RONOCTUA_WORDS = "${wordsData}";
+        };
         inherit fonts fontconfigConf iconSuperpack;
         inherit themed themes defaultTheme;
       };
@@ -862,7 +920,8 @@
       # `test-tiers-are-total` demands that every name in `slow.nix` exist in
       # `checks`; everything else lands here by construction, so a new check
       # joins on its own.
-      slowNames = import ./tests/slow.nix;
+      # AND EVERY BRAIN MODULE'S OWN, from its `checks.nix` (`slow = [ … ]`).
+      slowNames = import ./tests/slow.nix ++ brainModules.slowChecks;
       mostApp = pkgs.callPackage ./nix/gate.nix {
         inherit system keepSources;
         name = "ronoctua-most";
@@ -887,20 +946,13 @@
         # machine keeps itself running with nobody doing anything.
         ./nix/modules/store.nix
         ./nix/modules/rescue.nix
-        # AFTER the rescue console, and the order is load-bearing: the update
-        # sequence's `system-rebuild` step BORROWS `ronoctua-rescue-rebuild`
-        # rather than declaring a second `nixos-rebuild switch --flake
-        # /etc/nixos#<person>`. One of those in the repository, not two, and an
-        # `assertions` entry says so if the rescue console is ever turned off.
-        ./nix/modules/update.nix
-        # AFTER the update module, because the brain's one task asks systemd to
-        # start the units that module declares. Nix does not care about the
-        # order; a person reading the list does.
+        # THE BRAIN, AND WITH IT EVERY MODULE'S NIXOS HALF — the update's
+        # sequence included, whose rebuild step BORROWS the rescue console's
+        # `ronoctua-rescue-rebuild` rather than declaring a second `nixos-rebuild
+        # switch --flake /etc/nixos#<person>`; an `assertions` entry says so if
+        # the rescue console is ever turned off.
         ./nix/modules/brain.nix
         ./nix/modules/cache.nix
-        # The disk's relief: the two user units the brain starts when the disk
-        # is short. After the cache, whose sandbox it copies.
-        ./nix/modules/space.nix
         # The file manager's privileged half: one unit, one polkit rule, and
         # where it opens. Everything else about it needs no configuration.
         ./nix/modules/files.nix
@@ -975,6 +1027,60 @@
         ./nix/modules/flatpak.nix
         ./nix/modules/appimage.nix
         ./nix/modules/android.nix
+
+        # The offline English dictionary, on the profile that carries it.
+        ./nix/modules/words.nix
+
+        # The door lock the player's adult catalogue asks: the PAM service
+        # `ronoctua-unlock`, password only, with a delay after a failure.
+        ./nix/modules/unlock.nix
+
+        # The super index of fast-access: its unit, its limits, the watches
+        # it needs. A function of the EXTRACTED binary, so the unit's closure
+        # is the indexer and never the desktop.
+        (import ./nix/modules/index.nix { index = rust.index; })
+
+        # The video catalogue's scanner: the unit the brain starts every few hours
+        # and its command line. A function of the EXTRACTED binary, so the unit's
+        # closure is the scanner and never the desktop.
+        (import ./nix/modules/video-metrics.nix { videoMetrics = rust.videoMetrics; })
+
+        # The security centre's foundation: nftables and the person's table,
+        # the sudo window's include, the shields' one polkit rule, fprintd
+        # behind two PAM gates, fwupd read only. The root helper comes from
+        # the workspace EXTRACTED, next to the import: a unit that runs as
+        # root must not carry the desktop, and the `ronoctua` argument set
+        # below is not where a lane adds a line.
+        ./nix/modules/security.nix
+        { ronoctua.security.helper = rust.securityRoot; }
+        # AND THE QUEUE'S CHILD THAT SENDS A FILE TO VIRUSTOTAL (`Work::Scan`),
+        # by store path: the queue's unit has a session `PATH`, and a bare
+        # name would be found or not by accident.
+        (
+          { config, lib, ... }:
+          {
+            systemd.user.services.ronoctua-transfers.environment = lib.mkIf config.ronoctua.transfers.enable {
+              RONOCTUA_SCAN = "${rust.scan}/bin/ronoctua-scan";
+            };
+          }
+        )
+
+        # sys-boundaries: the person's containers — Podman, rootless and
+        # compatible with Docker (`docker`, `DOCKER_HOST`, `podman-compose`).
+        # After `filesystem.nix`, whose `ownSubvolumes` it adds
+        # `~/.local/share/containers` to. On in the full profile.
+        ./nix/modules/containers.nix
+
+        # The belongings (`LEADER s v`): the queue runs their CLI, extracted
+        # so `age` stays out of the queue and the footer; the module hands
+        # its path to the queue's unit.
+        ./nix/modules/belongings.nix
+        { ronoctua.belongings.cli = rust.belongings; }
+
+        # Blender and OrcaSlicer, and OrcaSlicer as the default for the three
+        # model types in `/etc/xdg/mimeapps.list`. On in the full profile.
+        ./nix/modules/workshop.nix
+
         inputs.home-manager.nixosModules.home-manager
         {
           # Injects the packages built by this flake into the modules.
@@ -1147,16 +1253,13 @@
         atuin-options-rs = atuinOptionsRs;
         keyboards-rs = keyboardsRs;
         compositor-deeds = compositorDeeds;
-        # THE SEVEN COMPONENTS, each buildable on its own.
+        # THE COMPONENTS, each buildable on its own.
         #
         # Three of them used to be missing here, and it showed the day the
         # nested loop learned to rebuild a buffer: `nix build .#buffer-memory`
         # did not exist, so the newest buffers were the ones the loop could not
         # reload. What names them now is `nix/buffers.nix`'s own table.
         buffer-example = buffers.example;
-        buffer-glyphs = buffers.glyphs;
-        buffer-unicode = buffers.unicode;
-        buffer-lucide = buffers.lucide;
         buffer-memory = buffers.memory;
         buffer-keyboard = buffers.keyboard;
         buffer-transfers = buffers.transfers;
@@ -1164,18 +1267,10 @@
         buffer-brain = buffers.brain;
         i18n-rs = i18nRs;
 
-        # THE UPDATE SEQUENCE, in three pieces, exposed so a check can reach
-        # them without evaluating a whole NixOS system.
-        #
-        # `updates-negative` is the fixture that must FAIL to build: it is a
-        # table with a step that installs, and a guard nobody proves is a guard
-        # that stopped working quietly. The same shape `nix/glyphgen.nix` and
-        # the icon table already use.
-        updates-rs = updatesTable.table;
-        updates-negative = updatesTable.negativeFixture;
-        # And the same pair for the highlighter: `syntax-negative` is a table
-        # in which one language steals another's type and another claims prose,
-        # and it must FAIL to build.
+        # THE HIGHLIGHTER'S TABLE, and its negative fixture: `syntax-negative`
+        # is a table in which one language steals another's type and another
+        # claims prose, and it must FAIL to build. (The update sequence's pair
+        # travels with its brain module, whose checks build it.)
         syntax-rs = syntaxTable.table;
         syntax-negative = syntaxTable.negativeFixture;
         update-runners = self.nixosConfigurations.noctua.config.ronoctua.update.package;
@@ -1187,6 +1282,36 @@
 
         # The shell: the two-line footer.
         ronoctua-shell = rust.shell;
+
+        # The brain's modules as Rust — one manifest per folder and the registry.
+        brain-modules-rs = brainModulesRs;
+
+        # The offline English dictionary, buildable on its own: two sorted TSV
+        # files out of the Open English WordNet (`nix/wordsgen.nix`).
+        words-data = wordsData;
+        # The calculator's unit table, and the fixture that proves its
+        # generator refuses (`units-are-total` reads both).
+        units-table = unitsRs;
+        units-negative-fixture = unitsTable.negativeFixture;
+        # The three icon tables as `RONOCTUA_ICONSET` names them.
+        inherit iconset;
+
+        # The super index's unit, extracted (`nix/rust.nix`).
+        ronoctua-index = rust.index;
+
+        # The video catalogue's scanner, extracted (`nix/rust.nix`).
+        ronoctua-video-metrics = rust.videoMetrics;
+
+        # The security centre's root helper, buildable on its own — what
+        # `relax-line-parses` runs, and what the units run as root.
+        ronoctua-security-root = rust.securityRoot;
+
+        # The belongings' CLI, extracted (`nix/rust.nix`), and the table of
+        # what they keep with its refusing fixture — what
+        # `belongings-manifest-covers-the-stores` reads.
+        ronoctua-belongings = rust.belongings;
+        belongings-table = belongingsRs;
+        belongings-table-refuses = belongingsTable.refuses;
 
       }
       // {
@@ -1389,7 +1514,6 @@
           unicodedb
           lucidedb
           marksdb
-          updatesTable
           syntaxTable
           iconSuperpack
           rust
@@ -1416,6 +1540,11 @@
           extension
           potProvider
           rustToolchain
+
+          i18nRs
+          brainModules
+          brainModulesRs
+
           ;
       };
 
@@ -1535,6 +1664,7 @@
         # It says out loud that it is not the gate. A short lane that lets one
         # believe the work is finished is worse than no short lane.
         quick = mkScriptApp "ronoctua-quick" "the checks that bring up no VM — the short loop" ''
+          ${pkgs.callPackage ./nix/tree-guard.nix { }}/bin/ronoctua-tree-holds-no-build
           echo "== the short loop: a chosen subset =="
           ${keepSources}
           # THE LIST COMES FROM `tests/quick.nix`, not from here.
@@ -2085,8 +2215,13 @@
           ${rust.workspace}/bin/ronoctua-bench-shaping
           echo
           echo "== component instantiation =="
+          # THE BRAIN'S BUFFER, since the icon browsers left for the native
+          # app: the largest component the session still instantiates.
           ${rust.workspace}/bin/ronoctua-bench-instance \
-            ${buffers.glyphs}/lib/ronoctua_buffer_glyphs.wasm 200
+            ${buffers.brain}/lib/ronoctua_buffer_brain.wasm 200
+          echo
+          echo "== the super index: a million names, keystroke by keystroke =="
+          ${rust.workspace}/bin/ronoctua-bench-index
           echo
           echo "== frame targets, on real hardware =="
           # Section 9.3 demands they be measured here and never under lavapipe. It needs a
@@ -2146,11 +2281,13 @@
           for word in "$@"; do
             if [ "$word" = "--door" ]; then
               export RONOCTUA_ATLAS=${rust.atRunTime.RONOCTUA_ATLAS}
+              export RONOCTUA_ICONSET=${rust.atRunTime.RONOCTUA_ICONSET}
               exec ${rust.workspace}/bin/ronoctua-shell photograph "$@"
             fi
           done
           exec ${rust.workspace}/bin/ronoctua-render-png "$@"
         '';
+
       };
 
       # =================================================================
@@ -2274,6 +2411,33 @@
                 cargo fmt --manifest-path "$manifest" -- --check || failed=1
               else
                 cargo fmt --manifest-path "$manifest"
+              fi
+            done
+            # AND THE BRAIN'S MODULES, which `cargo fmt` never reaches: the
+            # crate loads each `module.rs` by a `#[path]` inside an `include!`
+            # of a generated file, and `rustfmt` does not expand macros. The
+            # sample under `tests/modules/` is loaded the same way. `rustfmt`
+            # on the file itself, with the edition the manifest would have told
+            # it — `brain-modules-fmt` checks the same files the same way.
+            #
+            # A FOLDER THAT IS NOT THERE IS LEFT OUT, never silenced: with no
+            # module yet `modules/` does not exist, and `fd` told about it
+            # fails — the trap the file/directory split above records.
+            brain_dirs=()
+            for d in crates/ronoctua-brain/modules crates/ronoctua-brain/tests/modules; do
+              if [ -d "$d" ]; then
+                brain_dirs+=("$d")
+              fi
+            done
+            brain_sources=()
+            if [ ''${#brain_dirs[@]} -gt 0 ]; then
+              mapfile -t brain_sources < <(fd --type f --extension rs . "''${brain_dirs[@]}")
+            fi
+            for source in ''${brain_sources[@]+"''${brain_sources[@]}"}; do
+              if [ "$check" = true ]; then
+                rustfmt --edition 2024 --check "$source" || failed=1
+              else
+                rustfmt --edition 2024 "$source"
               fi
             done
           fi

@@ -1,7 +1,7 @@
 //! The client's half: what the shell links — never the engine.
 
 use std::{
-    io::{BufReader, BufWriter},
+    io::{BufRead, BufReader, BufWriter},
     os::unix::net::UnixStream,
     path::PathBuf,
     sync::{
@@ -373,16 +373,12 @@ pub fn watch(on_heard: impl Fn(Heard) + Send + 'static) -> Arc<AtomicBool> {
                     let stream = UnixStream::connect(socket_path()?)?;
                     let mut out = BufWriter::new(stream.try_clone()?);
                     write_line(&mut out, &Ask::Watch)?;
-                    let mut input = BufReader::new(stream);
-                    while let Some(say) = read_line::<Say>(&mut input)? {
-                        if gone.load(Ordering::SeqCst) {
-                            return Ok(());
-                        }
-                        if let Some(heard) = heard_of(say) {
-                            on_heard(heard);
-                        }
-                    }
-                    Ok(())
+                    let input = BufReader::new(stream);
+                    let ask_queue = || match from_a_running_player(&Ask::Queue, QUEUE_PATIENCE) {
+                        Ok(Say::Queue(q)) => Some(q),
+                        _ => None,
+                    };
+                    hear_lines(input, &gone, ask_queue, &on_heard)
                 };
                 let r = run();
                 // SAY IT ONCE when it goes away, not every second it stays gone.
@@ -394,6 +390,61 @@ pub fn watch(on_heard: impl Fn(Heard) + Send + 'static) -> Arc<AtomicBool> {
             }
         });
     stop
+}
+
+/// How long a watch waits for the outline it asked for ([`Ask::Queue`]):
+/// answered under the queue's lock, at once.
+const QUEUE_PATIENCE: Duration = Duration::from_secs(3);
+
+/// The lines of one watch's connection, handed on as they come — and THE
+/// OUTLINE ASKED FOR when a state's `revision` passes the last outline's: the
+/// daemon sends an outline before the state that goes with it, so a state
+/// past it means a line was lost, and the door would draw a queue of another
+/// shape than the state's (`ask_queue`, on another connection, at most once
+/// for each revision). What was asked is handed on before the state.
+fn hear_lines(
+    mut input: impl BufRead,
+    gone: &AtomicBool,
+    ask_queue: impl Fn() -> Option<Box<Outline>>,
+    on_heard: &impl Fn(Heard),
+) -> Result<()> {
+    let mut kept: Option<u64> = None;
+    let mut asked: Option<u64> = None;
+    while let Some(say) = read_line::<Say>(&mut input)? {
+        if gone.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match &say {
+            Say::Queue(q) => kept = Some(q.revision),
+            Say::State(s) if outline_owed(kept, asked, s.revision) => {
+                asked = Some(s.revision);
+                if let Some(q) = ask_queue() {
+                    kept = Some(q.revision);
+                    on_heard(Heard::Queue(q));
+                }
+            }
+            _ => {}
+        }
+        if let Some(heard) = heard_of(say) {
+            on_heard(heard);
+        }
+    }
+    Ok(())
+}
+
+/// Whether a state of `revision` finds the door's outline behind it — the
+/// one it `kept` older, or none at all — and it was not asked for that
+/// revision already.
+const fn outline_owed(kept: Option<u64>, asked: Option<u64>, revision: u64) -> bool {
+    let behind = match kept {
+        Some(k) => revision > k,
+        None => true,
+    };
+    let again = match asked {
+        Some(a) => a == revision,
+        None => false,
+    };
+    behind && !again
 }
 
 /// What a line on a watch means to a door: a state, an outline, a farewell,
@@ -501,6 +552,82 @@ mod tests {
         said.send(()).expect("the fake player waits");
         assert_eq!(heard.join().expect("the fake player"), Some(Ask::Quit));
         std::fs::remove_dir_all(&dir).expect("cleans up");
+    }
+
+    /// FAILS IF: a state whose revision passes the outline the door holds —
+    /// a line lost — leaves the door drawing the old queue, instead of the
+    /// outline being asked and handed on before that state; or the door asks
+    /// again and again for one revision, or asks when nothing was lost.
+    #[test]
+    fn a_state_past_the_outline_asks_for_it() {
+        use std::cell::RefCell;
+        let state = |revision: u64| {
+            Say::State(Box::new(State {
+                revision,
+                ..State::default()
+            }))
+        };
+        let outline = |revision: u64| {
+            Say::Queue(Box::new(Outline {
+                revision,
+                entries: Vec::new(),
+            }))
+        };
+        let lines = |says: &[Say]| {
+            let mut text = String::new();
+            for s in says {
+                text.push_str(&serde_json::to_string(s).expect("writes"));
+                text.push('\n');
+            }
+            text
+        };
+        let run = |says: &[Say], answer: Option<u64>| {
+            let heard = RefCell::new(Vec::new());
+            let asked = RefCell::new(0_u32);
+            let ask = || {
+                *asked.borrow_mut() += 1;
+                answer.map(|revision| {
+                    Box::new(Outline {
+                        revision,
+                        entries: Vec::new(),
+                    })
+                })
+            };
+            hear_lines(
+                std::io::Cursor::new(lines(says)),
+                &AtomicBool::new(false),
+                ask,
+                &|h| heard.borrow_mut().push(h),
+            )
+            .expect("reads");
+            (heard.into_inner(), asked.into_inner())
+        };
+        let revision_of = |h: &Heard| match h {
+            Heard::State(s) => (0, s.revision),
+            Heard::Queue(q) => (1, q.revision),
+            _ => (9, 0),
+        };
+        // NOTHING LOST: the outline, then its states — never asked.
+        let (heard, asked) = run(&[outline(4), state(4), state(4)], Some(9));
+        assert_eq!(asked, 0);
+        assert_eq!(heard.len(), 3);
+        // THE OUTLINE OF 5 LOST: asked, and handed on BEFORE the state.
+        let (heard, asked) = run(&[outline(4), state(4), state(5), state(5)], Some(5));
+        assert_eq!(asked, 1, "once for revision 5");
+        let order: Vec<(u8, u64)> = heard.iter().map(revision_of).collect();
+        assert_eq!(order, vec![(1, 4), (0, 4), (1, 5), (0, 5), (0, 5)]);
+        // A PLAYER THAT DOES NOT ANSWER is asked once a revision, not on
+        // every state.
+        let (heard, asked) = run(&[outline(4), state(5), state(5), state(6)], None);
+        assert_eq!(asked, 2, "once for 5, once for 6");
+        assert_eq!(heard.len(), 4);
+        // NO OUTLINE AT ALL before a state: asked.
+        let (_, asked) = run(&[state(1)], Some(1));
+        assert_eq!(asked, 1);
+        assert!(
+            !outline_owed(Some(7), None, 3),
+            "an older state owes nothing"
+        );
     }
 
     /// FAILS IF: a watch stops telling a farewell from a state or an

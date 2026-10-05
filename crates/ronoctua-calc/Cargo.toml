@@ -1,0 +1,45 @@
+[package]
+name = "ronoctua-calc"
+description = "The calculator's engine: exact arithmetic, units, bases, dates and zones — and the one boundary with the ECB's reference rates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# PURE BUT FOR ONE FEATURE. Parsing, evaluating, converting and formatting
+# read nothing and ask nothing: the rates, the time and the zone arrive in an
+# `Env` the caller built. `net` adds the one request this crate makes — the
+# ECB's daily XML — and it takes a `Pass` for `www.ecb.europa.eu`.
+[features]
+default = [ "net" ]
+net = [ "dep:ronoctua-consent", "dep:ronoctua-http", "ronoctua-http/tls" ]
+
+[dependencies]
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+# A time zone is the file manager's TZif reader (`when::Zone`), over the
+# `RONOCTUA_ZONEINFO` the caller reads — one reader of TZif in the tree.
+ronoctua-files = { path = "../ronoctua-files" }
+# The ECB's rates are XML, read (from the cache or the answer) through the
+# depth guard every external XML goes through.
+ronoctua-xml = { path = "../ronoctua-xml" }
+# The one accent folding of the tree: a word typed is compared folded, and
+# `nix/scripts/gen-units.py` folds the table with the same one-for-one table.
+ronoctua-apps = { path = "../ronoctua-apps" }
+# The cache directory (`rates.xml`) and its atomic write.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+tracing.workspace = true
+ronoctua-consent = { path = "../ronoctua-consent", optional = true }
+ronoctua-http = { path = "../ronoctua-http", optional = true }
+
+[dev-dependencies]
+# Every refusal, category and shape has its sentence in every language.
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+
+[lints]
+workspace = true

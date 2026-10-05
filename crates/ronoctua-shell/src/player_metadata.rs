@@ -132,6 +132,26 @@ pub struct Meta {
     /// no sheet — no player, or none in time: asked again on the next
     /// settles, up to [`SHEET_TRIES`], an older sheet shown meanwhile.
     failed: Option<(String, u64, u8)>,
+    /// A SEVERAL-LINE FIELD EDITED HERE ("Edit here"), while its text is
+    /// open over the page: which file and field its `C-s` writes, and the
+    /// words last sent — kept once the sheet read back says them
+    /// ([`kept_back`]).
+    editing: Option<Editing>,
+}
+
+/// The text of THE FIELD EDITED HERE (`crate::text_area`): its id, which the
+/// view's `C-s` reads to know whose words it keeps.
+pub const EDIT_HERE: &str = "player-field-edit-here";
+
+/// A field being edited in the door ([`Meta::editing`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Editing {
+    /// The file.
+    location: String,
+    /// The field.
+    field: Field,
+    /// The words the last `C-s` sent, until the file says them.
+    sent: Option<String>,
 }
 
 /// How many times a sheet that came back with no answer is asked for, at one
@@ -475,17 +495,124 @@ pub(crate) fn field_page(meta: &Meta, field: Field, s: &State, b: &mut Builder<'
         .any(|d| d.field == field && draft_is_of(d, meta, s));
     match row.map(|r| &r.can) {
         Some(Can::No(why)) => b.warning(&crate::player::tags_refusal(why, b.texts)),
-        _ => b.pair(
-            b.t(key::PLAYER_FIELD_EDIT),
-            if open {
-                b.t(key::PLAYER_DRAFT_OPEN)
-            } else {
-                String::new()
-            },
-            Target::Draft(field),
-            "field-edit",
-        ),
+        _ => {
+            // HERE, IN THIS DOOR — every door types (the owner's rule) — and
+            // in the editor, which stays.
+            b.pair(
+                b.t(key::PLAYER_FIELD_EDIT_HERE),
+                String::new(),
+                Target::EditHere(field),
+                "field-edit-here",
+            );
+            b.pair(
+                b.t(key::PLAYER_FIELD_EDIT),
+                if open {
+                    b.t(key::PLAYER_DRAFT_OPEN)
+                } else {
+                    String::new()
+                },
+                Target::Draft(field),
+                "field-edit",
+            );
+        }
     }
+}
+
+/// "Edit here" on a several-line field: its words, to open over the page
+/// (`Turned::Edit`), the file and the field remembered for the `C-s` that
+/// writes them — or why the file cannot take it.
+fn edit_here(
+    meta: &mut Meta,
+    field: Field,
+    s: &State,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<Turned> {
+    let sheet = meta.sheet(s)?;
+    if let Some(Can::No(why)) = sheet.field(field).map(|r| &r.can) {
+        return Some(Turned::Errand(Errand::Said(crate::player::tags_refusal(
+            why, texts,
+        ))));
+    }
+    let text = sheet.value(field).unwrap_or_default().to_owned();
+    let location = sheet.location.to_string_lossy().into_owned();
+    meta.editing = Some(Editing {
+        location,
+        field,
+        sent: None,
+    });
+    Some(Turned::Edit {
+        title: texts.t(field_key(field)),
+        text,
+    })
+}
+
+/// `C-s` on the field edited here: its words WRITTEN into the file — the
+/// `Retag` a line typed sends, against the sheet as it is now — and kept
+/// once the sheet read back says them ([`kept_back`]). A file that is no
+/// longer the one shown, or a sheet not read yet, is said.
+#[must_use]
+pub fn edit_kept(
+    meta: &mut Meta,
+    text: String,
+    s: Option<&State>,
+    texts: &ronoctua_i18n::Texts,
+) -> Errand {
+    let Some(editing) = meta.editing.clone() else {
+        return Errand::Said(texts.t(key::TEXT_AREA_NOT_KEPT));
+    };
+    let Some(sheet) = s.and_then(|s| meta.sheet(s)) else {
+        return Errand::Said(texts.t(key::PLAYER_META_READING));
+    };
+    if sheet.location.to_string_lossy() != editing.location {
+        return Errand::Said(texts.t(key::PLAYER_PAGE_GONE));
+    }
+    let stamp = sheet.stamp;
+    let name = named(&editing.location, texts);
+    let field_word = texts.t(field_key(editing.field));
+    let said = texts.t_with(
+        key::PLAYER_TAG_WRITING,
+        &[("field", &field_word), ("name", &name)],
+    );
+    meta.editing = Some(Editing {
+        sent: Some(text.clone()),
+        ..editing.clone()
+    });
+    Errand::TellSaying(
+        Ask::Retag {
+            location: editing.location,
+            stamp,
+            edits: vec![Edit::Set {
+                field: editing.field,
+                value: text,
+            }],
+        },
+        said,
+    )
+}
+
+/// The words the last `C-s` sent, ONCE THE FILE SAYS THEM — its sheet read
+/// back after the write holds them for the field: the view marks the text
+/// kept then, and a leaving after it asks nothing. A write refused never
+/// gets here, and the text stays changed.
+pub fn kept_back(meta: &mut Meta, s: Option<&State>) -> Option<String> {
+    let editing = meta.editing.as_ref()?;
+    let sent = editing.sent.as_ref()?;
+    let sheet = s.and_then(|s| meta.sheet(s))?;
+    let says = sheet.location.to_string_lossy() == editing.location
+        && sheet.value(editing.field).unwrap_or_default().trim() == sent.trim();
+    if !says {
+        return None;
+    }
+    let sent = sent.clone();
+    if let Some(e) = meta.editing.as_mut() {
+        e.sent = None;
+    }
+    Some(sent)
+}
+
+/// The text edited here was left: nothing of it is waited for any more.
+pub fn edit_left(meta: &mut Meta) {
+    meta.editing = None;
 }
 
 /// The question a one-line field is asked with: its own, so the line says
@@ -521,11 +648,11 @@ pub fn field_asked(id: &str) -> Option<Field> {
 }
 
 /// Whether `id` is one of the questions the metadata asks on a door's line —
-/// a field's, a tag's, or a picture typed for the cover: the footer hands
-/// their answers to the view.
+/// a field's or a tag's: the footer hands their answers to the view. A
+/// picture for the cover is chosen in the file picker (`Purpose::Cover`).
 #[must_use]
 pub fn asks(id: &str) -> bool {
-    typed_here(id) || id == crate::player_question::COVER_FILE
+    typed_here(id)
 }
 
 /// Whether `id` is a question whose answer [`typed`] takes: a field's value,
@@ -533,8 +660,19 @@ pub fn asks(id: &str) -> bool {
 #[must_use]
 pub fn typed_here(id: &str) -> bool {
     use crate::player_question::{TAG_NAME, TAG_VALUE, TAG_VALUE_ALL};
-    field_asked(id).is_some() || matches!(id, TAG_NAME | TAG_VALUE | TAG_VALUE_ALL)
+    field_asked(id).is_some()
+        || matches!(
+            id,
+            TAG_NAME | TAG_VALUE | TAG_VALUE_ALL | STREAM_LANGUAGE | STREAM_TITLE | CHAPTER_TITLE
+        )
 }
+
+/// A stream's language, typed as a code (`en`, `pt-BR`, `por`).
+pub const STREAM_LANGUAGE: &str = "player-stream-language";
+/// A stream's own name, typed.
+pub const STREAM_TITLE: &str = "player-stream-title";
+/// A chapter's title, typed.
+pub const CHAPTER_TITLE: &str = "player-chapter-title";
 
 /// A technical fact's label — its own key.
 #[must_use]
@@ -879,7 +1017,7 @@ pub(crate) fn cover_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
     }
     match &sheet.cover_can {
         Can::Yes(_) => {
-            let pick = PageId::Files(Purpose::Cover);
+            let pick = PageId::Pick(Purpose::Cover);
             b.pair(
                 b.t(pick.key()),
                 String::new(),
@@ -910,6 +1048,18 @@ pub(crate) fn cover_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
     }
 }
 
+/// What a stream is, as its row and a group of its tags say it.
+const fn stream_kind_key(st: &ronoctua_tags::Stream) -> &'static str {
+    match st.kind {
+        StreamKind::Video if st.attached => key::PLAYER_STREAM_KIND_COVER,
+        StreamKind::Video => key::PLAYER_STREAM_KIND_VIDEO,
+        StreamKind::Audio => key::PLAYER_STREAM_KIND_AUDIO,
+        StreamKind::Subtitle => key::PLAYER_STREAM_KIND_SUBTITLE,
+        StreamKind::Data => key::PLAYER_STREAM_KIND_DATA,
+        StreamKind::Attachment => key::PLAYER_STREAM_KIND_ATTACHMENT,
+    }
+}
+
 /// THE STREAMS' PAGE: every stream of the container, what it is, its codec,
 /// language and title, and its marks.
 pub(crate) fn streams_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
@@ -921,14 +1071,7 @@ pub(crate) fn streams_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
         b.note(key::PLAYER_STREAMS_NONE);
     }
     for st in &sheet.streams {
-        let kind = b.t(match st.kind {
-            StreamKind::Video if st.attached => key::PLAYER_STREAM_KIND_COVER,
-            StreamKind::Video => key::PLAYER_STREAM_KIND_VIDEO,
-            StreamKind::Audio => key::PLAYER_STREAM_KIND_AUDIO,
-            StreamKind::Subtitle => key::PLAYER_STREAM_KIND_SUBTITLE,
-            StreamKind::Data => key::PLAYER_STREAM_KIND_DATA,
-            StreamKind::Attachment => key::PLAYER_STREAM_KIND_ATTACHMENT,
-        });
+        let kind = b.t(stream_kind_key(st));
         let label = b.texts.t_args(
             key::PLAYER_STREAM_LABEL,
             &[
@@ -965,7 +1108,80 @@ pub(crate) fn streams_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
             Target::Nothing,
             &format!("stream-{}", st.index),
         );
+        // WHAT CAN CHANGE OF IT, set in under it: its language and its name,
+        // asked typed, and its two marks, switches (`Edit::Stream`).
+        if st.can.can() {
+            stream_rows(st, b);
+        }
     }
+    // A REASON EVERY STREAM SHARES — not Matroska, its tools not there — is
+    // said once, under the rows.
+    let refusals: Vec<&Why> = sheet
+        .streams
+        .iter()
+        .filter(|st| st.kind != StreamKind::Attachment && !st.attached)
+        .filter_map(|st| match &st.can {
+            Can::No(why) => Some(why),
+            Can::Yes(_) => None,
+        })
+        .collect();
+    let all = sheet
+        .streams
+        .iter()
+        .filter(|st| st.kind != StreamKind::Attachment && !st.attached)
+        .count();
+    if let Some(first) = refusals.first()
+        && refusals.len() == all
+        && refusals.iter().all(|w| w == first)
+    {
+        crate::player_find::note_said(&crate::player::tags_refusal(first, b.texts), b);
+    }
+}
+
+/// A stream's rows that change it: its language — by its name — its own
+/// name, and whether it is the default and forced.
+fn stream_rows(st: &ronoctua_tags::Stream, b: &mut Builder<'_>) {
+    let empty = || b.t(key::PLAYER_TAG_EMPTY);
+    let lang = st
+        .lang
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map_or_else(empty, |l| crate::player_find::tongue_name(l, b.texts));
+    let title = st
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map_or_else(empty, ToOwned::to_owned);
+    let on_off = |on: bool| crate::player_rows::on_off(on, b.texts);
+    let (default, forced) = (on_off(st.default), on_off(st.forced));
+    b.nested(|b| {
+        b.pair(
+            b.t(key::PLAYER_STREAM_LANGUAGE_ROW),
+            lang,
+            Target::StreamLanguage(st.index),
+            &format!("stream-{}-language", st.index),
+        );
+        b.pair(
+            b.t(key::PLAYER_STREAM_TITLE_ROW),
+            title,
+            Target::StreamTitle(st.index),
+            &format!("stream-{}-title", st.index),
+        );
+        b.pair(
+            b.t(key::PLAYER_STREAM_DEFAULT_ROW),
+            default,
+            Target::StreamDefault(st.index),
+            &format!("stream-{}-default", st.index),
+        );
+        b.pair(
+            b.t(key::PLAYER_STREAM_FORCED_ROW),
+            forced,
+            Target::StreamForced(st.index),
+            &format!("stream-{}-forced", st.index),
+        );
+    });
 }
 
 /// THE CHAPTERS' PAGE: each chapter where it starts, and its title.
@@ -977,6 +1193,10 @@ pub(crate) fn chapters_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
     if sheet.chapters.is_empty() {
         b.note(key::PLAYER_CHAPTERS_NONE);
     }
+    // A TITLE THAT CAN CHANGE is a row that asks it typed; one that cannot
+    // is a fact, and the reason is said once, under them.
+    let can = sheet.chapters_can.as_ref();
+    let writable = can.is_some_and(Can::can);
     for (
         i,
         Chapter {
@@ -993,15 +1213,61 @@ pub(crate) fn chapters_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
                 .map_or_else(|| b.t(key::PLAYER_CHAPTER_UNTITLED), ToOwned::to_owned),
-            Target::Nothing,
+            if writable {
+                Target::ChapterTitle(*start_ms)
+            } else {
+                Target::Nothing
+            },
             &format!("chapter-{i}"),
         );
     }
+    if let Some(Can::No(why)) = can
+        && !sheet.chapters.is_empty()
+    {
+        crate::player_find::note_said(&crate::player::tags_refusal(why, b.texts), b);
+    }
 }
 
-/// The title of the group a tag is in: who read it and from where.
-fn origin_title(origin: &Origin, texts: &ronoctua_i18n::Texts) -> String {
+/// The title of the group a tag is in: who read it and from where — a
+/// Matroska track's tags by the stream they belong to, found by its UID
+/// among `streams` (a film has a group for every track, each with the same
+/// names: BPS, DURATION…).
+fn origin_title(
+    origin: &Origin,
+    streams: &[ronoctua_tags::Stream],
+    texts: &ronoctua_i18n::Texts,
+) -> String {
     match origin {
+        Origin::Matroska {
+            track: Some(uid), ..
+        } => match streams.iter().find(|st| st.uid == Some(*uid)) {
+            Some(st) => {
+                let kind = texts.t(stream_kind_key(st));
+                let index = Arg::Number(i64::from(st.index));
+                match st.lang.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+                    Some(lang) => texts.t_args(
+                        key::PLAYER_ORIGIN_MATROSKA_TRACK_LANG,
+                        &[
+                            ("index", index),
+                            ("kind", Arg::Text(&kind)),
+                            (
+                                "lang",
+                                Arg::Text(&crate::player_find::tongue_name(lang, texts)),
+                            ),
+                        ],
+                    ),
+                    None => texts.t_args(
+                        key::PLAYER_ORIGIN_MATROSKA_TRACK_OF,
+                        &[("index", index), ("kind", Arg::Text(&kind))],
+                    ),
+                }
+            }
+            // NO STREAM BEARS IT: the UID itself tells the groups apart.
+            None => texts.t_with(
+                key::PLAYER_ORIGIN_MATROSKA_TRACK_UID,
+                &[("uid", uid.to_string().as_str())],
+            ),
+        },
         Origin::Lofty { format } => texts.t(match format {
             TagFormat::Id3v2 => key::PLAYER_ORIGIN_ID3V2,
             TagFormat::Id3v1 => key::PLAYER_ORIGIN_ID3V1,
@@ -1011,7 +1277,7 @@ fn origin_title(origin: &Origin, texts: &ronoctua_i18n::Texts) -> String {
             TagFormat::RiffInfo => key::PLAYER_ORIGIN_RIFF_INFO,
             TagFormat::AiffText => key::PLAYER_ORIGIN_AIFF_TEXT,
         }),
-        Origin::Matroska { target } => texts.t(match target {
+        Origin::Matroska { target, .. } => texts.t(match target {
             MkvTarget::Global => key::PLAYER_ORIGIN_MATROSKA_GLOBAL,
             MkvTarget::Track => key::PLAYER_ORIGIN_MATROSKA_TRACK,
             MkvTarget::Other => key::PLAYER_ORIGIN_MATROSKA_OTHER,
@@ -1065,7 +1331,7 @@ pub(crate) fn every_tag_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
         match (&adding.origin, &adding.can) {
             (Some(origin), Can::Yes(_)) => b.pair_whole(
                 b.t(key::PLAYER_TAG_ADD),
-                origin_title(origin, b.texts),
+                origin_title(origin, &sheet.streams, b.texts),
                 Target::AddTag,
                 "tag-add",
             ),
@@ -1102,7 +1368,7 @@ pub(crate) fn every_tag_page(meta: &Meta, s: &State, b: &mut Builder<'_>) {
         }
     }
     for (g, (origin, tags)) in groups.into_iter().enumerate() {
-        b.heading_within(origin_title(origin, b.texts));
+        b.heading_within(origin_title(origin, &sheet.streams, b.texts));
         if page_why.is_none()
             && let Some(why) = one_reason(tags.iter().copied())
         {
@@ -1188,10 +1454,162 @@ fn bad_name(typed: &str, origin: &Origin, texts: &ronoctua_i18n::Texts) -> Strin
         key::PLAYER_TAG_BAD_NAME,
         &[
             ("typed", typed.trim()),
-            ("where", &origin_title(origin, texts)),
+            ("where", &origin_title(origin, &[], texts)),
             ("rule", &texts.t(rule)),
         ],
     )
+}
+
+/// A stream's language or name, as a sentence about writing it names it.
+fn stream_what(index: u32, language: bool, texts: &ronoctua_i18n::Texts) -> String {
+    texts.t_args(
+        if language {
+            key::PLAYER_STREAM_LANGUAGE_OF
+        } else {
+            key::PLAYER_STREAM_TITLE_OF
+        },
+        &[("index", Arg::Number(i64::from(index)))],
+    )
+}
+
+/// A chapter, as a sentence about writing its title names it.
+fn chapter_what(start_ms: u64, texts: &ronoctua_i18n::Texts) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let at = crate::player::clock(start_ms as f64 / 1000.0);
+    texts.t_with(key::PLAYER_CHAPTER_TITLE_OF, &[("at", &at)])
+}
+
+/// What a press on a stream's or a chapter's row does — `None` for none of
+/// theirs.
+fn stream_or_chapter(
+    meta: &Meta,
+    target: &Target,
+    press: crate::player::Press,
+    s: &State,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<Turned> {
+    use crate::player::Press;
+    let sheet = meta.sheet(s)?;
+    let location = sheet.location.to_string_lossy().into_owned();
+    let stream = |index: u32| sheet.streams.iter().find(|st| st.index == index);
+    let retag = |edit: Edit, what: &str| {
+        let name = named(&location, texts);
+        Turned::Errand(Errand::TellSaying(
+            Ask::Retag {
+                location: location.clone(),
+                stamp: sheet.stamp,
+                edits: vec![edit],
+            },
+            texts.t_with(
+                key::PLAYER_TAG_NAMED_WRITING,
+                &[("tag", what), ("name", &name)],
+            ),
+        ))
+    };
+    let asked = |typed: Typed, id: &'static str, was: &str| {
+        Turned::Asked(
+            crate::player::Typing::Meta(typed),
+            if was.is_empty() {
+                Question::plain(id, false)
+            } else {
+                Question::holding(id, was.to_owned())
+            },
+        )
+    };
+    match (target, press) {
+        (Target::StreamLanguage(i) | Target::StreamTitle(i), Press::Enter) => {
+            let st = stream(*i)?;
+            let language = matches!(target, Target::StreamLanguage(_));
+            let was = if language { &st.lang } else { &st.title };
+            let was = was.as_deref().unwrap_or_default().trim().to_owned();
+            Some(asked(
+                Typed::Stream {
+                    location: location.clone(),
+                    stamp: sheet.stamp,
+                    index: *i,
+                    language,
+                    was: was.clone(),
+                },
+                if language {
+                    STREAM_LANGUAGE
+                } else {
+                    STREAM_TITLE
+                },
+                &was,
+            ))
+        }
+        // ITS NAME TAKEN OUT, after a question — "no" first.
+        (Target::StreamTitle(i), Press::Remove) => {
+            let st = stream(*i)?;
+            let what = stream_what(*i, false, texts);
+            if st.title.as_deref().is_none_or(|t| t.trim().is_empty()) {
+                return Some(Turned::Errand(Errand::Said(
+                    texts.t_with(key::PLAYER_TAG_ALREADY_EMPTY, &[("field", &what)]),
+                )));
+            }
+            let Turned::Errand(yes) = retag(
+                Edit::Stream {
+                    index: *i,
+                    change: ronoctua_tags::StreamChange::Title(String::new()),
+                },
+                &what,
+            ) else {
+                return None;
+            };
+            Some(Turned::Question(
+                texts.t_with(
+                    key::PLAYER_ASK_CLEAR_TAG,
+                    &[("field", &what), ("name", &named(&location, texts))],
+                ),
+                yes,
+            ))
+        }
+        (
+            Target::StreamDefault(i) | Target::StreamForced(i),
+            Press::Enter | Press::Less | Press::More,
+        ) => {
+            let st = stream(*i)?;
+            let (change, key) = match target {
+                Target::StreamDefault(_) => (
+                    ronoctua_tags::StreamChange::Default(!st.default),
+                    key::PLAYER_STREAM_DEFAULT_ROW,
+                ),
+                _ => (
+                    ronoctua_tags::StreamChange::Forced(!st.forced),
+                    key::PLAYER_STREAM_FORCED_ROW,
+                ),
+            };
+            let what = format!(
+                "{}{}{}",
+                stream_what(*i, false, texts),
+                texts.t(key::PLAYER_META_JOINER),
+                texts.t(key)
+            );
+            Some(retag(Edit::Stream { index: *i, change }, &what))
+        }
+        (Target::ChapterTitle(start_ms), Press::Enter) => {
+            let was = sheet
+                .chapters
+                .iter()
+                .find(|c| c.start_ms == *start_ms)?
+                .title
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            Some(asked(
+                Typed::Chapter {
+                    location: location.clone(),
+                    stamp: sheet.stamp,
+                    start_ms: *start_ms,
+                    was: was.clone(),
+                },
+                CHAPTER_TITLE,
+                &was,
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// What a press on a row of the metadata does — `None` for a target that is
@@ -1206,6 +1624,16 @@ pub fn turn(
 ) -> Option<Turned> {
     use crate::player::Press;
     let forward = !matches!(press, Press::Less);
+    if matches!(
+        target,
+        Target::StreamLanguage(_)
+            | Target::StreamTitle(_)
+            | Target::StreamDefault(_)
+            | Target::StreamForced(_)
+            | Target::ChapterTitle(_)
+    ) {
+        return stream_or_chapter(meta, target, press, s, texts);
+    }
     match (target, press) {
         (Target::MetaFile, Press::Enter | Press::Less | Press::More) => {
             let n = locations(s).len().max(1);
@@ -1231,6 +1659,7 @@ pub fn turn(
         {
             Some(Turned::Page(PageId::Field(*field)))
         }
+        (Target::EditHere(field), Press::Enter) => edit_here(meta, *field, s, texts),
         (Target::Draft(field), Press::Enter) => {
             let sheet = meta.sheet(s)?;
             if let Some(Can::No(why)) = sheet.field(*field).map(|r| &r.can) {
@@ -1454,6 +1883,14 @@ pub enum Turned {
     Question(String, Errand),
     /// A page, over this one.
     Page(PageId),
+    /// A several-line field's words, opened over the page to be changed in
+    /// this door, under its title ([`EDIT_HERE`]).
+    Edit {
+        /// The field's name.
+        title: String,
+        /// Its words now.
+        text: String,
+    },
 }
 
 /// A question of the metadata's being typed, and what its answer is about.
@@ -1497,6 +1934,30 @@ pub enum Typed {
         origin: Origin,
         /// The names that tag has now.
         taken: Vec<String>,
+    },
+    /// A stream's language or name, typed: `was` is what the line held.
+    Stream {
+        /// The file.
+        location: String,
+        /// The file as its sheet was read.
+        stamp: ronoctua_tags::Stamp,
+        /// ffprobe's index of the stream.
+        index: u32,
+        /// Its language (`true`) or its name.
+        language: bool,
+        /// What the line held.
+        was: String,
+    },
+    /// A chapter's title, typed: the chapter by where it starts.
+    Chapter {
+        /// The file.
+        location: String,
+        /// The file as its sheet was read.
+        stamp: ronoctua_tags::Stamp,
+        /// Where the chapter starts.
+        start_ms: u64,
+        /// What the line held.
+        was: String,
     },
     /// The value of the tag `name` being added, the name typed first.
     NewTagValue {
@@ -1586,6 +2047,47 @@ pub fn typed(asked: Typed, said: &str, texts: &ronoctua_i18n::Texts) -> Turned {
                         },
                         &what,
                     )
+                }
+                Err(why) => refused(why),
+            }
+        }
+        Typed::Stream {
+            location,
+            stamp,
+            index,
+            language,
+            was,
+        } => {
+            if said.is_empty() || said == was.trim() {
+                return Turned::Errand(Errand::Nothing);
+            }
+            let change = if language {
+                match ronoctua_tags::language(said) {
+                    Ok(code) => ronoctua_tags::StreamChange::Language(code),
+                    Err(why) => return refused(why),
+                }
+            } else {
+                match ronoctua_tags::tag_text(said) {
+                    Ok(t) => ronoctua_tags::StreamChange::Title(t),
+                    Err(why) => return refused(why),
+                }
+            };
+            let what = stream_what(index, language, texts);
+            writing(location, stamp, Edit::Stream { index, change }, &what)
+        }
+        Typed::Chapter {
+            location,
+            stamp,
+            start_ms,
+            was,
+        } => {
+            if said.is_empty() || said == was.trim() {
+                return Turned::Errand(Errand::Nothing);
+            }
+            match ronoctua_tags::tag_text(said) {
+                Ok(title) => {
+                    let what = chapter_what(start_ms, texts);
+                    writing(location, stamp, Edit::Chapter { start_ms, title }, &what)
                 }
                 Err(why) => refused(why),
             }
@@ -1769,7 +2271,7 @@ fn draft_lines(path: &Path) -> Vec<String> {
 }
 
 /// Where a cover is drawn among `lines` rows of `cells` cells from its box's
-/// top-left corner, in its own proportion, with `space.files.pictureAir` of
+/// top-left corner, in its own proportion, with `files::picture_air` of
 /// air above and below it inside the box — a picture never touches the row
 /// over it or under it — and the part of it on screen when the rows are cut:
 /// `visible` is the box's lines on screen, `(first, end)`. Answers the drawn
@@ -1785,7 +2287,7 @@ pub fn cover_place(
 ) -> Option<(ronoctua_render::image::Area, (f32, f32))> {
     #[allow(clippy::cast_precision_loss)]
     let aspect = width as f32 / (height.max(1) as f32);
-    let air = f32::from(tokens::space::FILES_PICTUREAIR);
+    let air = crate::files::picture_air();
     let (box_w, box_h) = (
         f32::from(cells) * cell_px,
         (f32::from(lines) * line_px - air - air).max(0.0),
@@ -1914,8 +2416,10 @@ pub(crate) mod tests {
                 can: Can::No(Why::NoWriter {
                     container: Container::Flac,
                 }),
+                uid: None,
             }],
             chapters: Vec::new(),
+            chapters_can: None,
             other: vec![Tag {
                 origin: Origin::Exiftool {
                     group: "Vorbis".into(),
@@ -2295,6 +2799,249 @@ pub(crate) mod tests {
         assert_ne!(rows[v.cursor()].target, Target::Answer(false));
     }
 
+    /// A FILM in Matroska, whose streams and chapters can change.
+    fn film_sheet(location: &str) -> Sheet {
+        let mut sheet = song_sheet(location);
+        sheet.container = Container::Matroska;
+        let stream = |index: u32, kind: StreamKind, lang: Option<&str>| Stream {
+            index,
+            kind,
+            codec: Some("x".into()),
+            lang: lang.map(Into::into),
+            title: None,
+            default: index == 0,
+            forced: false,
+            hearing: false,
+            attached: false,
+            can: Can::Yes(Writer::Matroska),
+            uid: None,
+        };
+        sheet.streams = vec![
+            stream(0, StreamKind::Video, None),
+            stream(1, StreamKind::Audio, Some("por")),
+        ];
+        sheet.chapters = vec![
+            Chapter {
+                start_ms: 0,
+                end_ms: Some(61_500),
+                title: Some("Opening".into()),
+            },
+            Chapter {
+                start_ms: 61_500,
+                end_ms: None,
+                title: None,
+            },
+        ];
+        sheet.chapters_can = Some(Can::Yes(Writer::Matroska));
+        sheet
+    }
+
+    /// FAILS IF: the tags of two Matroska tracks — a film has a group for
+    /// every track, each with the same names — are titled alike, or by
+    /// anything but the stream they belong to (its number, what it is, its
+    /// language by name), or a track no stream bears is not told apart.
+    #[test]
+    fn each_track_s_tags_are_titled_by_their_stream() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let s = alone(
+                "/films/harbour.mkv",
+                vec![
+                    track(1, Kind::Video, None, true),
+                    track(1, Kind::Audio, None, true),
+                ],
+            );
+            let mut sheet = film_sheet("/films/harbour.mkv");
+            sheet.streams[0].uid = Some(901);
+            sheet.streams[1].uid = Some(902);
+            let tag = |uid: u64, value: &str| ronoctua_tags::Tag {
+                origin: Origin::Matroska {
+                    target: MkvTarget::Track,
+                    track: Some(uid),
+                },
+                name: "BPS".into(),
+                value: TagValue::Text(value.into()),
+                can: Can::Yes(Writer::Matroska),
+            };
+            sheet.other = vec![tag(901, "5000000"), tag(902, "192000"), tag(903, "1")];
+            let mut v = View::blank(None);
+            held(&mut v, &s, sheet);
+            let rows = every_tag(&mut v, &s, &t);
+            let headings: Vec<String> = rows
+                .iter()
+                .filter(|r| r.heading)
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect();
+            let video = t.t_args(
+                key::PLAYER_ORIGIN_MATROSKA_TRACK_OF,
+                &[
+                    ("index", Arg::Number(0)),
+                    ("kind", Arg::Text(&t.t(key::PLAYER_STREAM_KIND_VIDEO))),
+                ],
+            );
+            let sound = t.t_args(
+                key::PLAYER_ORIGIN_MATROSKA_TRACK_LANG,
+                &[
+                    ("index", Arg::Number(1)),
+                    ("kind", Arg::Text(&t.t(key::PLAYER_STREAM_KIND_AUDIO))),
+                    ("lang", Arg::Text(&t.t("tongue-pt"))),
+                ],
+            );
+            let unknown = t.t_with(key::PLAYER_ORIGIN_MATROSKA_TRACK_UID, &[("uid", "903")]);
+            for want in [&video, &sound, &unknown] {
+                assert!(
+                    headings.contains(want),
+                    "{language}: {want} in {headings:?}"
+                );
+            }
+            assert!(
+                !headings.contains(&t.t(key::PLAYER_ORIGIN_MATROSKA_TRACK)),
+                "{headings:?}"
+            );
+        }
+    }
+
+    /// FAILS IF: a stream's language, name and marks, and a chapter's title,
+    /// stay facts where the file can change them — or a typed language that
+    /// is no code is sent, a mark does not turn, a chapter is aimed at by its
+    /// place and not where it starts; or where the file cannot change them
+    /// the rows act, or the reason is not said once, in either language.
+    #[test]
+    fn a_stream_s_language_name_marks_and_a_chapter_s_title_change() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let s = alone(
+                "/films/harbour.mkv",
+                vec![
+                    track(1, Kind::Video, None, true),
+                    track(1, Kind::Audio, None, true),
+                ],
+            );
+            let mut v = View::blank(None);
+            held(&mut v, &s, film_sheet("/films/harbour.mkv"));
+            v.key(Press::Go(PageId::Streams), Some(&s), 80, &t);
+            let rows = v.rows(Some(&s), 80, &t);
+            let (_, lang) = row_of(&rows, &Target::StreamLanguage(1)).expect("its language");
+            assert!(
+                lang.fields.iter().any(|f| f.text == t.t("tongue-pt")),
+                "{:?}",
+                lang.fields
+            );
+            assert!(row_of(&rows, &Target::StreamTitle(1)).is_some());
+            assert!(row_of(&rows, &Target::StreamForced(0)).is_some());
+            // THE LANGUAGE, asked holding its code; a word that is no code
+            // refused before anything is sent.
+            let (at, _) = row_of(&rows, &Target::StreamLanguage(1)).expect("language");
+            v.grabbed(at);
+            let Errand::Ask(q) = v.key(Press::Enter, Some(&s), 80, &t) else {
+                panic!("not asked");
+            };
+            assert_eq!((q.id, q.initial.as_deref()), (STREAM_LANGUAGE, Some("por")));
+            assert_eq!(
+                v.answered(
+                    q.id,
+                    "Portuguese",
+                    &mut crate::player_machines::Pairing::default(),
+                    Some(&s),
+                    80,
+                    &t
+                ),
+                Errand::Said(crate::player::tags_refusal(&Why::BadLanguage, &t))
+            );
+            v.grabbed(at);
+            let Errand::Ask(q) = v.key(Press::Enter, Some(&s), 80, &t) else {
+                panic!("not asked again");
+            };
+            let Errand::TellSaying(Ask::Retag { edits, .. }, _) = v.answered(
+                q.id,
+                "pt-BR",
+                &mut crate::player_machines::Pairing::default(),
+                Some(&s),
+                80,
+                &t,
+            ) else {
+                panic!("not written");
+            };
+            assert_eq!(
+                edits,
+                [Edit::Stream {
+                    index: 1,
+                    change: ronoctua_tags::StreamChange::Language("pt-BR".into()),
+                }]
+            );
+            // A MARK TURNS on a press.
+            let rows = v.rows(Some(&s), 80, &t);
+            let (at, _) = row_of(&rows, &Target::StreamDefault(0)).expect("default");
+            v.grabbed(at);
+            let Errand::TellSaying(Ask::Retag { edits, .. }, _) =
+                v.key(Press::Enter, Some(&s), 80, &t)
+            else {
+                panic!("the mark did not turn");
+            };
+            assert_eq!(
+                edits,
+                [Edit::Stream {
+                    index: 0,
+                    change: ronoctua_tags::StreamChange::Default(false),
+                }]
+            );
+            // A CHAPTER BY WHERE IT STARTS.
+            v.key(Press::Escape, Some(&s), 80, &t);
+            v.key(Press::Go(PageId::Chapters), Some(&s), 80, &t);
+            let rows = v.rows(Some(&s), 80, &t);
+            let (at, _) = row_of(&rows, &Target::ChapterTitle(61_500)).expect("the second");
+            v.grabbed(at);
+            let Errand::Ask(q) = v.key(Press::Enter, Some(&s), 80, &t) else {
+                panic!("not asked");
+            };
+            assert_eq!((q.id, q.initial.as_deref()), (CHAPTER_TITLE, None));
+            let Errand::TellSaying(Ask::Retag { edits, .. }, _) = v.answered(
+                q.id,
+                " The  harbour ",
+                &mut crate::player_machines::Pairing::default(),
+                Some(&s),
+                80,
+                &t,
+            ) else {
+                panic!("not written");
+            };
+            assert_eq!(
+                edits,
+                [Edit::Chapter {
+                    start_ms: 61_500,
+                    title: "The harbour".into(),
+                }]
+            );
+            // NOT MATROSKA: facts, and why said once.
+            let mut flac = film_sheet("/films/harbour.mkv");
+            let refusal = Why::ChaptersOnlyInMatroska {
+                container: Container::Flac,
+            };
+            flac.chapters_can = Some(Can::No(refusal.clone()));
+            let mut v = View::blank(None);
+            held(&mut v, &s, flac);
+            v.key(Press::Go(PageId::Chapters), Some(&s), 80, &t);
+            let rows = v.rows(Some(&s), 80, &t);
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| matches!(r.target, Target::ChapterTitle(_)))
+            );
+            let said: Vec<String> = rows
+                .iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect();
+            // THE WHOLE SENTENCE, wrapped over its lines, and said once.
+            let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let why = flat(&crate::player::tags_refusal(&refusal, &t));
+            assert_eq!(
+                flat(&said.join(" ")).matches(why.as_str()).count(),
+                1,
+                "{language}: {why:?} in {said:?}"
+            );
+        }
+    }
+
     /// FAILS IF: an ADDRESS's sheet — read only — draws its fields as
     /// settings, or says nothing of why they cannot change, or `RET` on one
     /// asks instead of saying why.
@@ -2483,7 +3230,7 @@ pub(crate) mod tests {
         );
         v.key(Press::Go(PageId::Cover), Some(&s), 80, &t);
         let rows = v.rows(Some(&s), 80, &t);
-        assert!(row_of(&rows, &Target::Go(PageId::Files(Purpose::Cover))).is_some());
+        assert!(row_of(&rows, &Target::Go(PageId::Pick(Purpose::Cover))).is_some());
         let (at, _) = row_of(&rows, &Target::CoverSave).expect("save beside");
         v.grabbed(at);
         assert!(matches!(
@@ -2603,12 +3350,12 @@ pub(crate) mod tests {
         v.key(Press::Go(PageId::Cover), Some(&s), 80, &t);
         let rows = v.rows(Some(&s), 80, &t);
         let (at, _) =
-            row_of(&rows, &Target::Go(PageId::Files(Purpose::Cover))).expect("the picker's row");
+            row_of(&rows, &Target::Go(PageId::Pick(Purpose::Cover))).expect("the picker's row");
         v.grabbed(at);
         v.key(Press::Enter, Some(&s), 80, &t);
-        assert_eq!(v.page(), PageId::Files(Purpose::Cover));
+        assert_eq!(v.page(), PageId::Pick(Purpose::Cover));
         let rows = v.rows(Some(&s), 80, &t);
-        let picture = Target::File(music.join("front.jpg"));
+        let picture = Target::Picker(crate::file_picker::Target::File(music.join("front.jpg")));
         assert!(
             rows.iter()
                 .any(|r| r.cells.iter().any(|c| c.target == picture)),
@@ -2617,7 +3364,8 @@ pub(crate) mod tests {
         assert!(
             !rows.iter().any(|r| r.cells.iter().any(|c| matches!(
                 &c.target,
-                Target::File(p) if p.ends_with("song.flac") || p.ends_with("notes.txt")
+                Target::Picker(crate::file_picker::Target::File(p))
+                    if p.ends_with("song.flac") || p.ends_with("notes.txt")
             ))),
             "a file that is no picture is listed"
         );
@@ -2643,7 +3391,7 @@ pub(crate) mod tests {
     /// the part cut by the scroll is not cut from the picture too.
     #[test]
     fn a_cover_keeps_its_proportion_and_is_cut_with_its_rows() {
-        let air = f32::from(tokens::space::FILES_PICTUREAIR);
+        let air = crate::files::picture_air();
         let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
         let (area, crop) = cover_place((40, 8), (10.0, 20.0), (600, 600), (0, 8)).expect("drawn");
         let side = 160.0 - 2.0 * air;
@@ -2928,5 +3676,92 @@ pub(crate) mod tests {
             1,
             "on the add row, and not again for the page: {all}"
         );
+    }
+
+    /// FAILS IF: a several-line field's page stops offering to edit it
+    /// HERE — in this door, beside the editor — or its words stop opening
+    /// over the page; or `C-s` stops sending the field's `Retag` against the
+    /// sheet as it is; or the text is marked kept before the file says the
+    /// words (a refused write leaving without a question), or stays unkept
+    /// once it does.
+    #[test]
+    fn a_field_is_edited_here_and_kept_once_the_file_says_it() {
+        use ronoctua_keymap::{Key, Sym};
+        let text = |v: &mut View, s: &State, t: &ronoctua_i18n::Texts, key: Key| {
+            v.key(Press::Text(key), Some(s), 80, t)
+        };
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let s = a_song();
+            let mut v = View::blank(None);
+            held(&mut v, &s, song_sheet("/music/harbour.flac"));
+            let rows = v.rows(Some(&s), 80, &t);
+            let (at, _) = row_of(&rows, &Target::Tag(Field::Lyrics)).expect("lyrics");
+            v.grabbed(at);
+            v.key(Press::Enter, Some(&s), 80, &t);
+            assert_eq!(v.page(), PageId::Field(Field::Lyrics));
+            let rows = v.rows(Some(&s), 80, &t);
+            let (here, row) = row_of(&rows, &Target::EditHere(Field::Lyrics)).expect("edit here");
+            assert_eq!(row.fields[0].text, t.t(key::PLAYER_FIELD_EDIT_HERE));
+            let (editor, _) = row_of(&rows, &Target::Draft(Field::Lyrics)).expect("the editor");
+            assert!(
+                here < editor,
+                "{language}: here comes first, the editor stays"
+            );
+            v.grabbed(here);
+            assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), Errand::Nothing);
+            assert!(v.editing_text(), "{language}: nothing opened");
+            let words: String = v
+                .rows(Some(&s), 80, &t)
+                .iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect();
+            assert!(words.contains("First line"), "{language}: {words}");
+            // A LETTER, then `C-s`: the field's Retag, against the sheet.
+            text(&mut v, &s, &t, Key::simple(Sym::Char('X')));
+            let keep = Key::parse("C-s").expect("C-s");
+            match text(&mut v, &s, &t, keep) {
+                Errand::TellSaying(
+                    Ask::Retag {
+                        location,
+                        stamp,
+                        edits,
+                    },
+                    _,
+                ) => {
+                    assert_eq!(location, "/music/harbour.flac");
+                    assert_eq!(stamp.len, 100);
+                    assert_eq!(
+                        edits,
+                        [Edit::Set {
+                            field: Field::Lyrics,
+                            value: "First line\nSecond line\nThirdX".into()
+                        }]
+                    );
+                }
+                other => panic!("{language}: {other:?}"),
+            }
+            // NOT WRITTEN YET: leaving asks.
+            v.settle_in(Some(&s), 80, &t);
+            v.key(Press::Escape, Some(&s), 80, &t);
+            assert!(v.editing_text(), "{language}: left before the file said it");
+            let rows = v.rows(Some(&s), 80, &t);
+            assert!(
+                rows.iter().any(|r| r.spot == "text-area-no"),
+                "{language}: no question before throwing it away"
+            );
+            v.key(Press::Escape, Some(&s), 80, &t);
+            // THE FILE SAYS IT: kept, and leaving asks nothing.
+            let mut written = song_sheet("/music/harbour.flac");
+            for row in &mut written.fields {
+                if row.field == Field::Lyrics {
+                    row.value = Some("First line\nSecond line\nThirdX".into());
+                }
+            }
+            held(&mut v, &s, written);
+            v.settle_in(Some(&s), 80, &t);
+            v.key(Press::Escape, Some(&s), 80, &t);
+            assert!(!v.editing_text(), "{language}: kept and still asked");
+        }
     }
 }

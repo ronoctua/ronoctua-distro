@@ -71,16 +71,16 @@ teclado não: o `nixos-facter` lê hardware, e layout é o que os seus dedos esp
 
 | | `full` | `minimal` |
 |---|---|---|
-| tamanho | 22,8 GiB | 6,9 GiB |
+| tamanho | ~26,7 GiB | 6,9 GiB |
 | o que traz | tudo | o sistema, sem os aplicativos |
-| fica de fora | — | Android Studio e Flutter, os compiladores (rust, go, python, node, gcc), o Chrome, o Emacs, os players de mídia e as variantes extras da fonte |
+| fica de fora | — | Android Studio e Flutter, os compiladores (rust, go, python, node, gcc), os agentes de código (Claude Code e Codex), o Blender e o OrcaSlicer, o Chrome, o Emacs, os players de mídia e as variantes extras da fonte |
 
 **A recomendada é a `full`**: ela é a que não pede uma segunda decisão depois.
 
 A `minimal` não é outra distro — compositor, rodapé, fonte, teclado, rede, impermanência e terminal
 continuam lá. O que muda é que ela **instala em minutos**, e é por isso que ela existe: quem trabalha
 NA distro reinstala com frequência, e quem só quer experimentar um aplicativo o instala nela em vez
-de baixar 23 GiB para chegar nele.
+de baixar 27 GiB para chegar nele.
 
 **Ligar um grupo depois é uma linha** em `/etc/nixos/host.nix`, seguida de `nixos-rebuild switch`:
 
@@ -90,6 +90,8 @@ ronoctua.editor.emacs   = true;    # o Emacs e o Doom
 ronoctua.media.enable   = true;    # VLC, mpv, gstreamer (o ffmpeg vem sempre)
 ronoctua.dev.toolchains = true;    # rust, go, python, node, gcc
 ronoctua.dev.android    = true;    # Android Studio, SDK, Flutter
+ronoctua.dev.agents     = true;    # Claude Code e Codex
+ronoctua.workshop.enable = true;   # Blender e OrcaSlicer (que abre .stl, .3mf e .step)
 ronoctua.fonts.full     = true;    # as 27 variantes da Iosevka
 ```
 

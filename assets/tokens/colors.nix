@@ -369,6 +369,30 @@
       of = "accent.text-loud";
       alpha = 0.9;
     };
+
+    # THE GIT BROWSER'S DIFF, AS GROUNDS: a line added and a line removed
+    # (`git_browser::band_of`) — the diff's ROLES as bands, and the file's own
+    # language as the ink drawn over them. So each band is its family's
+    # quietest paint, `ground` (the brain line's weight): an addition reads as
+    # green without the green taking the code's colours away. Gated like every
+    # ground a tone is drawn on (`gen-theme.py`, `CONTRAST_GATES` and
+    # `DISTANCE_GATES`).
+    #
+    # AT TWICE THE FAMILY'S PAINT CHROMA (`chroma = 2.2`), and that is what
+    # the measurement asked for: at the plain step the two bands sat 0.020 to
+    # 0.029 apart in six themes, and a green band on forest's green window
+    # 0.025 from it. The `element` step (the selection's) was measured too and
+    # refused: the body text on it fell to Lc 68 on the light themes' pages.
+    diff = {
+      added = {
+        of = "success.ground";
+        chroma = 2.2;
+      };
+      removed = {
+        of = "error.ground";
+        chroma = 2.2;
+      };
+    };
   };
 
   # -------------------------------------------------------------------
@@ -1408,4 +1432,20 @@
     # Not the selection's green, which is the outline's and louder.
     drawer = "drawer.text";
   };
+
+  # THE MAXIMUM ALERT BAR (`crate::alert`) — the one line on screen that
+  # does not go away on its own. Its ground and its ink ALTERNATE between
+  # these two roles, so it is the one thing on the screen that moves: the
+  # error's red, and the warning's amber, each with the ink the palette
+  # solves to read on its solid (`on-solid`). Both are gated in
+  # `gen-theme.py` (`CONTRAST_GATES`, and a distance between the two
+  # grounds), and both are the same on every page, like the band's: the bar
+  # never changes with where the footer stands.
+  alert = {
+    ground = "error.solid";
+    text = "error.on-solid";
+    ground-alt = "warning.solid";
+    text-alt = "warning.on-solid";
+  };
+
 }

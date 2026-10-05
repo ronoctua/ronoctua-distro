@@ -1,0 +1,62 @@
+[package]
+name = "ronoctua-belongings"
+description = "The belongings: the person's configuration kept, encrypted, in a private git repository they name — what is kept, the plan and its conflicts, and the engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# TWO LAYERS, and the second stays out of the shell, the queue and the
+# installer.
+#
+# `prefs` (serde and the XDG roots) is the SHAPE: `belongings.json`, what is
+# kept (the table `assets/belongings.nix` generates), where every file of the
+# belongings lives, the plan the engine writes, the decisions a door writes
+# back, the status a sync leaves, and the order the queue carries. The shell,
+# the queue and the installer link only this
+# (`default-features = false, features = [ "prefs" ]`).
+#
+# `crypt` is the engine the extracted CLI (`rust.belongings`) runs: `age`
+# (X25519 recipients, one scrypt passphrase), git as transport through
+# `ronoctua-git`, the three-way merge. It is a DEFAULT feature so the CLI —
+# this crate's own `[[bin]]` — is built with every workspace build, and the
+# three consumers above take it off by name: what they link never cites a
+# symbol of `age`, and the linker leaves it out of their binaries.
+[features]
+default = [ "prefs", "crypt" ]
+prefs = [ ]
+crypt = [
+  "prefs",
+  "dep:age",
+  "dep:ring",
+  "dep:ronoctua-git",
+  "dep:rustix",
+]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The roots every path of the belongings is logical against (`config/…`,
+# `state/…`), per instance — the `.#dev` loop keeps its own.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+age = { workspace = true, optional = true }
+# SHA-256 of each kept file (the index's hashes, the three-way merge), and the
+# random ids that hide the blobs' names.
+ring = { workspace = true, optional = true }
+ronoctua-git = { path = "../ronoctua-git", optional = true }
+# The machine's name, for the index (never in a commit): `uname`, not `/proc`.
+rustix = { workspace = true, optional = true, features = [ "system" ] }
+
+[build-dependencies]
+
+# THE CLI, run by the queue as a child (`Work::Belongings`). It reads the
+# passphrase from the `0600` runtime file the door wrote, and deletes it with
+# the session.
+[[bin]]
+name = "ronoctua-belongings"
+path = "src/bin/cli.rs"
+required-features = [ "crypt" ]
+
+[lints]
+workspace = true

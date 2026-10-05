@@ -8,7 +8,7 @@
 //! choice — and a check compares the rows against the two `.ftl` files and
 //! against the key list in both directions.
 //!
-//! It is also the lesson `buffers/lucide` paid for: an affordance scattered
+//! It is also the lesson the old Lucide buffer paid for: an affordance scattered
 //! across four functions, with the drawing consulting none of them, gave
 //! twenty-four identical-looking rows where the same key did three different
 //! things. Here, what decides whether a row is offered and what decides whether
@@ -69,6 +69,19 @@ pub enum Applies {
     /// the trash is a property of WHERE the entry is, which is why this variant
     /// is answered by the caller rather than by the entry.
     InTrash,
+    /// Only for an archive this system reads — by its name, as the program
+    /// that lists it is chosen, or by a type the database says is a zip (an
+    /// `.odt` is one).
+    Archive,
+    /// Only for an archive whose members change in place (zip, 7z), with
+    /// something on the clipboard to put in it.
+    ArchiveAndClip,
+    /// Only for a MEMBER of an archive the view has walked into. Being inside
+    /// one is WHERE the view is, answered by the caller like
+    /// [`Applies::InTrash`] — and inside one, nothing but these rows and
+    /// `open` is offered: a member is not a file on the disk to rename,
+    /// trash or chmod.
+    InArchive,
 }
 
 /// One row of the menu.
@@ -237,6 +250,19 @@ pub fn all_of() -> &'static [Action] {
             tier: Tier::Free,
             confirms: false,
         },
+        // THE PERSON'S BELONGINGS: kept, encrypted, in their private
+        // repository and put back on a new installation (`LEADER s v`) — or,
+        // when it is kept already, no longer. One row for both, and what it
+        // did is said on the line.
+        Action {
+            id: "belongings",
+            label: key::FILES_BELONGINGS,
+            does: key::FILES_DOES_BELONGINGS,
+            key: "k",
+            applies: Applies::Always,
+            tier: Tier::Free,
+            confirms: false,
+        },
         // The way back for a row that was hidden. It is `Always` and it is
         // about the SIDEBAR rather than about the entry — which is why it
         // cannot be a key on a row: the row is not drawn.
@@ -256,6 +282,31 @@ pub fn all_of() -> &'static [Action] {
             does: key::FILES_DOES_INFO,
             key: "i",
             applies: Applies::Always,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        // WHAT MANY ENGINES SAY OF IT: the security centre's check, in a
+        // window of its own — its fingerprint only, and the file itself only
+        // after a question that asks "no" first.
+        Action {
+            id: "virustotal",
+            label: key::FILES_VIRUSTOTAL,
+            does: key::FILES_DOES_VIRUSTOTAL,
+            key: "v",
+            applies: Applies::File,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        // THE PLACE, OUT. Beside "information" because it is about what the
+        // file SAYS; it never `confirms` by a second key because it asks a
+        // question of its own (no / a copy / over the file, `no` first) —
+        // and a question that names the three outcomes is the confirmation.
+        Action {
+            id: "remove-location",
+            label: key::FILES_REMOVE_LOCATION,
+            does: key::FILES_DOES_REMOVE_LOCATION,
+            key: "L",
+            applies: Applies::File,
             tier: Tier::Free,
             confirms: false,
         },
@@ -286,12 +337,12 @@ pub fn all_of() -> &'static [Action] {
             tier: Tier::Free,
             confirms: false,
         },
-        // --- archives, and the first rows that exist because of a FORMAT ---
+        // --- archives ------------------------------------------------
         //
-        // `Applies::Under` asks the database whether a type DESCENDS from
-        // another, so a row written for `application/zip` reaches the fifty
-        // types that are a zip underneath. A future row for one specific
-        // format is one line here, not a new branch.
+        // EVERY ONE THROUGH `ronoctua-archive`, which knows the formats by
+        // name — so one `extract` covers the zip, the 7z, the tar family, the
+        // RAR and the ISO, where there used to be a row per database type.
+        // `compress` opens the SHEET (format, level, password, volumes).
         Action {
             id: "compress",
             label: key::FILES_COMPRESS,
@@ -306,18 +357,59 @@ pub fn all_of() -> &'static [Action] {
             label: key::FILES_EXTRACT,
             does: key::FILES_DOES_EXTRACT,
             key: "u",
-            applies: Applies::Under("application/zip"),
+            applies: Applies::Archive,
             tier: Tier::Free,
             confirms: false,
         },
         Action {
-            id: "extract-tar",
-            label: key::FILES_EXTRACT_TAR,
-            does: key::FILES_DOES_EXTRACT_TAR,
-            key: "U",
-            applies: Applies::Under("application/x-tar"),
+            id: "archive-test",
+            label: key::FILES_ARCHIVE_TEST,
+            does: key::FILES_DOES_ARCHIVE_TEST,
+            key: "T",
+            applies: Applies::Archive,
             tier: Tier::Free,
             confirms: false,
+        },
+        Action {
+            id: "archive-convert",
+            label: key::FILES_ARCHIVE_CONVERT,
+            does: key::FILES_DOES_ARCHIVE_CONVERT,
+            // `V` and not `v`, which is the security centre's check: both
+            // rows show on an archive.
+            key: "V",
+            applies: Applies::Archive,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        Action {
+            id: "archive-add",
+            label: key::FILES_ARCHIVE_ADD,
+            does: key::FILES_DOES_ARCHIVE_ADD,
+            key: "A",
+            applies: Applies::ArchiveAndClip,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        // INSIDE AN ARCHIVE: what the members can be asked. Taking one out is
+        // the second irreversible row this menu has after `delete` and
+        // `shred`, and it is armed the same way.
+        Action {
+            id: "archive-extract",
+            label: key::FILES_ARCHIVE_EXTRACT,
+            does: key::FILES_DOES_ARCHIVE_EXTRACT,
+            key: "e",
+            applies: Applies::InArchive,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        Action {
+            id: "archive-remove",
+            label: key::FILES_ARCHIVE_REMOVE,
+            does: key::FILES_DOES_ARCHIVE_REMOVE,
+            key: "X",
+            applies: Applies::InArchive,
+            tier: Tier::Free,
+            confirms: true,
         },
         // --- getting rid of it ---------------------------------------
         //
@@ -368,17 +460,26 @@ pub fn all_of() -> &'static [Action] {
 /// The rows that apply to this entry, in menu order.
 ///
 /// `pasteable` is whether the clipboard holds anything: a `paste` row on an
-/// empty clipboard is a row that would refuse.
+/// empty clipboard is a row that would refuse. `in_archive` is whether the
+/// entry is a MEMBER of an archive the view walked into: then only `open`
+/// and the rows about members are offered.
 #[must_use]
 pub fn for_entry(
     entry: &Entry,
     of_type: &str,
     pasteable: bool,
     in_trash: bool,
+    in_archive: bool,
 ) -> Vec<&'static Action> {
     all_of()
         .iter()
-        .filter(|a| offered(a.applies, entry, of_type, pasteable, in_trash))
+        .filter(|a| {
+            if in_archive {
+                a.applies == Applies::InArchive || a.id == "open"
+            } else {
+                offered(a.applies, entry, of_type, pasteable, in_trash)
+            }
+        })
         .collect()
 }
 
@@ -399,6 +500,17 @@ pub fn offered(
         Applies::Symlink => matches!(entry.kind, Kind::Symlink),
         Applies::Pasteable => pasteable,
         Applies::Under(parent) => mime::is_a(of_type, parent),
+        Applies::Archive => {
+            !matches!(entry.opens_as(), Kind::Directory)
+                && (crate::archive::enters(&entry.name) || mime::is_a(of_type, "application/zip"))
+        }
+        Applies::ArchiveAndClip => {
+            pasteable
+                && !matches!(entry.opens_as(), Kind::Directory)
+                && crate::archive::editable(&entry.name)
+        }
+        // ONLY WHERE THE CALLER SAYS: see `for_entry`.
+        Applies::InArchive => false,
     }
 }
 
@@ -480,7 +592,7 @@ mod tests {
         // A confirmation on something undoable teaches people to press twice
         // without reading, which is what makes the one that matters useless.
         for a in all_of() {
-            let irreversible = matches!(a.id, "delete" | "shred");
+            let irreversible = matches!(a.id, "delete" | "shred" | "archive-remove");
             assert_eq!(
                 a.confirms, irreversible,
                 "`{}` confirma={} e irreversivel={}",
@@ -501,7 +613,7 @@ mod tests {
     #[test]
     fn a_directory_is_not_offered_what_cannot_be_done_to_it() {
         let dir = entry("folder", Kind::Directory);
-        let offered: Vec<_> = for_entry(&dir, mime::DIRECTORY, false, false)
+        let offered: Vec<_> = for_entry(&dir, mime::DIRECTORY, false, false, false)
             .iter()
             .map(|a| a.id)
             .collect();
@@ -524,31 +636,76 @@ mod tests {
         let file = entry("document.odt", Kind::File);
         let odt = "application/vnd.oasis.opendocument.text";
         assert!(
-            for_entry(&file, odt, false, false)
+            for_entry(&file, odt, false, false, false)
                 .iter()
                 .any(|a| a.id == "extract"),
             "an .odt IS a zip, and nothing offered it"
         );
 
         let png = entry("foto.png", Kind::File);
-        let offered: Vec<_> = for_entry(&png, "image/png", false, false)
+        assert!(
+            !for_entry(&png, "image/png", false, false, false)
+                .iter()
+                .any(|a| a.id == "extract")
+        );
+        // AND EVERY FORMAT THE ARCHIVE CRATE READS, by its name — one row for
+        // all of them, where there used to be one per database type.
+        for name in ["a.7z", "b.tar.zst", "c.rar", "d.iso", "e.tgz"] {
+            let file = entry(name, Kind::File);
+            let ids: Vec<_> = for_entry(&file, "application/octet-stream", false, false, false)
+                .iter()
+                .map(|a| a.id)
+                .collect();
+            assert!(
+                ids.contains(&"extract") && ids.contains(&"archive-test"),
+                "{name}: {ids:?}"
+            );
+            assert!(
+                !ids.contains(&"archive-add"),
+                "nothing on the clipboard to add"
+            );
+        }
+        let zip = entry("a.zip", Kind::File);
+        assert!(
+            for_entry(&zip, "application/zip", true, false, false)
+                .iter()
+                .any(|a| a.id == "archive-add")
+        );
+        let tar = entry("a.tar.xz", Kind::File);
+        assert!(
+            !for_entry(&tar, "application/x-xz-compressed-tar", true, false, false)
+                .iter()
+                .any(|a| a.id == "archive-add"),
+            "a tar changes by conversion, never in place"
+        );
+    }
+
+    #[test]
+    fn inside_an_archive_a_member_is_offered_only_what_a_member_can_be_asked() {
+        let member = entry("note.txt", Kind::File);
+        let ids: Vec<_> = for_entry(&member, "text/plain", true, false, true)
             .iter()
             .map(|a| a.id)
             .collect();
-        assert!(!offered.contains(&"extract"));
-        assert!(!offered.contains(&"extract-tar"));
+        assert_eq!(ids, ["open", "archive-extract", "archive-remove"]);
+        // AND OUTSIDE ONE, never.
+        let ids: Vec<_> = for_entry(&member, "text/plain", true, false, false)
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        assert!(!ids.contains(&"archive-extract") && !ids.contains(&"archive-remove"));
     }
 
     #[test]
     fn paste_only_shows_when_there_is_something_to_paste() {
         let file = entry("x", Kind::File);
         assert!(
-            !for_entry(&file, "text/plain", false, false)
+            !for_entry(&file, "text/plain", false, false, false)
                 .iter()
                 .any(|a| a.id == "paste")
         );
         assert!(
-            for_entry(&file, "text/plain", true, false)
+            for_entry(&file, "text/plain", true, false, false)
                 .iter()
                 .any(|a| a.id == "paste")
         );
@@ -562,7 +719,7 @@ mod tests {
         let mut link = entry("atalho", Kind::Symlink);
         link.aims_at = Some(Kind::Directory);
         assert!(
-            !for_entry(&link, mime::SYMLINK, false, false)
+            !for_entry(&link, mime::SYMLINK, false, false, false)
                 .iter()
                 .any(|a| a.id == "shred")
         );

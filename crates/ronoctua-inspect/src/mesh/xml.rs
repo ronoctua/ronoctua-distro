@@ -5,6 +5,28 @@
 //! all three are written by tools that declare namespaces. Asking `roxmltree`
 //! about a name directly means asking about a name in NO namespace, which
 //! matches none of them, in every file, silently.
+//!
+//! And the third, which every one of them shares: the text is parsed through
+//! the depth guard (`ronoctua_xml`), at the format's own ceiling.
+
+use ronoctua_xml::roxmltree;
+
+use crate::Refusal;
+
+/// A model's XML, parsed once its nesting is measured under `most`.
+///
+/// Each reader passes its format's ceiling, measured: `roxmltree` recurses once
+/// per level and has no limit of its own, so a document made for it ran the
+/// inspector's thread out of stack — which aborts the footer, not a preview.
+///
+/// # Errors
+///
+/// [`Refusal::Failed`] for a document deeper than `most` and for one that is
+/// not XML: the panel says the same thing for both.
+pub fn parse(text: &str, most: usize) -> Result<roxmltree::Document<'_>, Refusal> {
+    ronoctua_xml::parse_within(text, roxmltree::ParsingOptions::default(), most)
+        .map_err(|_| Refusal::Failed)
+}
 
 /// An element by LOCAL name, whatever namespace it is in.
 ///

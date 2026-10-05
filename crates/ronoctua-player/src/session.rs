@@ -198,6 +198,17 @@ pub fn length(lanes: &[Lane], length_of: impl Fn(LaneId) -> Option<f64>) -> Opti
     last
 }
 
+/// Whether a set plays NOTHING: no picture or sound of it is on — every one
+/// switched off, or only words left. Such a set is over at once: its clock
+/// would walk with nothing heard or seen and never reach an end, since
+/// [`length`] has none to give and no voice plays to end.
+#[must_use]
+pub fn plays_nothing(lanes: &[Lane]) -> bool {
+    !lanes
+        .iter()
+        .any(|lane| lane.enabled && lane.kind != LaneKind::Subtitle)
+}
+
 /// Who keeps the set's time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Master {
@@ -318,6 +329,27 @@ mod tests {
             lanes,
             arrangement: Arrangement::default(),
         }
+    }
+
+    /// FAILS IF: a set whose pictures and sounds are all off — or that has
+    /// only words left on — is not over: no voice plays to end and no length
+    /// is known, so its clock walked for ever while it "played".
+    #[test]
+    fn a_set_with_every_lane_off_plays_nothing() {
+        let mut lanes = vec![
+            lane(1, LaneKind::Video, "/film.mkv"),
+            lane(2, LaneKind::Audio, "/film.mkv"),
+            lane(3, LaneKind::Subtitle, "/film.srt"),
+        ];
+        assert!(!plays_nothing(&lanes));
+        lanes[0].enabled = false;
+        assert!(!plays_nothing(&lanes), "its sound still plays");
+        lanes[1].enabled = false;
+        assert!(plays_nothing(&lanes), "only words are left");
+        assert_eq!(length(&lanes, |_| Some(60.0)), None, "and no length");
+        lanes[2].enabled = false;
+        assert!(plays_nothing(&lanes));
+        assert!(plays_nothing(&[]));
     }
 
     /// FAILS IF: a film's picture and its own sound stop sharing one player.

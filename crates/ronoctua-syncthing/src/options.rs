@@ -65,51 +65,16 @@ impl Scope {
     }
 }
 
-/// What kind of thing an option is, and therefore what a key does to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// On or off.
-    Switch,
-    /// A whole number inside a range.
-    Number {
-        /// The smallest Syncthing accepts.
-        least: i64,
-        /// The largest worth offering.
-        most: i64,
-        /// What the number is counted in, as a text key.
-        ///
-        /// `None` for the handful that are genuinely bare — a port number, a
-        /// priority, a traffic class. Everything else gets one, because a row
-        /// reading `look again every  3600` says nothing at all: that came off
-        /// a printed screen, and no assertion had a way to see it.
-        unit: Option<&'static str>,
-    },
-    /// Free text.
-    Text,
-    /// One of a fixed set of words.
-    Ring(&'static [&'static str]),
-    /// A list of strings, written on one line and separated by commas.
-    List,
-    /// A number with a unit beside it — `{ "value": 1, "unit": "%" }`.
-    Amount,
-}
-
-impl Kind {
-    /// Whether `S-<arrows>` mean anything on this row.
-    ///
-    /// Everything but text and a list: those two are typed, on the line of
-    /// whichever door the key was pressed in.
-    #[must_use]
-    pub const fn turns(self) -> bool {
-        !matches!(self, Self::Text | Self::List)
-    }
-
-    /// Whether this row is answered by typing.
-    #[must_use]
-    pub const fn is_typed(self) -> bool {
-        matches!(self, Self::Text | Self::List)
-    }
-}
+/// What kind of thing an option is — the SHARED vocabulary
+/// (`ronoctua_options::Kind`), which the generated table names.
+///
+/// IT WAS A COPY OF ITS OWN, older than the crate, and the four tables
+/// (Syncthing's, Tor's, ClipCascade's, Atuin's) answered the same three
+/// questions in two places. What is Syncthing's alone stays here: which rows
+/// TURN and which are TYPED ([`Setting::turns`]) — an amount is `{ value,
+/// unit }` here, and its arrows move the number, where the other three domains
+/// type a size.
+pub use ronoctua_options::Kind;
 
 /// One option.
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +101,23 @@ pub struct Setting {
 }
 
 impl Setting {
+    /// Whether `S-<arrows>` mean anything on this row.
+    ///
+    /// Everything but text and a list: those two are typed, on the line of
+    /// whichever door the key was pressed in. An AMOUNT turns — its arrows
+    /// move the number and leave the unit alone ([`Setting::turned`]) — which
+    /// is the one place Syncthing reads the shared [`Kind`] its own way.
+    #[must_use]
+    pub const fn turns(&self) -> bool {
+        !self.is_typed()
+    }
+
+    /// Whether this row is answered by typing.
+    #[must_use]
+    pub const fn is_typed(&self) -> bool {
+        matches!(self.kind, Kind::Text | Kind::List)
+    }
+
     /// The value out of a configuration object, honouring `within`.
     #[must_use]
     pub fn read<'a>(&self, from: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
@@ -173,27 +155,23 @@ impl Setting {
                 let was = now.and_then(serde_json::Value::as_bool).unwrap_or(false);
                 Some(serde_json::json!(!was))
             }
+            // THE SHARED ARITHMETIC (`ronoctua_options`): a number moves by a
+            // step a person would have chosen and STOPS at the ends — holding
+            // the arrow to raise a limit and having it drop to the floor at the
+            // top is a number nobody meant to write, and Syncthing would take
+            // it — and a ring of words wraps, a word Syncthing invented
+            // landing on the first.
             Kind::Number { least, most, .. } => {
                 let was = now.and_then(serde_json::Value::as_i64).unwrap_or(least);
-                let step = step_of(least, most);
-                let next = if forward {
-                    was.saturating_add(step)
-                } else {
-                    was.saturating_sub(step)
-                };
-                // AND IT STOPS AT THE ENDS INSTEAD OF WRAPPING.
-                //
-                // A ring of words wraps because every word is as good as the
-                // next. A range does not: holding the arrow to raise a limit
-                // and having it drop to the floor at the top is a number
-                // nobody meant to write, and Syncthing would take it.
-                Some(serde_json::json!(next.clamp(least, most)))
+                Some(serde_json::json!(ronoctua_options::nudge(
+                    was, least, most, forward
+                )))
             }
             Kind::Ring(words) => {
                 let was = now.and_then(serde_json::Value::as_str).unwrap_or("");
-                let at = words.iter().position(|w| *w == was).unwrap_or(0);
-                let step = if forward { 1 } else { words.len() - 1 };
-                Some(serde_json::json!(words[(at + step) % words.len()]))
+                Some(serde_json::json!(ronoctua_options::turn(
+                    words, was, forward
+                )))
             }
             Kind::Amount => {
                 // THE ARROWS MOVE THE NUMBER AND LEAVE THE UNIT ALONE.
@@ -284,54 +262,16 @@ impl Setting {
     }
 }
 
-/// How far one press moves a number.
-///
-/// One would be right for a count of connections and useless for a bandwidth
-/// limit in kilobits, where the range is a million wide: holding the arrow for
-/// a minute would move a thousandth of it. So the step is a thousandth of the
-/// range, rounded to something a person would have typed, and never less than
-/// one.
-#[must_use]
-pub fn step_of(least: i64, most: i64) -> i64 {
-    let span = most.saturating_sub(least);
-    let rough = span / 1000;
-    if rough <= 1 {
-        return 1;
-    }
-    // The next round number at or below a thousandth: 1, 10, 100, 1000…
-    let mut round = 1;
-    while round * 10 <= rough {
-        round *= 10;
-    }
-    round
-}
-
 /// The text key for one word of a ring.
 ///
 /// Syncthing spells them three ways — `sendreceive`, `smallestFirst`,
 /// `copy_file_range` — and an empty string means "none", which is a word on
-/// the screen like any other. The rule is the generator's, written twice
-/// because one side is Python and the other Rust; `syncthing-words-agree`
-/// holds them together.
+/// the screen like any other. The rule is the shared one
+/// (`ronoctua_options::word_key`), under this domain's prefix: the generator
+/// writes `syncthing-word-<word>` for every word of the table.
 #[must_use]
 pub fn word_key(value: &str) -> String {
-    if value.is_empty() {
-        return "syncthing-word-none".to_owned();
-    }
-    let mut out = String::with_capacity(value.len() + 4);
-    for (n, c) in value.chars().enumerate() {
-        if c == '_' {
-            out.push('-');
-        } else if c.is_ascii_uppercase() {
-            if n > 0 {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    format!("syncthing-word-{out}")
+    format!("syncthing-word-{}", ronoctua_options::word_key(value))
 }
 
 /// Every option in one scope, in the order the screen draws them.
@@ -436,20 +376,46 @@ mod tests {
         // AND A WORD SYNCTHING INVENTED LANDS ON THE FIRST, never nowhere.
         assert_eq!(
             ring.turned(Some(&serde_json::json!("new")), true),
-            Some(serde_json::json!("b"))
+            Some(serde_json::json!("a"))
         );
     }
 
     #[test]
-    fn the_step_follows_the_range() {
-        // One is right for a count of connections and useless for a limit in
-        // kilobits: a range a million wide would take a thousand presses to
-        // cross a thousandth of it.
-        assert_eq!(step_of(0, 8), 1);
-        assert_eq!(step_of(0, 100), 1);
-        assert_eq!(step_of(0, 1_000_000), 1000);
-        assert_eq!(step_of(0, 31_536_000), 10000);
-        assert_eq!(step_of(-1, 3), 1);
+    fn the_step_is_the_shared_one() {
+        // ONE ARITHMETIC for the four tables: a limit a million kilobits wide
+        // moves by a round step, not by one, and the same press moves Tor's
+        // and Syncthing's numbers alike.
+        let wide = Setting {
+            id: "x",
+            label: "syncthing-opt-x",
+            key: "x",
+            within: None,
+            scope: Scope::Global,
+            kind: Kind::Number {
+                least: 0,
+                most: 1_000_000,
+                unit: None,
+            },
+            fixed: false,
+            advanced: false,
+        };
+        let step = ronoctua_options::step_of(0, 1_000_000);
+        assert!(step > 1);
+        assert_eq!(
+            wide.turned(Some(&serde_json::json!(0)), true),
+            Some(serde_json::json!(step))
+        );
+    }
+
+    #[test]
+    fn an_amount_turns_and_a_list_is_typed() {
+        // THE ONE PLACE SYNCTHING READS THE SHARED KIND ITS OWN WAY: its
+        // amount is `{ value, unit }` and the arrows move the number.
+        let amount = by_id("least-free-space").expect("the table declares it");
+        assert!(matches!(amount.kind, Kind::Amount));
+        assert!(amount.turns() && !amount.is_typed());
+        let listen = by_id("listen-addresses").expect("the table declares it");
+        assert!(listen.is_typed() && !listen.turns());
     }
 
     #[test]
@@ -484,7 +450,7 @@ mod tests {
         );
         // A LIST NEVER TURNS: it is typed, on either door's line.
         assert_eq!(listen.turned(None, true), None);
-        assert!(listen.kind.is_typed());
+        assert!(listen.is_typed());
     }
 
     #[test]

@@ -52,7 +52,11 @@ pub fn add(dir: &Path, entry: &Entry) -> std::io::Result<()> {
         .create(true)
         .append(true)
         .open(&path)?;
-    writeln!(file, "{}", serde_json::to_string(entry).unwrap_or_default())?;
+    // ONE WRITE for the line and its newline: two processes appending at
+    // once interleave between writes, never inside one (`O_APPEND`).
+    let mut line = serde_json::to_string(entry).unwrap_or_default();
+    line.push('\n');
+    file.write_all(line.as_bytes())?;
     drop(file);
     let lines = read_lines(&path);
     if lines.len() > MOST {

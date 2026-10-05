@@ -11,10 +11,19 @@
 //! reader that ignored transforms would draw the piece squashed and no error
 //! anywhere would say why.
 
-use super::xml::{attr, tagged};
+use super::xml::{attr, parse, tagged};
 use super::{Bounds, Mesh, Read, Shape, TRIANGLE_CEILING};
 use crate::Refusal;
 use crate::zip::{member_bytes, members, part};
+use ronoctua_xml::roxmltree;
+
+/// How deep a 3MF part's XML may nest.
+///
+/// The shared ceiling, and far above the format: a model is
+/// `model > resources > object > mesh > triangles > triangle`, and the deepest
+/// part of the three real packages measured (two of OrcaSlicer's and
+/// shared-mime-info's `cube.3mf`) nests five levels.
+const XML_DEPTH: usize = ronoctua_xml::DEPTH_MOST;
 
 /// How deep a chain of `<components>` may go before it is called a loop.
 ///
@@ -151,7 +160,7 @@ pub fn read(bytes: &[u8]) -> Result<Read, Refusal> {
     if let Some(m) = part(&list, "_rels/.rels")
         && let Ok(raw) = member_bytes(bytes, m)
         && let Ok(text) = String::from_utf8(raw)
-        && let Ok(doc) = roxmltree::Document::parse(&text)
+        && let Ok(doc) = parse(&text, XML_DEPTH)
     {
         for r in doc.descendants().filter(|n| tagged(*n, "Relationship")) {
             if attr(r, "Type") == Some(ROOT_RELATION)
@@ -181,7 +190,7 @@ pub fn read(bytes: &[u8]) -> Result<Read, Refusal> {
     };
 
     // The root's own document answers the unit, the metadata and the build.
-    let root_doc = roxmltree::Document::parse(&texts[root_at].1).map_err(|_| Refusal::Failed)?;
+    let root_doc = parse(&texts[root_at].1, XML_DEPTH)?;
     let unit = root_doc
         .descendants()
         .find(|n| tagged(*n, "model"))
@@ -210,7 +219,7 @@ pub fn read(bytes: &[u8]) -> Result<Read, Refusal> {
         let Some(at) = load(&name, &mut texts) else {
             continue;
         };
-        let Ok(doc) = roxmltree::Document::parse(&texts[at].1) else {
+        let Ok(doc) = parse(&texts[at].1, XML_DEPTH) else {
             continue;
         };
         for c in doc.descendants().filter(|n| tagged(*n, "component")) {
@@ -224,7 +233,7 @@ pub fn read(bytes: &[u8]) -> Result<Read, Refusal> {
     }
     let docs: Vec<(String, roxmltree::Document<'_>)> = texts
         .iter()
-        .filter_map(|(n, t)| roxmltree::Document::parse(t).ok().map(|d| (n.clone(), d)))
+        .filter_map(|(n, t)| parse(t, XML_DEPTH).ok().map(|d| (n.clone(), d)))
         .collect();
     let table: Vec<(String, Vec<(String, Object)>)> = docs
         .iter()
@@ -344,7 +353,21 @@ fn place(
 #[cfg(test)]
 mod tests {
     use super::{STILL, Shape, matrix, moved, read};
+    use crate::Refusal;
     use crate::mesh::fixture::{cube, model_part, zip_of};
+
+    #[test]
+    fn a_model_made_to_run_the_parser_out_of_stack_is_refused() {
+        let deep = format!("<model>{}</model>", "<a>".repeat(100_000));
+        let package = zip_of(&[("3D/3dmodel.model", deep.into_bytes(), true)]);
+        let refused = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || read(&package).err())
+            .expect("a thread")
+            .join()
+            .expect("the read came back");
+        assert_eq!(refused, Some(Refusal::Failed));
+    }
 
     #[test]
     // THE DEFECT THIS CATCHES: assuming the geometry is in `3D/3dmodel.model`.

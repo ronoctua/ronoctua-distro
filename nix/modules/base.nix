@@ -133,6 +133,12 @@ in
       toolchains = lib.mkEnableOption "the toolchains: rust, go, python, node, gcc" // {
         default = true;
       };
+      # The two coding agents, Claude Code and Codex — programs one installs to
+      # USE, so `profile.nix` puts them in the full profile only. Claude Code
+      # is unfree: its name is in `nixpkgs-config.nix`'s predicate.
+      agents = lib.mkEnableOption "the coding agents: Claude Code and Codex" // {
+        default = true;
+      };
     };
 
     # WHICH OF THE TWO INSTALLATIONS THIS MACHINE IS.

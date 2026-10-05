@@ -71,6 +71,53 @@ pub enum Sends {
     Camera,
 }
 
+/// What the virtual camera's picture goes through when it sends the camera
+/// alone ([`Sends::Camera`]).
+///
+/// A CHAIN OF ITS OWN, so a call can have the background blurred while the
+/// preview shows the plain picture — two chains on one capture
+/// (`sources::Shared::own`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VirtualEffect {
+    /// The camera layer's own chain — what the preview shows.
+    #[default]
+    Preview,
+    /// No effect at all.
+    None,
+    /// One declared effect, at its defaults.
+    Own(String),
+}
+
+impl VirtualEffect {
+    /// The chain the virtual camera runs of its own, or `None` for the
+    /// preview's.
+    #[must_use]
+    pub fn chain(&self) -> Option<ronoctua_effects::Chain> {
+        match self {
+            Self::Preview => None,
+            Self::None => Some(ronoctua_effects::Chain(Vec::new())),
+            Self::Own(id) => Some(ronoctua_effects::Chain(
+                ronoctua_effects::Step::new(id).into_iter().collect(),
+            )),
+        }
+    }
+
+    /// The ring the settings turn: the preview's, none, then every declared
+    /// effect in the table's order.
+    #[must_use]
+    pub fn ring() -> Vec<Self> {
+        [Self::Preview, Self::None]
+            .into_iter()
+            .chain(
+                ronoctua_effects::DECLARED
+                    .iter()
+                    .map(|d| Self::Own(d.id.to_owned())),
+            )
+            .collect()
+    }
+}
+
 /// The whole settings file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -104,8 +151,13 @@ pub struct Preferences {
     pub virtual_at_start: bool,
     /// What it sends.
     pub virtual_sends: Sends,
+    /// What the camera it sends goes through, when it sends the camera alone.
+    pub virtual_effect: VirtualEffect,
     /// The picture a replaced background shows; `None` refuses the effect.
     pub backdrop: Option<PathBuf>,
+    /// The pictures the backdrop turns among in the camera's settings
+    /// (`←`/`→`), chosen there in the file picker, several at once.
+    pub backdrops: Vec<PathBuf>,
     /// Where photos go; `None` is the Pictures directory.
     pub pictures: Option<PathBuf>,
     /// Where recordings go; `None` is the Videos directory.
@@ -133,7 +185,9 @@ impl Default for Preferences {
             cursor: true,
             virtual_at_start: false,
             virtual_sends: Sends::Program,
+            virtual_effect: VirtualEffect::Preview,
             backdrop: None,
+            backdrops: Vec::new(),
             pictures: None,
             videos: None,
             stream_url: None,

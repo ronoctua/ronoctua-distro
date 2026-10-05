@@ -9,10 +9,15 @@
 # permissions of a file one does not own, and telling the device which blocks
 # are free.
 #
-# Those go through ONE unit with a FIXED name — see below — and a polkit rule
-# that names it. `files-polkit-is-narrow` compares the two lists in both
-# directions, so a verb without its unit fails in front of the person and a
-# unit left behind after its verb went away is privilege granted to nobody.
+# Those go through ONE unit with a FIXED name — see below — started through
+# the SUDO DOOR (`ronoctua_security::authority`, verb `files-root`): the root
+# helper runs `systemctl start` on exactly this unit, after `sudo -n` or the
+# person's password typed into the door that asked. There is NO polkit rule
+# for it: this session has no polkit agent, so the `auth_self_keep` rule that
+# used to name it could never ask anybody, and every change of owner was
+# refused at once. `files-root-is-narrow` holds the three names together (the
+# crate's unit, this module's, the helper's) and refuses a polkit rule that
+# names the unit again.
 #
 # DELETING AND MOVING ARE DELIBERATELY ABSENT from the privileged verbs. They
 # are the two that cannot be undone, and a root delete one key away from a
@@ -33,10 +38,11 @@ let
   # THE UNIT'S NAME IS FIXED, and that is the whole design.
   #
   # A templated unit taking the path as its instance would be the obvious shape
-  # and it is the wrong one: `%i` is a free string, so the polkit rule could not
-  # enumerate what is allowed — it would have to match a prefix, and a prefix
-  # match is a door of unknown width. With a fixed name, the request travels
-  # through a directory the person owns and the unit VALIDATES it.
+  # and it is the wrong one: `%i` is a free string, so the root helper's verb
+  # could not name what it starts — it would have to take a free argument, and
+  # a free argument to a root helper is a door of unknown width. With a fixed
+  # name, the request travels through a directory the person owns and the unit
+  # VALIDATES it.
   unit = "ronoctua-files-root.service";
 
   # Where the request is written. One file per field: a path may contain a
@@ -123,7 +129,7 @@ in
     # `AGENTS.md` records: a derivation references what its bytes cite, and
     # shipping the shell here would put wgpu, the wasm runtime and the renderer
     # in a unit that runs as root.
-    systemd.services.ronoctua-files-root = {
+    systemd.services.${lib.removeSuffix ".service" unit} = {
       description = "Applies a change of owner, group or permission asked for by the manager";
       serviceConfig = {
         Type = "oneshot";
@@ -145,27 +151,10 @@ in
       };
     };
 
-    # WHO MAY START IT, AND ONLY IT.
-    #
-    # `auth_self_keep` and not `yes`: this is the line the owner drew for the
-    # rescue console and it holds here for the same reason — seeing is free,
-    # acting proves who you are, and the proof is remembered for the session so
-    # changing the owner of six files is not six passwords.
-    #
-    # The verb is `start` and nothing else: this rule cannot stop a service and
-    # cannot name a unit that is not this one.
-    security.polkit.extraConfig = ''
-      polkit.addRule(function (action, subject) {
-        if (
-          action.id == "org.freedesktop.systemd1.manage-units" &&
-          action.lookup("verb") == "start" &&
-          action.lookup("unit") == "${unit}" &&
-          subject.user == "${user}"
-        ) {
-          return polkit.Result.AUTH_SELF_KEEP;
-        }
-      });
-    '';
+    # WHO MAY START IT: whoever passes the sudo door. Seeing is free, acting
+    # proves who you are (the person's own password, the authority they
+    # already have), and sudo's own timestamp keeps six files from being six
+    # passwords. No polkit rule: see the top of this file.
 
     # WHERE IT OPENS. A session variable and not a baked constant, so changing
     # it is a rebuild and not a recompile.

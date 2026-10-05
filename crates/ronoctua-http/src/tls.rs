@@ -32,8 +32,9 @@
 //! [`crate::Call::headers`] is for and what ClipCascade's session does.
 
 use std::io::Read;
-use std::net::TcpStream;
-use std::sync::Arc;
+use std::net::{Shutdown, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -150,13 +151,92 @@ pub fn connect(host: &str, port: u16, patience: Duration) -> Result<Stream> {
     let session = rustls::ClientConnection::new(config, name)
         .context("the TLS session could not be started")?;
 
+    let socket = reach(host, port, patience, Fence::Open)?;
+    Ok(rustls::StreamOwned::new(session, socket))
+}
+
+/// Where a connection may go, by the addresses its name resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fence {
+    /// Wherever the name resolves: every TLS connection (a certificate is
+    /// checked), and the host a person pasted themselves — a box on their own
+    /// network may serve their list.
+    Open,
+    /// The public internet only ([`is_public`]): a host a list's server sent
+    /// a walk IN THE CLEAR to. A server does not get to make this machine ask
+    /// its own neighbours — a router, a printer, a service on `localhost` —
+    /// with no certificate in the way.
+    Public,
+}
+
+/// Whether `ip` is on the public internet: not this machine, not a network
+/// of its own (the private blocks, a tailnet's shared block), not a link's,
+/// not a multicast group, a broadcast or a reserved block. Pure.
+#[must_use]
+pub fn is_public(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_unspecified()
+                || v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                // "THIS NETWORK", the shared block (a carrier's NAT, a
+                // tailnet), the benchmarking block and the reserved ones.
+                || a == 0
+                || (a == 100 && (b & 0xc0) == 64)
+                || (a == 198 && (b & 0xfe) == 18)
+                || a >= 240)
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public(std::net::IpAddr::V4(v4));
+            }
+            !(v6.is_unspecified()
+                || v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local())
+        }
+    }
+}
+
+/// A TCP connection to `host:port`, every address the name resolves to tried
+/// in turn within `patience` — only the public ones behind
+/// [`Fence::Public`] — with the read and write deadlines set: what both
+/// [`connect`] and [`fetch_plain_abortable`] stand on.
+///
+/// # Errors
+///
+/// The name does not resolve, every address it resolves to is fenced off,
+/// or no address answered inside `patience`.
+fn reach(host: &str, port: u16, patience: Duration, fence: Fence) -> Result<TcpStream> {
     // THE DEADLINE IS ON THE CONNECT TOO, and it has to be: name resolution
     // and a SYN to a host that drops packets are both silent waits, and
     // `TcpStream::connect` has no timeout of its own.
-    let addresses: Vec<std::net::SocketAddr> =
+    let resolved: Vec<std::net::SocketAddr> =
         std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
             .with_context(|| format!("`{host}` did not resolve"))?
             .collect();
+    // THE FENCE, on what the name RESOLVED to — a name is no promise of
+    // where it leads — and before anything is sent.
+    let addresses: Vec<std::net::SocketAddr> = match fence {
+        Fence::Open => resolved.clone(),
+        Fence::Public => resolved
+            .iter()
+            .copied()
+            .filter(|a| is_public(a.ip()))
+            .collect(),
+    };
+    if addresses.is_empty() && !resolved.is_empty() {
+        bail!(
+            "`{host}` is this machine or a network of its own, and a request in the clear is \
+             never sent there on another host's word"
+        );
+    }
     // EVERY ADDRESS, IN TURN. A host that lists IPv6 first on a network with
     // no IPv6 route answers the first attempt with "unreachable" and the
     // second with the page; taking only the first made the whole host look
@@ -190,7 +270,7 @@ pub fn connect(host: &str, port: u16, patience: Duration) -> Result<Stream> {
     // waiting on; holding it for forty milliseconds to coalesce with a packet
     // that is not coming is latency for nothing.
     socket.set_nodelay(true).ok();
-    Ok(rustls::StreamOwned::new(session, socket))
+    Ok(socket)
 }
 
 /// One call over TLS, and the answer.
@@ -228,6 +308,109 @@ pub fn over_tls(host: &str, port: u16, call: &crate::Call<'_>) -> Result<crate::
 /// cancelled; holding it in memory here would be none of those.
 pub const MOST_EVER: u64 = 32 << 20;
 
+/// A way to stop a request from ANOTHER thread: its socket is shut.
+///
+/// # Why a socket and not a flag
+///
+/// A request blocks in a read for up to its patience, and a flag is looked at
+/// only between reads — so a search that a person has already typed past
+/// would go on holding its thread, and the host, for ten seconds. Shutting the
+/// socket ends the blocked read AT ONCE (it returns the end of the stream, or
+/// an error), and the request answers [`crate::web::Kind::Failed`].
+///
+/// The search app hands every keystroke's request an `Abort` and aborts the
+/// previous one when the next key arrives.
+///
+/// # What it cannot shorten
+///
+/// Resolving the name and the TCP connect: neither has a socket to shut yet,
+/// and both are bounded by the patience. The abort is looked at before the
+/// connect and as soon as it returns, so an aborted request never sends.
+///
+/// # One-way
+///
+/// Once aborted it stays aborted, and every request that holds it (a clone is
+/// the same handle) is stopped: the next request takes a new one.
+#[derive(Debug, Clone, Default)]
+pub struct Abort(Arc<Stops>);
+
+#[derive(Debug, Default)]
+struct Stops {
+    stopped: AtomicBool,
+    /// Every socket open under this handle, by a number of its own, so two
+    /// requests sharing one each take theirs out when they end.
+    open: Mutex<Vec<(u64, TcpStream)>>,
+    next: AtomicU64,
+}
+
+impl Abort {
+    /// A handle nothing has aborted.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stops every request holding this handle: the ones in flight have
+    /// their socket shut, and the ones not yet started never connect.
+    pub fn abort(&self) {
+        // THE FLAG FIRST, THEN THE LOCK: `hold` looks at the flag under the
+        // lock, so a socket is either seen here or refused there — never
+        // registered after the sweep and left open.
+        self.0.stopped.store(true, Ordering::SeqCst);
+        let open = std::mem::take(&mut *self.0.open.lock().unwrap_or_else(PoisonError::into_inner));
+        for (_, socket) in open {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
+    }
+
+    /// Whether [`Abort::abort`] was called.
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        self.0.stopped.load(Ordering::SeqCst)
+    }
+
+    /// Registers `socket` until the returned guard drops.
+    ///
+    /// # Errors
+    ///
+    /// `Interrupted` when the handle is already aborted (the socket is shut
+    /// then and there), or the socket could not be cloned.
+    pub(crate) fn hold(&self, socket: &TcpStream) -> std::io::Result<Held<'_>> {
+        let clone = socket.try_clone()?;
+        let id = self.0.next.fetch_add(1, Ordering::SeqCst);
+        let mut open = self.0.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.is_aborted() {
+            drop(open);
+            let _ = clone.shutdown(Shutdown::Both);
+            return Err(aborted());
+        }
+        open.push((id, clone));
+        Ok(Held { abort: self, id })
+    }
+}
+
+/// A socket registered with an [`Abort`], taken out when this drops.
+pub(crate) struct Held<'a> {
+    abort: &'a Abort,
+    id: u64,
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.abort
+            .0
+            .open
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(id, _)| *id != self.id);
+    }
+}
+
+/// The error an aborted request ends in.
+pub(crate) fn aborted() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, "aborted by its caller")
+}
+
 /// One call over TLS, and the whole reply as BYTES with its headers.
 ///
 /// `most` is the caller's ceiling for this answer — a web manifest is small, a
@@ -241,20 +424,151 @@ pub const MOST_EVER: u64 = 32 << 20;
 /// The connection failed (see [`connect`]), the host answered more than the
 /// ceiling, or what came back is not an HTTP response.
 pub fn fetch(host: &str, port: u16, call: &crate::Call<'_>, most: u64) -> Result<crate::Reply> {
+    fetch_abortable(host, port, call, most, None)
+}
+
+/// [`fetch`], stopped by `abort` from another thread: its socket is shut
+/// ([`Abort`]).
+///
+/// The crate's own: [`crate::web`] is the way in, and a transport that asks
+/// a host without its `Pass` is not handed out a second time.
+///
+/// # Errors
+///
+/// As [`fetch`], and an `Interrupted` I/O error once aborted — whatever the
+/// read said, since a shut socket reads as an end of stream and a chunked
+/// body, or one with no length, would pass for a whole answer.
+pub(crate) fn fetch_abortable(
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    most: u64,
+    abort: Option<&Abort>,
+) -> Result<crate::Reply> {
     let most = most.min(MOST_EVER);
+    if abort.is_some_and(Abort::is_aborted) {
+        return Err(aborted()).context(format!("the request to {host} was not sent"));
+    }
     let mut stream = connect(host, port, call.patience)?;
+    // HELD BEFORE THE FIRST BYTE: `StreamOwned` handshakes on its first write,
+    // so the handshake too is under the abort.
+    let _held = abort
+        .map(|a| a.hold(stream.get_ref()))
+        .transpose()
+        .with_context(|| format!("the request to {host} was not sent"))?;
     std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
         .with_context(|| format!("could not send the request to {host}"))?;
     std::io::Write::flush(&mut stream).ok();
+    reply_read(&mut stream, host, most, abort)
+}
+
+/// [`fetch_abortable`] over PLAIN TCP: one call to an `http` address, NOT
+/// ENCRYPTED — whoever is on the way reads it and can change it — behind
+/// `fence` ([`Fence::Public`] for a host the person did not name).
+///
+/// Only [`crate::web::request_unencrypted`] reaches it: an address a person
+/// pasted and was told crosses the network in the clear (an IPTV provider's
+/// list is `http` more often than not). Nothing of ours asks a host of its
+/// own choosing this way.
+///
+/// # Errors
+///
+/// As [`fetch_abortable`].
+pub(crate) fn fetch_plain_abortable(
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    most: u64,
+    abort: Option<&Abort>,
+    fence: Fence,
+) -> Result<crate::Reply> {
+    let most = most.min(MOST_EVER);
+    if abort.is_some_and(Abort::is_aborted) {
+        return Err(aborted()).context(format!("the request to {host} was not sent"));
+    }
+    let mut stream = reach(host, port, call.patience, fence)?;
+    let _held = abort
+        .map(|a| a.hold(&stream))
+        .transpose()
+        .with_context(|| format!("the request to {host} was not sent"))?;
+    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+        .with_context(|| format!("could not send the request to {host}"))?;
+    std::io::Write::flush(&mut stream).ok();
+    reply_read(&mut stream, host, most, abort)
+}
+
+/// One POST over TLS whose body is a FILE, streamed as a one-part
+/// `multipart/form-data` ([`crate::multipart`]) and never held in memory —
+/// and the reply, within `most` bytes. `call` carries the head (its body is
+/// ignored, its content type is replaced by the form's).
+///
+/// The crate's own, like [`fetch_abortable`]: [`crate::web::upload_let`] is
+/// the way in, with the person's pass.
+///
+/// # Errors
+///
+/// As [`fetch`]; a file that carries the boundary, is not the length said,
+/// or was stopped ([`crate::multipart::Unsent`]); an `Interrupted` error once
+/// aborted.
+pub(crate) fn upload_abortable(
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    sending: crate::multipart::Sending<'_>,
+    most: u64,
+    abort: Option<&Abort>,
+) -> Result<crate::Reply> {
+    let most = most.min(MOST_EVER);
+    if abort.is_some_and(Abort::is_aborted) {
+        return Err(aborted()).context(format!("the upload to {host} was not sent"));
+    }
+    let boundary = crate::multipart::boundary();
+    let kind = crate::multipart::content_type(&boundary);
+    let head_call = crate::Call {
+        content_type: &kind,
+        body: None,
+        ..*call
+    };
+    let head = crate::head_of(
+        &head_call,
+        crate::multipart::length(&boundary, &sending.part),
+    );
+    let mut stream = connect(host, port, call.patience)?;
+    let _held = abort
+        .map(|a| a.hold(stream.get_ref()))
+        .transpose()
+        .with_context(|| format!("the upload to {host} was not sent"))?;
+    std::io::Write::write_all(&mut stream, head.as_bytes())
+        .with_context(|| format!("could not send the upload's head to {host}"))?;
+    crate::multipart::write(&mut stream, &boundary, sending)
+        .with_context(|| format!("could not send the file to {host}"))?;
+    reply_read(&mut stream, host, most, abort)
+}
+
+/// The reply read off `stream`, to its end, within `most` bytes of body —
+/// and refused when `abort` was set meanwhile. Generic so a test can hand it
+/// what a shut socket reads.
+fn reply_read(
+    stream: &mut impl Read,
+    host: &str,
+    most: u64,
+    abort: Option<&Abort>,
+) -> Result<crate::Reply> {
     let mut raw = Vec::new();
     // The head is not counted against the ceiling a caller thinks of as the
     // BODY's, so the read allows a little over it.
     let allowance = most + (64 << 10);
-    ended(
-        Read::take(&mut stream, allowance + 1).read_to_end(&mut raw),
+    let read = ended(
+        Read::take(stream, allowance + 1).read_to_end(&mut raw),
         &raw,
-    )
-    .with_context(|| format!("could not read {host}'s answer"))?;
+    );
+    // ABORTED IS ABORTED, before anything is made of what came: a shut
+    // socket reads as an end of stream, and a chunked body — or one with no
+    // length — cut there would pass `whole` as an answer.
+    if abort.is_some_and(Abort::is_aborted) {
+        return Err(aborted()).context(format!("the request to {host} was aborted"));
+    }
+    read.with_context(|| format!("could not read {host}'s answer"))?;
     if raw.len() as u64 > allowance {
         bail!("{host} answered more than {most} bytes");
     }
@@ -470,6 +784,21 @@ mod tests {
         assert!(PATIENCE <= Duration::from_secs(30));
     }
 
+    /// FAILS IF: a fenced connection to this machine or a network of its own
+    /// is tried at all — the refusal comes from the addresses, before a
+    /// socket is opened (a literal address resolves with no network).
+    #[test]
+    fn a_fenced_connection_never_reaches_this_machine() {
+        for host in ["127.0.0.1", "::1", "192.168.1.1"] {
+            let refused =
+                reach(host, 9, Duration::from_millis(50), Fence::Public).expect_err("fenced off");
+            assert!(
+                format!("{refused:#}").contains("a network of its own"),
+                "{host}: {refused:#}"
+            );
+        }
+    }
+
     /// The ceiling is far above any answer and still a ceiling.
     const _: () = {
         assert!(MOST >= 1 << 16, "too tight for a legitimate answer");
@@ -509,6 +838,87 @@ mod tests {
         );
         let full = crate::reply_of(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc").unwrap();
         assert!(whole(&full, "h").is_ok());
+    }
+
+    /// FAILS IF: an abort from another thread does not end a read that is
+    /// blocked on a host that never answers — the search would hold its
+    /// thread for the whole patience after the person typed past it.
+    #[test]
+    fn an_abort_ends_a_blocked_read_at_once() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        // The host accepts and says nothing, for longer than the test waits.
+        let quiet = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(socket);
+        });
+        let socket = TcpStream::connect(at).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(20)))
+            .unwrap();
+        let abort = Abort::new();
+        let held = abort.hold(&socket).unwrap();
+        let from_elsewhere = abort.clone();
+        let t0 = std::time::Instant::now();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            from_elsewhere.abort();
+        });
+        let mut buf = [0u8; 16];
+        let read = (&socket).read(&mut buf);
+        assert!(
+            matches!(read, Ok(0) | Err(_)),
+            "the read ended with the end of the stream or an error: {read:?}"
+        );
+        assert!(
+            t0.elapsed() < Duration::from_secs(2),
+            "the abort ended the read, not the host: {:?}",
+            t0.elapsed()
+        );
+        stopper.join().unwrap();
+        drop(held);
+        assert!(abort.is_aborted());
+        // An aborted handle refuses the next socket, and shuts it.
+        let late = TcpStream::connect(at);
+        if let Ok(late) = late {
+            assert_eq!(
+                abort.hold(&late).err().map(|e| e.kind()),
+                Some(std::io::ErrorKind::Interrupted)
+            );
+        }
+        quiet.join().unwrap();
+    }
+
+    /// FAILS IF: a chunked answer cut by an abort (the shut socket reads as
+    /// its end) is handed back as if it were whole.
+    #[test]
+    fn a_reply_cut_by_an_abort_is_no_reply() {
+        let half = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel";
+        let got = reply_read(&mut &half[..], "h", MOST, None);
+        assert!(got.is_ok(), "unaborted, a chunked body is taken as it came");
+        let abort = Abort::new();
+        abort.abort();
+        let e = reply_read(&mut &half[..], "h", MOST, Some(&abort)).unwrap_err();
+        let io = e
+            .chain()
+            .find_map(|c| c.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind);
+        assert_eq!(io, Some(std::io::ErrorKind::Interrupted), "{e:#}");
+    }
+
+    #[test]
+    fn a_request_aborted_before_it_starts_never_connects() {
+        let abort = Abort::new();
+        abort.abort();
+        let call = crate::Call::new("GET", "/", "example.org");
+        // `example.org` is never resolved: the refusal is before the connect.
+        let e = fetch_abortable("example.org", 443, &call, MOST, Some(&abort)).unwrap_err();
+        let io = e
+            .chain()
+            .find_map(|c| c.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind);
+        assert_eq!(io, Some(std::io::ErrorKind::Interrupted), "{e:#}");
     }
 
     #[test]

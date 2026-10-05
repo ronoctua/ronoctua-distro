@@ -95,7 +95,7 @@ pub struct Frame {
     ///
     /// The cursor moves while a child process runs, and one file's picture
     /// under another file's name is the one failure a preview must not have —
-    /// the rule `View::looked` already keeps for the still frame.
+    /// the rule `inspection::Panel::looked` already keeps for the still frame.
     pub key: String,
     /// The pixels.
     pub rgba: ronoctua_render::image::Rgba,
@@ -451,7 +451,7 @@ fn play_video(reel: &Reel, out: &calloop::channel::Sender<Beat>, clock: &Clock<'
             wave_height: reel.wave_height,
             wave_foot: reel.wave_foot,
         });
-        let born = Command::new(&program)
+        let born = crate::watchdog::unshared(&mut Command::new(&program))
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

@@ -48,6 +48,14 @@ ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
 # table only, without `net`. The listing itself (TLS, the cache, the index)
 # is the daemon's.
 ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false }
+# Why the lyrics were not translated (`Trouble::Translation`): the words
+# crate's closed set and the host, SCHEMA only, without `net` — the asking is
+# the daemon's.
+ronoctua-words = { path = "../ronoctua-words", default-features = false }
+# The person's consent, host by host (`prefs::Preferences::allows`): the
+# player's own list of services let is merged into it once and read from it
+# at the moment of asking.
+ronoctua-consent = { path = "../ronoctua-consent" }
 encoding_rs = "0.8"
 chardetng = "0.1"
 # MPRIS `Quit`, the one way to close a player OLDER than the door that finds
@@ -56,6 +64,11 @@ chardetng = "0.1"
 # caller's own thread; the shell already links zbus through its other
 # boundaries, so nothing new enters a binary.
 zbus.workspace = true
+
+[dev-dependencies]
+# A test lets hosts in a consent file of its own; the helpers that read one
+# are `test-support`, never a product's.
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [lints]
 workspace = true

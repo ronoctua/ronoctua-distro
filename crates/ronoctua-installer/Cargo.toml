@@ -17,6 +17,11 @@ path = "src/bin/install.rs"
 # with no terminal at all.
 [dependencies]
 ronoctua-i18n = { path = "../ronoctua-i18n" }
+# The fifteenth question's address check and the file it becomes: the
+# belongings' SHAPE only (`prefs`) — `age` stays in their own CLI.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+# The name of our folder under a person's roots, written once.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
 # The seventh question's network scan. The same boundary the footer uses:
 # nobody talks to NetworkManager outside this crate.
 ronoctua-network = { path = "../ronoctua-network" }

@@ -8,23 +8,31 @@
 //!   they want to know what the machine is planning, and what a check reads.
 //! - `run <task>` / `rehearse <task>`: asks for something now. It adds and
 //!   leaves; it does not wait for the rebuild.
+//! - `modules`: prints the id of every module the build compiled from its
+//!   folder, one per line — what the sealed check compares with the folders
+//!   Nix sees.
+//! - `work <id> [--report <path>] [args…]`: the work of a long unit, done by
+//!   the module itself (`Module::work`), in this binary.
 //!
-//! One binary because all three need the same model and the same socket, and
-//! three would be three closures of the same size in the ISO.
+//! One binary because they all need the same model and the same socket, and
+//! several would be several closures of the same size in the ISO.
 //!
-//! # Two threads, and only one of them may block
+//! # Three threads, and only one of them may block
 //!
-//! The runner blocks — a rebuild is an hour — and it blocks its own thread. The
-//! socket is answered on a thread per client, each reading the state through
-//! the lock, so a screen asking what is happening is answered while the rebuild
-//! is happening.
+//! The runner blocks — a rebuild is an hour — and it blocks its own thread.
+//! The watch thread hears the journal, paths and children for the modules
+//! that listen, and never waits for the runner. The socket is answered on a
+//! thread per client, each reading the state through the lock, so a screen
+//! asking what is happening is answered while the rebuild is happening. All
+//! of them hold ONE core: one registry, one journal.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context as _, Result};
 use ronoctua_brain::{
-    Registry, Shared, client, mind, moment, prefs, pulse, runner, serve, tasks, wire,
+    Birth, Core, Registry, Shared, client, compiled, mind, moment, prefs, pulse, registry, runner,
+    serve, watch, wire,
 };
 
 fn main() -> Result<()> {
@@ -53,15 +61,19 @@ fn main() -> Result<()> {
         Some("look") => look(),
         Some("run") => ask_for(false),
         Some("rehearse") => ask_for(true),
+        Some("modules") => modules(),
+        Some("work") => work(),
         Some(other) => {
             anyhow::bail!(
-                "I do not know how to do `{other}`; use `look`, `run <task>`, `rehearse <task>`, or nothing"
+                "I do not know how to do `{other}`; use `look`, `run <task>`, `rehearse <task>`, \
+                 `modules`, `work <id>`, or nothing"
             )
         }
     }
 }
 
-/// The daemon: the socket, and the one thread that decides.
+/// The daemon: the socket, the one thread that decides and the one that
+/// listens — over ONE core.
 fn unit() -> Result<()> {
     let store = prefs::Where::of_env();
     let shared = Arc::new(Shared::of(store.prefs()));
@@ -72,27 +84,25 @@ fn unit() -> Result<()> {
     let zone: Arc<dyn moment::Offset> = Arc::new(ronoctua_files::when::Zone::read_from(
         std::path::Path::new("/etc/localtime"),
     ));
-    let registry = Registry::of(tasks::tasks(Arc::clone(&zone)))
+    let birth = Birth {
+        zone,
+        roots: store.clone(),
+    };
+    // ONE REGISTRY, for the runner, the watch thread and the socket alike: it
+    // was built twice, and a module with state would have had two of it.
+    let modules = Registry::of(ronoctua_brain::every_module(&birth))
         // A malformed or repeated id is a PROGRAMMING error, and this is the
-        // one moment somebody is looking. Starting anyway would put a bracketed
-        // key on a screen instead.
-        .context("the brain's tasks are badly declared")?;
-    let desk = Arc::new(serve::Desk {
-        shared: Arc::clone(&shared),
-        tasks: Arc::new(registry),
-        store: store.clone(),
-    });
-
-    // The runner gets a registry of its own: `Registry` holds boxed tasks, and
-    // two owners of one set of trait objects would need a lock nothing else
-    // needs. Building it twice costs a `vec![]`.
-    let mut runner = runner::Runner::new(
-        Arc::clone(&shared),
-        Registry::of(tasks::tasks(zone)).context("the brain's tasks are badly declared")?,
-        Box::new(pulse::Machine::here()),
-        Box::new(moment::Wall),
-        store,
-    );
+        // one moment somebody is looking. Starting anyway would put a
+        // bracketed key on a screen instead.
+        .context("the brain's modules are badly declared")?
+        // AND THE ONES THE FLAKE TURNED OFF, which stay on the page refusing
+        // with the reason. Absent (the nested loop, a test) is nothing off:
+        // the unit always sets it, empty when nothing is.
+        .switched_off(&registry::off_of(
+            &std::env::var(registry::OFF_VARIABLE).unwrap_or_default(),
+        ));
+    let core = Arc::new(Core::new(shared, modules, store, Box::new(moment::Wall)));
+    let mut runner = runner::Runner::new(Arc::clone(&core), Box::new(pulse::Machine::here()));
     // ONE PASS BEFORE THE SOCKET OPENS. The rows of the mind are built by the
     // runner, so a client that connected in the first milliseconds would get an
     // answer with no tasks in it — and "the brain knows nothing" and "the brain
@@ -108,7 +118,66 @@ fn unit() -> Result<()> {
         })
         .context("start the thread that decides")?;
 
-    serve::listen_on(&wire::socket_path()?, &desk)
+    // THE ONE THAT LISTENS, and only when some module does.
+    let listening = watch::listeners(&core);
+    let _watching = watch::Watch::new(Arc::clone(&core))
+        .start()
+        .context("start the thread that listens")?;
+    if !listening.is_empty() {
+        tracing::info!(modules = ?listening, "listening");
+    }
+
+    serve::listen_on(&wire::socket_path()?, &core)
+}
+
+/// Prints the id of every module the build compiled from its folder, one per
+/// line.
+///
+/// MADE and not only listed: each is built with a birth that reads and writes
+/// nowhere, so a folder whose module answered with another's manifest prints
+/// the other's id — and the check that compares this with Nix sees it.
+fn modules() -> Result<()> {
+    for m in compiled::all(&Birth::detached()) {
+        println!("{}", m.manifest().id);
+    }
+    Ok(())
+}
+
+/// `work <id> [--report <path>] [args…]`: the work of a long unit, done by the
+/// module in this binary.
+///
+/// The report is where the runner watches — `<reports>/<id>.json` — unless
+/// the unit says otherwise; a rehearsal unit passes `--report` with its own.
+fn work() -> Result<()> {
+    let mut args: Vec<String> = std::env::args().skip(2).collect();
+    if args.is_empty() {
+        anyhow::bail!("usage: ronoctua-brain work <id> [--report <path>] [args…]");
+    }
+    let id = args.remove(0);
+    let report = match args.iter().position(|a| a == "--report") {
+        Some(at) => {
+            let Some(path) = args.get(at + 1).cloned() else {
+                anyhow::bail!("`--report` needs a path");
+            };
+            args.drain(at..=at + 1);
+            std::path::PathBuf::from(path)
+        }
+        None => runner::report_in(&runner::reports_dir(), &id, false),
+    };
+    let store = prefs::Where::of_env();
+    let birth = Birth {
+        zone: Arc::new(ronoctua_files::when::Zone::read_from(std::path::Path::new(
+            "/etc/localtime",
+        ))),
+        roots: store,
+    };
+    let modules = Registry::of(ronoctua_brain::every_module(&birth))
+        .context("the brain's modules are badly declared")?;
+    let module = modules.find(&id).with_context(|| {
+        let known: Vec<&str> = modules.ids().collect();
+        format!("there is no module `{id}`; there are: {}", known.join(", "))
+    })?;
+    module.work(&args, &report)
 }
 
 /// Prints what the brain is thinking, as JSON, and leaves.
@@ -119,8 +188,10 @@ fn look() -> Result<()> {
             println!("{text}");
             Ok(())
         }
-        wire::Say::Refused { why } => anyhow::bail!("{why}"),
+        wire::Say::Refused { why } => anyhow::bail!("{}", refusal(&why)),
         wire::Say::Lines { .. } => anyhow::bail!("the brain answered a look with its log"),
+        wire::Say::Screen { .. } => anyhow::bail!("the brain answered a look with a screen"),
+        wire::Say::Declined { key } => anyhow::bail!("the brain declined a look: {key}"),
     }
 }
 
@@ -137,8 +208,25 @@ fn ask_for(rehearsal: bool) -> Result<()> {
             report(&mind, &task);
             Ok(())
         }
-        wire::Say::Refused { why } => anyhow::bail!("{why}"),
+        wire::Say::Refused { why } => anyhow::bail!("{}", refusal(&why)),
         wire::Say::Lines { .. } => anyhow::bail!("the brain answered a run with its log"),
+        wire::Say::Screen { .. } => anyhow::bail!("the brain answered a run with a screen"),
+        wire::Say::Declined { key } => anyhow::bail!("the brain declined the run: {key}"),
+    }
+}
+
+/// A refusal as the terminal says it.
+///
+/// The brain refuses in two shapes: its own sentence, when the ask made no
+/// sense to it, and a TEXT KEY when a module declined or the system switched
+/// the module off (`brain-why-system-off`) — which a door translates. This
+/// binary has no bundle (see [`report`]), so a key is said as what it is,
+/// inside a sentence, rather than printed bare as if it were one.
+fn refusal(why: &str) -> String {
+    if why.contains(char::is_whitespace) {
+        why.to_owned()
+    } else {
+        format!("the brain refused it, for the reason its screens call `{why}`")
     }
 }
 
@@ -152,4 +240,22 @@ fn report(m: &mind::Mind, task: &str) {
         .task(task)
         .map_or("?", |t| mind::Standing::word(t.standing));
     println!("{task}: {standing}");
+}
+
+#[cfg(test)]
+mod tests {
+    /// A key is said inside a sentence; a sentence is said as it came.
+    ///
+    /// THE DEFECT THIS CATCHES: `ronoctua-brain rehearse <id>` on a module
+    /// the system switched off printed `Error: brain-why-system-off` — a key,
+    /// bare, where every other refusal on the socket is a sentence.
+    #[test]
+    fn a_refusal_key_is_said_inside_a_sentence() {
+        let said = super::refusal("brain-why-system-off");
+        assert!(said.contains("`brain-why-system-off`") && said.contains(' '));
+        assert_eq!(
+            super::refusal("`x` has no action called `y`"),
+            "`x` has no action called `y`"
+        );
+    }
 }

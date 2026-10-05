@@ -94,6 +94,9 @@ pub struct Wanted {
     pub from_ms: u64,
     /// Where in its file it stops, in milliseconds.
     pub until_ms: Option<u64>,
+    /// The language it keeps ([`Lane::lang`]): which of a file of several
+    /// languages it shows (a SAMI's class, [`super::sami::chosen`]).
+    pub lang: Option<String>,
 }
 
 impl Wanted {
@@ -233,6 +236,7 @@ pub fn wanted(picture: &Lane, lanes: &[Lane], tracks: &[Track]) -> Option<Vec<Wa
             until_ms: lane
                 .until_seconds
                 .map(|u| u64::try_from(milliseconds(u)).unwrap_or(0)),
+            lang: lane.lang.clone(),
         });
     }
     Some(out)
@@ -305,6 +309,10 @@ pub struct Show {
     pub secondary: Option<Shown>,
     /// The lanes shown nowhere, and why.
     pub refused: Vec<(LaneId, Trouble)>,
+    /// The lanes whose file carries several languages and shows one, and
+    /// those languages ([`super::Track::languages`]): what a door offers to
+    /// choose among.
+    pub languages: Vec<(LaneId, Vec<String>)>,
 }
 
 /// Decides what a picture shows of `wanted`, each read as `reads` says (the
@@ -312,6 +320,16 @@ pub struct Show {
 /// script drawn as `look` says.
 #[must_use]
 pub fn compose(wanted: &[Wanted], reads: &[Read], colours: &[Rgb], look: &Look) -> Show {
+    let languages: Vec<(LaneId, Vec<String>)> = wanted
+        .iter()
+        .zip(reads)
+        .filter_map(|(w, r)| match r {
+            Read::Words { words, .. } if !words.languages.is_empty() => {
+                Some((w.lane, words.languages.clone()))
+            }
+            _ => None,
+        })
+        .collect();
     let mut refused = Vec::new();
     let mut secondary: Option<Shown> = None;
     let mut text: Vec<(&Wanted, &Read)> = Vec::new();
@@ -355,6 +373,7 @@ pub fn compose(wanted: &[Wanted], reads: &[Read], colours: &[Rgb], look: &Look) 
                 }),
                 secondary,
                 refused,
+                languages,
             };
         }
     }
@@ -381,6 +400,7 @@ pub fn compose(wanted: &[Wanted], reads: &[Read], colours: &[Rgb], look: &Look) 
             primary: Primary::Nothing,
             secondary,
             refused,
+            languages,
         };
     }
     let lanes: Vec<MergeLane<'_>> = kept
@@ -406,6 +426,7 @@ pub fn compose(wanted: &[Wanted], reads: &[Read], colours: &[Rgb], look: &Look) 
         primary: Primary::Merged(merge(&lanes, look)),
         secondary,
         refused,
+        languages,
     }
 }
 
@@ -482,6 +503,7 @@ mod tests {
             title: None,
             cues: vec![Cue::plain(start_ms, end_ms, text)],
             signs: Vec::new(),
+            languages: Vec::new(),
         })
     }
 
@@ -518,6 +540,7 @@ mod tests {
             offset_ms: 0,
             from_ms: 0,
             until_ms: None,
+            lang: None,
         }
     }
 

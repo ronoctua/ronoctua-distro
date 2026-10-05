@@ -704,6 +704,30 @@ interface types {
         proceed,
         // Not now — it comes back at its next moment. `target` is ignored.
         postpone,
+        // THE MODULES'. Each is still a verb plus ONE index into a list the
+        // host just sent, and the host checks it against that list.
+        //
+        // Show this task's module screen: `target` is the 1-based task index,
+        // `0` stops watching. The host asks the brain for the screen whenever
+        // the task's `screen-generation` moves, and pushes it.
+        watch-screen,
+        // The action on a row: `target` is the 1-based index of the row in
+        // the last `module-screen`, counted across its sections in order.
+        act-row,
+        // The row's SECOND action (`module-row::also`), by the same index.
+        act-row-also,
+        // One of the watched task's `actions`, by its 1-based index. One that
+        // asks first opens the host's question line; the answer goes with it.
+        act-page,
+        // Put away, or put off by the first snooze it offers, the notice at
+        // this 1-based index of the last `mind.notices`.
+        dismiss-notice,
+        snooze-notice,
+        // The FIRST control the notice at this 1-based index offers — the
+        // strip's own button, and `, n` on the page. A notice's controls are
+        // actions of its module, and the watched task's `act-page` could not
+        // reach one on the home page, where nothing is watched.
+        act-notice,
     }
 
     // WHAT TO WRITE ON A DISK, and on which.
@@ -732,6 +756,11 @@ interface types {
         // pendrive" — as ONE choice rather than three. It is refused for
         // anything that is not a whole disk.
         whole-disk: bool,
+        // Write it inside a LUKS2 container. A YES and nothing more: the
+        // passphrase is asked by the HOST, twice, on its own line, and never
+        // crosses into the component — a buffer holds no secret it could
+        // draw, keep or send (invariant 11's spirit, and the design's).
+        encrypt: bool,
     }
 
     record demand {
@@ -765,6 +794,16 @@ interface types {
         media,
         // BitTorrent, through the session the queue owns.
         torrent,
+        // A region's streets: a download, then a baking.
+        atlas,
+        // The person's programs: the software center's command line.
+        software,
+        // A file sent to VirusTotal.
+        scan,
+        // The person's containers: a pull, a build, compose.
+        container,
+        // The person's belongings: their sync.
+        belongings,
     }
 
     // Where a job is in its life.
@@ -794,6 +833,12 @@ interface types {
         audio,
         subtitles,
         torrent,
+        // An archive's own work: add to it, take out of it, test it, write
+        // it again in another format.
+        archive-add,
+        archive-remove,
+        archive-test,
+        archive-convert,
     }
 
     // What `done` and `total` are counted in.
@@ -1184,6 +1229,11 @@ interface types {
         // seconds, and a log that wrote a line each time would be a wall of
         // "RAM is busy" with everything that actually happened underneath it.
         held,
+        // NOTHING RAN: a module wrote down something it NOTICED — a process
+        // the kernel killed, an error in the journal. Like `held`, not a run;
+        // what it says is the record's `says`, already made into a sentence in
+        // `says-text`.
+        noted,
     }
 
     // Whether a task repeats, or happens once and is then gone.
@@ -1196,6 +1246,9 @@ interface types {
     enum task-kind {
         routine,
         once,
+        // A MODULE THAT ONLY LISTENS — a journal, a path, a clock — and runs
+        // nothing on a schedule. Its row says "watching" instead of a date.
+        watch,
     }
 
     // Which stretch of the person's day a task prefers. The hours each one
@@ -1250,6 +1303,22 @@ interface types {
         // What the machine said, verbatim. Empty when it said nothing.
         trouble: string,
         steps: list<step-outcome>,
+        // THE KEYS, so the component never builds one out of an id — a
+        // module's words are its own (`<module>-why-<word>`), and a key built
+        // by convention on this side is a key nobody declared.
+        //
+        // The task's name.
+        task-key: string,
+        // The name of the step it stopped at. Empty when `at` is.
+        at-key: string,
+        // The key of `why`. Empty when `why` is.
+        why-key: string,
+        // What a `noted` record says, as a key, and the sentence the host
+        // made of it with its values — the component cannot format a size or
+        // a moment, and a key with holes in it is not something it can draw.
+        // Both empty for every other kind.
+        says: string,
+        says-text: string,
     }
 
     // One thing a task runs, as the screen draws it.
@@ -1273,8 +1342,26 @@ interface types {
         //
         // Sending the DEFAULT instead makes "changed" a subtraction anybody
         // can do (`on != on-by-default`) and leaves exactly one authority for
-        // it: `assets/updates.nix`, where it is declared.
+        // it: the update's `steps.nix`, where it is declared.
         on-by-default: bool,
+        // The keys of its name and of the line under the cursor, declared by
+        // the module that owns the step — never `update-<id>` built here.
+        name-key: string,
+        does-key: string,
+    }
+
+    // SOMETHING A PERSON CAN ASK OF A MODULE BY NAME — the registry command
+    // `<module>-<id>`, offered on its page, beside a notice, or on a row.
+    record module-action {
+        // Its id inside the module: what `act-page`, `act-row` and a notice's
+        // control hand back.
+        id: string,
+        // `cmd-<module>-<id>`.
+        label-key: string,
+        // Whether it acts on a ROW of the module's screen.
+        row: bool,
+        // The key of the question it asks first; empty when it asks none.
+        asks-key: string,
     }
 
     record task-state {
@@ -1321,6 +1408,21 @@ interface types {
         // it decided to keep.
         history: list<run-record>,
         steps: list<task-step>,
+        // Whether it keeps a calendar. A page draws the cadence and the window
+        // only when it does: a relief that comes due when the disk is short
+        // has neither.
+        calendar: bool,
+        // `brain-task-<id>` and its `-does`, and the key of `why-not` — what
+        // the component draws, instead of keys it would build itself.
+        name-key: string,
+        does-key: string,
+        why-key: string,
+        // THE MODULE'S PAGE MOVED when this does: a page that shows the
+        // module's screen asks for it again (`request::watch-screen`), and
+        // never on a clock. The screen itself is not in the mind.
+        screen-generation: u64,
+        // What a person can ask of it by name, in the manifest's order.
+        actions: list<module-action>,
     }
 
     // The warning that something is about to happen.
@@ -1336,22 +1438,71 @@ interface types {
         why: string,
     }
 
-    // How busy is too busy — the general gate, as the person set it.
-    // SOMETHING THE BRAIN WANTS SAID, without anybody having asked.
+    // SOMETHING A MODULE WANTS SAID, without anybody having asked.
     //
-    // It is the line under the minibuffer — the one the countdown already
-    // uses. A WATCH's whole output is a sentence, and a sentence that only
-    // appeared on a screen somebody had to open would be a watch nobody hears.
+    // The brain's strip under the minibuffer says the loudest one, and the
+    // brain's page lists every one of them (`mind.notices`). A WATCH's whole
+    // output is a sentence, and a sentence that only appeared on a screen
+    // somebody had to open would be a watch nobody hears.
     //
-    // Keys and not sentences: neither the footer nor a component invents
-    // words. `act` is a COMMAND id, and empty is a notice that only tells —
-    // which is not a lesser kind. The one about a second copy of Emacs has no
-    // button on purpose: what is open is somebody's work, and nothing here
-    // knows whether it is saved.
+    // A KEY AND ITS SENTENCE: the key for whoever translates, the sentence the
+    // host made of it with its values — a component cannot format a size or a
+    // moment, and a key with holes in it is not something it can draw. An
+    // empty `controls` is a notice that only tells, which is not a lesser
+    // kind: what a module cannot know is safe to do, it does not offer.
     record notice {
-        task: string,
+        // Whose it is, and its id inside the module.
+        module: string,
+        id: string,
+        // What it says, as a text key.
         says: string,
-        act: string,
+        // The sentence, made by the host out of `says` and `args` in the
+        // person's language: the component draws it and measures it.
+        says-text: string,
+        // Each value, already formatted — for a component that lays the
+        // values out one per row.
+        args: list<notice-arg>,
+        level: notice-level,
+        // Since when it has been true: the number for the arithmetic, the
+        // text for the date the component cannot compute.
+        since: u64,
+        since-text: string,
+        // Actions offered beside it.
+        controls: list<module-action>,
+        // Whether it may be put away, and the snoozes it offers, in minutes
+        // (the first is the strip's).
+        dismissable: bool,
+        snooze: list<u16>,
+    }
+
+    // HOW LOUD A NOTICE IS. The order is the strip's precedence, quietest
+    // first: an alarm beats even the countdown.
+    enum notice-level {
+        info,
+        warn,
+        danger,
+        alarm,
+    }
+
+    // One value of a notice's sentence, by its name, formatted by the host.
+    record notice-arg {
+        name: string,
+        text: string,
+    }
+
+    // ONE ROW OF THE ACTIVITY LOG: consecutive records that say the same
+    // thing, folded. Forty holds for a busy RAM are one row — "Last: <when>",
+    // how many, and the first — that opens into all of them.
+    record activity-row {
+        // What the row draws.
+        newest: run-record,
+        // How many records it folds; `1` is one that stands alone.
+        repeats: u32,
+        // When the newest and the oldest of them happened, formatted.
+        last-text: string,
+        first-text: string,
+        // All of them, newest first, `newest` included.
+        members: list<run-record>,
     }
 
     record gate {
@@ -1387,7 +1538,9 @@ interface types {
         // `ronoctua-brain` — and a screen that stepped by one would take
         // twenty-three presses to get from a month to a week.
         cadence: list<u16>,
-        // EVERYTHING THE BRAIN HAS DONE, newest first, across every task.
+        // EVERYTHING THE BRAIN HAS DONE, newest first, across every task —
+        // FOLDED: consecutive records that say the same thing are one row
+        // (`journal::grouped`, in the brain), and the row opens into them.
         //
         // A task's own `history` answers "how has this one been going"; this
         // answers "what has this machine been doing", which is the question
@@ -1395,8 +1548,9 @@ interface types {
         // one list, because the per-task one has a floor — a task that runs
         // monthly keeps its last ten however much else happens — and this one
         // has a ceiling. Neither can be cut out of the other.
-        activity: list<run-record>,
-        // HOW MANY THAT LIST KEEPS, which is not how many it holds today.
+        activity-rows: list<activity-row>,
+        // HOW MANY RECORDS THAT LIST FOLDS AT MOST, which is not how many it
+        // holds today.
         //
         // It crosses for the reason `cadence` does: it is a POLICY, decided in
         // `ronoctua-brain` with its argument beside it, and the screen names it
@@ -1415,8 +1569,10 @@ interface types {
         // would be a fourth place for the number to disagree with the one that
         // does the keeping.
         recent: u32,
-        // What the brain wants said. `task` empty means there is nothing.
-        notice: notice,
+        // EVERY NOTICE every module raised, in the order the strip ranks them:
+        // an alarm first, then danger, warn and info, the newest first among
+        // equals. Empty is a machine with nothing to say.
+        notices: list<notice>,
     }
 
     // One step, switched on or off by the id the last `mind` gave.
@@ -1449,6 +1605,82 @@ interface types {
         // Which task it belongs to, by the id the last `mind` gave.
         task: string,
         knob: knob,
+    }
+
+    // ------------------------------------------------------------------
+    // A MODULE'S OWN PAGE, as rows of DATA — asked for when its task's
+    // `screen-generation` moves (`request::watch-screen`) and pushed by the
+    // host through `input::module-screen`. Never carried in the `mind`: a page
+    // nobody is looking at costs nothing.
+    //
+    // The component draws every module's page the same way and names none.
+    // ------------------------------------------------------------------
+
+    // The colour of a row, by MEANING — one token each on the host's side.
+    enum brain-tone {
+        quiet,
+        watching,
+        warning,
+        danger,
+        accent,
+    }
+
+    // A moment: the number for the arithmetic, the text for the date.
+    record timed {
+        at: u64,
+        text: string,
+    }
+
+    // A size: the number for the arithmetic, the text in the person's units
+    // and decimal mark.
+    record measured {
+        bytes: u64,
+        text: string,
+    }
+
+    // One cell of a row.
+    variant screen-cell {
+        empty,
+        // A text key.
+        key(string),
+        // Data, drawn as it is — including what a person typed.
+        data(string),
+        moment(timed),
+        count(u64),
+        bytes(measured),
+    }
+
+    record module-row {
+        // Its id inside the module — DATA; the host hands it back to the
+        // module when the row's action is asked for.
+        id: string,
+        label: screen-cell,
+        value: screen-cell,
+        note: screen-cell,
+        tone: brain-tone,
+        // The id of the action a press runs; empty is a row that only tells.
+        act: string,
+        // The id of its SECOND action, on a key of its own; empty when it
+        // has none.
+        also: string,
+    }
+
+    record module-section {
+        // Its title, as a key.
+        heading: string,
+        rows: list<module-row>,
+    }
+
+    record module-screen {
+        // Whose, by the task's id in the last `mind`.
+        module: string,
+        // The `screen-generation` it answers.
+        generation: u64,
+        sections: list<module-section>,
+        // WHY THERE IS NO PAGE, as a sentence the host made — the brain refused
+        // it, or did not answer. Empty when the page came. A page with nothing
+        // on it and a page refused must not look the same.
+        refused: string,
     }
 
     record binding {
@@ -1768,6 +2000,10 @@ interface types {
         // `capability::brain`, and like `mind` nobody pressed it: the host
         // follows the daemon's log on a thread.
         log(list<log-line>),
+        // A MODULE'S OWN PAGE, for whoever declared `capability::brain` and
+        // asked for one (`request::watch-screen`): pushed when its generation
+        // moves, never on a clock.
+        module-screen(module-screen),
         // WHERE THE POINTER IS RESTING, in the buffer's own cells.
         //
         // It used to be refused, and the reason written down was that
@@ -1834,6 +2070,10 @@ interface view {
         step-outcome, run-record, task-step, task-state, announcement, gate, mind,
         log-level, log-line,
         step-switch, knob, setting,
+        // And the modules' — reachable only from inside `mind` and `input`.
+        module-action, notice, notice-level, notice-arg, activity-row,
+        brain-tone, timed, measured, screen-cell, module-row, module-section,
+        module-screen,
         // And the independent keyboards', reachable only from inside `boards`
         // and `effect`.
         keyboard-mode, unit-board, layout-word, unit-setting, unit-change

@@ -28,10 +28,23 @@ publish.workspace = true
 #
 # NO THREAD, NO CLOCK: every fetch blocks its caller, and the caller is a
 # worker thread of the daemon. Time arrives as an argument.
+#
+# AND THE CATALOGUE: `catalog` brings `rusqlite` over the system's
+# `libsqlite3` (never `bundled`: no C of our own; FTS5 is the store's) for
+# `catalog::Writer` and `catalog::Reader`. The daemon takes it by default; a
+# door that reads the catalogue asks for it by name (`default-features =
+# false, features = ["catalog"]`) and links SQLite without TLS. Without it,
+# the catalogue's types, its folding and every source's reader still compile:
+# only the files are behind it. This crate and `ronoctua-video-metrics` are
+# the only two that name `rusqlite` (`one-sqlite-boundary`).
+#
+# The new default sources (NASA, Commons, PeerTube) ask only behind `net`,
+# and only with the person's `ronoctua_consent::Pass` for the host.
 
 [features]
-default = [ "net" ]
+default = [ "net", "catalog" ]
 net = [ "ronoctua-http/tls", "dep:tracing" ]
+catalog = [ "dep:rusqlite" ]
 
 [dependencies]
 serde.workspace = true
@@ -46,8 +59,33 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 # atomically, read back with `parsed` before a write.
 ronoctua-store = { path = "../ronoctua-store" }
 # `Stream` and `Origin`: what a station, a channel or an archive file becomes
-# in the queue. Pure (an XML reader and serde).
+# in the queue. Pure (an XML reader and serde). Its M3U reader keeps the IPTV
+# attributes a person's list is read by.
 ronoctua-playlist = { path = "../ronoctua-playlist" }
+# The person's consent (`Pass`) for a default source's host, and the private
+# file `sources.json` is written through (`keys::write_private_file`).
+ronoctua-consent = { path = "../ronoctua-consent" }
+# A feed is XML from outside: through the depth guard.
+ronoctua-xml = { path = "../ronoctua-xml" }
+# A person's YouTube channel or playlist, listed flat (`flat_up_to`).
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+# NFD, to take a title's accents off for its sort key and its letter. Already
+# in every program through `url`'s IDNA; the compiled data only.
+icu_normalizer = { version = "2.2", default-features = false, features = [ "compiled_data" ] }
+# The serialised `sources.json` is wiped once written.
+zeroize.workspace = true
+# The host a consent pass is checked against, and the one a masked address
+# shows, read by the parser the web fetches with (the WHATWG rules): a looser
+# split names another host than the request goes to. Already in every
+# program that links `ronoctua-http/tls`.
+url = "2.5"
+# THE CATALOGUE'S FILES (feature `catalog`).
+rusqlite = { workspace = true, optional = true }
+
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [lints]
 workspace = true

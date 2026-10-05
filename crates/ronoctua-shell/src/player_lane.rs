@@ -292,14 +292,10 @@ pub fn start_said(seconds: f64, texts: &ronoctua_i18n::Texts) -> String {
     }
 }
 
-/// How long lane `lane`'s FILE is, in seconds, once the player said it
-/// (`LaneState::duration_seconds`, what mpv reads of the file).
+/// How long lane `lane`'s FILE is, in seconds, once the player said it —
+/// on or off (`player::lane_length`).
 fn file_length(s: &State, lane: &Lane) -> Option<f64> {
-    s.lane_states
-        .iter()
-        .find(|l| l.lane == lane.id)
-        .and_then(|l| l.duration_seconds)
-        .filter(|d| d.is_finite() && *d > 0.0)
+    crate::player::lane_length(s, lane.id)
 }
 
 /// Where lane `lane` stops in its own file NOW, in seconds of the file: where
@@ -344,6 +340,7 @@ pub fn until_stepped(s: &State, lane: &Lane, later: bool) -> Errand {
         change: LaneChange::Trim {
             from_seconds: lane.from_seconds,
             until_seconds: until,
+            voice: false,
         },
     })
 }
@@ -391,6 +388,56 @@ pub fn over_turned(s: &State, id: LaneId, forward: bool) -> Errand {
         lane: id,
         change: LaneChange::Over {
             over: Some(pictures[to].id),
+        },
+    })
+}
+
+/// The languages subtitle lane `id`'s file carries, when it shows one of
+/// several (a SAMI's classes, `LaneState::languages`), and the place of the
+/// one it shows — the one it keeps, else the first.
+fn languages_of<'s>(s: &'s State, lane: &Lane) -> Option<(&'s [String], usize)> {
+    let all = s
+        .lane_states
+        .iter()
+        .find(|l| l.lane == lane.id)
+        .map(|l| l.languages.as_slice())
+        .filter(|all| all.len() > 1)?;
+    let at = lane
+        .lang
+        .as_deref()
+        .and_then(|kept| {
+            all.iter()
+                .position(|l| l.eq_ignore_ascii_case(kept))
+                .or_else(|| {
+                    let primary =
+                        |c: &str| c.split(['-', '_']).next().unwrap_or(c).to_ascii_lowercase();
+                    all.iter().position(|l| primary(l) == primary(kept))
+                })
+        })
+        .unwrap_or(0);
+    Some((all, at))
+}
+
+/// What turning a subtitle lane's language asks: the next (or the previous)
+/// of the languages its file carries — nothing for a file of one.
+#[must_use]
+pub fn language_turned(s: &State, id: LaneId, forward: bool) -> Errand {
+    let Some(lane) = s.lanes.iter().find(|l| l.id == id) else {
+        return Errand::Nothing;
+    };
+    let Some((all, now)) = languages_of(s, lane) else {
+        return Errand::Nothing;
+    };
+    let n = all.len();
+    let to = if forward {
+        (now + 1) % n
+    } else {
+        (now + n - 1) % n
+    };
+    Errand::Tell(Ask::Lane {
+        lane: id,
+        change: LaneChange::Language {
+            lang: Some(all[to].clone()),
         },
     })
 }
@@ -450,7 +497,7 @@ pub(crate) fn timeline(s: &State, b: &mut Builder<'_>) {
     b.inert(crate::chrome::AIR);
     b.deck(&s.lanes, s);
     b.inert(crate::chrome::AIR);
-    let more = PageId::Files(Purpose::Lane);
+    let more = PageId::Pick(Purpose::Lane);
     b.pair(
         b.t(more.key()),
         String::new(),
@@ -475,7 +522,7 @@ pub(crate) fn page(id: LaneId, s: &State, known: &[Known], b: &mut Builder<'_>) 
             Some(LaneStatus::Playing) => key::PLAYER_STATE_PLAYING,
         })
     } else {
-        b.t(key::PLAYER_LANE_SWITCHED_OFF)
+        crate::player::switched_off(s, id, b.texts)
     };
     // WHAT IT IS, as its row said it: a subtitle wears its colour on its chip
     // here too, which turns it as it does there.
@@ -599,6 +646,16 @@ pub(crate) fn page(id: LaneId, s: &State, known: &[Known], b: &mut Builder<'_>) 
             },
             "lane-over",
         );
+        // WHICH OF ITS FILE'S LANGUAGES IT SHOWS, by the language's name: a
+        // ring, only while the file carries several (a SAMI's classes).
+        if let Some((all, at)) = languages_of(s, lane) {
+            b.pair(
+                b.t(key::PLAYER_LANE_LANGUAGE),
+                crate::player_find::tongue_name(&all[at], b.texts),
+                Target::LaneLanguage(id),
+                "lane-language",
+            );
+        }
     }
     b.inert(crate::chrome::AIR);
     b.pair(
@@ -637,6 +694,106 @@ mod tests {
                 track(1, Kind::Sub, Some("English"), true),
             ],
         )
+    }
+
+    /// FAILS IF: a subtitle file of several languages (a SAMI) shows no row
+    /// to choose among them, names them by their codes, or the ring does not
+    /// turn to the next — or a file of one language shows the row at all.
+    #[test]
+    fn a_sami_lane_chooses_its_language_on_its_page() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let mut s = film();
+            let state = s
+                .lane_states
+                .iter_mut()
+                .find(|l| l.lane == LaneId(3))
+                .expect("the subtitle's state");
+            state.languages = vec!["en-US".into(), "pt-BR".into()];
+            let mut v = View::blank(None);
+            v.push(PageId::Lane(LaneId(3)), None);
+            let rows = v.rows(Some(&s), 80, &t);
+            let n = rows
+                .iter()
+                .position(|r| r.target == Target::LaneLanguage(LaneId(3)))
+                .expect("the language's row");
+            assert!(
+                rows[n].fields.iter().any(|f| f.text == t.t("tongue-en")),
+                "{:?}",
+                rows[n].fields
+            );
+            v.clicked(n, &rows);
+            assert_eq!(
+                v.key(Press::Enter, Some(&s), 80, &t),
+                Errand::Tell(Ask::Lane {
+                    lane: LaneId(3),
+                    change: LaneChange::Language {
+                        lang: Some("pt-BR".into())
+                    },
+                })
+            );
+            // ONE LANGUAGE is no choice: no row.
+            s.lane_states.iter_mut().for_each(|l| l.languages.clear());
+            assert!(
+                !v.rows(Some(&s), 80, &t)
+                    .iter()
+                    .any(|r| matches!(r.target, Target::LaneLanguage(_)))
+            );
+        }
+    }
+
+    /// FAILS IF: a lane switched off says only "switched off" when the
+    /// player knows how long it runs, or its band runs to the track's end
+    /// like a live one's.
+    #[test]
+    fn a_lane_switched_off_says_its_length() {
+        let t = texts();
+        let mut s = film();
+        let lane = s
+            .lanes
+            .iter_mut()
+            .find(|l| l.id == LaneId(2))
+            .expect("the sound");
+        lane.enabled = false;
+        s.lane_states.retain(|l| l.lane != LaneId(2));
+        s.lengths_off = vec![ronoctua_player::wire::LaneLength {
+            lane: LaneId(2),
+            seconds: 125.0,
+        }];
+        assert_eq!(crate::player::lane_length(&s, LaneId(2)), Some(125.0));
+        let said = crate::player::switched_off(&s, LaneId(2), &t);
+        assert!(said.contains("2:05"), "{said}");
+        let mut v = View::blank(None);
+        v.push(PageId::Lane(LaneId(2)), None);
+        let words: Vec<String> = v
+            .rows(Some(&s), 80, &t)
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(words.contains(&said), "{words:?}");
+        // AND ITS BAND ENDS where its file does.
+        let deck = crate::player_timeline::of_state(
+            &s.lanes,
+            Some(&s),
+            crate::player_timeline::Room::wide(80).every_lane(),
+            0,
+        );
+        let line = deck
+            .lines
+            .iter()
+            .find_map(|l| match l {
+                crate::player_timeline::DeckLine::Lane(l) if l.lane == LaneId(2) => Some(l),
+                _ => None,
+            })
+            .expect("the sound's line");
+        assert!(!line.live, "a lane off with a length is no live one");
+        assert_eq!(line.end_seconds, Some(125.0));
+        // WITH NO LENGTH KNOWN, switched off as before.
+        s.lengths_off.clear();
+        assert_eq!(
+            crate::player::switched_off(&s, LaneId(2), &t),
+            t.t(key::PLAYER_LANE_SWITCHED_OFF)
+        );
     }
 
     /// FAILS IF: a lane's page stops turning it on and off, stops moving a
@@ -977,11 +1134,17 @@ mod tests {
         };
         assert_eq!(
             typed(&mut v, "+1,5"),
-            lane(LaneChange::Start { seconds: 11.5 })
+            lane(LaneChange::Start {
+                seconds: 11.5,
+                voice: false
+            })
         );
         assert_eq!(
             typed(&mut v, "1:02:03"),
-            lane(LaneChange::Start { seconds: 3723.0 })
+            lane(LaneChange::Start {
+                seconds: 3723.0,
+                voice: false
+            })
         );
         assert_eq!(typed(&mut v, "  "), Errand::Nothing);
         match typed(&mut v, "soon") {
@@ -991,7 +1154,10 @@ mod tests {
         // THE ARROWS, half a second.
         assert_eq!(
             v.key(Press::More, Some(&s), 80, &t),
-            lane(LaneChange::Start { seconds: 10.5 })
+            lane(LaneChange::Start {
+                seconds: 10.5,
+                voice: false
+            })
         );
         // ITS OWN VOLUME: a step, and `RET` its mute.
         stand(&mut v, &Target::LaneVolume(LaneId(2)));
@@ -1095,6 +1261,7 @@ mod tests {
                 change: LaneChange::Trim {
                     from_seconds: 5.0,
                     until_seconds: until,
+                    voice: false,
                 },
             })
         };

@@ -136,6 +136,21 @@ buildNpmPackage (finalAttrs: {
     ${lib.getExe deno} --version >/dev/null
   '';
 
+  # THE THREE VARIABLES a unit that asks yt-dlp for YouTube carries — all of
+  # them or none (`ronoctua_ytdlp::pot_flags_of`) — named HERE, where the
+  # layout they point into is made, so no unit spells a path of its own.
+  #
+  # `RONOCTUA_POT_PLUGINS` IS THE ROOT, not `plugin/`: yt-dlp's
+  # `--plugin-dirs` takes a folder of plugin PACKAGES and looks for
+  # `yt_dlp_plugins` one level down in each. Measured: `--plugin-dirs
+  # <pot>/plugin` loads nothing ("Plugin directories: none"), `<pot>` loads
+  # the script provider. Two units once spelled the two answers apart.
+  passthru.environment = {
+    RONOCTUA_POT_HOME = "${finalAttrs.finalPackage}/server";
+    RONOCTUA_POT_PLUGINS = "${finalAttrs.finalPackage}";
+    RONOCTUA_DENO = lib.getExe deno;
+  };
+
   meta = {
     description = "The PO token generator, in script mode: runs on request and exits";
     homepage = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider";

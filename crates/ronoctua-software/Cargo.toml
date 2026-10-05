@@ -35,6 +35,9 @@ ronoctua-apps = { path = "../ronoctua-apps" }
 # F-Droid's `entry.jar` is a zip, and so is an APK.
 ronoctua-zip = { path = "../ronoctua-zip" }
 ronoctua-http = { path = "../ronoctua-http", optional = true }
+# The person's consent, host by host: a web app's page is read on a `Pass`
+# for the host the person typed (`icons::from_site`).
+ronoctua-consent = { path = "../ronoctua-consent" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -51,6 +54,10 @@ url = "2.5"
 quick-xml = "0.41"
 image = { workspace = true, optional = true, features = [ "ico" ] }
 resvg = { workspace = true, optional = true }
+
+[dev-dependencies]
+# A test mints its passes from a consent file of its own.
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [[bin]]
 name = "ronoctua-software"

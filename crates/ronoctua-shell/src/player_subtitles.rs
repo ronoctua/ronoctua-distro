@@ -112,7 +112,7 @@ type Slot = std::sync::Arc<std::sync::Mutex<Option<(String, Vec<PathBuf>)>>>;
 /// The subtitle files beside the film that plays, named after it — READ ONCE
 /// A FILM, and again when the page opens: the rows are built several times a
 /// frame, and a folder read on each was the listing that froze a door before
-/// (`player_browse::glyph_if_played`).
+/// (`player_kinds::glyph_if_played`).
 ///
 /// OFF THE LOOP: a film on a network mount is a folder that takes seconds to
 /// list, and the door's loop is the desktop's. A door with a loop hands the
@@ -236,7 +236,7 @@ pub fn name(lane: &Lane, s: &State, texts: &ronoctua_i18n::Texts, width_cells: u
         .and_then(|id| kin.iter().find(|t| t.id == id));
     let named = own.map_or_else(
         || lane_name(lane, &s.lanes, texts, width_cells),
-        |t| crate::player::track_name(t, &kin),
+        |t| crate::player::track_name(t, &kin, texts),
     );
     let lang = lane
         .lang
@@ -244,10 +244,12 @@ pub fn name(lane: &Lane, s: &State, texts: &ronoctua_i18n::Texts, width_cells: u
         .or_else(|| own.and_then(|t| t.lang.as_deref()))
         .map(str::trim)
         .filter(|l| !l.is_empty());
-    // THE CODE AS THE FILE SAYS IT: no table of languages' names is in the
-    // player yet, and a guessed name would be a word the file never said.
+    // THE LANGUAGE BY ITS NAME, from the table the searches bring — the code
+    // as the file says it when the table has no such language: a guessed
+    // name would be a word the file never said.
+    let lang = lang.map(|l| crate::player_find::tongue_name(l, texts));
     match lang {
-        Some(l) if !named.contains(l) => format!("{l} · {named}"),
+        Some(l) if !named.contains(&l) => format!("{l} · {named}"),
         _ => named,
     }
 }
@@ -351,7 +353,7 @@ pub(crate) fn page(s: &State, beside: &Beside, b: &mut Builder<'_>) {
     }
     // WHERE MORE COME FROM: any file, and the network — the page that
     // searches for this film's.
-    for page in [PageId::Files(Purpose::Subtitle), PageId::FindSubtitles] {
+    for page in [PageId::Pick(Purpose::Subtitle), PageId::FindSubtitles] {
         b.pair(
             b.t(page.key()),
             String::new(),
@@ -492,7 +494,7 @@ mod tests {
         );
         let mut file = Lane::new(LaneId(4), LaneKind::Subtitle, "/films/a.pt-BR.srt");
         file.lang = Some("pt-BR".into());
-        file.title = Some("Portuguese".into());
+        file.title = Some("Commentary".into());
         let mut hidden = Lane::new(LaneId(5), LaneKind::Subtitle, "/films/a.es.srt");
         hidden.enabled = false;
         s.lanes.push(file);
@@ -570,10 +572,12 @@ mod tests {
                 .iter()
                 .any(|f| f.text == tokens::icon::PLAYER_SUBTITLE_HIDDEN.to_string())
         );
-        // THE LANGUAGE AS THE FILE SAYS IT, in front of the name.
+        // THE LANGUAGE BY ITS NAME, in front of the lane's own.
         let file = &rows[row_of(&rows, &Target::Subtitle(LaneId(4)))];
         assert!(
-            file.fields.iter().any(|f| f.text == "pt-BR · Portuguese"),
+            file.fields
+                .iter()
+                .any(|f| f.text == "Portuguese (Brazil) · Commentary"),
             "{:?}",
             file.fields
         );
@@ -694,7 +698,7 @@ mod tests {
             80,
             &t,
         );
-        v.files_at(&dir, Purpose::Subtitle);
+        v.pick_at(&dir, Purpose::Subtitle);
         let rows = v.rows(Some(&s), 80, &t);
         let (at, from) = rows
             .iter()
@@ -702,7 +706,9 @@ mod tests {
             .find_map(|(n, r)| {
                 r.cells
                     .iter()
-                    .find(|c| c.target == Target::File(notes.clone()))
+                    .find(|c| {
+                        c.target == Target::Picker(crate::file_picker::Target::File(notes.clone()))
+                    })
                     .map(|c| (n, c.from))
             })
             .expect("a text file is listed when a subtitle is asked for");
@@ -760,10 +766,18 @@ mod tests {
             })
         };
         assert!(!said(&v), "nothing beside, said before it was known");
-        wakes
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the door is woken when the folder is read");
-        v.settle_in(Some(&s), 80, &t);
+        // WOKEN UNTIL THE FOLDER IS READ: another thread of the view's may
+        // wake the door first, under a loaded machine.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            wakes
+                .recv_timeout(until.saturating_duration_since(std::time::Instant::now()))
+                .expect("the door is woken when the folder is read");
+            v.settle_in(Some(&s), 80, &t);
+            if !v.beside.reading() {
+                break;
+            }
+        }
         assert!(!v.beside.reading());
         assert_eq!(v.beside.files, vec![dir.join("film.srt")]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -859,6 +873,7 @@ mod tests {
             master: false,
             size: None,
             cover: false,
+            languages: Vec::new(),
         });
         s.lanes[4].enabled = true;
         let mut v = View::blank(None);
@@ -902,6 +917,6 @@ mod tests {
         s.lanes[2].enabled = false;
         assert_eq!(summary(&s, &t), t.t(key::PLAYER_SUBTITLES_OFF));
         s.lanes[3].enabled = true;
-        assert_eq!(summary(&s, &t), "pt-BR · Portuguese");
+        assert_eq!(summary(&s, &t), "Portuguese (Brazil) · Commentary");
     }
 }

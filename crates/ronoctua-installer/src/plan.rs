@@ -116,6 +116,32 @@ pub const WIFI_PROFILE_PATH: &str =
 /// system would be born with no password at all, with nothing to flag it.
 pub const WIFI_SECRET_DIRECTORY: &str = "/mnt/persist/etc/ronoctua/wifi";
 
+/// The person's user name on the target: the last component of
+/// [`PASSWORD_HASH_PATH`], the one place the installer names them — a second
+/// spelling here would be a second definition (invariant 16).
+#[must_use]
+pub fn target_user() -> &'static str {
+    PASSWORD_HASH_PATH.rsplit('/').next().unwrap_or_default()
+}
+
+/// Where the target's users are, for the person's uid and gid: the file the
+/// activation of `nixos-install` wrote.
+pub const TARGET_PASSWD: &str = "/mnt/etc/passwd";
+
+/// Where the fifteenth answer is written: the belongings' settings, in the
+/// PERSON'S home on the target (`~/.config/ronoctua/belongings.json`), owned
+/// by them — never `host.nix`, which describes the machine and not whoever
+/// uses it.
+#[must_use]
+pub fn belongings_path() -> String {
+    format!(
+        "/mnt/home/{}/.config/{}/{}",
+        target_user(),
+        ronoctua_xdg::NAME,
+        ronoctua_belongings::prefs::FILE
+    )
+}
+
 /// An internal command: seal the Wi-Fi password into the TPM.
 ///
 /// It is not [`WRITE`] because it is not writing content the installer
@@ -375,12 +401,19 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             //
             // It evaluates the WORKING directory: `/mnt` only comes into existence
             // after this command.
+            //
+            // `--yes-wipe-all-disks` BECAUSE THE INSTALLER HAS ALREADY ASKED:
+            // the TUI's confirmation screen, or `--execute` in the
+            // environment mode. Without it `disko` asks again on a `stdin`
+            // nobody types into (the output is piped, the TUI owns the
+            // terminal), reads nothing and aborts with the disk untouched.
             command: vec![
                 "disko".into(),
                 "--mode".into(),
                 "destroy,format,mount".into(),
                 "--flake".into(),
                 format!("{WORK_DIRECTORY}#noctua"),
+                "--yes-wipe-all-disks".into(),
             ],
             destructive: true,
         },
@@ -402,6 +435,15 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             // Now with the `resume_offset`, which only exists after the swap.
             label: key::INST_STEP_HOST_NIX,
             command: vec![WRITE.into(), HOST_NIX_WORK_PATH.into()],
+            destructive: true,
+        },
+        Step {
+            // THE TARGET'S `/etc/nixos` IS MADE FIRST: `disko` mounts the root
+            // at `/mnt` and nothing under it, so `/mnt/etc` does not exist
+            // yet, and `cp -rT` makes the last folder of its destination but
+            // never the ones above it ("cannot create directory").
+            label: key::INST_STEP_TARGET,
+            command: vec!["mkdir".into(), "-p".into(), TARGET_DIRECTORY.into()],
             destructive: true,
         },
         Step {
@@ -473,6 +515,16 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             ],
             destructive: true,
         },
+        Step {
+            // THE BELONGINGS' REPOSITORY, into the person's home — AFTER
+            // `nixos-install`, whose activation made the user (and so the
+            // uid and gid the file is given, read from the target's
+            // `/etc/passwd`). The address alone: no key, no token, no
+            // passphrase — those are asked by the view, on the machine.
+            label: key::INST_STEP_BELONGINGS,
+            command: vec![WRITE.into(), belongings_path()],
+            destructive: true,
+        },
         // THERE IS NO TPM STEP, and its absence is the decision rather than
         // an omission.
         //
@@ -501,6 +553,12 @@ pub fn steps(r: &Answers, flake: &str) -> Vec<Step> {
             p.command.get(1).map(String::as_str) != Some(WIFI_PROFILE_PATH)
                 && p.command.first().map(String::as_str) != Some(SEAL)
         });
+    }
+    // AND THE BELONGINGS' ONLY WHEN THERE IS A REPOSITORY: an empty address
+    // written into the home would read as "configured" to nobody.
+    if r.belongings.is_empty() {
+        let path = belongings_path();
+        sequence.retain(|p| p.command.get(1) != Some(&path));
     }
     sequence
 }
@@ -544,7 +602,47 @@ mod tests {
             // proves the field reaches `host.nix` even when it is being dropped.
             profile: "minimal".into(),
             resume_offset: Some(123_456),
+            belongings: String::new(),
         }
+    }
+
+    /// FAILS IF: the belongings' address reaches `host.nix`, is written
+    /// anywhere but the person's home, before `nixos-install` made them, or
+    /// at all when there is none.
+    #[test]
+    fn the_belongings_go_into_the_home_after_the_install_and_never_host_nix() {
+        let mut r = answers();
+        let path = belongings_path();
+        assert_eq!(path, "/mnt/home/noctua/.config/ronoctua/belongings.json");
+        assert!(
+            !steps(&r, "f")
+                .iter()
+                .any(|s| s.command.get(1) == Some(&path)),
+            "a step for no repository"
+        );
+        r.belongings = "git@example.org:someone/belongings.git".into();
+        let plan = steps(&r, "f");
+        let at = plan
+            .iter()
+            .position(|s| s.command.get(1) == Some(&path))
+            .expect("no step writes the belongings");
+        let installed = plan
+            .iter()
+            .position(|s| s.command.first().map(String::as_str) == Some("nixos-install"))
+            .unwrap();
+        assert!(at > installed, "written before the user exists");
+        assert_eq!(plan[at].label, key::INST_STEP_BELONGINGS);
+        assert!(
+            !host_nix(&r).contains("example.org"),
+            "the address reached host.nix"
+        );
+        assert!(
+            !plan
+                .iter()
+                .flat_map(|s| &s.command)
+                .any(|a| a.contains("example.org")),
+            "the address reached a command line"
+        );
     }
 
     #[test]
@@ -796,6 +894,14 @@ mod tests {
             disko_target.starts_with(WORK_DIRECTORY),
             "disko evaluates `{disko_target}`, which only exists after it"
         );
+        // And it does not ask a second time: the installer's confirmation
+        // is the one, and a question on a `stdin` nobody types into aborts.
+        assert!(
+            p[idx("disko")]
+                .command
+                .contains(&"--yes-wipe-all-disks".to_owned()),
+            "disko asks its own question, and nobody can answer it"
+        );
     }
 
     #[test]
@@ -819,6 +925,22 @@ mod tests {
             .expect("no step partitions");
 
         assert!(disko < target_copy, "a copy before the target is mounted");
+        // The folder is made before the copy, which makes no parent of it.
+        let made = p
+            .iter()
+            .position(|x| x.command.first().map(String::as_str) == Some("mkdir"))
+            .expect("nobody makes the target's folder");
+        let copied = p
+            .iter()
+            .position(|x| {
+                x.command.first().map(String::as_str) == Some("cp")
+                    && x.command.contains(&TARGET_DIRECTORY.to_owned())
+            })
+            .expect("nobody copies the flake to the target");
+        assert!(
+            disko < made && made < copied,
+            "the folder is made out of order"
+        );
         assert!(target_copy < installs, "the flake arrives after installing");
 
         for cmd in p

@@ -7,9 +7,22 @@
 //! chose precisely because nothing else was — and the second one would be
 //! running under conditions the gate never approved.
 //!
-//! It is a property of the RUNNER and not of any task: there is one worker
+//! It is a property of the RUNNER and not of any module: there is one worker
 //! thread, so overlap is impossible by construction rather than by everybody
-//! remembering. A feature added tomorrow inherits the queue by existing.
+//! remembering. A module added tomorrow inherits the queue by existing.
+//!
+//! # What it runs
+//!
+//! Every module that answers [`crate::module::Module::scheduled`], with the
+//! person's preferences resolved over the module's own declaration
+//! ([`crate::prefs::Prefs::of_module`]). A module that only watches is on the
+//! watch thread ([`crate::watch`]) and never here.
+//!
+//! # A quiet brain
+//!
+//! With `quiet` in the preferences nothing comes due by itself — neither by
+//! its calendar nor because the machine wants it — and every row says so.
+//! What somebody asks for still runs.
 //!
 //! # Why the pass never sleeps
 //!
@@ -29,12 +42,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::journal::Journal;
-use crate::mind::{Announcement, Shared, Standing, StepState, TaskState};
-use crate::moment::{Clock, Moment};
-use crate::prefs::{Gate, Prefs, TaskPrefs, Where};
+use crate::hub::Core;
+use crate::mind::{Announcement, Standing};
+use crate::module::Run;
+use crate::moment::Moment;
+use crate::prefs::{Gate, Prefs};
 use crate::pulse::{Meter, Pulse};
-use crate::registry::Registry;
 use crate::task::{Due, Hold, Report, RunRecord, Verdict};
 
 /// How often the runner looks, when nothing rings the bell.
@@ -80,7 +93,8 @@ pub const BEAT: Duration = Duration::from_secs(2);
 /// It had no symptom anybody could see quickly, because the tests all point
 /// `Runner::reporting_in` at a scratch directory and never name this one. What
 /// closes that is `the-brain-reads-what-the-units-write`, which reads the
-/// argument out of `nix/modules/*.nix` and compares it with this function.
+/// argument out of `nix/modules/*.nix` and compares it with this function —
+/// and each brain module's own check, for the units in its folder.
 ///
 /// The brain only ever READS here, which is why the previous report is MARKED
 /// rather than deleted ([`crate::task::Report::mark`]).
@@ -141,67 +155,44 @@ pub fn judge(pulse: &Pulse, gate: &Gate) -> Verdict {
 
 /// The brain's one worker.
 pub struct Runner {
-    shared: Arc<Shared>,
-    tasks: Registry,
+    core: Arc<Core>,
     meter: Box<dyn Meter>,
-    clock: Box<dyn Clock>,
-    store: Where,
-    journal: Journal,
     reports: std::path::PathBuf,
-    /// When each task last STARTED, a rehearsal included — which the journal
-    /// never records. A task that wants itself run again after a rest counts
+    /// When each module last STARTED, a rehearsal included — which the journal
+    /// never records. A module that wants itself run again after a rest counts
     /// the rest from here ([`Runner::enrol`]).
     started: std::collections::HashMap<String, Moment>,
 }
 
 impl Runner {
-    /// A runner over a mind, with everything it depends on handed in.
+    /// A runner over the brain's one core, with the machine's meter.
     ///
-    /// Every seam is a parameter — the clock, the meter, the two directories —
-    /// for the reason the rest of this repository gives: a test that had to
-    /// wait for a Tuesday, or make the machine busy, is a test nobody runs.
+    /// Every seam is a parameter — the clock is the core's, the meter and the
+    /// reports' directory are here — for the reason the rest of this
+    /// repository gives: a test that had to wait for a Tuesday, or make the
+    /// machine busy, is a test nobody runs.
     #[must_use]
-    pub fn new(
-        shared: Arc<Shared>,
-        tasks: Registry,
-        meter: Box<dyn Meter>,
-        clock: Box<dyn Clock>,
-        store: Where,
-    ) -> Self {
-        let journal = store
-            .state
-            .as_deref()
-            .map_or_else(Journal::fresh, Journal::read_from);
-        let reports = reports_dir();
+    pub fn new(core: Arc<Core>, meter: Box<dyn Meter>) -> Self {
         Self {
-            shared,
-            tasks,
+            core,
             meter,
-            clock,
-            store,
-            journal,
-            reports,
+            reports: reports_dir(),
             started: std::collections::HashMap::new(),
         }
     }
 
-    /// Where the report of a task is written and read.
+    /// Where the report of a module is written and read.
     ///
     /// # Why the rehearsal has a file of its own
     ///
-    /// Because the units do: `ronoctua-cache-sweep-rehearsal.service` writes
-    /// `cache-sweep-rehearsal.json`, beside the real one. Watching the real
+    /// Because the units do: a module's rehearsal unit writes
+    /// `<id>-rehearsal.json`, beside the real one. Watching the real
     /// file during a rehearsal reads whatever the last true run left there —
     /// an mtime that never changes, so the rehearsal ran out its patience and
     /// came back `runaway` while the rehearsal unit finished in a second.
     #[must_use]
     pub fn report_path(&self, task: &str, rehearsal: bool) -> std::path::PathBuf {
-        let leaf = if rehearsal {
-            format!("{task}-rehearsal.json")
-        } else {
-            format!("{task}.json")
-        };
-        self.reports.join(leaf)
+        report_in(&self.reports, task, rehearsal)
     }
 
     /// Points the reports somewhere else — what a test does.
@@ -215,20 +206,20 @@ impl Runner {
     ///
     /// It comes back rather than waiting, always. See this module's header.
     pub fn pump(&mut self) {
-        let now = self.clock.now();
+        let now = self.core.now();
         let pulse = self.meter.read(now);
         // THE HEARTBEAT, one line a pass: what the gate is about to judge by,
         // and where the queue stands. The owner asked to see every tick on the
         // brain's page, and the page is a copy of this log (`crate::tail`).
         {
-            let (mind, _) = self.shared.snapshot();
+            let (mind, _) = self.core.shared.snapshot();
             tracing::info!(
                 ram_pct = pulse.ram_used_pct,
                 memory_stall = pulse.memory_stall,
                 cpu_stall = pulse.cpu_stall,
                 on_battery = pulse.on_battery,
                 disk_free_per_mille = pulse.disk_free_per_mille,
-                disk_short = pulse.disk_short,
+                filesystems = pulse.rooms.len(),
                 queued = mind.queue.len(),
                 running = %mind.running,
                 "tick"
@@ -239,8 +230,14 @@ impl Runner {
         // was just taken out of, and the person would answer the same question
         // every half minute until the window closed.
         self.put_off(now);
-        let prefs = self.publish(now, pulse);
-        self.enrol(now, &pulse, &prefs);
+        // THE NOTES A WATCHER LEFT WAITING, when no watch thread is there to
+        // write them: an action's, a run's.
+        self.core.save_journal_if_due(std::time::Instant::now());
+        self.core.publish(now, pulse.clone());
+        let prefs = self.core.shared.snapshot().0.prefs;
+        if !prefs.quiet {
+            self.enrol(now, &pulse, &prefs);
+        }
         self.maybe_run(now, &pulse, &prefs);
     }
 
@@ -252,7 +249,7 @@ impl Runner {
     /// Tuesday from pushing a weekly update a week away.
     fn put_off(&mut self, now: Moment) {
         let mut task = None;
-        self.shared.change(|m| task = m.postponed.take());
+        self.core.shared.change(|m| task = m.postponed.take());
         let Some(task) = task else {
             return;
         };
@@ -265,20 +262,15 @@ impl Runner {
                 why: "postponed".to_owned(),
             },
         );
-        self.journal.put(record.clone());
-        if let Some(dir) = self.store.state.as_deref()
-            && let Err(e) = self.journal.write_to(dir)
-        {
-            tracing::error!(error = %e, "could not write the brain's journal");
-        }
+        self.core.put(record.clone());
         // AND IT LEAVES THE QUEUE HERE TOO. The socket already took it out,
         // and doing it again is not belt and braces: what makes a postponement
         // a postponement is the record plus the empty queue, and the two
         // belong in one place — otherwise a caller that set the flag without
         // unqueueing would have the task run in the very next pass, which is
         // the defect this whole path exists to close.
-        self.shared.unqueue(&task);
-        self.shared.change(|m| {
+        self.core.shared.unqueue(&task);
+        self.core.shared.change(|m| {
             if let Some(row) = m.task_mut(&task) {
                 row.last = Some(record.clone());
                 row.hold = None;
@@ -286,163 +278,48 @@ impl Runner {
         });
     }
 
-    /// Redraws every row from what is true right now, and gives back the
-    /// preferences it used.
-    ///
-    /// One place, and not one per event: a row rebuilt at each site that
-    /// changes something is a row somebody forgets to rebuild.
-    fn publish(&self, now: Moment, pulse: Pulse) -> Prefs {
-        // The preferences are read ONCE and every row is built from that one
-        // reading. Reading them per task would let a `Tune` arriving in the
-        // middle produce a screen where two rows disagree about what the
-        // person chose.
-        let prefs = self.shared.snapshot().0.prefs;
-        // AND WHAT EACH TASK CHOSE FOR ITSELF travels with its row, because the
-        // row is built inside `change` where the tasks are no longer in reach —
-        // and a row that resolved the preferences some other way would draw a
-        // cadence the schedule does not use. See `Task::defaults`.
-        let rows: Vec<(
-            &'static str,
-            crate::task::Kind,
-            Due,
-            &'static [crate::task::Step],
-            TaskPrefs,
-        )> = self
-            .tasks
-            .all()
-            .map(|t| {
-                let due = t.due(now, &prefs, self.journal.last(t.id()));
-                (t.id(), t.kind(), due, t.steps(), prefs.of_task(t))
-            })
-            .collect();
-
-        // THE LOG, COPIED ONCE PER PASS. It is bounded by `ACTIVITY` here and
-        // not on the way out, so what a screen is told and what the socket
-        // carries are the same list — the argument `wire` makes about sending
-        // the mind whole only holds if the mind IS what is sent.
-        let log: Vec<crate::task::RunRecord> = self
-            .journal
-            .all()
-            .iter()
-            .rev()
-            .take(crate::journal::ACTIVITY)
-            .rev()
-            .cloned()
-            .collect();
-        self.shared.change(|mind| {
-            mind.now = now;
-            mind.pulse = pulse;
-            mind.journal.clone_from(&log);
-            let running = mind.running.clone();
-            let queued: Vec<String> = mind.queue.clone();
-            let old: Vec<TaskState> = std::mem::take(&mut mind.tasks);
-            mind.tasks = rows
-                .iter()
-                .map(|(id, kind, due, steps, mine)| {
-                    let mine = mine.clone();
-                    let was = old.iter().find(|t| t.id == *id);
-                    // AND THE LAST FEW RUNS OF THIS ONE, asked of the journal
-                    // per TASK: the journal is one list for every task, so on a
-                    // machine where one runs weekly and another monthly the
-                    // second one's records fall off the end of a shared window
-                    // while its own row still has to show them.
-                    let history = self.journal.recent(id, RECENT);
-                    let standing = if running == *id {
-                        Standing::Running
-                    } else if queued.iter().any(|q| q == *id) {
-                        Standing::Queued
-                    } else {
-                        Standing::Idle
-                    };
-                    // WHAT IS WAITING BEHIND SOMETHING ELSE SAYS SO. Without
-                    // it a queued task shows the hold of the last time the gate
-                    // looked at it, which is a reason that has nothing to do
-                    // with why it is waiting now.
-                    let hold = if standing == Standing::Queued && !running.is_empty() {
-                        Some(Hold::Busy)
-                    } else {
-                        was.and_then(|t| t.hold)
-                    };
-                    TaskState {
-                        id: (*id).to_owned(),
-                        kind: *kind,
-                        standing,
-                        enabled: mine.enabled,
-                        interval_days: mine.interval_days,
-                        part_of_day: mine.part_of_day,
-                        next: match due {
-                            Due::At(at) => *at,
-                            // NOW and NOT-AT-ALL are both "no moment to draw",
-                            // and they are told apart by `why_not` — a date on
-                            // screen for something that is already overdue
-                            // would be a date in the past.
-                            Due::Now | Due::Not { .. } => 0,
-                        },
-                        hold,
-                        why_not: match due {
-                            Due::Not { why } => (*why).to_owned(),
-                            _ => String::new(),
-                        },
-                        last: history.first().cloned(),
-                        history,
-                        steps: steps
-                            .iter()
-                            .map(|s| StepState {
-                                id: s.id.to_owned(),
-                                command: s.command.to_owned(),
-                                needs_root: s.needs_root,
-                                // ONE LINE FOR BOTH ANSWERS, and it is the
-                                // whole of the fix. `on` used to be
-                                // `!contains(id)`, which reads the set as a
-                                // list of switched-off steps and so assumes
-                                // every step ships ON. Six of the update's
-                                // twelve ship OFF, so on an untouched machine
-                                // those six drew with a tick AND the note
-                                // "you changed" — see `TaskPrefs::steps_flipped`,
-                                // which carries the whole story.
-                                on: s.on_by_default ^ mine.steps_flipped.contains(s.id),
-                                on_by_default: s.on_by_default,
-                            })
-                            .collect(),
-                    }
-                })
-                .collect();
-        });
-        prefs
-    }
-
     /// Puts into the queue whatever has come due — by its calendar, or
-    /// because the machine wants it now ([`crate::task::Task::wanted_now`]).
+    /// because the machine wants it now
+    /// ([`crate::module::Scheduled::wanted_now`]).
     ///
-    /// A task the gate may not hold goes to the HEAD of the queue, since the
-    /// runner looks at nothing else: behind a task the gate is holding it would
-    /// be held all the same (`Shared::queue_first`).
+    /// A module the gate may not hold goes to the HEAD of the queue, since
+    /// the runner looks at nothing else: behind a run the gate is holding it
+    /// would be held all the same (`Shared::queue_first`).
     ///
     /// The calendar counts from the journal, where a rehearsal is not a run.
-    /// `wanted_now` counts from the last START, a rehearsal included: a task
+    /// `wanted_now` counts from the last START, a rehearsal included: a module
     /// that rests between runs rests after a rehearsal too — otherwise a brain
     /// that only rehearses (the development loop's) would start it on every
     /// tick, a walk of the cache and a question to the store twice a minute.
     fn enrol(&self, now: Moment, pulse: &Pulse, prefs: &Prefs) {
-        for task in self.tasks.all() {
-            let last = self.journal.last(task.id());
-            let started = self.started.get(task.id()).copied().max(last);
-            let wanted = matches!(task.due(now, prefs, last), Due::Now)
-                || task.wanted_now(now, pulse, prefs, started);
+        for m in self.core.modules().all() {
+            let Some(s) = m.scheduled() else { continue };
+            let manifest = m.manifest();
+            let mine = prefs.of_module(manifest);
+            // SWITCHED OFF IS ASKED HERE, by the core, and never left to the
+            // module: one that forgot to would run while its row said "off" —
+            // by the person, or by the system (`Registry::switched_off`).
+            if !mine.enabled || self.core.modules().off(manifest.id) {
+                continue;
+            }
+            let last = self.core.last_run(manifest.id);
+            let started = self.started.get(manifest.id).copied().max(last);
+            let wanted = matches!(s.due(now, &mine, last), Due::Now)
+                || s.wanted_now(now, pulse, &mine, started);
             if !wanted {
                 continue;
             }
-            if task.gated() {
-                self.shared.queue_up(task.id());
+            if manifest.gated() {
+                self.core.shared.queue_up(manifest.id);
             } else {
-                self.shared.queue_first(task.id());
+                self.core.shared.queue_first(manifest.id);
             }
         }
     }
 
     /// Starts the head of the queue, if everything says it may.
     fn maybe_run(&mut self, now: Moment, pulse: &Pulse, prefs: &Prefs) {
-        let (mind, _) = self.shared.snapshot();
+        let (mind, _) = self.core.shared.snapshot();
         if !mind.running.is_empty() {
             return;
         }
@@ -463,7 +340,7 @@ impl Runner {
             // it.
             let stale = mind.tasks.iter().any(|t| t.hold.is_some());
             if mind.announcement.is_some() || stale {
-                self.shared.change(|m| {
+                self.core.shared.change(|m| {
                     m.announcement = None;
                     for row in &mut m.tasks {
                         row.hold = None;
@@ -472,28 +349,35 @@ impl Runner {
             }
             return;
         };
-        let Some(task) = self.tasks.find(&id) else {
-            // A queued id nothing answers to: the person's file names a task
-            // that no longer exists, or a rename went half way.
-            tracing::warn!(task = %id, "a queued task that does not exist; dropping it");
-            self.shared.unqueue(&id);
+        let Some((m, s)) = self
+            .core
+            .modules()
+            .find(&id)
+            .and_then(|m| Some((m, m.scheduled()?)))
+        else {
+            // A queued id nothing runs: the person's file names a module that
+            // no longer exists, a rename went half way, or it only watches.
+            tracing::warn!(task = %id, "a queued task with no run; dropping it");
+            self.core.shared.unqueue(&id);
             return;
         };
+        let manifest = m.manifest();
+        let mine = prefs.of_module(manifest);
 
-        // THE GENERAL GATE FIRST, then what only the task knows. A hold is
+        // THE GENERAL GATE FIRST, then what only the module knows. A hold is
         // written down and published — never swallowed: a scheduler that
         // quietly does nothing is one nobody trusts.
         //
-        // UNLESS THE TASK IS ONE THE GATE MAY NOT HOLD: a relief of the disk
+        // UNLESS THE MODULE IS ONE THE GATE MAY NOT HOLD: a relief of the disk
         // waiting for the memory to calm down is a relief waiting for the
         // build that fills the disk to finish filling it.
-        let verdict = if task.gated() {
+        let verdict = if manifest.gated() {
             match judge(pulse, &prefs.gate) {
-                Verdict::Go => task.needs(pulse, prefs),
+                Verdict::Go => s.needs(pulse, &mine),
                 held => held,
             }
         } else {
-            task.needs(pulse, prefs)
+            s.needs(pulse, &mine)
         };
         if let Verdict::Hold(hold) = verdict {
             // ONCE PER EPISODE, and never once per tick.
@@ -508,12 +392,7 @@ impl Runner {
             // is cleared the moment anything else happens to the task, so a
             // hold that lifts and comes back is two episodes, which is what a
             // person reading the log wants to know.
-            let already = self
-                .shared
-                .snapshot()
-                .0
-                .task(&id)
-                .is_some_and(|t| t.hold == Some(hold));
+            let already = mind.task(&id).is_some_and(|t| t.hold == Some(hold));
             if !already {
                 let record = RunRecord::of(
                     &id,
@@ -527,18 +406,13 @@ impl Runner {
                 // would have made it: skipped is a run that was considered and
                 // dropped, held is a run still waiting for a better moment.
                 // The screen draws them in different words.
-                let record = RunRecord {
+                self.core.put(RunRecord {
                     kind: crate::task::OutcomeKind::Held,
                     ..record
-                };
-                self.journal.put(record);
-                if let Some(dir) = self.store.state.as_deref()
-                    && let Err(e) = self.journal.write_to(dir)
-                {
-                    tracing::error!(error = %e, "could not write the brain's journal");
-                }
+                });
+                self.core.refresh();
             }
-            self.shared.change(|m| {
+            self.core.shared.change(|m| {
                 if let Some(row) = m.task_mut(&id) {
                     row.hold = Some(hold);
                 }
@@ -553,13 +427,12 @@ impl Runner {
         // The warning, once. `deadline` and not a ticking number: whoever draws
         // has a one-second clock already, and a daemon that pushed a digit
         // every second would wake three processes to redraw one.
-        let seconds = task.countdown(prefs);
+        let seconds = mine.countdown_seconds;
         // A COUNTDOWN OF ZERO IS NO WARNING, and it is not published. It was:
         // the announcement stood for the few milliseconds until `perform`
         // took it down, and every screen drew it — the footer grew a line for
         // the brain and shrank again, so the modeline and the minibuffer
-        // jumped every thirty seconds, as long as a watch (`emacs-daemon`,
-        // `clock-sync`, both zero by design) kept its minute.
+        // jumped every thirty seconds, as long as a watch kept its minute.
         if seconds == 0 {
             self.perform(&id, now);
             return;
@@ -568,12 +441,13 @@ impl Runner {
             Some(a) if a.task == id => a.deadline,
             _ => {
                 let deadline = now + i64::from(seconds);
-                let why = if matches!(task.due(now, prefs, self.journal.last(&id)), Due::Now) {
+                let last = self.core.last_run(&id);
+                let why = if mine.enabled && matches!(s.due(now, &mine, last), Due::Now) {
                     "due"
                 } else {
                     "asked"
                 };
-                self.shared.change(|m| {
+                self.core.shared.change(|m| {
                     m.announcement = Some(Announcement {
                         task: id.clone(),
                         total_seconds: seconds,
@@ -593,22 +467,29 @@ impl Runner {
         self.perform(&id, now);
     }
 
-    /// Runs one task, and writes down what happened.
+    /// Runs one module's run, and writes down what happened.
     ///
     /// This is the one place in the daemon that blocks, and it blocks the
     /// runner's own thread. Every client of the socket has a thread of its own
-    /// and reads through the lock, so a rebuild that takes an hour is an hour
-    /// in which the screens keep answering.
+    /// and reads through the lock, and the watch thread goes on hearing, so a
+    /// rebuild that takes an hour is an hour in which the screens keep
+    /// answering and a process the kernel killed is still written down.
     fn perform(&mut self, id: &str, began: Moment) {
-        let Some(task) = self.tasks.find(id) else {
+        let core = Arc::clone(&self.core);
+        let Some((m, s)) = core
+            .modules()
+            .find(id)
+            .and_then(|m| Some((m, m.scheduled()?)))
+        else {
             return;
         };
+        let manifest = m.manifest();
         // THE FLAG IS IN THE STATE, because whoever asked for a rehearsal is
         // on a socket thread and this is the runner's. Taken out as it is read:
         // a rehearsal asked for today must not make next week's scheduled run a
         // dry one.
         let mut rehearsal = false;
-        self.shared.change(|m| {
+        core.shared.change(|m| {
             rehearsal = m.rehearsing.as_deref() == Some(id);
             if rehearsal {
                 m.rehearsing = None;
@@ -618,27 +499,27 @@ impl Runner {
         // loop brings its own brain up, and on an installed machine that is a
         // second scheduler beside the real one: both would rebuild the
         // system, sweep the cache and restart units on their own clocks.
-        // Rehearsing keeps every task exercisable from the loop and changes
+        // Rehearsing keeps every module exercisable from the loop and changes
         // nothing — see `ronoctua_xdg::INSTANCE`.
-        rehearsal |= ronoctua_xdg::instance().is_some();
-        // AND THE PATIENCE IS THE TASK'S OWN, for the reason `Task::defaults`
-        // gives: two hours is right for a rebuild and absurd for a sweep, and a
-        // number resolved differently here from the one on the row would be the
-        // screen saying one thing and the watcher doing another.
-        let patience = Duration::from_secs(
-            u64::from(self.shared.snapshot().0.prefs.of_task(task).runaway_minutes) * 60,
-        );
+        rehearsal |= crate::hub::rehearsing_here();
+        // AND THE PATIENCE IS THE MODULE'S OWN: two hours is right for a
+        // rebuild and absurd for a sweep, and a number resolved differently
+        // here from the one on the row would be the screen saying one thing
+        // and the watcher doing another.
+        let prefs = core.shared.snapshot().0.prefs;
+        let patience =
+            Duration::from_secs(u64::from(prefs.of_module(manifest).runaway_minutes) * 60);
         let mut report = Report::at(
             self.report_path(id, rehearsal),
             patience,
             BEAT,
-            self.shared.stop_flag(),
+            core.shared.stop_flag(),
         );
         if rehearsal {
             report = report.rehearsing();
         }
 
-        self.shared.change(|m| {
+        core.shared.change(|m| {
             m.running = id.to_owned();
             if let Some(at) = m.queue.iter().position(|q| q == id) {
                 m.queue.remove(at);
@@ -652,14 +533,9 @@ impl Runner {
 
         tracing::info!(task = id, rehearsal, "starting");
         self.started.insert(id.to_owned(), began);
-        let outcome = task.run(&report);
-        // AND WHAT IT WANTS SAID, which is not what it did. A watch's whole
-        // output is a sentence; see `task::Notice`.
-        let said = report.said();
-        // AND WHAT A RELIEF OF THE DISK DID, stamped with this clock — never
-        // a rehearsal's, which changed nothing.
-        let relieved = report.relieved().filter(|_| !rehearsal);
-        let ended = self.clock.now();
+        let run = Run::new(report, core.ctx(manifest.id, began, rehearsal));
+        let outcome = s.run(&run);
+        let ended = core.now();
         tracing::info!(task = id, ?outcome, "finished");
 
         // A REHEARSAL IS NOT A RUN. Writing it down would push the next real
@@ -667,34 +543,21 @@ impl Runner {
         // machine by asking what an update would do.
         let record = RunRecord::of(id, began, ended, outcome);
         if !rehearsal {
-            self.journal.put(record.clone());
-            if let Some(dir) = self.store.state.as_deref()
-                && let Err(e) = self.journal.write_to(dir)
-            {
-                // Not fatal: a read-only home is not a reason to stop deciding.
-                // It IS worth a line, because what is lost is the memory of
-                // when this last ran — and the next start would run it again.
-                tracing::error!(error = %e, "could not write the brain's journal");
-            }
+            core.put(record.clone());
         }
 
-        self.shared.change(|m| {
+        core.shared.change(|m| {
             m.running.clear();
             if let Some(row) = m.task_mut(id) {
                 row.standing = Standing::Idle;
                 row.last = Some(record.clone());
             }
-            // THE NOTICE IS REPLACED AND NOT MERGED, including with `None`:
-            // a watch that finds nothing wrong takes its own line down. Only
-            // the task that raised one may clear it, so a sweep finishing
-            // does not silence a warning about Emacs.
-            if said.is_some() || m.notice.as_ref().is_some_and(|n| n.task == id) {
-                m.notice.clone_from(&said);
-            }
-            if let Some(r) = relieved {
-                m.relieved = Some(crate::task::Relieved { at: ended, ..r });
-            }
         });
+        // AND ITS FACE AGAIN: what a run found — a daemon that is down, a
+        // clock nobody keeps — is what its notices say, and they should say
+        // it now rather than at the next pass.
+        core.touch(manifest.id);
+        core.refresh();
     }
 
     /// Pumps forever, waiting on the bell between passes.
@@ -720,153 +583,170 @@ impl Runner {
             // resizing when the minibuffer opened, `Enter` took seconds, and
             // closing it took seconds — none of which is a slow buffer, and all
             // of which is a starved event loop.
-            let mine = self.shared.version();
-            let _ = self.shared.wait_past(mine, TICK);
+            self.rest(stop);
         }
     }
+
+    /// Waits for something that could change what the next pass decides, or
+    /// for the tick.
+    ///
+    /// # Why not every change of the mind
+    ///
+    /// Because most of them are not the runner's. A journal line a watcher
+    /// wrote down, a notice put away, a module's face: each bumps the mind,
+    /// and a pass after each would read the meter, publish a fresh pulse —
+    /// a second whole `Mind` to every screen for every one the watch thread
+    /// sent — and log a `tick` on the brain's page. What a pass decides from
+    /// is the queue, what runs, the announcement, the preferences and the two
+    /// flags a socket leaves for it ([`Decides`]); the rest waits for the
+    /// tick, which publishes it anyway.
+    fn rest(&self, stop: &AtomicBool) {
+        let began = std::time::Instant::now();
+        let (mind, mut seen) = self.core.shared.snapshot();
+        let decided = Decides::of(&mind);
+        loop {
+            // RECOMPUTED ON EVERY WAKE: a notice snoozed meanwhile shortens
+            // it, and the tick never grows.
+            let wait = patience(self.core.now(), self.core.next_return(self.core.now()))
+                .saturating_sub(began.elapsed());
+            if wait.is_zero() || stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let (mind, now) = self.core.shared.wait_past(seen, wait);
+            if now == seen || Decides::of(&mind) != decided {
+                return;
+            }
+            seen = now;
+        }
+    }
+}
+
+/// What a pass of the runner decides FROM — the part of the mind whose change
+/// is worth a pass before the tick. See [`Runner::rest`].
+#[derive(Debug, PartialEq)]
+struct Decides {
+    queue: Vec<String>,
+    running: String,
+    announcement: Option<Announcement>,
+    prefs: Prefs,
+    rehearsing: Option<String>,
+    postponed: Option<String>,
+}
+
+impl Decides {
+    fn of(mind: &crate::mind::Mind) -> Self {
+        Self {
+            queue: mind.queue.clone(),
+            running: mind.running.clone(),
+            announcement: mind.announcement.clone(),
+            prefs: mind.prefs.clone(),
+            rehearsing: mind.rehearsing.clone(),
+            postponed: mind.postponed.clone(),
+        }
+    }
+}
+
+/// How long the runner waits: the tick, or less when a snoozed notice comes
+/// back sooner — a clock armed for that moment only while something is
+/// snoozed.
+#[must_use]
+pub fn patience(now: Moment, comes_back: Option<Moment>) -> Duration {
+    comes_back.map_or(TICK, |at| {
+        let seconds = u64::try_from(at.saturating_sub(now)).unwrap_or(0);
+        TICK.min(Duration::from_secs(seconds.max(1)))
+    })
+}
+
+/// `<dir>/<task>.json`, or `<task>-rehearsal.json` for a rehearsal — the one
+/// spelling the runner and `ronoctua-brain work` share.
+#[must_use]
+pub fn report_in(dir: &std::path::Path, task: &str, rehearsal: bool) -> std::path::PathBuf {
+    let leaf = if rehearsal {
+        format!("{task}-rehearsal.json")
+    } else {
+        format!("{task}.json")
+    };
+    dir.join(leaf)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fake::{Fake, Hand, ROUTINE, manifest};
+    use crate::mind::Shared;
+    use crate::module::{Manifest, Module, Schedule};
     use crate::moment::{Fixed, Offset};
-    use crate::prefs::{PartOfDay, TaskPrefs};
+    use crate::prefs::{PartOfDay, TaskPrefs, Where};
     use crate::pulse::Fake as FakeMeter;
-    use crate::task::{Outcome, Step, Task};
+    use crate::registry::Registry;
+    use crate::task::{Outcome, Step};
     use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
 
-    /// A clock the test moves by hand.
-    #[derive(Debug, Default)]
-    struct Hand(Arc<Mutex<Moment>>);
+    fn a_core(modules: Vec<Box<dyn Module>>, prefs: Prefs, clock: Hand) -> Arc<Core> {
+        Arc::new(Core::new(
+            Arc::new(Shared::of(prefs)),
+            Registry::of(modules).expect("the registry"),
+            Where::default(),
+            Box::new(clock),
+        ))
+    }
 
-    impl Clock for Hand {
-        fn now(&self) -> Moment {
-            *self.0.lock().expect("the clock")
+    fn a_runner(modules: Vec<Box<dyn Module>>, pulse: Pulse, at: Moment) -> (Arc<Shared>, Runner) {
+        let core = a_core(modules, Prefs::default(), Hand::at(at));
+        let shared = Arc::clone(&core.shared);
+        (shared, Runner::new(core, Box::new(FakeMeter(pulse))))
+    }
+
+    /// A manifest with a schedule of this shape.
+    fn with(id: &'static str, schedule: Schedule) -> Manifest {
+        Manifest {
+            schedule: Some(schedule),
+            ..manifest(id)
         }
     }
 
-    /// A task that writes down when it began and ended, and takes a while.
-    struct Slow {
+    /// A module that writes down when it began and ended, and takes a while.
+    fn slow(
         id: &'static str,
-        log: Arc<Mutex<Vec<(&'static str, char)>>>,
+        log: &Arc<Mutex<Vec<(&'static str, char)>>>,
         takes: Duration,
+    ) -> Box<dyn Module> {
+        let log = Arc::clone(log);
+        Fake::routine(id)
+            .runs(move |_| {
+                log.lock().expect("log").push((id, '('));
+                std::thread::sleep(takes);
+                log.lock().expect("log").push((id, ')'));
+                Outcome::Done(Vec::new())
+            })
+            .boxed()
     }
 
-    impl Task for Slow {
-        fn id(&self) -> &'static str {
-            self.id
-        }
-        fn due(&self, _now: Moment, _prefs: &Prefs, _last: Option<Moment>) -> Due {
-            // Never on its own: these tests ask by hand, so the queue is the
-            // only thing under test.
-            Due::Not { why: "test" }
-        }
-        fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-            Verdict::Go
-        }
-        fn countdown(&self, _prefs: &Prefs) -> u16 {
-            0
-        }
-        fn steps(&self) -> &'static [Step] {
-            &[]
-        }
-        fn run(&self, _report: &Report) -> Outcome {
-            self.log.lock().expect("log").push((self.id, '('));
-            std::thread::sleep(self.takes);
-            self.log.lock().expect("log").push((self.id, ')'));
-            Outcome::Done(Vec::new())
-        }
-    }
-
-    /// A task that is due until it has a record, and refuses to run.
+    /// A module that is due until it has a record, and refuses to run.
     ///
-    /// The pair with `Always`: this one READS the journal the way a real task
-    /// does, which is what makes a postponement provable — `Always` would be
-    /// due again on the very next pass whatever anybody wrote down.
-    struct Once;
-
-    impl Task for Once {
-        fn id(&self) -> &'static str {
-            "once"
-        }
-        fn due(&self, _now: Moment, _prefs: &Prefs, last: Option<Moment>) -> Due {
-            if last.is_some() {
-                Due::Not { why: "already" }
-            } else {
-                Due::Now
-            }
-        }
-        fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-            Verdict::Go
-        }
-        fn countdown(&self, _prefs: &Prefs) -> u16 {
-            0
-        }
-        fn run(&self, _report: &Report) -> Outcome {
-            panic!("it ran after being put off");
-        }
+    /// The pair with `always`: this one READS the journal the way a real
+    /// module does, which is what makes a postponement provable — `always`
+    /// would be due again on the very next pass whatever anybody wrote down.
+    fn once() -> Box<dyn Module> {
+        Fake::routine("once")
+            .due(|_, _, last| {
+                if last.is_some() {
+                    Due::Not { why: "already" }
+                } else {
+                    Due::Now
+                }
+            })
+            .runs(|_| panic!("it ran after being put off"))
+            .boxed()
     }
 
-    /// A task that is always due — for the gate's test.
-    struct Always;
-
-    impl Task for Always {
-        fn id(&self) -> &'static str {
-            "always"
-        }
-        fn due(&self, _now: Moment, _prefs: &Prefs, _last: Option<Moment>) -> Due {
-            Due::Now
-        }
-        fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-            Verdict::Go
-        }
-        fn countdown(&self, _prefs: &Prefs) -> u16 {
-            0
-        }
-        fn run(&self, _report: &Report) -> Outcome {
-            panic!("it ran with the machine busy");
-        }
-    }
-
-    fn nowhere() -> Where {
-        Where::default()
-    }
-
-    fn a_runner(tasks: Vec<Box<dyn Task>>, pulse: Pulse, at: Moment) -> (Arc<Shared>, Runner) {
-        let shared = Arc::new(Shared::of(Prefs::default()));
-        let runner = Runner::new(
-            Arc::clone(&shared),
-            Registry::of(tasks).expect("the registry"),
-            Box::new(FakeMeter(pulse)),
-            Box::new(Hand(Arc::new(Mutex::new(at)))),
-            nowhere(),
-        );
-        (shared, runner)
-    }
-
-    /// A task that counts how many times the pass looked at it.
-    struct Counted(Arc<AtomicUsize>);
-
-    impl Task for Counted {
-        fn id(&self) -> &'static str {
-            "counted"
-        }
-        fn due(&self, _: Moment, _: &Prefs, _: Option<Moment>) -> Due {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            Due::Not { why: "never" }
-        }
-        fn needs(&self, _: &Pulse, _: &Prefs) -> Verdict {
-            Verdict::Go
-        }
-        fn countdown(&self, _: &Prefs) -> u16 {
-            0
-        }
-        fn run(&self, _: &Report) -> Outcome {
-            Outcome::Skipped {
-                why: "never".to_owned(),
-            }
-        }
+    /// A module that is always due — for the gate's test.
+    fn always() -> Box<dyn Module> {
+        Fake::routine("always")
+            .due(|_, _, _| Due::Now)
+            .runs(|_| panic!("it ran with the machine busy"))
+            .boxed()
     }
 
     #[test]
@@ -880,16 +760,18 @@ mod tests {
         // BEFORE the pass — and a pass writes, so the wait was already
         // satisfied when it began and came back at once. It span at whatever
         // rate the processor allowed, and every turn handed a whole `Mind` to
-        // every `Ask::Watch` subscriber. On the other end of that socket is the
-        // loop that draws, and it spent its time on those instead of on the
-        // compositor.
-        //
-        // Nothing crashed, nothing was logged, and no test noticed: every other
-        // test here calls `pump` directly, which is correct on its own. What was
-        // wrong was the WAITING, and only `serve` waits.
+        // every `Ask::Watch` subscriber.
         let counted = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&counted);
         let (shared, mut runner) = a_runner(
-            vec![Box::new(Counted(Arc::clone(&counted)))],
+            vec![
+                Fake::routine("counted")
+                    .due(move |_, _, _| {
+                        seen.fetch_add(1, Ordering::Relaxed);
+                        Due::Not { why: "never" }
+                    })
+                    .boxed(),
+            ],
             Pulse::default(),
             1000,
         );
@@ -915,6 +797,65 @@ mod tests {
     }
 
     #[test]
+    fn only_what_a_pass_decides_from_wakes_the_runner() {
+        // THE DEFECT THIS CATCHES: every mind the watch thread published woke
+        // the runner, whose pass read the meter and published a fresh pulse —
+        // a second whole mind to every screen for each of the watch thread's,
+        // and a `tick` on the brain's page.
+        let counted = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&counted);
+        let (shared, mut runner) = a_runner(
+            vec![
+                Fake::routine("counted")
+                    .due(move |_, _, _| {
+                        seen.fetch_add(1, Ordering::Relaxed);
+                        Due::Not { why: "never" }
+                    })
+                    .boxed(),
+            ],
+            Pulse::default(),
+            1000,
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let mine = Arc::clone(&stop);
+        let hand = std::thread::spawn(move || runner.serve(&mine));
+        std::thread::sleep(Duration::from_millis(200));
+        let before = counted.load(Ordering::Relaxed);
+        // WHAT A WATCHER DID: the mind moves, and no pass follows.
+        for n in 0..50 {
+            shared.change(|m| m.now = 5000 + n);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            counted.load(Ordering::Relaxed),
+            before,
+            "a change the runner does not decide from woke it"
+        );
+        // WHAT IT DECIDES FROM: the queue moves, and a pass follows at once.
+        shared.queue_up("counted");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while counted.load(Ordering::Relaxed) == before {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the queue did not wake the runner"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        stop.store(true, Ordering::Relaxed);
+        shared.change(|m| m.now = 9000);
+        hand.join().expect("the brain's pump");
+    }
+
+    #[test]
+    fn the_wait_is_the_tick_unless_something_comes_back_sooner() {
+        assert_eq!(patience(1000, None), TICK);
+        assert_eq!(patience(1000, Some(1010)), Duration::from_secs(10));
+        assert_eq!(patience(1000, Some(5000)), TICK);
+        // A MOMENT ALREADY PAST is a second, never a spin at zero.
+        assert_eq!(patience(1000, Some(900)), Duration::from_secs(1));
+    }
+
+    #[test]
     fn the_gate_refuses_by_name_and_nothing_runs() {
         // THE DEFECT THIS CATCHES: a rebuild starting on a machine that is
         // already at its knees — and, just as bad, a refusal nobody can see.
@@ -923,7 +864,7 @@ mod tests {
             ram_used_pct: Some(94),
             ..Pulse::default()
         };
-        let (shared, mut runner) = a_runner(vec![Box::new(Always)], busy, 1000);
+        let (shared, mut runner) = a_runner(vec![always()], busy, 1000);
         runner.pump();
         let (mind, _) = shared.snapshot();
         assert_eq!(mind.running, "", "it ran all the same");
@@ -932,6 +873,28 @@ mod tests {
         // And the pulse is published, so the screen can show the number that
         // decided.
         assert_eq!(mind.pulse.ram_used_pct, Some(94));
+    }
+
+    #[test]
+    fn what_only_the_module_knows_holds_it_by_name_too() {
+        let (shared, mut runner) = a_runner(
+            vec![
+                Fake::routine("offline")
+                    .due(|_, _, _| Due::Now)
+                    .needs(|_, _| Verdict::Hold(Hold::Network))
+                    .runs(|_| panic!("it ran with no network"))
+                    .boxed(),
+            ],
+            Pulse::default(),
+            1000,
+        );
+        runner.pump();
+        let (mind, _) = shared.snapshot();
+        assert_eq!(
+            mind.task("offline").and_then(|t| t.hold),
+            Some(Hold::Network)
+        );
+        assert_eq!(mind.running, "");
     }
 
     #[test]
@@ -956,25 +919,20 @@ mod tests {
     }
 
     #[test]
-    fn two_tasks_do_not_overlap_and_the_second_waits_its_turn() {
+    fn two_runs_do_not_overlap_and_the_second_waits_its_turn() {
         // THE QUEUE, proved the only way it can be: with a real thread and two
-        // tasks that record when they started and stopped. One pass runs at
-        // most one thing, and the second task's brackets have to open after the
+        // modules that record when they started and stopped. One pass runs at
+        // most one thing, and the second one's brackets have to open after the
         // first one's closed.
         let log = Arc::new(Mutex::new(Vec::new()));
-        let tasks: Vec<Box<dyn Task>> = vec![
-            Box::new(Slow {
-                id: "one",
-                log: Arc::clone(&log),
-                takes: Duration::from_millis(40),
-            }),
-            Box::new(Slow {
-                id: "two",
-                log: Arc::clone(&log),
-                takes: Duration::from_millis(40),
-            }),
-        ];
-        let (shared, mut runner) = a_runner(tasks, Pulse::default(), 1000);
+        let (shared, mut runner) = a_runner(
+            vec![
+                slow("one", &log, Duration::from_millis(40)),
+                slow("two", &log, Duration::from_millis(40)),
+            ],
+            Pulse::default(),
+            1000,
+        );
         shared.queue_up("one");
         shared.queue_up("two");
         // Two passes, because one pass starts at most one thing — which is the
@@ -997,20 +955,7 @@ mod tests {
 
     #[test]
     fn a_hold_is_written_down_once_per_episode() {
-        // THE DEFECT THIS CATCHES, and it is not the one this test used to
-        // catch. It used to assert that a hold is NEVER written down, and the
-        // reason was sound as far as it went: the machine being busy at two in
-        // the morning is not an event, and recording one would push a weekly
-        // update a whole week for something that never happened.
-        //
-        // What changed is that the home page now shows the last hundred things
-        // the brain did, and "nothing, because the memory was busy" is one of
-        // the most useful of them — on a machine where a task keeps not
-        // running, it is the ONLY thing that explains why. So a hold is a
-        // record, and it is a record that does not move the schedule: nothing
-        // reads `Held` as a run.
-        //
-        // What it must not be is a record per TICK. This pass runs every
+        // THE DEFECT THIS CATCHES: a record per TICK. This pass runs every
         // thirty seconds, so an hour of a busy machine would be a hundred and
         // twenty identical lines — a wall of "RAM is busy" with everything
         // that actually happened buried underneath it, and the journal's
@@ -1019,132 +964,94 @@ mod tests {
             ram_used_pct: Some(99),
             ..Pulse::default()
         };
-        let (shared, mut runner) = a_runner(vec![Box::new(Always)], busy, 1000);
+        let (shared, mut runner) = a_runner(vec![always()], busy.clone(), 1000);
         runner.pump();
         runner.pump();
         runner.pump();
+        let runs = runner.core.journal().runs.clone();
         assert_eq!(
-            runner.journal.runs.len(),
+            runs.len(),
             1,
             "three passes over one busy machine wrote {} lines",
-            runner.journal.runs.len()
+            runs.len()
         );
-        let wrote = &runner.journal.runs[0];
-        assert_eq!(wrote.kind, crate::task::OutcomeKind::Held);
+        assert_eq!(runs[0].kind, crate::task::OutcomeKind::Held);
         assert_eq!(
-            wrote.why, "ram",
+            runs[0].why, "ram",
             "the record does not say what was in the way"
         );
         assert_eq!(
             shared.snapshot().0.task("always").and_then(|t| t.hold),
             Some(Hold::Ram)
         );
+        // AND THE LOG ON SCREEN has it at once, not a pass later.
+        assert_eq!(shared.snapshot().0.journal.len(), 1);
 
-        // AND IT DOES NOT OUTLIVE THE QUEUE.
-        //
-        // A hold means "this is waiting for a better moment"; with nothing
-        // waiting there is nothing to be held, and a row that went on saying
-        // so put "the processor is too busy" on the brain's screen for the
-        // rest of the day on a machine doing nothing at all. The row carried
-        // it all along — before there was a line that alarms, nobody could
-        // see it.
-        //
-        // THE QUEUE IS CLEARED AND THE TASK IS TAKEN AWAY, because `enrol`
-        // puts a still-due task straight back: emptying the queue under a
-        // task that is due is not a state this daemon can be in. A task
-        // ABORTED or POSTPONED is, and that is what this stands for.
-        let (quiet, mut alone) = a_runner(Vec::new(), busy, 1000);
+        // AND IT DOES NOT OUTLIVE THE QUEUE. A hold means "this is waiting
+        // for a better moment"; with nothing waiting there is nothing to be
+        // held. THE QUEUE IS CLEARED AND THE MODULE IS TAKEN AWAY, because
+        // `enrol` puts a still-due module straight back: emptying the queue
+        // under a module that is due is not a state this daemon can be in.
+        let (quiet, mut alone) = a_runner(Vec::new(), busy.clone(), 1000);
         quiet.change(|m| {
             m.tasks = shared.snapshot().0.tasks;
             m.queue.push("always".to_owned());
         });
-        assert_eq!(
-            quiet.snapshot().0.task("always").and_then(|t| t.hold),
-            Some(Hold::Ram)
-        );
         quiet.change(|m| m.queue.clear());
-        alone.pump();
+        alone.maybe_run(1000, &busy, &Prefs::default());
         assert_eq!(
             quiet.snapshot().0.task("always").and_then(|t| t.hold),
             None,
             "a hold outlived the queue it belonged to"
         );
 
-        // AND IT DOES NOT MOVE THE SCHEDULE.
-        //
-        // `Journal::last` is what `due` counts from, and a wait is not a run.
-        // With the hold as the only record this has to answer NOTHING — the
-        // task has never run — and not "it ran at the moment it was refused",
-        // which would push a weekly task a whole week every time the machine
-        // was busy at its moment.
+        // AND IT DOES NOT MOVE THE SCHEDULE: `Journal::last` is what `due`
+        // counts from, and a wait is not a run.
         assert_eq!(
-            runner.journal.last("always"),
+            runner.core.last_run("always"),
             None,
             "a wait was counted as a run"
         );
-        // And the SCREEN still sees it, which is the half that makes the log
-        // worth having: `latest` answers with the last thing that happened,
-        // whatever it was.
         assert_eq!(
-            runner.journal.latest("always").map(|r| r.kind),
+            runner.core.journal().latest("always").map(|r| r.kind),
             Some(crate::task::OutcomeKind::Held)
         );
     }
 
-    /// A task the gate may not hold, wanted while it has never run — and it
-    /// says what it freed, the way the disk's relief does.
-    struct Relief(Arc<AtomicUsize>);
-
-    impl Task for Relief {
-        fn id(&self) -> &'static str {
-            "relief"
-        }
-        fn due(&self, _: Moment, _: &Prefs, _: Option<Moment>) -> Due {
-            Due::Not { why: "when-short" }
-        }
-        fn wanted_now(&self, _: Moment, _: &Pulse, _: &Prefs, last: Option<Moment>) -> bool {
-            last.is_none()
-        }
-        fn gated(&self) -> bool {
-            false
-        }
-        fn needs(&self, _: &Pulse, _: &Prefs) -> Verdict {
-            Verdict::Go
-        }
-        fn countdown(&self, _: &Prefs) -> u16 {
-            0
-        }
-        fn run(&self, report: &Report) -> Outcome {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            report.relieve(crate::task::Relieved {
-                at: 7,
-                freed_bytes: 42,
-                free_per_mille: 123,
-                short: false,
-            });
+    /// A module the gate may not hold, wanted while it has never run — the
+    /// shape of a relief of the disk.
+    fn relief(ran: &Arc<AtomicUsize>) -> Box<dyn Module> {
+        let ran = Arc::clone(ran);
+        Fake::new(with(
+            "relief",
+            Schedule {
+                calendar: false,
+                gated: false,
+                ..ROUTINE
+            },
+        ))
+        .due(|_, _, _| Due::Not { why: "when-short" })
+        .wanted(|_, _, _, last| last.is_none())
+        .runs(move |_| {
+            ran.fetch_add(1, Ordering::Relaxed);
             Outcome::Done(Vec::new())
-        }
+        })
+        .boxed()
     }
 
     #[test]
     fn a_relief_runs_past_a_busy_gate_and_ahead_of_the_queue() {
         // THE DEFECT THIS CATCHES, twice over. The gate holds everything while
         // the memory is busy — and a disk filled by a heavy build is exactly a
-        // machine whose memory is busy, so a relief behind the gate would wait
-        // for the disk to be full. And the runner looks only at the HEAD of the
-        // queue: a relief appended behind a task the gate is holding would be
-        // held all the same.
+        // machine whose memory is busy. And the runner looks only at the HEAD
+        // of the queue: a relief appended behind a held run would be held all
+        // the same.
         let busy = Pulse {
             ram_used_pct: Some(99),
             ..Pulse::default()
         };
         let ran = Arc::new(AtomicUsize::new(0));
-        let (shared, mut runner) = a_runner(
-            vec![Box::new(Always), Box::new(Relief(Arc::clone(&ran)))],
-            busy,
-            1000,
-        );
-        // `Always` is at the head already, held by the gate.
+        let (shared, mut runner) = a_runner(vec![always(), relief(&ran)], busy, 1000);
         shared.queue_up("always");
         runner.pump();
         assert_eq!(
@@ -1156,20 +1063,8 @@ mod tests {
         assert_eq!(
             mind.queue,
             vec!["always".to_owned()],
-            "the held task lost its place"
+            "the held one lost its place"
         );
-        // AND WHAT IT FREED REACHES THE MIND, stamped by the runner's clock
-        // and not by whatever the task wrote.
-        assert_eq!(
-            mind.relieved,
-            Some(crate::task::Relieved {
-                at: 1000,
-                freed_bytes: 42,
-                free_per_mille: 123,
-                short: false,
-            })
-        );
-        // THE GATED ONE IS STILL HELD, by name.
         runner.pump();
         assert_eq!(
             ran.load(Ordering::Relaxed),
@@ -1180,20 +1075,22 @@ mod tests {
             shared.snapshot().0.task("always").and_then(|t| t.hold),
             Some(Hold::Ram)
         );
+        // A ROW WITHOUT A CALENDAR says so, and says why it has no moment.
+        let row = shared.snapshot().0.task("relief").cloned().expect("row");
+        assert!(!row.calendar);
+        assert_eq!(row.why_not, "when-short");
+        assert_eq!(row.why_key, "brain-why-when-short");
     }
 
     #[test]
     fn a_rehearsed_relief_rests_like_a_real_one() {
-        // THE DEFECT THIS CATCHES: a rehearsal is not written in the journal,
-        // so a task that rests "since the last run" never rested after one —
-        // and a brain that only rehearses (the development loop's) started
-        // the disk's relief on every tick.
+        // A rehearsal is not written in the journal, so a module that rests
+        // "since the last run" never rested after one — and a brain that only
+        // rehearses (the development loop's) started the relief every tick.
+        // (That a rehearsal TELLS nothing is the module's own rule, tested
+        // where it is written.)
         let ran = Arc::new(AtomicUsize::new(0));
-        let (shared, mut runner) = a_runner(
-            vec![Box::new(Relief(Arc::clone(&ran)))],
-            Pulse::default(),
-            1000,
-        );
+        let (shared, mut runner) = a_runner(vec![relief(&ran)], Pulse::default(), 1000);
         shared.change(|m| m.rehearsing = Some("relief".to_owned()));
         runner.pump();
         assert_eq!(ran.load(Ordering::Relaxed), 1);
@@ -1207,39 +1104,21 @@ mod tests {
     }
 
     #[test]
-    fn a_rehearsed_relief_says_nothing_about_the_disk() {
-        // A REHEARSAL CHANGED NOTHING, so "room made" about it would be a lie.
-        let ran = Arc::new(AtomicUsize::new(0));
-        let (shared, mut runner) = a_runner(
-            vec![Box::new(Relief(Arc::clone(&ran)))],
-            Pulse::default(),
-            1000,
-        );
-        shared.change(|m| m.rehearsing = Some("relief".to_owned()));
-        runner.pump();
-        assert_eq!(ran.load(Ordering::Relaxed), 1);
-        assert_eq!(shared.snapshot().0.relieved, None);
-    }
-
-    #[test]
-    fn a_postponement_is_written_down_and_the_task_leaves_the_queue() {
+    fn a_postponement_is_written_down_and_the_module_leaves_the_queue() {
         // "NOT NOW" HAS TO MEAN SOMETHING. Without a record the next tick, half
-        // a minute later, finds the task due again and asks the same question —
-        // and it keeps asking until the window closes.
-        let (shared, mut runner) = a_runner(vec![Box::new(Once)], Pulse::default(), 1000);
+        // a minute later, finds it due again and asks the same question — and
+        // it keeps asking until the window closes.
+        let (shared, mut runner) = a_runner(vec![once()], Pulse::default(), 1000);
         shared.queue_up("once");
         shared.change(|m| m.postponed = Some("once".to_owned()));
         runner.pump();
         assert_eq!(
-            runner.journal.runs.len(),
+            runner.core.journal().runs.len(),
             1,
             "it did not note the postponement"
         );
-        assert_eq!(runner.journal.runs[0].why, "postponed");
-        assert_eq!(runner.journal.last("once"), Some(1000));
-        // AND IT IS NOT ASKED AGAIN. `Once` panics if it runs, and without the
-        // record it would be due on this very pass — which is the defect: the
-        // person answers "not now" and is asked again half a minute later.
+        assert_eq!(runner.core.journal().runs[0].why, "postponed");
+        assert_eq!(runner.core.last_run("once"), Some(1000));
         runner.pump();
         let (mind, _) = shared.snapshot();
         assert!(mind.queue.is_empty(), "it went back into the queue");
@@ -1253,21 +1132,14 @@ mod tests {
     #[test]
     fn what_waits_behind_something_else_says_so() {
         let log = Arc::new(Mutex::new(Vec::new()));
-        let tasks: Vec<Box<dyn Task>> = vec![
-            Box::new(Slow {
-                id: "one",
-                log: Arc::clone(&log),
-                takes: Duration::from_millis(1),
-            }),
-            Box::new(Slow {
-                id: "two",
-                log: Arc::clone(&log),
-                takes: Duration::from_millis(1),
-            }),
-        ];
-        let (shared, mut runner) = a_runner(tasks, Pulse::default(), 1000);
-        // `two` is queued while `one` is marked as running: the row has to say
-        // it is waiting for the brain and not for the machine.
+        let (shared, mut runner) = a_runner(
+            vec![
+                slow("one", &log, Duration::from_millis(1)),
+                slow("two", &log, Duration::from_millis(1)),
+            ],
+            Pulse::default(),
+            1000,
+        );
         shared.change(|m| m.running = "one".to_owned());
         shared.queue_up("two");
         runner.pump();
@@ -1277,93 +1149,67 @@ mod tests {
     }
 
     #[test]
-    fn the_countdown_holds_it_back_until_the_deadline() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        struct Warned(Arc<Mutex<Vec<(&'static str, char)>>>);
-        impl Task for Warned {
-            fn id(&self) -> &'static str {
-                "warned"
-            }
-            fn due(&self, _now: Moment, _prefs: &Prefs, _last: Option<Moment>) -> Due {
-                Due::Not { why: "test" }
-            }
-            fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-                Verdict::Go
-            }
-            fn countdown(&self, _prefs: &Prefs) -> u16 {
-                60
-            }
-            fn run(&self, _report: &Report) -> Outcome {
-                self.0.lock().expect("log").push(("warned", '('));
-                Outcome::Done(Vec::new())
-            }
-        }
-        let clock = Arc::new(Mutex::new(1000));
-        let shared = Arc::new(Shared::of(Prefs::default()));
-        let mut runner = Runner::new(
-            Arc::clone(&shared),
-            Registry::of(vec![Box::new(Warned(Arc::clone(&log)))]).expect("the registry"),
-            Box::new(FakeMeter(Pulse::default())),
-            Box::new(Hand(Arc::clone(&clock))),
-            nowhere(),
+    fn the_countdown_is_the_modules_and_holds_it_back_until_the_deadline() {
+        let log = Arc::new(Mutex::new(0));
+        let ran = Arc::clone(&log);
+        let clock = Hand::at(1000);
+        let core = a_core(
+            vec![
+                Fake::new(with(
+                    "warned",
+                    Schedule {
+                        countdown_seconds: 60,
+                        ..ROUTINE
+                    },
+                ))
+                .runs(move |_| {
+                    *ran.lock().expect("log") += 1;
+                    Outcome::Done(Vec::new())
+                })
+                .boxed(),
+            ],
+            Prefs::default(),
+            clock.clone(),
         );
+        let shared = Arc::clone(&core.shared);
+        let mut runner = Runner::new(core, Box::new(FakeMeter(Pulse::default())));
         shared.queue_up("warned");
         runner.pump();
-        let (mind, _) = shared.snapshot();
-        let announced = mind.announcement.expect("it did not warn");
-        assert_eq!(announced.deadline, 1060);
-        assert_eq!(announced.total_seconds, 60);
-        assert!(
-            log.lock().expect("log").is_empty(),
-            "it ran without warning"
-        );
-
-        // The clock reaches the deadline, and only then does it run.
-        *clock.lock().expect("clock") = 1060;
+        let announced = shared.snapshot().0.announcement.expect("it did not warn");
+        assert_eq!((announced.deadline, announced.total_seconds), (1060, 60));
+        assert_eq!(announced.why, "asked");
+        assert_eq!(*log.lock().expect("log"), 0, "it ran without warning");
+        clock.set(1060);
         runner.pump();
-        assert_eq!(log.lock().expect("log").len(), 1);
+        assert_eq!(*log.lock().expect("log"), 1);
         assert!(
             shared.snapshot().0.announcement.is_none(),
             "the notice stayed"
         );
     }
 
-    /// A TASK WITH NO COUNTDOWN RUNS WITHOUT A WARNING — not even one that
+    /// A MODULE WITH NO COUNTDOWN RUNS WITHOUT A WARNING — not even one that
     /// stands for the instant before it starts, which every screen drew.
     #[test]
     fn a_zero_countdown_is_never_announced() {
-        struct Watch(Arc<Mutex<u8>>);
-        impl Task for Watch {
-            fn id(&self) -> &'static str {
-                "watch"
-            }
-            fn due(&self, _now: Moment, _prefs: &Prefs, _last: Option<Moment>) -> Due {
-                Due::Not { why: "test" }
-            }
-            fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-                Verdict::Go
-            }
-            fn countdown(&self, _prefs: &Prefs) -> u16 {
-                0
-            }
-            fn run(&self, _report: &Report) -> Outcome {
-                *self.0.lock().expect("runs") += 1;
-                Outcome::Done(Vec::new())
-            }
-        }
-        let runs = Arc::new(Mutex::new(0));
-        let shared = Arc::new(Shared::of(Prefs::default()));
-        let mut runner = Runner::new(
-            Arc::clone(&shared),
-            Registry::of(vec![Box::new(Watch(Arc::clone(&runs)))]).expect("the registry"),
-            Box::new(FakeMeter(Pulse::default())),
-            Box::new(Hand(Arc::new(Mutex::new(1000)))),
-            nowhere(),
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&runs);
+        let (shared, mut runner) = a_runner(
+            vec![
+                Fake::routine("watch")
+                    .runs(move |_| {
+                        counting.fetch_add(1, Ordering::Relaxed);
+                        Outcome::Done(Vec::new())
+                    })
+                    .boxed(),
+            ],
+            Pulse::default(),
+            1000,
         );
         shared.queue_up("watch");
         runner.pump();
         assert_eq!(
-            *runs.lock().expect("runs"),
+            runs.load(Ordering::Relaxed),
             1,
             "it did not run in the same pass"
         );
@@ -1375,19 +1221,13 @@ mod tests {
 
     #[test]
     fn a_hold_takes_the_countdown_off_the_screen() {
-        // A warning that kept counting while the gate was refusing would end at
-        // zero with nothing happening — which is the shape of a promise a
-        // screen must not make.
-        let shared = Arc::new(Shared::of(Prefs::default()));
-        let mut runner = Runner::new(
-            Arc::clone(&shared),
-            Registry::of(vec![Box::new(Always)]).expect("the registry"),
-            Box::new(FakeMeter(Pulse {
+        let (shared, mut runner) = a_runner(
+            vec![always()],
+            Pulse {
                 ram_used_pct: Some(99),
                 ..Pulse::default()
-            })),
-            Box::new(Hand(Arc::new(Mutex::new(10)))),
-            nowhere(),
+            },
+            10,
         );
         shared.change(|m| {
             m.announcement = Some(Announcement {
@@ -1409,45 +1249,29 @@ mod tests {
                 command: "a",
                 needs_root: true,
                 on_by_default: true,
+                name_key: "",
+                does_key: "",
             },
             Step {
                 id: "off-by-default",
                 command: "b",
                 needs_root: false,
                 on_by_default: false,
+                name_key: "",
+                does_key: "",
             },
         ];
-        struct Stepped;
-        impl Task for Stepped {
-            fn id(&self) -> &'static str {
-                "stepped"
-            }
-            fn due(&self, _now: Moment, _prefs: &Prefs, _last: Option<Moment>) -> Due {
-                Due::Not { why: "test" }
-            }
-            fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-                Verdict::Go
-            }
-            fn countdown(&self, _prefs: &Prefs) -> u16 {
-                0
-            }
-            fn steps(&self) -> &'static [Step] {
-                STEPS
-            }
-            fn run(&self, _report: &Report) -> Outcome {
-                Outcome::Done(Vec::new())
-            }
-        }
-        // FIRST, THE MACHINE NOBODY HAS TOUCHED. This is the case that was
-        // wrong, and it was wrong in the direction that is hardest to notice:
-        // the set of exceptions is empty, so `!contains(id)` answered "on" for
-        // BOTH rows, and "changed" — which was `contains(id) == on_by_default`
-        // — answered true for the one that ships off. The owner read six of
-        // those on the update's page and asked what they meant.
-        let (shared, mut runner) = a_runner(vec![Box::new(Stepped)], Pulse::default(), 1);
+        let stepped = || Fake::routine("stepped").steps(STEPS).boxed();
+        // FIRST, THE MACHINE NOBODY HAS TOUCHED: every step is what it ships.
+        let (shared, mut runner) = a_runner(vec![stepped()], Pulse::default(), 1);
         runner.pump();
-        let (mind, _) = shared.snapshot();
-        let steps = &mind.task("stepped").expect("row").steps;
+        let steps = shared
+            .snapshot()
+            .0
+            .task("stepped")
+            .expect("row")
+            .steps
+            .clone();
         assert!(
             steps[0].on,
             "a step that ships on is off with no file at all"
@@ -1456,116 +1280,167 @@ mod tests {
             !steps[1].on,
             "a step that ships OFF is drawn as on with no file at all"
         );
-        for s in steps {
-            assert_eq!(
-                s.on, s.on_by_default,
-                "`{}` differs from its default on a machine nobody has touched",
-                s.id
-            );
-        }
 
         // AND NOW ONE FLIP, which moves exactly one row and in one direction.
-        let (shared, mut runner) = a_runner(vec![Box::new(Stepped)], Pulse::default(), 1);
+        let (shared, mut runner) = a_runner(vec![stepped()], Pulse::default(), 1);
         shared.change(|m| {
-            m.prefs
-                .mine("stepped")
-                .steps_flipped
-                .insert("on-by-default".into());
+            m.prefs.tasks.insert(
+                "stepped".to_owned(),
+                TaskPrefs {
+                    steps_flipped: ["on-by-default".to_owned()].into(),
+                    ..TaskPrefs::default()
+                },
+            );
         });
         runner.pump();
-        let (mind, _) = shared.snapshot();
-        let steps = &mind.task("stepped").expect("row").steps;
+        let steps = shared
+            .snapshot()
+            .0
+            .task("stepped")
+            .expect("row")
+            .steps
+            .clone();
         assert!(!steps[0].on, "the switched-off step is still on");
-        assert_ne!(
-            steps[0].on, steps[0].on_by_default,
-            "the row the person moved does not read as moved"
-        );
         assert!(!steps[1].on, "flipping one step moved another one with it");
-        assert_eq!(
-            steps[1].on, steps[1].on_by_default,
-            "an untouched row reads as moved"
-        );
-
-        // AND THE OTHER DIRECTION, which the old shape could not express at
-        // all: switching ON a step the distro ships OFF.
-        let (shared, mut runner) = a_runner(vec![Box::new(Stepped)], Pulse::default(), 1);
-        shared.change(|m| {
-            m.prefs
-                .mine("stepped")
-                .steps_flipped
-                .insert("off-by-default".into());
-        });
-        runner.pump();
-        let (mind, _) = shared.snapshot();
-        let steps = &mind.task("stepped").expect("row").steps;
-        assert!(steps[1].on, "a step that was switched on is still off");
-        assert_ne!(
-            steps[1].on, steps[1].on_by_default,
-            "the row the person moved does not read as moved"
-        );
     }
 
     #[test]
     fn a_row_carries_the_next_moment_and_the_word_when_there_is_none() {
-        struct Scheduled(Arc<dyn Offset>);
-        impl Task for Scheduled {
-            fn id(&self) -> &'static str {
-                "scheduled"
-            }
-            fn due(&self, now: Moment, prefs: &Prefs, last: Option<Moment>) -> Due {
-                let mine = prefs.of("scheduled");
-                if !mine.enabled {
-                    return Due::Not { why: "off" };
-                }
-                let at = crate::schedule::next_moment(now, last, &mine, self.0.as_ref());
-                if at <= now { Due::Now } else { Due::At(at) }
-            }
-            fn needs(&self, _pulse: &Pulse, _prefs: &Prefs) -> Verdict {
-                Verdict::Go
-            }
-            fn countdown(&self, _prefs: &Prefs) -> u16 {
-                0
-            }
-            fn run(&self, _report: &Report) -> Outcome {
-                Outcome::Done(Vec::new())
-            }
-        }
         let zone: Arc<dyn Offset> = Arc::new(Fixed(0));
-        let shared = Arc::new(Shared::of(Prefs {
-            tasks: [(
-                "scheduled".to_owned(),
-                TaskPrefs {
-                    part_of_day: PartOfDay::Night,
-                    ..TaskPrefs::default()
-                },
-            )]
-            .into_iter()
-            .collect(),
-            ..Prefs::default()
-        }));
-        let mut runner = Runner::new(
-            Arc::clone(&shared),
-            Registry::of(vec![Box::new(Scheduled(zone))]).expect("the registry"),
-            Box::new(FakeMeter(Pulse::default())),
-            // 09:00 on day 0: the night window closed, so the next one is
-            // tomorrow at 02:00.
-            Box::new(Hand(Arc::new(Mutex::new(9 * 3600)))),
-            nowhere(),
-        );
+        let calendar = Fake::new(with(
+            "scheduled",
+            Schedule {
+                part_of_day: PartOfDay::Night,
+                ..ROUTINE
+            },
+        ))
+        .due(move |now, mine, last| {
+            let at = crate::schedule::next_moment(now, last, mine, zone.as_ref());
+            if at <= now { Due::Now } else { Due::At(at) }
+        });
+        // 09:00 on day 0: the night window closed, so the next one is
+        // tomorrow at 02:00 — the MODULE'S window, with no entry in the file.
+        let (shared, mut runner) = a_runner(vec![calendar.boxed()], Pulse::default(), 9 * 3600);
         runner.pump();
-        let (mind, _) = shared.snapshot();
-        let row = mind.task("scheduled").expect("row");
+        let row = shared.snapshot().0.task("scheduled").cloned().expect("row");
         assert_eq!(row.next, 86_400 + 2 * 3600);
         assert!(row.why_not.is_empty());
 
         // Switched off, there is no moment at all — and the row says the word
-        // instead of a date nothing will honour.
-        shared.change(|m| m.prefs.mine("scheduled").enabled = false);
+        // instead of a date nothing will honour. The CORE says it: the module
+        // was not asked.
+        runner
+            .core
+            .set("scheduled", &crate::wire::Knob::Enabled(false))
+            .expect("off");
+        runner.pump();
+        let row = shared.snapshot().0.task("scheduled").cloned().expect("row");
+        assert_eq!((row.next, row.why_not.as_str()), (0, "off"));
+        assert!(!row.enabled);
+    }
+
+    #[test]
+    fn a_quiet_brain_starts_nothing_by_itself_and_what_is_asked_still_runs() {
+        // THE VIRTUAL MACHINES' LINE: `{"quiet": true}`, naming no module.
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&runs);
+        let wanted = Arc::new(AtomicUsize::new(0));
+        let asked = Arc::clone(&wanted);
+        let core = a_core(
+            vec![
+                Fake::routine("eager")
+                    .due(|_, _, _| Due::Now)
+                    .wanted(move |_, _, _, _| {
+                        asked.fetch_add(1, Ordering::Relaxed);
+                        true
+                    })
+                    .runs(move |_| {
+                        counting.fetch_add(1, Ordering::Relaxed);
+                        Outcome::Done(Vec::new())
+                    })
+                    .boxed(),
+            ],
+            serde_json::from_str(r#"{"quiet": true}"#).expect("prefs"),
+            Hand::at(1000),
+        );
+        let shared = Arc::clone(&core.shared);
+        let mut runner = Runner::new(core, Box::new(FakeMeter(Pulse::default())));
+        runner.pump();
+        runner.pump();
+        assert_eq!(
+            runs.load(Ordering::Relaxed),
+            0,
+            "a quiet brain started something"
+        );
+        assert_eq!(
+            wanted.load(Ordering::Relaxed),
+            0,
+            "a quiet brain asked the machine"
+        );
+        assert!(shared.snapshot().0.queue.is_empty());
+        assert_eq!(
+            shared
+                .snapshot()
+                .0
+                .task("eager")
+                .map(|t| t.why_not.clone())
+                .as_deref(),
+            Some("quiet")
+        );
+        // ASKED FOR, it runs.
+        shared.queue_up("eager");
+        runner.pump();
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_module_that_only_watches_is_never_queued_or_run() {
+        let (shared, mut runner) =
+            a_runner(vec![Fake::watch("looker").boxed()], Pulse::default(), 1000);
+        shared.queue_up("looker");
         runner.pump();
         let (mind, _) = shared.snapshot();
-        let row = mind.task("scheduled").expect("row");
-        assert_eq!(row.next, 0);
-        assert_eq!(row.why_not, "off");
-        assert!(!row.enabled);
+        assert!(mind.queue.is_empty(), "a watch waited in the queue");
+        assert_eq!(mind.running, "");
+        assert_eq!(
+            mind.task("looker").map(|t| t.kind),
+            Some(crate::task::Kind::Watch)
+        );
+    }
+
+    #[test]
+    fn the_run_gets_its_door_out_and_the_face_follows_at_once() {
+        // WHAT A RUN FOUND is what its notices say — and they say it as the
+        // run ends, not half a minute later.
+        let found = Arc::new(AtomicUsize::new(0));
+        let (runs, face) = (Arc::clone(&found), Arc::clone(&found));
+        let (shared, mut runner) = a_runner(
+            vec![
+                Fake::routine("finder")
+                    .runs(move |run| {
+                        assert_eq!(run.ctx().module(), "finder");
+                        assert_eq!(run.ctx().now(), 1000);
+                        runs.store(3, Ordering::Relaxed);
+                        Outcome::Done(Vec::new())
+                    })
+                    .face(move |_| crate::module::Face {
+                        screen: u64::try_from(face.load(Ordering::Relaxed)).unwrap_or(0),
+                        ..crate::module::Face::default()
+                    })
+                    .boxed(),
+            ],
+            Pulse::default(),
+            1000,
+        );
+        shared.queue_up("finder");
+        runner.pump();
+        assert_eq!(
+            shared
+                .snapshot()
+                .0
+                .task("finder")
+                .map(|t| t.screen_generation),
+            Some(3)
+        );
     }
 }

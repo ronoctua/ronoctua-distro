@@ -179,8 +179,9 @@ in
         // lib.optionalAttrs config.ronoctua.media.enable {
           RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
         }
-        # AND THE PO TOKEN'S PAIR, exactly when the queue has it: playing
-        # YouTube anonymously needs the same attestation downloading does.
+        # AND THE PO TOKEN'S THREE, exactly when the queue has them: playing
+        # YouTube anonymously needs the same attestation downloading does
+        # (`ronoctua_ytdlp::pot_flags`, all three or none).
         // {
           RONOCTUA_PLAYER_PORT = toString cfg.port;
           # MPRIS: `Raise` raises the column through the shell, and
@@ -188,10 +189,10 @@ in
           RONOCTUA_SHELL = "${ronoctua.shell}/bin/ronoctua-shell";
           RONOCTUA_PLAYER_TYPES = "${entry}/share/ronoctua/player-types";
         }
-        // lib.optionalAttrs (config.ronoctua.transfers.poToken == "on-demand") {
-          RONOCTUA_POT_HOME = "${ronoctua.potProvider}/server";
-          RONOCTUA_DENO = lib.getExe pkgs.deno;
-        }
+        # The minter's own three (`nix/pot-provider.nix`), never spelled here.
+        // lib.optionalAttrs (
+          config.ronoctua.transfers.poToken == "on-demand"
+        ) ronoctua.potProvider.environment
         # THE AMBIENT SOUNDS (`nix/ambience.nix`): the loops and the index the
         # daemon reads, ~42 MiB, with the player and never without it. Named
         # only where the flake has them — their originals are a Release asset

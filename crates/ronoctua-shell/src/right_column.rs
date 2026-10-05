@@ -23,9 +23,7 @@
 //! One file per tenant in the runtime directory (`column-<tenant>.pid`),
 //! `<pid> <size> <workspace…>`: the workspace LAST, so a name with spaces in
 //! it survives, and absent when there was no compositor to name one. Each
-//! process writes only its own, through a draft renamed into place. The old
-//! single file (`column.pid`, a bare pid or `<pid> player`) is still read as
-//! the player's, until no column started before the slot is left alive.
+//! process writes only its own, through a draft renamed into place.
 //!
 //! # A living pid is not enough
 //!
@@ -38,26 +36,27 @@
 
 use crate::column::{Opening, Size};
 
-/// The runtime file the slot was kept in before there was one per tenant —
-/// read as the player's, and never written.
-pub const LEGACY: &str = "column.pid";
-
 /// Who can hold a right column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tenant {
     /// The player (`ronoctua-shell column player`, or `column` alone).
     Player,
+
+    /// The search (`ronoctua-shell column fast-access`, `LEADER d c`).
+    FastAccess,
 }
 
 impl Tenant {
     /// Every tenant, for reading the files back.
-    pub const ALL: [Self; 1] = [Self::Player];
+    pub const ALL: [Self; 2] = [Self::Player, Self::FastAccess];
 
     /// Its name in the files and on the command line.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Player => "player",
+
+            Self::FastAccess => "fast-access",
         }
     }
 
@@ -114,22 +113,6 @@ fn line_of(h: &Holder) -> String {
     }
 }
 
-/// The OLD file: a bare pid, or `<pid> player`. Anything else in it is not
-/// the player's, and is not read as a column at all.
-fn parse_legacy(text: &str) -> Option<Holder> {
-    let mut words = text.split_whitespace();
-    let pid = words.next()?.parse().ok()?;
-    match words.next() {
-        None | Some("player") => Some(Holder {
-            pid,
-            tenant: Tenant::Player,
-            size: Size::Medium,
-            workspace: None,
-        }),
-        Some(_) => None,
-    }
-}
-
 /// This process's pid, as the files write it.
 fn me() -> Option<i32> {
     i32::try_from(std::process::id()).ok()
@@ -150,17 +133,8 @@ fn believed(h: Holder) -> Option<Holder> {
 pub fn holder(tenant: Tenant) -> Option<Holder> {
     let read =
         |leaf: &str| ronoctua_xdg::runtime_file(leaf).and_then(|p| std::fs::read_to_string(p).ok());
-    if let Some(h) = read(&tenant.file())
+    read(&tenant.file())
         .and_then(|t| parse(&t, tenant))
-        .and_then(believed)
-    {
-        return Some(h);
-    }
-    // THE COLUMN STARTED BEFORE THE SLOT WAS PER TENANT, still up.
-    (tenant == Tenant::Player)
-        .then(|| read(LEGACY))
-        .flatten()
-        .and_then(|t| parse_legacy(&t))
         .and_then(believed)
 }
 
@@ -355,7 +329,7 @@ pub fn raise_again() {
         }
         // WAITED FOR, aside (`foreign::waited`): a column the footer raises
         // and then forgets would end as a zombie of the footer.
-        if let Ok(child) = std::process::Command::new(&program)
+        if let Ok(child) = crate::watchdog::unshared(&mut std::process::Command::new(&program))
             .args(raised_as(&h))
             .stdin(std::process::Stdio::null())
             .spawn()
@@ -423,17 +397,6 @@ mod tests {
         }
         assert_eq!(parse("42 huge 2", Tenant::Player), None, "an unknown size");
         assert_eq!(parse("", Tenant::Player), None);
-    }
-
-    /// FAILS IF: the file from before the slot was per tenant — a bare pid,
-    /// or `<pid> player` — stops being read as the player's column.
-    #[test]
-    fn a_bare_legacy_pid_is_the_player() {
-        let h = parse_legacy("42\n").expect("a bare pid");
-        assert_eq!((h.pid, h.tenant, h.workspace), (42, Tenant::Player, None));
-        assert_eq!(parse_legacy("42 player").map(|h| h.pid), Some(42));
-        assert_eq!(parse_legacy("42 somebody"), None);
-        assert_eq!(parse_legacy(""), None);
     }
 
     /// FAILS IF: taking a workspace leaves the same tenant up elsewhere (it

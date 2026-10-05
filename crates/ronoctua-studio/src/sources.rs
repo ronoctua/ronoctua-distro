@@ -15,8 +15,17 @@
 //! The chain is the one the engine sets on the source (`Shared::chain`): the
 //! first visible layer that shows the source decides it. Two layers showing
 //! the SAME camera with DIFFERENT effects therefore show the first's — a
-//! camera can be opened once, and running two chains on one capture is future
-//! work written down in `docs/PENDING.md`.
+//! camera can be opened once.
+//!
+//! # And a SECOND chain, for the virtual camera
+//!
+//! What a call sees is not always what the preview shows: a person may want
+//! the background blurred for the call and the plain picture on screen. A
+//! camera source runs a second chain (`Shared::own`) on a copy of the same
+//! captured frame and publishes it beside the first (`Shared::own_frame`) —
+//! one capture, two pictures, and the second costs nothing unless the virtual
+//! camera sends the camera with an effect of its own
+//! (`prefs::VirtualEffect`).
 
 use std::{
     path::PathBuf,
@@ -55,6 +64,11 @@ pub struct Shared {
     /// The camera is shown as a mirror — the hands read it as the person sees
     /// it either way.
     pub mirrored: AtomicBool,
+    /// The virtual camera's own chain, when it has one: run on a copy of the
+    /// same captured frame. `None` is the first chain's picture.
+    pub own: Mutex<Option<Chain>>,
+    /// The newest frame through that chain.
+    pub own_frame: Mutex<Option<Arc<Frame>>>,
     stop: AtomicBool,
 }
 
@@ -85,6 +99,32 @@ impl Shared {
             let now = left.min(step);
             std::thread::sleep(now);
             left -= now;
+        }
+    }
+
+    /// Sets the virtual camera's own chain, or takes it away.
+    pub fn set_own(&self, chain: Option<Chain>) {
+        if let Ok(mut c) = self.own.lock()
+            && *c != chain
+        {
+            if chain.is_none()
+                && let Ok(mut f) = self.own_frame.lock()
+            {
+                *f = None;
+            }
+            *c = chain;
+        }
+    }
+
+    /// The chain the virtual camera has of its own, when it has one.
+    fn own_chain(&self) -> Option<Chain> {
+        self.own.lock().ok().and_then(|c| c.clone())
+    }
+
+    /// Publishes a frame through the virtual camera's own chain.
+    fn publish_own(&self, frame: Frame) {
+        if let Ok(mut slot) = self.own_frame.lock() {
+            *slot = Some(Arc::new(frame));
         }
     }
 
@@ -142,6 +182,7 @@ pub fn start(source: Source, setup: Setup) -> Live {
             Source::Window { matching } => screen_source(&mine, &Target::Window(matching), &setup),
             Source::Image { path } => still(&mine, &setup, || picture(&path, setup.program)),
             Source::Colour { rgba } => still(&mine, &setup, || colour(&rgba)),
+            Source::Text { text, rgba } => words(&mine, &setup, &text, &rgba),
             Source::Media { path } => media(&mine, &path, &setup),
         })
         .ok();
@@ -169,6 +210,12 @@ impl Effects {
 
     fn run(&mut self, frame: &mut Frame, shared: &Shared, setup: &Setup) -> Option<Trouble> {
         let chain = shared.chain.lock().map(|c| c.clone()).unwrap_or_default();
+        self.run_chain(frame, &chain, setup)
+    }
+
+    /// The same, for a chain the caller holds — the virtual camera's own.
+    fn run_chain(&mut self, frame: &mut Frame, chain: &Chain, setup: &Setup) -> Option<Trouble> {
+        let chain = chain.clone();
         if chain.0.is_empty() {
             self.segment = None;
             return None;
@@ -354,6 +401,9 @@ type Newest = Arc<(Mutex<Slot>, Condvar)>;
 
 fn camera(shared: &Shared, identity: Option<&str>, setup: &Setup) {
     let mut effects = Effects::new();
+    // THE SECOND CHAIN'S OWN SCRATCH AND SEGMENTER: its mask and its backdrop
+    // are its own, and sharing them would hand one chain the other's.
+    let mut own_effects = Effects::new();
     let mut buf = Vec::new();
     while shared.going() {
         let cameras = ronoctua_camera::scan();
@@ -452,7 +502,8 @@ fn camera(shared: &Shared, identity: Option<&str>, setup: &Setup) {
                             height: h as usize,
                             rgba: buf.clone(),
                         };
-                        let trouble = effects.run(&mut frame, shared, setup);
+                        let trouble =
+                            through_both(&mut frame, shared, setup, &mut effects, &mut own_effects);
                         shared.publish(frame);
                         if trouble.is_some() {
                             shared.say(trouble);
@@ -484,6 +535,30 @@ fn camera(shared: &Shared, identity: Option<&str>, setup: &Setup) {
         drop(capture);
         shared.rest(Duration::from_secs(2));
     }
+}
+
+/// One captured frame through both chains: the virtual camera's own first,
+/// on a copy of the capture before the first chain touches it, published
+/// beside; then the first, in place.
+///
+/// Answers the FIRST trouble of either: the preview's chain, else the
+/// virtual camera's own. A call that gets the plain picture because its
+/// blur has no model is said in the camera's doors like the preview's —
+/// thrown away, the settings would name an effect nobody was getting.
+fn through_both(
+    frame: &mut Frame,
+    shared: &Shared,
+    setup: &Setup,
+    effects: &mut Effects,
+    own_effects: &mut Effects,
+) -> Option<Trouble> {
+    let own_trouble = shared.own_chain().and_then(|own| {
+        let mut copy = frame.clone();
+        let trouble = own_effects.run_chain(&mut copy, &own, setup);
+        shared.publish_own(copy);
+        trouble
+    });
+    effects.run(frame, shared, setup).or(own_trouble)
 }
 
 fn screen_source(shared: &Shared, target: &Target, setup: &Setup) {
@@ -545,6 +620,22 @@ fn still(shared: &Shared, setup: &Setup, make: impl Fn() -> Option<Frame>) {
         }
         shared.rest(Duration::from_millis(200));
     }
+}
+
+/// A text source: the words drawn once, and again when the chain changes —
+/// or the trouble that says there is no face to draw them with.
+fn words(shared: &Shared, setup: &Setup, text: &str, rgba: &str) {
+    let colour = crate::words::rgba_of(rgba).unwrap_or([255, 255, 255, 255]);
+    if !crate::words::has_a_face() {
+        while shared.going() {
+            shared.say(Some(Trouble::NoFace));
+            shared.rest(Duration::from_secs(5));
+        }
+        return;
+    }
+    still(shared, setup, || {
+        crate::words::drawn(text, colour, setup.program.1)
+    });
 }
 
 fn picture(path: &str, program: (u32, u32)) -> Option<Frame> {
@@ -648,6 +739,97 @@ fn media(shared: &Shared, path: &str, setup: &Setup) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_capture_goes_through_two_chains() {
+        // THE PREVIEW PLAIN AND THE CALL NEGATIVE, out of one frame: the
+        // virtual camera's chain runs on a copy, and the first chain's frame
+        // is not touched by it.
+        let shared = Shared::default();
+        let setup = Setup {
+            program: (2, 1),
+            fps: 30,
+            cursor: false,
+            backdrop: None,
+            model: None,
+        };
+        shared.set_own(Some(Chain(vec![
+            ronoctua_effects::Step::new("negative").expect("declared"),
+        ])));
+        let mut frame = Frame {
+            width: 2,
+            height: 1,
+            rgba: vec![10, 20, 30, 255, 200, 100, 0, 255],
+        };
+        let (mut a, mut b) = (Effects::new(), Effects::new());
+        let _ = through_both(&mut frame, &shared, &setup, &mut a, &mut b);
+        assert_eq!(
+            frame.rgba,
+            vec![10, 20, 30, 255, 200, 100, 0, 255],
+            "the preview's frame changed"
+        );
+        let own = shared
+            .own_frame
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the own frame");
+        assert_ne!(
+            own.rgba, frame.rgba,
+            "the virtual camera's chain did not run"
+        );
+        // AND WITH NO OWN CHAIN there is no second picture.
+        shared.set_own(None);
+        assert!(shared.own_frame.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn the_virtual_cameras_own_trouble_is_said() {
+        // A BLUR FOR THE CALL WITH NO MODEL: the preview's chain is plain and
+        // fine, and the trouble that comes back is the call's.
+        let shared = Shared::default();
+        let setup = Setup {
+            program: (2, 1),
+            fps: 30,
+            cursor: false,
+            backdrop: None,
+            model: None,
+        };
+        shared.set_own(Some(Chain(vec![
+            ronoctua_effects::Step::new("background-blur").expect("declared"),
+        ])));
+        let mut frame = Frame {
+            width: 2,
+            height: 1,
+            rgba: vec![10, 20, 30, 255, 200, 100, 0, 255],
+        };
+        let (mut a, mut b) = (Effects::new(), Effects::new());
+        assert_eq!(
+            through_both(&mut frame, &shared, &setup, &mut a, &mut b),
+            Some(Trouble::NoModel)
+        );
+        // AND WITH NO OWN CHAIN, nothing to say.
+        shared.set_own(None);
+        assert_eq!(
+            through_both(&mut frame, &shared, &setup, &mut a, &mut b),
+            None
+        );
+    }
+
+    #[test]
+    fn the_virtual_effect_is_the_previews_none_or_its_own() {
+        use crate::prefs::VirtualEffect;
+        assert_eq!(VirtualEffect::Preview.chain(), None);
+        assert_eq!(VirtualEffect::None.chain(), Some(Chain(Vec::new())));
+        let own = VirtualEffect::Own("negative".to_owned())
+            .chain()
+            .expect("a chain");
+        assert_eq!(own.0.len(), 1);
+        let ring = VirtualEffect::ring();
+        assert_eq!(ring[0], VirtualEffect::Preview);
+        assert_eq!(ring[1], VirtualEffect::None);
+        assert!(ring.len() > 2);
+    }
 
     #[test]
     fn a_colour_reads_with_and_without_alpha() {

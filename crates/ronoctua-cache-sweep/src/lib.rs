@@ -65,7 +65,7 @@
 //! It is answered before this is ever started, by `ronoctua_brain::runner::judge`
 //! against a gate the person configured in one place. A second opinion here
 //! would be a second policy that drifts from the first — the same refusal
-//! `tasks/update.rs` writes out about itself.
+//! the update's brain module writes out about itself.
 //!
 //! # Two walks, and the relief that runs them
 //!

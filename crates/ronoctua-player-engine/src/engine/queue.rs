@@ -22,6 +22,18 @@
 //! changes by an event: a leaf changing, a pause, a stop, closing. Never on a
 //! clock. Version 1 of `player.json` held the whole queue, flat; it is read
 //! once as files and written in the new form.
+//!
+//! # Saved, or not
+//!
+//! A queue opened from a `.rqueue` — or saved as one — keeps where it came
+//! from ([`Origin`], in `player.json` too): the file, its name, what the
+//! queue WAS then (a SHA-256 of the queue as a file keeps it, [`fingerprint`])
+//! and what the file was then (its length, time and inode, [`FileStamp`]).
+//! "Not saved" is the fingerprint of now against the one kept — not the
+//! tree's revision, which does not move for a lane's volume — computed only
+//! when something changed since it was last computed. Saving again writes
+//! over the file unless it changed on the disk since, which is the person's
+//! to say (`force`).
 
 use std::path::Path;
 
@@ -63,6 +75,221 @@ const WHERE_VERSION: u32 = 2;
 /// (`player-set-joiner`).
 pub(crate) const JOINER: &str = " + ";
 
+/// How often a queue that changed only in a lane — a start, a volume — is
+/// written at most: a meter dragged says dozens of changes a second, and
+/// each would be the whole queue written under the engine's lock.
+const LANES_KEPT_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// When the queue is written to the disk ([`keep_due`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Keep {
+    /// Nothing changed since the last write.
+    Nothing,
+    /// Now.
+    Now,
+    /// Once this much more time went by: only a lane changed since a write
+    /// a moment ago ([`Engine::keep_after`]).
+    After(std::time::Duration),
+}
+
+/// When the queue is written to the disk: `kept` is what was written last
+/// (the tree's revision and the lanes changed in place), `now` what the
+/// queue is, `last` when it was written. At once when the tree changed; when
+/// only a lane did, once [`LANES_KEPT_EVERY`] went by since the last write —
+/// [`Keep::After`] the rest of it, and the LAST change of a meter let go is
+/// written then, even when nothing is said after it (a paused set). A save
+/// writes it at once. Pure.
+#[must_use]
+pub(crate) fn keep_due(
+    kept: Option<(u64, u64)>,
+    now: (u64, u64),
+    last: Option<std::time::Instant>,
+    at: std::time::Instant,
+) -> Keep {
+    match (kept, last) {
+        (Some(k), _) if k == now => Keep::Nothing,
+        (Some((revision, _)), Some(l)) if revision == now.0 => {
+            let since = at.saturating_duration_since(l);
+            if since >= LANES_KEPT_EVERY {
+                Keep::Now
+            } else {
+                Keep::After(LANES_KEPT_EVERY - since)
+            }
+        }
+        _ => Keep::Now,
+    }
+}
+
+/// A file as it was when it was read or written: what [`Origin`] compares
+/// to tell a `.rqueue` that changed on the disk since.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FileStamp {
+    /// Its length, bytes.
+    pub len: u64,
+    /// When it was last written: seconds since the epoch, and nanoseconds.
+    pub mtime_s: i64,
+    /// The nanoseconds of it.
+    pub mtime_ns: i64,
+    /// Its inode: a file renamed over it is another file.
+    pub ino: u64,
+}
+
+impl FileStamp {
+    /// The file at `path` now; `None` when it is not there.
+    #[must_use]
+    pub(crate) fn of(path: &Path) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+        let m = std::fs::metadata(path).ok()?;
+        Some(Self {
+            len: m.len(),
+            mtime_s: m.mtime(),
+            mtime_ns: m.mtime_nsec(),
+            ino: m.ino(),
+        })
+    }
+}
+
+/// Where the queue was opened from, or last saved as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Origin {
+    /// The `.rqueue`.
+    pub path: String,
+    /// What it is called.
+    pub name: String,
+    /// The queue as it was then ([`fingerprint`]).
+    pub fingerprint: String,
+    /// The file as it was then; `None` when it could not be read.
+    pub stamp: Option<FileStamp>,
+}
+
+/// The queue as a file keeps it, paths absolute, hashed: two queues with the
+/// same things in the same order with the same settings — a lane's volume,
+/// a set's name — are one fingerprint, and any change is another. SHA-256,
+/// hex. Pure.
+#[must_use]
+pub(crate) fn fingerprint(queue: &Queue) -> String {
+    let bytes = serde_json::to_vec(&queue.kept(None)).unwrap_or_default();
+    ring::digest::digest(&ring::digest::SHA256, &bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// What the Queue's title says of where it is kept: nothing in it, never
+/// kept, the file's, or changed since — the fingerprint of `now` against
+/// the one `origin` kept. Pure.
+#[must_use]
+pub(crate) fn kept_as(
+    queue: &Queue,
+    origin: Option<&Origin>,
+    now: impl FnOnce() -> String,
+) -> queue::QueueKept {
+    use queue::QueueKept;
+    if queue.is_empty() {
+        return QueueKept::Empty;
+    }
+    match origin {
+        None => QueueKept::Never,
+        Some(o) if now() == o.fingerprint => QueueKept::Same {
+            path: o.path.clone(),
+            name: o.name.clone(),
+        },
+        Some(o) => QueueKept::Changed {
+            path: o.path.clone(),
+            name: o.name.clone(),
+        },
+    }
+}
+
+/// Writes `queue` as a `.rqueue` at `to`, called `name` (else after the
+/// file): where it is kept from now on — the file, its name, the queue's
+/// fingerprint and the file as written. Writes nothing but `to`.
+///
+/// # Errors
+///
+/// [`Trouble::Unwritable`]: no folder or name in `to`, or the write failed.
+pub(crate) fn written_queue(
+    queue: &Queue,
+    to: &str,
+    name: Option<String>,
+) -> Result<Origin, Trouble> {
+    let unwritable = |why: &str| Trouble::Unwritable {
+        path: to.to_owned(),
+        why: why.to_owned(),
+    };
+    let path = Path::new(to);
+    let folder = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| unwritable("no folder"))?;
+    let file = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .ok_or_else(|| unwritable("no file name"))?;
+    let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
+    let text = own::queue_to_text(&queue.kept(name.clone()), folder);
+    ronoctua_xdg::write_atomically(folder, file, text.as_bytes())
+        .map_err(|e| unwritable(&e.to_string()))?;
+    let called = name.unwrap_or_else(|| {
+        path.file_stem()
+            .map_or_else(|| file.to_owned(), |s| s.to_string_lossy().into_owned())
+    });
+    Ok(Origin {
+        path: to.to_owned(),
+        name: called,
+        fingerprint: fingerprint(queue),
+        stamp: FileStamp::of(path),
+    })
+}
+
+/// Where "save again" writes, and under what name: the file the queue came
+/// from — refused with [`Trouble::NoOrigin`] when it came from none, and
+/// with [`Trouble::ChangedOnDisk`] when that file changed on the disk since
+/// it was read or written, unless `force` (the person's answer to the
+/// question). Reads the file's stamp.
+///
+/// # Errors
+///
+/// As above.
+pub(crate) fn again(origin: Option<&Origin>, force: bool) -> Result<(String, String), Trouble> {
+    let origin = origin.ok_or(Trouble::NoOrigin)?;
+    if !force && FileStamp::of(Path::new(&origin.path)) != origin.stamp {
+        return Err(Trouble::ChangedOnDisk {
+            path: origin.path.clone(),
+        });
+    }
+    Ok((origin.path.clone(), origin.name.clone()))
+}
+
+/// Refused with [`Trouble::AlreadyQueued`] when any of `places` — each
+/// worked out before the lock ([`queue::place_of`]) — is a leaf of `queue`
+/// already: by the leaf's own text ([`Queue::holding`]), or by where a leaf
+/// written otherwise IS (`aliases`, written → canonical, found off the
+/// lock). Text only: this runs under the engine's lock.
+///
+/// # Errors
+///
+/// As above.
+pub(crate) fn not_queued_in(
+    queue: &Queue,
+    aliases: &std::collections::HashMap<String, String>,
+    places: &[String],
+) -> Result<(), Refused> {
+    let held = |place: &String| {
+        queue.holding(place).or_else(|| {
+            aliases
+                .iter()
+                .filter(|(_, canonical)| *canonical == place)
+                .find_map(|(written, _)| queue.holding(written))
+        })
+    };
+    match places.iter().find_map(held) {
+        Some((entry, name)) => Err(Trouble::AlreadyQueued { entry, name }.into()),
+        None => Ok(()),
+    }
+}
+
 /// Where the queue was, as [`WHERE_FILE`] keeps it — both versions, so one
 /// read tells them apart: version 1 had `queue` and `current` (an index),
 /// version 2 has `version` and `at` (a path in the tree).
@@ -77,6 +304,9 @@ struct Remembered {
     volume: Option<u8>,
     repeat: Repeat,
     shuffle: bool,
+    /// Where the queue was opened from or last saved as.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<Origin>,
     /// Version 1's flat queue, imported once.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     queue: Vec<OldItem>,
@@ -155,6 +385,21 @@ pub(super) fn first_leaf(entry: &Entry) -> Option<EntryId> {
         Body::Playlist { children, .. } => children.iter().find_map(first_leaf),
         _ => Some(entry.id),
     }
+}
+
+/// Names the leaf `id` `title` when it is still what it arrived as: one
+/// address, `url`, that nobody named — neither the person nor the thing put
+/// (`Thing::Named`) nor a listing. `true` when it was named. Pure.
+pub(crate) fn name_if_unnamed(queue: &mut Queue, id: EntryId, url: &str, title: &str) -> bool {
+    let title = title.trim();
+    let unnamed = matches!(
+        queue.find(id).map(|e| &e.body),
+        Some(Body::Single { location, title: None, .. }) if location == url
+    );
+    if !unnamed || title.is_empty() || title == queue::file_name(url) {
+        return false;
+    }
+    queue.rename(id, title).is_ok()
 }
 
 /// A name as this daemon says it, where it must say one itself.
@@ -243,10 +488,13 @@ impl Engine {
         if r.shuffle {
             self.shuffle(true);
         }
+        // WHERE IT CAME FROM, and what it was then: "not saved" survives a
+        // restart, as the queue does.
+        self.origin = r.origin.filter(|_| !self.queue.is_empty());
         // WHAT WAS READ IS WHAT IS ON THE DISK — unless it came from version
         // 1, which the first broadcast writes in the new form.
         if !imported {
-            self.kept_revision = Some(self.queue.revision());
+            self.kept_revision = Some((self.queue.revision(), self.lanes_moved));
         }
     }
 
@@ -261,10 +509,38 @@ impl Engine {
         };
         let text = own::queue_to_text(&self.queue.kept(None), &dir);
         match ronoctua_xdg::write_atomically(&dir, QUEUE_FILE, text.as_bytes()) {
-            Ok(()) => self.kept_revision = Some(self.queue.revision()),
+            Ok(()) => {
+                self.kept_revision = Some((self.queue.revision(), self.lanes_moved));
+                self.queue_kept_at = Some(std::time::Instant::now());
+            }
             Err(e) => tracing::warn!(error = %e, "could not keep the queue"),
         }
         self.remember_where();
+    }
+
+    /// A lane's last change, written once [`Keep::After`] `wait` is up: a
+    /// meter let go a moment after the last write would otherwise wait for
+    /// the next thing the player says — on a paused set, maybe never before
+    /// the session ends. ONE thread, sleeping once, and only while such a
+    /// write waits (`keep_armed`); what it writes is the queue as it is then.
+    pub(super) fn keep_after(&mut self, wait: std::time::Duration) {
+        if self.keep_armed {
+            return;
+        }
+        let Ok(shared) = self.shared() else { return };
+        let spawned = std::thread::Builder::new()
+            .name("player-keep".into())
+            .spawn(move || {
+                std::thread::sleep(wait);
+                let (lock, _) = &*shared;
+                if let Ok(mut e) = lock.lock() {
+                    e.keep_armed = false;
+                    if e.kept_revision != Some((e.queue.revision(), e.lanes_moved)) {
+                        e.keep_queue();
+                    }
+                }
+            });
+        self.keep_armed = spawned.is_ok();
     }
 
     /// Writes where the queue is: this machine's own place while it follows
@@ -284,6 +560,7 @@ impl Engine {
             volume: Some(self.state.volume),
             repeat: self.state.repeat,
             shuffle: self.state.shuffle,
+            origin: self.origin.clone(),
             queue: Vec::new(),
             current: None,
         };
@@ -470,8 +747,11 @@ impl Engine {
         Ok(())
     }
 
-    /// Empties the queue.
+    /// Empties the queue — and it is no longer the file it came from: what
+    /// is put next is a new queue.
     pub(super) fn clear(&mut self) {
+        self.origin = None;
+        self.aliases.clear();
         self.queue.clear();
         self.resolving.clear();
         self.play_when_resolved = None;
@@ -609,27 +889,57 @@ impl Engine {
         let mut troubles = Vec::new();
         let mut items = Vec::new();
         let mut jobs = Vec::new();
+        let mut titles = Vec::new();
         let mut subtitles = Vec::new();
-        let mut whole: Option<Vec<Item>> = None;
+        let mut whole: Option<(Vec<Item>, Option<Origin>)> = None;
+        let mut aliases = Vec::new();
         let count = resolved.len();
         for r in resolved {
             match r {
                 Ok(Resolved::Now(item)) => {
                     items.push(item);
                     jobs.push(None);
+                    titles.push(None);
                 }
-                Ok(Resolved::Queue { item, entries }) => {
+                // PLAYABLE NOW, and named when its title comes.
+                Ok(Resolved::Titling { item, url }) => {
+                    items.push(item);
+                    jobs.push(None);
+                    titles.push(Some(url));
+                }
+                Ok(Resolved::Queue {
+                    item,
+                    entries,
+                    stamp,
+                    aliases: places,
+                }) => {
+                    aliases.extend(places);
                     // A QUEUE FILE OPENED TO START OVER IS the queue, not a
-                    // playlist inside it.
+                    // playlist inside it — and the file it came from.
                     if replace && count == 1 {
-                        whole = Some(entries);
+                        let origin = match &item {
+                            Item::Playlist {
+                                name,
+                                from: Some(path),
+                                ..
+                            } => Some(Origin {
+                                path: path.clone(),
+                                name: name.clone(),
+                                fingerprint: String::new(),
+                                stamp,
+                            }),
+                            _ => None,
+                        };
+                        whole = Some((entries, origin));
                     }
                     items.push(item);
                     jobs.push(None);
+                    titles.push(None);
                 }
                 Ok(Resolved::Later { placeholder, job }) => {
                     items.push(placeholder);
                     jobs.push(Some(job));
+                    titles.push(None);
                 }
                 // A SUBTITLE FILE goes over a film once the films are in.
                 Ok(Resolved::Subtitle(path)) => subtitles.push(path),
@@ -651,21 +961,37 @@ impl Engine {
                 .into());
         }
         let ids = if replace {
-            let ids = match whole {
-                Some(entries) => {
+            let (ids, origin) = match whole {
+                Some((entries, origin)) => {
                     jobs = vec![None; entries.len()];
-                    self.queue.replace(entries)?
+                    titles = vec![None; entries.len()];
+                    (self.queue.replace(entries)?, origin)
                 }
-                None => self.queue.replace(items)?,
+                None => (self.queue.replace(items)?, None),
             };
+            // STARTED OVER: the file it came from, and what it is now — or,
+            // from anything else, a queue never kept.
+            self.origin = origin.map(|o| Origin {
+                fingerprint: fingerprint(&self.queue),
+                ..o
+            });
             self.resolving.clear();
             self.play_when_resolved = None;
             self.resume = None;
             self.set_current(None);
+            self.aliases.clear();
             ids
         } else {
             self.queue.insert(place, items)?
         };
+        // WHERE A `.rqueue`'S FILES ARE, beside how it writes them.
+        self.aliases.extend(aliases);
+        let named: Vec<(EntryId, String)> = ids
+            .iter()
+            .zip(titles)
+            .filter_map(|(id, url)| url.map(|u| (*id, u)))
+            .collect();
+        super::resolve::spawn_titles(named, shared.clone());
         let waiting: Vec<(EntryId, super::resolve::Job)> = ids
             .iter()
             .zip(jobs)
@@ -775,25 +1101,102 @@ impl Engine {
         self.dirty = true;
     }
 
-    /// Writes the queue as a `.rqueue` at `to`.
-    pub(super) fn save_queue(&self, to: &str, name: Option<String>) -> Result<(), Refused> {
-        let unwritable = |why: &str| Trouble::Unwritable {
-            path: to.to_owned(),
-            why: why.to_owned(),
-        };
-        let path = Path::new(to);
-        let folder = path
-            .parent()
-            .filter(|p| p.is_absolute())
-            .ok_or_else(|| unwritable("not an absolute path"))?;
-        let file = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .ok_or_else(|| unwritable("no file name"))?;
-        let text = own::queue_to_text(&self.queue.kept(name), folder);
-        ronoctua_xdg::write_atomically(folder, file, text.as_bytes())
-            .map_err(|e| unwritable(&e.to_string()))?;
+    /// Writes the queue as a `.rqueue` at `to` — and it is that file's now:
+    /// what the Queue's title says it is kept as.
+    pub(super) fn save_queue(&mut self, to: &str, name: Option<String>) -> Result<(), Refused> {
+        self.origin = Some(written_queue(&self.queue, to, name)?);
+        // AND THE COPY THIS PLAYER WAKES WITH is what was saved — a lane
+        // changed a moment before would otherwise be missing from it, and
+        // the queue would wake "not saved".
+        if self.kept_revision == Some((self.queue.revision(), self.lanes_moved)) {
+            self.remember_where();
+        } else {
+            self.keep_queue();
+        }
         Ok(())
+    }
+
+    /// Writes the queue again into the file it came from
+    /// ([`Ask::SaveQueueAgain`](ronoctua_player::wire::Ask::SaveQueueAgain)),
+    /// refused as [`again`] says.
+    pub(super) fn save_queue_again(&mut self, force: bool) -> Result<(), Refused> {
+        let (path, name) = again(self.origin.as_ref(), force)?;
+        self.save_queue(&path, Some(name))
+    }
+
+    /// Where the queue is kept, as the state says it — its fingerprint
+    /// computed only when the queue changed since it last was.
+    pub(super) fn queue_kept(&self) -> queue::QueueKept {
+        kept_as(&self.queue, self.origin.as_ref(), || {
+            let key = (self.queue.revision(), self.lanes_moved);
+            let mut known = self.fingerprinted.borrow_mut();
+            match &*known {
+                Some((at, print)) if *at == key => print.clone(),
+                _ => {
+                    let print = fingerprint(&self.queue);
+                    *known = Some((key, print.clone()));
+                    print
+                }
+            }
+        })
+    }
+
+    /// A leaf that arrived as an address and nobody named — `id`, still at
+    /// `url` — called `title` now: the video's own title, from yt-dlp or
+    /// from mpv. The name was learned, not changed by anybody ([`learned`]).
+    ///
+    /// [`learned`]: Engine::learned
+    pub(crate) fn adopt_title(&mut self, id: EntryId, url: &str, title: &str) {
+        if self.learned(|q| name_if_unnamed(q, id, url, title)) {
+            self.dirty = true;
+        }
+    }
+
+    /// A change to the queue that NOBODY made — a title learned, a list mpv
+    /// opened into what it holds — done by `change` (`true` when it changed
+    /// something): a queue that was its file's before stays its file's, its
+    /// fingerprint taken again; one that was not stays not.
+    pub(crate) fn learned(&mut self, change: impl FnOnce(&mut Queue) -> bool) -> bool {
+        let was_kept = matches!(self.queue_kept(), queue::QueueKept::Same { .. });
+        let changed = change(&mut self.queue);
+        if changed
+            && was_kept
+            && let Some(o) = self.origin.as_mut()
+        {
+            o.fingerprint = fingerprint(&self.queue);
+        }
+        changed
+    }
+
+    /// Refused when any of `places` ([`queue::place_of`], worked out before
+    /// the lock) is a leaf of the queue already — the `once` of a put
+    /// ([`not_queued_in`]).
+    pub(crate) fn not_queued(&self, places: &[String]) -> Result<(), Refused> {
+        not_queued_in(&self.queue, &self.aliases, places)
+    }
+
+    /// Where the files of the queue this player woke with ARE, asked of the
+    /// disk on a thread of its own (a queue of ten thousand files, a network
+    /// mount that does not answer) and kept beside them once known: a queue
+    /// from before files were put by their canonical paths, or opened from a
+    /// `.rqueue`, still answers "is it in the queue already?".
+    pub(super) fn find_aliases(&self, shared: &Shared) {
+        let entries = self.queue.kept(None).entries;
+        if entries.is_empty() {
+            return;
+        }
+        let shared = shared.clone();
+        let _ = std::thread::Builder::new()
+            .name("player-places".into())
+            .spawn(move || {
+                let found = super::resolve::aliases_of(&entries);
+                if found.is_empty() {
+                    return;
+                }
+                if let Ok(mut e) = shared.0.lock() {
+                    e.aliases.extend(found);
+                }
+            });
     }
 
     /// Shuffle on (a new order, the current first) or off.
@@ -937,7 +1340,9 @@ impl Engine {
                 })
                 .collect(),
         };
-        if self.queue.set_body(opened, item).is_err() {
+        // WHAT mpv FOUND IN IT was learned, not changed by anybody: a queue
+        // that was its file's stays its file's (`learned`).
+        if !self.learned(|q| q.set_body(opened, item).is_ok()) {
             self.window.clear();
             return;
         }
@@ -1043,6 +1448,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ronoctua_player::wire::{Say, Thing};
 
     /// FAILS IF: mpv's playlist stops being read by its entry ids and its
     /// current mark — the window would map the wrong leaf.
@@ -1079,6 +1485,7 @@ mod tests {
             volume: Some(90),
             repeat: Repeat::One,
             shuffle: true,
+            origin: None,
             queue: Vec::new(),
             current: None,
         };
@@ -1090,6 +1497,422 @@ mod tests {
         let back: Remembered = serde_json::from_str(&text).expect("read");
         assert_eq!(back.at, Some(vec![1, 0]));
         assert!(back.shuffle);
+    }
+
+    /// FAILS IF: "not saved" follows the tree's revision instead of what
+    /// the queue holds — a lane's volume does not move the revision — or a
+    /// queue saved, or only reordered back, is said to be changed.
+    #[test]
+    fn a_queue_is_its_file_s_until_what_it_holds_changes() {
+        use ronoctua_player::own::{Lane, LaneId, Set};
+        use ronoctua_player::queue::QueueKept;
+        let mut set = Set::default();
+        set.lanes
+            .push(Lane::new(LaneId(1), LaneKind::Video, "/m/film.mkv"));
+        let mut q = Queue::from_file(QueueFile {
+            name: None,
+            entries: vec![
+                Item::Single {
+                    location: "/m/a.flac".into(),
+                    title: None,
+                    seconds: None,
+                },
+                Item::Set { set, from: None },
+            ],
+        })
+        .expect("a queue");
+        // OPENED: the fingerprint of what it is.
+        let origin = Origin {
+            path: "/q/Sunday.rqueue".into(),
+            name: "Sunday".into(),
+            fingerprint: fingerprint(&q),
+            stamp: None,
+        };
+        let now = |q: &Queue| kept_as(q, Some(&origin), || fingerprint(q));
+        assert!(matches!(now(&q), QueueKept::Same { .. }));
+        // A LANE'S VOLUME: the revision stays, the queue changed.
+        let revision = q.revision();
+        let set_id = q.leaves()[1];
+        q.set_mut(set_id).expect("a set").lanes[0].volume_percent = 40;
+        assert_eq!(q.revision(), revision, "a volume is not the outline's news");
+        assert!(matches!(now(&q), QueueKept::Changed { .. }));
+        q.set_mut(set_id).expect("a set").lanes[0].volume_percent = 100;
+        assert!(
+            matches!(now(&q), QueueKept::Same { .. }),
+            "put back, it is the file's again"
+        );
+        // AN ENTRY REMOVED is a change; SAVED, the new fingerprint is kept.
+        let first = q.leaves()[0];
+        q.remove(first).expect("removed");
+        assert!(matches!(now(&q), QueueKept::Changed { .. }));
+        let saved = Origin {
+            fingerprint: fingerprint(&q),
+            ..origin.clone()
+        };
+        assert!(matches!(
+            kept_as(&q, Some(&saved), || fingerprint(&q)),
+            QueueKept::Same { .. }
+        ));
+        // NEVER KEPT, and NOTHING IN IT.
+        assert_eq!(kept_as(&q, None, || unreachable!()), QueueKept::Never);
+        assert_eq!(
+            kept_as(&Queue::new(), Some(&saved), || unreachable!()),
+            QueueKept::Empty
+        );
+    }
+
+    /// A folder of this test's own, empty.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-engine-queue-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a folder");
+        dir
+    }
+
+    /// FAILS IF: a queue saved and read back — the `.rqueue` opened again,
+    /// the copy the player wakes with after a restart — is not the queue it
+    /// was, to the last bit of a lane's start dragged along the timeline
+    /// (a float the default JSON reader gives back one unit off); or "save
+    /// again" writes over a file that changed on the disk without the
+    /// person's `force`, or writes where the queue came from nowhere.
+    #[test]
+    fn a_saved_queue_reads_back_as_the_queue_it_was() {
+        use ronoctua_player::own::{Lane, LaneId, Set};
+        let dir = scratch("saved");
+        let mut set = Set::default();
+        let mut lane = Lane::new(LaneId(1), LaneKind::Video, "/m/film.mkv");
+        // THE FLOATS the reader used to miss (measured with serde_json
+        // 1.0.151: …731 came back …733, …921 came back …92).
+        lane.start_seconds = 113.369_931_496_647_31;
+        set.lanes.push(lane);
+        let q = Queue::from_file(QueueFile {
+            name: None,
+            entries: vec![
+                Item::Single {
+                    location: "/m/a.flac".into(),
+                    title: None,
+                    seconds: Some(197.562_174_045_628_92),
+                },
+                Item::Set { set, from: None },
+            ],
+        })
+        .expect("a queue");
+        let file = dir.join("Sunday.rqueue");
+        let to = file.to_string_lossy().into_owned();
+        let origin = written_queue(&q, &to, None).expect("written");
+        assert_eq!(origin.name, "Sunday");
+        assert_eq!(origin.fingerprint, fingerprint(&q));
+        // READ BACK: the same queue, the same fingerprint.
+        let Ok(own::Own::Queue(back)) = own::read(&file) else {
+            panic!("the file does not read back");
+        };
+        let back = Queue::from_file(back).expect("a queue");
+        assert_eq!(
+            fingerprint(&back),
+            origin.fingerprint,
+            "a queue kept whole reads back as another"
+        );
+        // SAVE AGAIN: the file as it was — then changed on the disk.
+        assert_eq!(
+            again(Some(&origin), false),
+            Ok((to.clone(), "Sunday".to_owned()))
+        );
+        let mut text = std::fs::read(&file).expect("there");
+        text.push(b'\n');
+        std::fs::write(&file, text).expect("changed");
+        assert_eq!(
+            again(Some(&origin), false),
+            Err(Trouble::ChangedOnDisk { path: to.clone() })
+        );
+        assert!(again(Some(&origin), true).is_ok(), "the person said so");
+        let rewritten = written_queue(&q, &to, Some("Sunday".into())).expect("written");
+        assert!(again(Some(&rewritten), false).is_ok(), "its own write");
+        assert_eq!(again(None, true), Err(Trouble::NoOrigin));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: "is it in the queue already?" misses a file the queue holds
+    /// under another spelling — a link, or a `.rqueue`'s path through a
+    /// linked folder — or refuses a file it does not hold; or the refusal
+    /// reaches every door's troubles instead of the one who asked.
+    #[test]
+    fn once_is_asked_by_where_a_file_is() {
+        let dir = scratch("once");
+        let real = dir.join("real");
+        std::fs::create_dir_all(&real).expect("a folder");
+        std::fs::write(real.join("a.flac"), b"a").expect("a file");
+        std::fs::write(real.join("b.flac"), b"b").expect("a file");
+        std::os::unix::fs::symlink(&real, dir.join("Music")).expect("a linked folder");
+        std::os::unix::fs::symlink(real.join("a.flac"), dir.join("link.flac")).expect("a link");
+        let canonical = |p: &std::path::Path| {
+            std::fs::canonicalize(p)
+                .expect("there")
+                .to_string_lossy()
+                .into_owned()
+        };
+        let a = canonical(&real.join("a.flac"));
+        // PUT BY ITS CANONICAL PATH (a file put by a door): a link is it.
+        let q = Queue::from_file(QueueFile {
+            name: None,
+            entries: vec![Item::Single {
+                location: a.clone(),
+                title: None,
+                seconds: None,
+            }],
+        })
+        .expect("a queue");
+        let none = std::collections::HashMap::new();
+        let link = super::super::resolve::places_of(&[Thing::Location(
+            dir.join("link.flac").to_string_lossy().into_owned(),
+        )]);
+        assert!(matches!(
+            not_queued_in(&q, &none, &link),
+            Err(Refused(Trouble::AlreadyQueued { .. }))
+        ));
+        let b = super::super::resolve::places_of(&[Thing::Location(
+            real.join("b.flac").to_string_lossy().into_owned(),
+        )]);
+        assert!(not_queued_in(&q, &none, &b).is_ok());
+        // A `.rqueue`'S SPELLING, through the linked folder: kept as it is
+        // written, and found by where it is.
+        let written = dir.join("Music/a.flac").to_string_lossy().into_owned();
+        let entries = vec![Item::Single {
+            location: written.clone(),
+            title: None,
+            seconds: None,
+        }];
+        let aliases: std::collections::HashMap<String, String> =
+            super::super::resolve::aliases_of(&entries)
+                .into_iter()
+                .collect();
+        assert_eq!(aliases.get(&written), Some(&a));
+        let spelled = Queue::from_file(QueueFile {
+            name: None,
+            entries,
+        })
+        .expect("a queue");
+        assert!(
+            not_queued_in(&spelled, &none, &link).is_ok(),
+            "without where it is, the spelling hides it"
+        );
+        assert!(matches!(
+            not_queued_in(&spelled, &aliases, &link),
+            Err(Refused(Trouble::AlreadyQueued { .. }))
+        ));
+        assert!(not_queued_in(&spelled, &aliases, &b).is_ok());
+        // THE ASKER'S QUESTION, and nobody else's trouble.
+        let said = Trouble::NoOrigin;
+        let mut troubles = vec![said.clone()];
+        let refused = not_queued_in(&q, &none, &link);
+        assert!(matches!(
+            super::super::answer_of(refused, &mut troubles),
+            Say::Refused(Trouble::AlreadyQueued { .. })
+        ));
+        assert_eq!(
+            troubles,
+            vec![said],
+            "every door told of one door's question"
+        );
+        let refused = Err(Refused(Trouble::ChangedOnDisk { path: "x".into() }));
+        assert!(matches!(
+            super::super::answer_of(refused, &mut troubles),
+            Say::Refused(Trouble::ChangedOnDisk { .. })
+        ));
+        assert_eq!(troubles, vec![Trouble::ChangedOnDisk { path: "x".into() }]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a change to the tree waits to be written, a lane dragged
+    /// writes the whole queue at every motion, or a lane's last change is
+    /// not given a time to be written at.
+    #[test]
+    fn a_lane_s_changes_are_kept_at_most_once_a_second() {
+        let t0 = std::time::Instant::now();
+        let later = t0 + LANES_KEPT_EVERY;
+        let soon = t0 + LANES_KEPT_EVERY / 4;
+        assert_eq!(
+            keep_due(Some((3, 7)), (3, 7), Some(t0), later),
+            Keep::Nothing,
+            "nothing new"
+        );
+        assert_eq!(
+            keep_due(Some((3, 7)), (4, 7), Some(t0), soon),
+            Keep::Now,
+            "the tree: at once"
+        );
+        assert_eq!(
+            keep_due(Some((3, 7)), (3, 8), Some(t0), soon),
+            Keep::After(LANES_KEPT_EVERY - LANES_KEPT_EVERY / 4),
+            "a lane, a moment ago: the rest of its second"
+        );
+        assert_eq!(
+            keep_due(Some((3, 7)), (3, 9), Some(t0), later),
+            Keep::Now,
+            "a lane, a second on"
+        );
+        assert_eq!(keep_due(None, (3, 7), None, t0), Keep::Now, "never written");
+        assert_eq!(
+            keep_due(Some((3, 7)), (3, 8), None, t0),
+            Keep::Now,
+            "never written this run"
+        );
+    }
+
+    /// FAILS IF: a lane's last change — a meter let go a moment after the
+    /// queue was written, on a set that then says nothing — is never written
+    /// to the disk, or is written as more than one thread's write.
+    #[test]
+    fn a_lane_s_last_change_is_written_after_its_second() {
+        crate::engine::alone::run(module_path!(), "a_lane_s_last_change_alone", &[]);
+    }
+
+    /// The half of [`a_lane_s_last_change_is_written_after_its_second`]
+    /// that runs alone: an engine in a home of its own, a set kept, then its
+    /// lane changed in place twice a moment after.
+    #[test]
+    fn a_lane_s_last_change_alone() {
+        use ronoctua_player::own::{Lane, LaneId, Set};
+        use std::sync::{Arc, Condvar, Mutex};
+        if !crate::engine::alone::is_alone() {
+            return;
+        }
+        let shared: Shared = Arc::new((Mutex::new(Engine::new()), Condvar::new()));
+        let (lock, _) = &*shared;
+        let mut set = Set::default();
+        set.lanes
+            .push(Lane::new(LaneId(1), LaneKind::Audio, "/m/song.flac"));
+        let id = {
+            let mut e = lock.lock().expect("the engine");
+            e.set_shared(&shared);
+            e.queue = Queue::from_file(QueueFile {
+                name: None,
+                entries: vec![Item::Set { set, from: None }],
+            })
+            .expect("a queue");
+            // WRITTEN, as every change of the tree is.
+            e.broadcast();
+            assert_eq!(
+                e.kept_revision,
+                Some((e.queue.revision(), e.lanes_moved)),
+                "the tree was not written at once"
+            );
+            let id = e.queue.leaves()[0];
+            // A METER DRAGGED: two values a moment after the write, and the
+            // set says nothing after the last one.
+            for volume in [40, 55] {
+                if let Some(set) = e.queue.set_mut(id) {
+                    set.lanes[0].volume_percent = volume;
+                }
+                e.lanes_moved += 1;
+                e.broadcast();
+            }
+            assert!(e.keep_armed, "nothing waits to write the last change");
+            assert_ne!(
+                e.kept_revision,
+                Some((e.queue.revision(), e.lanes_moved)),
+                "a lane's change written at every motion"
+            );
+            id
+        };
+        let kept = ronoctua_store::state_dir()
+            .expect("a state folder")
+            .join(QUEUE_FILE);
+        let deadline = std::time::Instant::now() + 4 * LANES_KEPT_EVERY;
+        loop {
+            let written = {
+                let e = lock.lock().expect("the engine");
+                e.kept_revision == Some((e.queue.revision(), e.lanes_moved))
+            };
+            if written {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the last change was never written"
+            );
+            std::thread::sleep(LANES_KEPT_EVERY / 10);
+        }
+        let Ok(own::Own::Queue(file)) = own::read(&kept) else {
+            panic!("the kept queue does not read");
+        };
+        let back = Queue::from_file(file).expect("a queue");
+        let Some(Body::Set { set, .. }) = back.find(back.leaves()[0]).map(|e| &e.body) else {
+            panic!("no set kept");
+        };
+        assert_eq!(
+            set.lanes[0].volume_percent, 55,
+            "the last value is not the one kept"
+        );
+        let e = lock.lock().expect("the engine");
+        assert!(!e.keep_armed, "the write is still waiting");
+        assert!(e.queue.find(id).is_some());
+    }
+
+    /// FAILS IF: a file changed on the disk is not told from the one read —
+    /// a rewrite of the same length, a file renamed over it — or a file that
+    /// did not change is.
+    #[test]
+    fn a_file_is_its_length_time_and_inode() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-engine-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a folder");
+        let file = dir.join("q.rqueue");
+        std::fs::write(&file, b"one").expect("written");
+        let first = FileStamp::of(&file).expect("there");
+        assert_eq!(FileStamp::of(&file), Some(first));
+        let other = dir.join("new");
+        std::fs::write(&other, b"one").expect("written");
+        std::fs::rename(&other, &file).expect("renamed over it");
+        assert_ne!(FileStamp::of(&file), Some(first), "another inode");
+        assert_eq!(FileStamp::of(&dir.join("gone")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a title learned for an address names a leaf somebody named,
+    /// one that is no longer that address, or names it after its own
+    /// address — or a leaf that is still what it arrived as is not named.
+    #[test]
+    fn a_learned_title_names_only_an_unnamed_address() {
+        let url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        let mut q = Queue::from_file(QueueFile {
+            name: None,
+            entries: vec![
+                Item::Single {
+                    location: url.into(),
+                    title: None,
+                    seconds: None,
+                },
+                Item::Single {
+                    location: url.into(),
+                    title: Some("Named by the person".into()),
+                    seconds: None,
+                },
+            ],
+        })
+        .expect("a queue");
+        let (a, b) = (q.leaves()[0], q.leaves()[1]);
+        assert!(!name_if_unnamed(&mut q, a, url, "  "));
+        assert!(
+            !name_if_unnamed(&mut q, a, url, "watch"),
+            "its address's own last piece is no title"
+        );
+        assert!(!name_if_unnamed(
+            &mut q,
+            a,
+            "https://other.example/x",
+            "Other"
+        ));
+        assert!(name_if_unnamed(&mut q, a, url, " A song "));
+        assert_eq!(
+            q.find(a).map(|e| e.body.name()),
+            Some(Name::Titled("A song".into()))
+        );
+        assert!(!name_if_unnamed(&mut q, a, url, "Again"), "named once");
+        assert!(!name_if_unnamed(&mut q, b, url, "A song"));
     }
 
     /// FAILS IF: a set is played by one of its subtitles, or a lane switched

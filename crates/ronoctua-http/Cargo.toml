@@ -32,10 +32,15 @@ publish.workspace = true
 # switch nobody turns off. `url` parses the addresses the rule resolves (the
 # software centre already linked it for that) and `flate2` inflates a gzipped
 # body (already in the lock under `png` and `ronoctua-zip`).
+#
+# `tls` also carries the person's consent: `web::request_let` takes a
+# `ronoctua_consent::Pass`, which only that crate mints, so a request to a
+# host nobody let is a program that does not compile. The loopback transports
+# ask no host and need none.
 
 [features]
 default = [ ]
-tls = [ "dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:tracing", "dep:url", "dep:flate2" ]
+tls = [ "dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:tracing", "dep:url", "dep:flate2", "dep:ronoctua-consent" ]
 # A WebSocket is an HTTP handshake that never ends, so `ws` implies nothing
 # about TLS: `ws://` over plain TCP is the same framing as `wss://` over a TLS
 # stream, and the frame code is generic over what it writes into.
@@ -51,6 +56,12 @@ url = { version = "2.5", optional = true }
 flate2 = { version = "1.1", optional = true }
 ring = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
+ronoctua-consent = { path = "../ronoctua-consent", optional = true }
+
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [lints]
 workspace = true

@@ -127,6 +127,10 @@ const ENUM_FRAMEINTERVALS: Opcode = opcode::read_write::<FrmIvalEnum>(b'V', 75);
 
 /// `V4L2_BUF_TYPE_VIDEO_CAPTURE`.
 pub(crate) const BUF_TYPE_CAPTURE: u32 = 1;
+/// `V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE`: the formats a multi-planar node
+/// offers are enumerated under this type, and under the other one it lists
+/// none.
+pub(crate) const BUF_TYPE_CAPTURE_MPLANE: u32 = 9;
 /// `V4L2_CAP_VIDEO_CAPTURE`.
 pub(crate) const CAP_CAPTURE: u32 = 0x0000_0001;
 /// `V4L2_CAP_VIDEO_CAPTURE_MPLANE`.
@@ -163,11 +167,11 @@ pub(crate) fn query_cap(fd: impl AsFd) -> rustix::io::Result<Capability> {
     Ok(v)
 }
 
-/// `VIDIOC_ENUM_FMT` for index `n`; `None` past the last.
-pub(crate) fn enum_fmt(fd: impl AsFd, n: u32) -> Option<FmtDesc> {
+/// `VIDIOC_ENUM_FMT` for index `n` of a buffer type; `None` past the last.
+pub(crate) fn enum_fmt(fd: impl AsFd, kind: u32, n: u32) -> Option<FmtDesc> {
     let mut v: FmtDesc = zeroed();
     v.index = n;
-    v.kind = BUF_TYPE_CAPTURE;
+    v.kind = kind;
     // SAFETY: ENUM_FMT reads and writes a `v4l2_fmtdesc`, layout asserted above.
     unsafe { ioctl(fd, Updater::<ENUM_FMT, FmtDesc>::new(&mut v)) }.ok()?;
     Some(v)

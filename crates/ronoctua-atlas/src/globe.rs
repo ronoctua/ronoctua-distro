@@ -340,6 +340,33 @@ fn normal(v: (f32, f32, f32)) -> (f32, f32, f32) {
     (v.0 / n, v.1 / n, v.2 / n)
 }
 
+/// The rings of the ONE country whose rings contain `at` — the one the
+/// address names (`lookup::country_at`), asked by its place in the section.
+///
+/// BY THE RINGS, never by the box: a box is the country's whole extent, and
+/// a country with an island across an ocean, or one that crosses the
+/// antimeridian, has a box that holds half the world — a coordinate in London
+/// lit the Netherlands (its Caribbean islands) and Russia (its whole width of
+/// longitudes) beside Great Britain.
+pub(crate) fn home_rings(atlas: &Atlas<'_>, at: Point) -> Vec<Vec<(f32, f32)>> {
+    let Some(home) = country_at(atlas, at, Tongue::English).map(|(_, _, n)| n) else {
+        return Vec::new();
+    };
+    let mut n = 0_u16;
+    rings_of(
+        atlas.countries_bytes(),
+        |c| {
+            let _iso = (c.u8()?, c.u8()?);
+            let _en = c.short()?;
+            let _pt = c.short()?;
+            let here = n;
+            n = n.wrapping_add(1);
+            Some(here)
+        },
+        |here, _| *here == home,
+    )
+}
+
 /// One ring of degrees, clipped at the horizon and walked round the rim.
 fn ring_to(
     lens: &Lens,
@@ -456,9 +483,7 @@ pub fn project(
         points: circle(lens.half, lens.radius),
     });
 
-    let home = at.and_then(|p| country_at(atlas, p, Tongue::English).map(|(_, _, n)| n));
     let mut borders: Vec<Vec<(f32, f32)>> = Vec::new();
-    let mut n = 0_u16;
     let countries = rings_of(
         atlas.countries_bytes(),
         |c| {
@@ -469,9 +494,6 @@ pub fn project(
         },
         |(), _| true,
     );
-    // WHICH FEATURE EACH RING BELONGS TO is not in `rings_of`'s answer, so the
-    // country the coordinate is in is filled in a second pass over the same
-    // section — cheap, and it keeps `rings_of` a walk rather than a query.
     for ring in &countries {
         for path in ring_to(&lens, ring, true, &mut spent) {
             if path.len() > 2 {
@@ -484,26 +506,10 @@ pub fn project(
             }
         }
     }
-    let _ = &mut n;
-    if let (Some(which), Some(p)) = (home, at) {
-        let _ = which;
-        // THE COUNTRY UNDER THE COORDINATE, filled again in its own ink. It is
-        // what "framed on the country" SHOWS as well as frames.
-        let mine = rings_of(
-            atlas.countries_bytes(),
-            |c| {
-                let _iso = (c.u8()?, c.u8()?);
-                let _en = c.short()?;
-                let _pt = c.short()?;
-                Some(())
-            },
-            |(), bbox| {
-                let qx = crate::baked::lon_to(p.lon);
-                let qy = crate::baked::lat_to(p.lat);
-                qx >= bbox.0 && qx <= bbox.2 && qy >= bbox.1 && qy <= bbox.3
-            },
-        );
-        for ring in &mine {
+    // THE COUNTRY UNDER THE COORDINATE, filled again in its own ink. It is
+    // what "framed on the country" SHOWS as well as frames.
+    if let Some(p) = at {
+        for ring in &home_rings(atlas, p) {
             for path in ring_to(&lens, ring, true, &mut spent) {
                 if path.len() > 2 {
                     shapes.push(Shape {

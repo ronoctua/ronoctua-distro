@@ -190,6 +190,11 @@ pub(super) struct Tags {
     art: Vec<(PathBuf, PathBuf)>,
     /// When a write's progress was last said.
     said: Instant,
+    /// Locations as the queue names them, each with the file it was found to
+    /// be when its sheet was asked ([`Engine::read_tags_of`]) — newest last,
+    /// the oldest forgotten past [`SHEETS_KEPT`]: what lets a broadcast find
+    /// a lane's sheet without asking the disk.
+    named: Vec<(String, PathBuf)>,
 }
 
 impl Tags {
@@ -204,7 +209,33 @@ impl Tags {
             stop: Arc::new(AtomicBool::new(false)),
             art: Vec::new(),
             said: Instant::now(),
+            named: Vec::new(),
         }
+    }
+
+    /// Remembers that `location`, as the queue names it, is the file `path`.
+    fn name(&mut self, location: &str, path: PathBuf) {
+        self.named.retain(|(n, _)| n != location);
+        self.named.push((location.to_owned(), path));
+        let past = self.named.len().saturating_sub(SHEETS_KEPT);
+        self.named.drain(..past);
+    }
+
+    /// How long the file the queue names `location` runs, as the sheet kept
+    /// of it says (`TechKey::DurationMs`) — WITHOUT ASKING THE DISK: `None`
+    /// for a location whose sheet was never asked, or is no longer kept.
+    fn length_named(&self, location: &str) -> Option<f64> {
+        let (_, path) = self.named.iter().rev().find(|(n, _)| n == location)?;
+        let ms: f64 = self
+            .known(path)?
+            .technical
+            .iter()
+            .find(|f| f.key == ronoctua_tags::TechKey::DurationMs)?
+            .value
+            .trim()
+            .parse()
+            .ok()?;
+        Some(ms / 1000.0)
     }
 
     /// The player is closing: a write under way stops, leaving the file as
@@ -687,6 +718,20 @@ impl Engine {
         at.exists().then(|| format!("file://{}", at.display()))
     }
 
+    /// How long the file at `location` runs, as the sheet kept of it says
+    /// (`TechKey::DurationMs`) — `None` for an address or a file whose sheet
+    /// was never asked. It runs on every broadcast, UNDER THE LOCK every ask
+    /// waits on, so it asks the disk nothing: a sleeping or network disk
+    /// holding a lane's file would stall them all. The file is found as it
+    /// was when its sheet was asked ([`Engine::read_tags_of`]), and a sheet
+    /// read again after a change replaces the old one.
+    pub(super) fn sheet_length(&self, location: &str) -> Option<f64> {
+        if is_address(location) {
+            return None;
+        }
+        self.tags.length_named(location)
+    }
+
     /// A file that plays was loaded: its sheet is read, and its cover kept,
     /// before any door asks — MPRIS is handed the cover of the one that
     /// leads ([`Engine::art_url`]).
@@ -700,6 +745,7 @@ impl Engine {
         let Ok(path) = std::fs::canonicalize(location) else {
             return;
         };
+        self.tags.name(location, path.clone());
         self.tags.read(
             Reading {
                 location: path,
@@ -1144,6 +1190,7 @@ mod tests {
             technical: Vec::new(),
             streams: Vec::new(),
             chapters: Vec::new(),
+            chapters_can: None,
             other: Vec::new(),
             unread: Vec::new(),
             cover_file: None,
@@ -1228,6 +1275,30 @@ mod tests {
         );
     }
 
+    /// FAILS IF: an off lane's length is not found by the name the queue
+    /// gives its file — once its sheet was asked and kept — or is found for
+    /// a name never asked, or after its sheet is no longer kept. (It is read
+    /// on every broadcast without asking the disk.)
+    #[test]
+    fn a_lane_s_length_is_found_by_its_name_without_the_disk() {
+        let mut t = Tags::open();
+        assert_eq!(t.length_named("/m/link.flac"), None);
+        t.name("/m/link.flac", PathBuf::from("/real/song.flac"));
+        assert_eq!(t.length_named("/m/link.flac"), None, "no sheet yet");
+        let mut read = sheet("/real/song.flac", ONE);
+        read.technical.push(ronoctua_tags::Fact {
+            key: ronoctua_tags::TechKey::DurationMs,
+            value: "125000".to_owned(),
+        });
+        t.keep(read);
+        assert_eq!(t.length_named("/m/link.flac"), Some(125.0));
+        assert_eq!(t.length_named("/real/song.flac"), None, "never named");
+        for n in 0..SHEETS_KEPT {
+            t.keep(sheet(&format!("/m/{n}.flac"), ONE));
+        }
+        assert_eq!(t.length_named("/m/link.flac"), None, "no longer kept");
+    }
+
     /// FAILS IF: a draft is compared with the file by anything but what a
     /// write would put — a trailing newline the editor added would read as
     /// a change somebody else made.
@@ -1268,6 +1339,7 @@ mod tests {
         let removed = [Edit::RemoveTag {
             origin: ronoctua_tags::Origin::Matroska {
                 target: ronoctua_tags::Target::Track,
+                track: None,
             },
             name: "BPS".to_owned(),
         }];

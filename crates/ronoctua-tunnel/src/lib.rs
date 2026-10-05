@@ -169,6 +169,114 @@ pub enum Order {
     Autostart(bool),
 }
 
+/// Why an order could not be carried out — by NAME.
+///
+/// The daemons' own words are English (Tor's answers, `systemctl`'s stderr,
+/// the local API's bodies) and the message line is in the person's language
+/// (invariant 8), so the door picks its sentence by this and the words go to
+/// the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The daemon's socket is not there: it is not running.
+    NoDaemon,
+    /// The socket or the cookie is not this person's to use.
+    NotAuthorized,
+    /// `systemctl` could not start or stop the unit.
+    UnitFailed,
+    /// A file of ours could not be written.
+    NotWritten,
+    /// Tor would not take its configuration — a line it could not read.
+    ConfigRefused,
+    /// The daemon answered no.
+    DaemonRefused,
+    /// Anything else.
+    Other,
+}
+
+/// A refusal, its name and what came with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    /// Which refusal it is.
+    pub why: Refusal,
+    /// THE PERSON'S OWN TEXT that Tor named as the line it could not read —
+    /// data they typed, not the daemon's English, and the one thing that
+    /// says which bridge was pasted wrong.
+    pub line: Option<String>,
+    /// The words that came with it, for the log.
+    pub words: String,
+}
+
+/// A refusal with a name, carried inside an `anyhow::Error` from where it
+/// happened to [`refused_of`].
+#[derive(Debug)]
+pub(crate) struct Said {
+    /// Which refusal.
+    pub why: Refusal,
+    /// The daemon's answer.
+    pub words: String,
+}
+
+impl std::fmt::Display for Said {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.words)
+    }
+}
+
+impl std::error::Error for Said {}
+
+/// The first quoted stretch of an answer — `'Brige'` in `553 Unrecognized
+/// option 'Brige'` — which is the person's own text, given back.
+#[must_use]
+pub fn quoted(answer: &str) -> Option<String> {
+    for q in ['\'', '"'] {
+        let mut parts = answer.splitn(3, q);
+        let _ = parts.next();
+        if let (Some(inside), Some(_)) = (parts.next(), parts.next())
+            && !inside.trim().is_empty()
+        {
+            return Some(inside.trim().to_owned());
+        }
+    }
+    None
+}
+
+/// The refusal an error is, read off its chain.
+#[must_use]
+pub fn refused_of(e: &anyhow::Error, otherwise: Refusal) -> Refused {
+    let words = format!("{e:#}");
+    for cause in e.chain() {
+        if let Some(s) = cause.downcast_ref::<Said>() {
+            let line = (s.why == Refusal::ConfigRefused)
+                .then(|| quoted(&s.words))
+                .flatten();
+            return Refused {
+                why: s.why,
+                line,
+                words,
+            };
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            let why = match io.kind() {
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
+                    Refusal::NoDaemon
+                }
+                std::io::ErrorKind::PermissionDenied => Refusal::NotAuthorized,
+                _ => continue,
+            };
+            return Refused {
+                why,
+                line: None,
+                words,
+            };
+        }
+    }
+    Refused {
+        why: otherwise,
+        line: None,
+        words,
+    }
+}
+
 /// What a door hears back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -179,7 +287,7 @@ pub enum Event {
         /// What was asked for.
         order: Order,
         /// What went wrong, when something did.
-        refused: Option<String>,
+        refused: Option<Refused>,
     },
     /// A login wants this address opened.
     Login(String),
@@ -246,11 +354,11 @@ where
 }
 
 /// Does one order, and says what went wrong when something did.
-fn carry_out<F>(places: &Places, order: &Order, on_event: &F) -> Option<String>
+fn carry_out<F>(places: &Places, order: &Order, on_event: &F) -> Option<Refused>
 where
     F: Fn(Event) + Send + 'static,
 {
-    let said = |r: anyhow::Result<()>| r.err().map(|e| e.to_string());
+    let said = |r: anyhow::Result<()>| r.err().map(|e| refused_of(&e, Refusal::DaemonRefused));
     match order {
         Order::Tailscale(on) => said(tailscale::set_running(&places.tailscale, *on)),
         Order::AcceptRoutes(on) => said(tailscale::set_accept_routes(&places.tailscale, *on)),
@@ -263,7 +371,7 @@ where
                 None
             }
             Ok(None) => None,
-            Err(e) => Some(e.to_string()),
+            Err(e) => Some(refused_of(&e, Refusal::DaemonRefused)),
         },
         Order::NewIdentity => {
             said(tor::Control::open(&places.tor, &places.cookie).and_then(|mut c| c.new_identity()))
@@ -278,15 +386,26 @@ where
                 .output()
             {
                 Ok(out) if out.status.success() => None,
-                Ok(out) => Some(String::from_utf8_lossy(&out.stderr).trim().to_owned()),
-                Err(e) => Some(e.to_string()),
+                Ok(out) => Some(Refused {
+                    why: Refusal::UnitFailed,
+                    line: None,
+                    words: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+                }),
+                Err(e) => Some(Refused {
+                    why: Refusal::UnitFailed,
+                    line: None,
+                    words: e.to_string(),
+                }),
             }
         }
         Order::Configure(lines) => said(configure(places, lines)),
-        Order::Autostart(on) => said(
-            prefs::write(&prefs::Preferences { autostart: *on })
-                .map_err(|e| anyhow::anyhow!("{e}")),
-        ),
+        Order::Autostart(on) => prefs::write(&prefs::Preferences { autostart: *on })
+            .err()
+            .map(|e| Refused {
+                why: Refusal::NotWritten,
+                line: None,
+                words: e.to_string(),
+            }),
     }
 }
 
@@ -296,7 +415,12 @@ where
 /// see [`Order::Configure`]. It is also skipped when the control socket will
 /// not open, which is the same situation from one step further away.
 fn configure(places: &Places, lines: &tor::fragment::Lines) -> anyhow::Result<()> {
-    tor::fragment::write(&places.fragment, lines)?;
+    tor::fragment::write(&places.fragment, lines).map_err(|e| {
+        anyhow::Error::from(Said {
+            why: Refusal::NotWritten,
+            words: format!("{e:#}"),
+        })
+    })?;
     if !matches!(tor::standing(&places.systemctl), tor::Standing::Running) {
         return Ok(());
     }
@@ -406,5 +530,34 @@ mod tests {
         // AND IT READS BACK AS WHAT WENT IN.
         assert_eq!(tor::fragment::read(&dir), lines);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FAILS IF: a refusal that has a name is read as another, or the line
+    /// Tor quoted — the person's own text — is lost.
+    #[test]
+    fn a_refusal_is_read_by_its_name() {
+        let tor = anyhow::Error::from(Said {
+            why: Refusal::ConfigRefused,
+            words: "553 Unrecognized option 'Brige obfs4 1.2.3.4'".to_owned(),
+        })
+        .context("configuring");
+        let r = refused_of(&tor, Refusal::Other);
+        assert_eq!(r.why, Refusal::ConfigRefused);
+        assert_eq!(r.line.as_deref(), Some("Brige obfs4 1.2.3.4"));
+        let gone = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound))
+            .context("/run/tailscale.sock");
+        assert_eq!(refused_of(&gone, Refusal::Other).why, Refusal::NoDaemon);
+        let denied =
+            anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(
+            refused_of(&denied, Refusal::Other).why,
+            Refusal::NotAuthorized
+        );
+        assert_eq!(
+            refused_of(&anyhow::anyhow!("403"), Refusal::DaemonRefused).why,
+            Refusal::DaemonRefused
+        );
+        assert_eq!(quoted("no quotes here"), None);
+        assert_eq!(quoted("say \"this\" back").as_deref(), Some("this"));
     }
 }

@@ -359,6 +359,11 @@ pub enum Role {
     /// cursor is on the window: colour is spent only where it tells two hands
     /// apart, the rule the shell's own windows keep (`crate::seats`).
     HoverOf(u16),
+    /// SOMETHING IS BEING FOLLOWED — a brain module that listens, and the
+    /// rows and marks it tones `watching`. The gestures' glyph colour, the one
+    /// the modeline already marks a watch with (`modeline.watching`), so a
+    /// person who has read the mark has read the row.
+    Watching,
     /// ONE KEYBOARD'S SELECTION, in its cursor's colour — `cursor.selection.*`,
     /// the band a buffer paints under each [`crate::Carets`] caret when more
     /// than one keyboard types into it. Built through [`Role::selection_of`].
@@ -528,6 +533,7 @@ impl Palette for Tokens {
             Role::Danger => "state-error",
             Role::Warning => "state-warning",
             Role::Once => "text-once",
+            Role::Watching => "modeline-watching",
             Role::Hover => "surface-hover",
             // ONE CURSOR'S HOVER, by its colour number — eight colours, and a
             // ninth cursor wears the first's (`HoverOf` reduces it first).

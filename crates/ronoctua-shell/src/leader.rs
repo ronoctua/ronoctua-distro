@@ -74,8 +74,36 @@ pub enum Order {
         pid: u32,
         /// The id it declared in its descriptor.
         id: String,
+        /// The tone that state declared — the colour the modeline draws it in.
+        tone: ronoctua_protocol::Tone,
+    },
+    /// The clipboard's window wants the history, now and after every change:
+    /// the connection it came on stays open, and the footer writes the whole
+    /// history down it (`crate::clipboard_wire`).
+    Follow(Follower),
+    /// The clipboard's window asks something of the footer's history.
+    Clipboard {
+        /// The history it was looking at.
+        generation: u64,
+        /// What it asks.
+        act: crate::clipboard_wire::Act,
     },
 }
+
+/// A connection kept open to be written to — the clipboard's window's.
+///
+/// Compared by IDENTITY: two connections are the same follower only if they
+/// are the same socket.
+#[derive(Debug, Clone)]
+pub struct Follower(pub std::sync::Arc<UnixStream>);
+
+impl PartialEq for Follower {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Follower {}
 
 /// The word a new footer says to the one it is going to replace.
 const YIELD: &str = "quit";
@@ -220,7 +248,37 @@ pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<(String, String)>>
 
 /// What a buffer answers about its states: which one is in effect, and the list
 /// of `(id, letter)` it declared.
-pub type States = (String, Vec<(String, char)>);
+pub type States = (String, ronoctua_protocol::Tone, Vec<(String, char)>);
+
+/// A tone as the control socket and the states socket spell it — one word,
+/// after the state's id.
+#[must_use]
+pub const fn tone_word(tone: ronoctua_protocol::Tone) -> &'static str {
+    use ronoctua_protocol::Tone;
+    match tone {
+        Tone::Standard => "standard",
+        Tone::Accent => "accent",
+        Tone::Success => "success",
+        Tone::Warning => "warning",
+        Tone::Error => "error",
+    }
+}
+
+/// [`tone_word`] read back. AN UNKNOWN WORD — or none, from a buffer older
+/// than the tone on the wire — IS THE STANDARD ONE: the host's own rule
+/// draws it, which is a colour that is never wrong, where dropping the state
+/// would be a segment that vanished.
+#[must_use]
+pub fn tone_of(word: Option<&str>) -> ronoctua_protocol::Tone {
+    use ronoctua_protocol::Tone;
+    match word.map(str::trim) {
+        Some("accent") => Tone::Accent,
+        Some("success") => Tone::Success,
+        Some("warning") => Tone::Warning,
+        Some("error") => Tone::Error,
+        _ => Tone::Standard,
+    }
+}
 
 /// Asks a buffer which state it is in, and which ones it has.
 ///
@@ -257,17 +315,18 @@ pub fn buffer_states_at(path: &std::path::Path) -> Option<States> {
         return None;
     }
     let mut lines = answer.lines();
-    let now = lines.next()?.trim().to_owned();
-    if now.is_empty() {
-        return None;
-    }
+    // `<id> [tone]`: the tone is a word after the id, absent from a buffer
+    // that predates it.
+    let mut first = lines.next()?.split_whitespace();
+    let now = first.next()?.to_owned();
+    let tone = tone_of(first.next());
     let states = lines
         .filter_map(|l| {
             let (id, letter) = l.trim().split_once(' ')?;
             Some((id.to_owned(), letter.chars().next()?))
         })
         .collect();
-    Some((now, states))
+    Some((now, tone, states))
 }
 
 /// Tells a buffer to go to a state, or to rotate.
@@ -398,7 +457,32 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
             for connection in listener.incoming() {
                 let Ok(stream) = connection else { continue };
                 let mut line = String::new();
-                if BufReader::new(stream).read_line(&mut line).is_err() {
+                // BY REFERENCE, so the connection outlives the line: a
+                // follower's is kept and written to.
+                if BufReader::new(&stream).read_line(&mut line).is_err() {
+                    continue;
+                }
+                // THE CLIPBOARD'S WINDOW, before anything is split or logged:
+                // an act can carry a login's password, and the warning below
+                // prints the line it could not read.
+                if line.trim() == crate::clipboard_wire::FOLLOW {
+                    if channel
+                        .send(Order::Follow(Follower(std::sync::Arc::new(stream))))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                if let Some(rest) = line.trim().strip_prefix(crate::clipboard_wire::ACT) {
+                    match crate::clipboard_wire::Act::parse(rest) {
+                        Some((generation, act)) => {
+                            if channel.send(Order::Clipboard { generation, act }).is_err() {
+                                return;
+                            }
+                        }
+                        None => tracing::warn!("a clipboard act that does not read"),
+                    }
                     continue;
                 }
                 // `leader` or `command <id> [argument]`. The argument is the
@@ -412,14 +496,19 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                     (Some("command"), Some(id)) => {
                         Order::Command(id.to_owned(), fields.next().map(str::to_owned))
                     }
-                    // `state <pid> <id>`. A pid that does not parse is dropped
-                    // with the rest: there is nothing sensible to do with a
-                    // report about a window nobody can name.
+                    // `state <pid> <id> [tone]`. A pid that does not parse is
+                    // dropped with the rest: there is nothing sensible to do
+                    // with a report about a window nobody can name.
                     (Some("state"), Some(pid)) => match (pid.parse(), fields.next()) {
-                        (Ok(pid), Some(id)) => Order::State {
-                            pid,
-                            id: id.to_owned(),
-                        },
+                        (Ok(pid), Some(rest)) => {
+                            let mut words = rest.split_whitespace();
+                            let id = words.next().unwrap_or_default().to_owned();
+                            Order::State {
+                                pid,
+                                id,
+                                tone: tone_of(words.next()),
+                            }
+                        }
                         _ => {
                             tracing::warn!(order = line.trim(), "a state with no pid or no id");
                             continue;
@@ -443,48 +532,50 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
     true
 }
 
-/// WHICH OF THE THREE TREES a sequence walks, chosen by a modifier TAPPED
-/// right after the leader.
+/// WHICH OF THE THREE TREES a sequence walks, chosen by pressing the LEADER
+/// again while its list is open.
 ///
 /// # Why there are three
 ///
 /// The owner's request (2026-09-28): the key that used to open an app's
 /// SUBMENU opens the app itself, in the footer — `LEADER s n` is the network
-/// where it was `LEADER s n n`. The same key after a tap of `Alt` opens the
-/// app's WINDOW, and after a tap of `Ctrl` the whole tree of before is there,
-/// every submenu as it was. The two doors of an app were only ever a
-/// convention of NAMES — the doubled letter is the footer, `w` the window —
-/// and that convention is what decides which groups fold: see [`collapse`].
+/// where it was `LEADER s n n`. The same key one set further opens the app's
+/// WINDOW, and one further still the whole tree of before is there, every
+/// submenu as it was. The two doors of an app were only ever a convention of
+/// NAMES — the doubled letter is the footer, `w` the window — and that
+/// convention is what decides which groups fold: see [`collapse`].
 ///
-/// # Why a tap and not a chord
+/// # Why the leader again, and no modifier (2026-09-30)
 ///
-/// Holding `Alt` while typing the letter is `M-s`, and `M-` is the
-/// compositor's family (`AGENTS.md`): it never reaches the footer. And in the
-/// nested loop the leader's own `Ctrl` and `Alt` are HELD by construction when
-/// the sequence starts, so a held modifier cannot mean anything here. A tap —
-/// pressed and released with nothing in between — is a gesture of its own;
-/// see [`Tap`].
+/// The sets were a TAP of `Alt` or `Ctrl` after the leader. The owner took
+/// both away from them: a tap of `Ctrl` now cycles the bars' modes
+/// (`crate::hidden::next_mode`), and `Alt` chooses nothing. The leader itself
+/// is the one key every hand already has under it when the list is open, and
+/// pressing it again walks the sets in order — default, windows, the whole
+/// tree, and back to the default ([`Set::next`]) — so `LEADER LEADER s n` is
+/// the network's window and `LEADER LEADER LEADER s n a` the aeroplane.
+/// Holding a modifier while typing the letter was never an answer: `M-` is the
+/// compositor's family (`AGENTS.md`), and in the nested loop the leader's own
+/// `Ctrl` and `Alt` are HELD by construction when the sequence starts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Set {
     /// `LEADER` alone: a group with two doors opens its footer door.
     #[default]
     Footer,
-    /// `LEADER`, then `Alt`: the same key opens the app's window.
+    /// `LEADER LEADER`: the same key opens the app's window.
     Window,
-    /// `LEADER`, then `Ctrl`: the whole tree, every submenu as it was.
+    /// `LEADER LEADER LEADER`: the whole tree, every submenu as it was.
     Full,
 }
 
-/// How the WINDOW set is named where a key is shown: the pending chord
-/// (`SUPER ALT s-`), a taught sequence (`ALT .`) and the leader's hint line.
+/// The key a lone TAP of which cycles the bars' modes at the leader's root —
+/// the grafted row of the root's list ([`crate::hidden::bars_row`]) and the
+/// sentences that teach it.
 ///
 /// A constant beside the tables and never text in a `.ftl`
 /// (`keys-are-never-text`): it is a key's name, the same in every language,
 /// as `SPC` is.
-pub const WINDOW_SET_KEY: &str = "ALT";
-
-/// And the FULL set's, for the same three places (`SUPER CTRL s n-`).
-pub const FULL_SET_KEY: &str = "CTRL";
+pub const BARS_TAP_KEY: &str = "CTRL";
 
 /// The letter a group's SECOND door hangs off — `w`, for window, the letter
 /// every view with a window uses (`. w`, `s n w`, `s u w`). The first door is
@@ -492,26 +583,46 @@ pub const FULL_SET_KEY: &str = "CTRL";
 pub const WINDOW_DOOR_KEY: &str = "w";
 
 impl Set {
-    /// The key a sequence in this set is shown with after the leader's, when
-    /// there is one: the default set is the leader alone.
+    /// How many times the leader is pressed AGAIN to reach this set from a
+    /// fresh opening: none for the default.
     #[must_use]
-    pub const fn key(self) -> Option<&'static str> {
+    pub const fn presses(self) -> usize {
         match self {
-            Self::Footer => None,
-            Self::Window => Some(WINDOW_SET_KEY),
-            Self::Full => Some(FULL_SET_KEY),
+            Self::Footer => 0,
+            Self::Window => 1,
+            Self::Full => 2,
+        }
+    }
+
+    /// The key a sequence in this set is shown with after the leader's, when
+    /// there is one — the leader again, once per [`Self::presses`], under the
+    /// label `leader` it goes by (`SUPER`, or `CTRL ALT SPC` in the nested
+    /// loop). The default set is the leader alone.
+    #[must_use]
+    pub fn key_with(self, leader: &str) -> Option<String> {
+        (self.presses() > 0).then(|| vec![leader; self.presses()].join(" "))
+    }
+
+    /// The set the leader pressed again goes to: default, windows, the whole
+    /// tree, and round to the default.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Footer => Self::Window,
+            Self::Window => Self::Full,
+            Self::Full => Self::Footer,
         }
     }
 
     /// The command that switches to this set — what the POINTER runs, since
-    /// a click cannot tap a modifier (invariant 19). Its id is also the key
+    /// a click cannot press the leader (invariant 19). Its id is also the key
     /// of the short word the hint line draws beside the key.
     #[must_use]
-    pub const fn command(self) -> Option<&'static str> {
+    pub const fn command(self) -> &'static str {
         match self {
-            Self::Footer => None,
-            Self::Window => Some("leader-set-window"),
-            Self::Full => Some("leader-set-full"),
+            Self::Footer => "leader-set-default",
+            Self::Window => "leader-set-window",
+            Self::Full => "leader-set-full",
         }
     }
 
@@ -652,7 +763,7 @@ pub fn folds(bindings: &[Binding], groups: &[GroupNode]) -> Vec<Fold> {
 /// [`folds`] becomes ONE binding — to its footer's door in [`Set::Footer`],
 /// to its window's in [`Set::Window`] — and everything under it, bindings and
 /// groups, leaves that set: the other keys of a folded group (`s n a`, the
-/// aeroplane) are still one tap of `Ctrl` away. A fold inside a folded group
+/// aeroplane) are still two more presses of the leader away. A fold inside a folded group
 /// is the outer one's to take away.
 #[must_use]
 pub fn collapse(
@@ -701,17 +812,29 @@ pub fn collapse(
 /// DEFAULT set, written as a sentence teaches them after `crate::leader()`.
 ///
 /// The footer's own sequence when it has one (`t`, the queue); else the
-/// window set's, after its key (`ALT .`, the manager's window); else the full
-/// tree's (`CTRL s b y`, answering a pairing). A key taught any other way is
-/// a key that does something else when typed — `t t` in the default set is
+/// window set's, after the leader again (`SUPER .`, the manager's window, so
+/// `LEADER SUPER .` on screen); else the full tree's, after the leader twice
+/// more (`SUPER SUPER s b y`, answering a pairing). A key taught any other way
+/// is a key that does something else when typed — `t t` in the default set is
 /// the queue and then a key that leads nowhere.
 ///
 /// `None` for a command no sequence reaches.
 #[must_use]
 pub fn taught_keys(trees: &Trees, command: &str, argument: Option<&str>) -> Option<String> {
+    taught_keys_with(trees, command, argument, &crate::leader())
+}
+
+/// [`taught_keys`] under a given leader label — the one the tests pin.
+#[must_use]
+pub fn taught_keys_with(
+    trees: &Trees,
+    command: &str,
+    argument: Option<&str>,
+    leader: &str,
+) -> Option<String> {
     Set::ALL.into_iter().find_map(|set| {
         let keys = ronoctua_keymap::notation(&trees.of(set).sequence_of(command, argument)?);
-        Some(match set.key() {
+        Some(match set.key_with(leader) {
             Some(k) => format!("{k} {keys}"),
             None => keys,
         })
@@ -720,19 +843,38 @@ pub fn taught_keys(trees: &Trees, command: &str, argument: Option<&str>) -> Opti
 
 /// A modifier TAPPED — pressed and released with no other key in between.
 ///
+/// # What a tap means now (2026-09-30)
+///
+/// Only a tap of `Ctrl` means anything: at the leader's root it cycles the
+/// bars' modes, normal → push → cover (`crate::hidden::next_mode`). `Alt`
+/// chose the window set until the owner took it away, and it still ARMS
+/// here — so a `Ctrl` pressed while `Alt` is down is a chord of the two and
+/// no tap — but its own release answers nothing.
+///
 /// # The three cases it keeps apart
 ///
-/// - A CLEAN TAP of `Alt` or `Ctrl` answers the set it stands for.
+/// - A CLEAN TAP of `Ctrl` answers `true`.
 /// - A modifier held WITH another key is a chord, and no tap: `Control_R`
-///   held while the arrows page the list (`Footer::navigate`) must go on
-///   paging, and the key in between disarms it. So does a second modifier.
+///   held while the arrows page the list (`Footer::navigate`) or walk the
+///   minibuffer's drawer must go on doing so, and the key in between disarms
+///   it. So does a second modifier.
 /// - A RELEASE WITH NO PRESS answers nothing. In the nested loop the leader
 ///   IS `Ctrl+Alt+Space`: both are pressed BEFORE the footer has the
-///   keyboard, and it sees only their releases. Counting those would switch
-///   the set on every opening.
+///   keyboard, and it sees only their releases. Counting those would cycle
+///   the bars on every opening.
+///
+/// # Both `Ctrl`s, the right one included
+///
+/// The right `Ctrl` is the drawer's and the pages' modifier, and it is
+/// always held WITH an arrow — a chord, which this disarms. Tapped alone it
+/// has no other meaning at the root, and a hand that reaches for the nearer
+/// `Ctrl` should not find that one of the two does nothing. What is weighed:
+/// a right `Ctrl` pressed to page and let go without an arrow cycles the
+/// bars — seen at once, and one more tap and a third undo it, where a `Ctrl`
+/// that sometimes works is a key nobody can learn.
 ///
 /// `AltGr` (`ISO_Level3_Shift`) is not `Alt`: it is how half the world types
-/// its own letters, and a tap of it is not a request for windows.
+/// its own letters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tap {
     /// The modifier pressed alone, still down.
@@ -742,10 +884,10 @@ pub struct Tap {
 impl Tap {
     /// Any key went DOWN.
     pub fn pressed(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) {
-        self.armed = match (self.armed, set_of_tap(sym)) {
+        self.armed = match (self.armed, arms(sym)) {
             // A MODIFIER ALONE arms; the same one again is a repeat of it.
-            (None, Some(_)) => Some(sym),
-            (Some(held), Some(_)) if held == sym => Some(held),
+            (None, true) => Some(sym),
+            (Some(held), true) if held == sym => Some(held),
             // Anything else — a letter, an arrow, a second modifier — is a
             // chord, and no tap.
             _ => None,
@@ -755,77 +897,68 @@ impl Tap {
     /// A pointer or a finger ACTED — a button pressed, a wheel turned, a
     /// finger down — while a modifier may be down: that is a chord with the
     /// hand, a Ctrl-click or a Ctrl-wheel, and no tap. Without it, the
-    /// release after a Ctrl-click on `ALT windows` switched to the full set.
+    /// release after a Ctrl-click on a hint cycled the bars.
     pub const fn pointer_acted(&mut self) {
         self.armed = None;
     }
 
-    /// A key came UP: the set a clean tap chose, when this is one.
-    pub fn released(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) -> Option<Set> {
+    /// A key came UP: `true` when it ends a clean tap of `Ctrl` — the one
+    /// tap that means something ([`cycles_the_bars`]).
+    pub fn released(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) -> bool {
         match self.armed {
             Some(held) if held == sym => {
                 self.armed = None;
-                set_of_tap(sym)
+                cycles_the_bars(sym)
             }
-            _ => None,
+            _ => false,
         }
     }
 }
 
-/// Which set a tap of the ON-SCREEN keyboard's modifier chooses — the same
-/// two the physical keys do ([`set_of_tap`]): `AltGr` is not `Alt` there
-/// either.
+/// Whether a tap of the ON-SCREEN keyboard's modifier cycles the bars — the
+/// same answer the physical keys give ([`cycles_the_bars`]): `Ctrl`, and
+/// neither `Alt` nor `AltGr`.
 #[must_use]
-pub const fn set_of_osk_tap(m: crate::osk::Modifier) -> Option<Set> {
-    match m {
-        crate::osk::Modifier::Alt => Some(Set::Window),
-        crate::osk::Modifier::Ctrl => Some(Set::Full),
-        _ => None,
-    }
+pub const fn osk_tap_cycles_the_bars(m: crate::osk::Modifier) -> bool {
+    matches!(m, crate::osk::Modifier::Ctrl)
 }
 
-/// Which set a tap of this key chooses.
-fn set_of_tap(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> Option<Set> {
+/// Whether this key, pressed alone, ARMS a tap: the two modifiers a tap was
+/// ever made of. `Alt` arms and answers nothing when it comes up, so that a
+/// `Ctrl` under a held `Alt` is a chord and not a tap.
+fn arms(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> bool {
     use smithay_client_toolkit::seat::keyboard::Keysym;
-    match sym {
-        Keysym::Alt_L | Keysym::Alt_R => Some(Set::Window),
-        Keysym::Control_L | Keysym::Control_R => Some(Set::Full),
-        _ => None,
-    }
+    matches!(
+        sym,
+        Keysym::Alt_L | Keysym::Alt_R | Keysym::Control_L | Keysym::Control_R
+    )
 }
 
-/// The leader's own hint at the ROOT: the sets a tap would switch to, each
-/// with its key and a short word — `ALT windows · CTRL everything` in the
-/// default set, and only the `CTRL` one in the window set.
+/// Whether a clean tap of this key cycles the bars: either `Ctrl`.
+fn cycles_the_bars(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> bool {
+    use smithay_client_toolkit::seat::keyboard::Keysym;
+    matches!(sym, Keysym::Control_L | Keysym::Control_R)
+}
+
+/// The leader's own hint at the ROOT: the NEXT set, which the leader pressed
+/// again would switch to — its key (the leader's label, `leader`) and a short
+/// word: `SUPER windows` in the default set, `SUPER everything` in the window
+/// set and `SUPER default` in the full one.
 ///
-/// Each is a CLICK (invariant 19): a pointer cannot tap a modifier, so the
-/// click runs the command the tap stands for ([`Set::command`]), and the
+/// It is a CLICK (invariant 19): a pointer cannot press the leader, so the
+/// click runs the command the press stands for ([`Set::command`]), and the
 /// pointer resting on it reads that command's `cmd-` sentence.
 #[must_use]
-pub fn set_hint(set: Set, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
+pub fn set_hint(set: Set, leader: &str, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
     use crate::chrome::Piece;
-    let offered: &[Set] = match set {
-        Set::Footer => &[Set::Window, Set::Full],
-        Set::Window => &[Set::Full],
-        Set::Full => &[],
-    };
-    let mut out = Vec::with_capacity(offered.len() * 3);
-    for s in offered {
-        let (Some(key), Some(id)) = (s.key(), s.command()) else {
-            continue;
-        };
-        if !out.is_empty() {
-            out.push(Piece::separator());
-        }
-        out.push(Piece::key(key, false).about(id).running(id));
+    let id = set.next().command();
+    vec![
+        Piece::key(leader, false).about(id).running(id),
         // THE SPACE BELONGS TO THE WORDS, as `chrome::hint_of_marked` keeps it.
-        out.push(
-            Piece::prose(format!(" {}", texts.t(id)))
-                .about(id)
-                .running(id),
-        );
-    }
-    out
+        Piece::prose(format!(" {}", texts.t(id)))
+            .about(id)
+            .running(id),
+    ]
 }
 
 /// The leader's state: nothing, or a sequence in progress.
@@ -878,9 +1011,9 @@ impl Leader {
     }
 
     /// The trigger as a sequence shows it: the leader's own label, and the
-    /// set's key after it when the set is not the default.
+    /// leader again after it once per press that chose the set.
     fn head(&self, trigger: &str) -> String {
-        match self.set.key() {
+        match self.set.key_with(trigger) {
             Some(k) => format!("{trigger} {k}"),
             None => trigger.to_owned(),
         }
@@ -1012,9 +1145,10 @@ impl Leader {
     /// two columns fewer. The ellipsis said the same thing taking up
     /// more space — and in a footer where everything elides, space is the resource.
     ///
-    /// THE SET IS PART OF IT (`SUPER ALT-`, `SUPER CTRL s n-`): the same `s n`
-    /// runs a different thing in each set, and the chord on screen is the one
-    /// place that says which tree the next key walks.
+    /// THE SET IS PART OF IT (`SUPER SUPER-`, `SUPER SUPER SUPER s n-`): the
+    /// same `s n` runs a different thing in each set, and the chord on screen
+    /// is the one place that says which tree the next key walks — and it says
+    /// it as the keys that were pressed to get there.
     #[must_use]
     pub fn prefix(&self, trigger: &str) -> String {
         format!("{}-", self.raw_prefix(trigger))
@@ -1180,10 +1314,6 @@ pub const BRAIN_PROCEED_KEYS: &str = ", p";
 /// they do lives in the brain's buffer as `, a` and `, p`; they stay in the
 /// registry because the band CLICKS them and `LEADER :` reaches them by name.
 ///
-/// `brain-start-emacs` is what a standing notice offers. A sequence for it
-/// would be a key that does nothing on every machine where the daemon is up,
-/// which is almost all of them, almost all of the time.
-///
 /// It is a LIST OF NAMES and not a prefix on purpose: `brain-` as a prefix
 /// would exempt the next brain command somebody forgets to bind.
 pub const BY_NAME_ONLY: &[&str] = &[
@@ -1194,15 +1324,15 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "selection-open",
     "brain-abort",
     "brain-proceed",
-    "brain-start-emacs",
-    "brain-clock-automatic",
     // THE LAUNCHER'S LAST ROW: `RET` or a click on "search to install" runs
     // it, and a key of its own would be a second way to the row it already is.
     "apps-search-to-install",
-    // THE SOFTWARE VIEW'S QUESTIONS: rows of the view run them, and each opens
-    // its door's line asking for its words (`ask-<id>`) — the footer's
-    // minibuffer or the window's header — and the answer comes back as the
-    // same command's argument.
+    // THE SOFTWARE VIEW'S QUESTIONS: rows of the view run them. The web
+    // app's address and name open its door's line asking for its words
+    // (`ask-<id>`) — the footer's minibuffer or the window's header — and the
+    // answer comes back as the same command's argument; the icon's image and
+    // the file to install open the view's file picker instead
+    // (`software::Picking`), and a path given as the argument is the answer.
     "software-web-address",
     "software-web-name",
     "software-icon-path",
@@ -1266,19 +1396,67 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "kiosk-tab",
     "kiosk-tab-move",
     "kiosk-extension",
-    // THE LEADER'S TWO OTHER SETS. Their key is a TAP of `Alt` or `Ctrl` after
-    // the leader, which is no sequence — a modifier alone never enters the
-    // tree — and they are commands so the pointer can click the hint that
-    // teaches the tap, and `LEADER :` can open the leader in either set.
+    // THE LEADER'S THREE SETS. Their key is the LEADER itself, pressed again
+    // with the list open, which is no sequence — the leader is the
+    // compositor's bind, not a key of the tree — and they are commands so the
+    // pointer can click the hint that teaches the press, and `LEADER :` can
+    // open the leader in any set.
     "leader-set-window",
     "leader-set-full",
-    // THE FOOTER'S HIDDEN MODES: their key is the LEADER itself, pressed again
-    // at the root (`crate::hidden`), which no tree can hold — the leader is
-    // the compositor's bind, not a key of the sequence. The root's list
-    // grafts a row that runs them (`hidden::bars_row`), and `LEADER :`
-    // reaches both by name.
+    // THE FOOTER'S HIDDEN MODES: their key is a TAP of `Ctrl` at the leader's
+    // root (`crate::hidden::next_mode`), which no tree can hold — a modifier
+    // alone never enters the tree. The root's list grafts a row that runs the
+    // cycle (`hidden::bars_row`), and `LEADER :` reaches the cycle and each
+    // mode by name.
     "footer-hide-push",
     "footer-hide-cover",
+    // THE STRIP'S THREE ABOUT A NOTICE. The strip CLICKS them and `LEADER :`
+    // reaches them by name; their keys are the brain's own `, n`, `, x` and
+    // `, z`, for the reason `brain-abort` and `brain-proceed` are `, a` and
+    // `, p` — a sequence under `LEADER b` cannot be a command and a prefix.
+    "brain-dismiss",
+    "brain-snooze",
+    "brain-act",
+    // ── end of brain-ui ──
+
+    // THE LEADER'S DEFAULT SET, by name: the third set the leader pressed
+    // again walks round to (`Set::next`), and the one the full set's hint
+    // teaches as a click.
+    "leader-set-default",
+    // THE BARS' THREE MODES IN TURN — normal, push, cover — which is what a
+    // tap of `Ctrl` at the leader's root does (`hidden::next_mode`). A
+    // modifier alone never enters a tree, so the root's list grafts a row
+    // that runs it (`hidden::bars_row`).
+    "footer-bars-cycle",
+    // THE LEADER CLOSED BY NAME, the way its `Esc` closes it — for what has
+    // no keyboard to press it with: the frame benchmark opens the leader
+    // over the socket again and again, and each opening has to be one
+    // (`nix/bench-frames.nix`). The leader pressed again walks the sets now.
+    "leader-close",
+    // THE MINIBUFFER'S DRAWER, opened or walked down and walked up or shut —
+    // the right `Ctrl` with an arrow while the footer has the keyboard
+    // (`Footer::fold_key`), and the compositor's transient bind while a hint
+    // too long for the line is on it (`Footer::keep_the_fold_keys`). No
+    // sequence: a drawer opened by `LEADER` would open onto the leader.
+    "minibuffer-fold-open",
+    "minibuffer-fold-close",
+    // THE ALERT BAR'S CLOSE BUTTON, for the keyboard — `LEADER :` — since
+    // the bar's own button is the pointer's (`crate::alert`).
+    "alert-dismiss",
+    // THE HOURS OF THE FREE MINIBUFFER, on or off by name: a row of the
+    // footer's settings (`LEADER s r`), whose `RET` is the view's own key.
+    "footer-hours",
+    // WHAT A DOOR OF THE SEARCH HANDS THE FOOTER (`fast_access_window::Out`):
+    // each takes the argument a key could not give.
+    "fast-access-launch",
+    "fast-access-open-path",
+    "fast-access-reveal",
+    "fast-access-man",
+    // THE REGISTRY LOGIN'S SECOND QUESTION (`containers::LOGIN_PASSWORD`):
+    // the secret line the first answer opens, whose answer arrives as this
+    // command's argument. A key of its own would ask for a password with no
+    // login to give it to.
+    "containers-login-password",
 ];
 
 /// And for the button a standing notice offers.
@@ -1319,7 +1497,7 @@ pub const NOTIF_OPEN_KEYS: &str = "n n";
 /// through `crate::leader()`, for the reason [`NOTIF_OPEN_KEYS`] gives. What
 /// it names is [`taught_keys`]'s answer for the command and not this
 /// constant: `s b` is the radio itself in the default set, so from there the
-/// answer is `CTRL s b y`.
+/// answer is the leader twice more and `s b y` (`SUPER SUPER s b y`).
 pub const PAIRING_YES_KEYS: &str = "s b y";
 
 /// The refusal's half of [`PAIRING_YES_KEYS`].
@@ -1428,18 +1606,6 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             label: key::CMD_BUFFER_CLOSE,
         },
         Command {
-            id: "glyphs-nerd-fonts",
-            label: key::CMD_GLYPHS_NERD_FONTS,
-        },
-        Command {
-            id: "unicode-symbols",
-            label: key::CMD_UNICODE_SYMBOLS,
-        },
-        Command {
-            id: "lucide-icons",
-            label: key::CMD_LUCIDE_ICONS,
-        },
-        Command {
             id: "session-quit",
             label: key::CMD_SESSION_QUIT,
         },
@@ -1449,8 +1615,8 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             id: "mx-open",
             label: key::CMD_MX_OPEN,
         },
-        // THE LEADER'S OTHER TWO SETS — what a tap of `Alt` or `Ctrl` does
-        // right after the leader, as commands for the pointer and for
+        // THE LEADER'S THREE SETS — what the leader pressed again with the
+        // list open walks through, as commands for the pointer and for
         // `LEADER :`. See [`Set`].
         Command {
             id: "leader-set-window",
@@ -1531,25 +1697,6 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         Command {
             id: "brain-proceed",
             label: key::CMD_BRAIN_PROCEED,
-        },
-        // AND WHAT A STANDING NOTICE OFFERS.
-        //
-        // A command of the registry and not a special case inside the band,
-        // because that is what makes a notice's button a thing anybody can
-        // reach: `LEADER :` runs it by name, the buffer's `, n` runs it, and
-        // the band clicks it. A notice names a COMMAND ID; it does not carry
-        // a thing to do.
-        Command {
-            id: "brain-start-emacs",
-            label: key::CMD_BRAIN_START_EMACS,
-        },
-        // AND WHAT THE CLOCK'S WATCH OFFERS. It turns the machine's network
-        // time client back on, which is the one thing that watch does on its
-        // own — the button is there for somebody who switched the watch off
-        // and wants the clock kept anyway.
-        Command {
-            id: "brain-clock-automatic",
-            label: key::CMD_BRAIN_CLOCK_AUTOMATIC,
         },
         // THE SCREENS — `LEADER s d`, and the gestures of the view itself,
         // which are commands like any other so the manual and the locator can
@@ -1657,7 +1804,7 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             id: "gestures-calibrate",
             label: key::CMD_GESTURES_CALIBRATE,
         },
-        // THE SCREEN RESIZER, `d r` — the first tool of the development
+        // THE SCREEN RESIZER, `/ r` — the first tool of the development
         // group: two curtains cut the screen, and everything is laid out in
         // what they leave (`crate::resizer`). On, or off when it is on.
         Command {
@@ -1870,10 +2017,6 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         Command {
             id: "player-add",
             label: key::CMD_PLAYER_ADD,
-        },
-        Command {
-            id: "player-parent",
-            label: key::CMD_PLAYER_PARENT,
         },
         Command {
             id: "player-only",
@@ -2319,41 +2462,9 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             id: "bluetooth-down",
             label: key::CMD_BLUETOOTH_DOWN,
         },
-        // `LEADER s u n` — THE WHOLE UPDATE, BY HAND, WITH NO BRAIN IN IT.
-        //
-        // The brain decides WHEN the machine updates itself; this is the
-        // person deciding it is now. The two are not two sequences: this
-        // starts the same unit the brain starts, and neither of them holds a
-        // list of steps — `assets/updates.nix` does, and everything else is
-        // generated from it. That is why there is no way to add a step to one
-        // and not the other: there is only one place a step can be added.
-        //
-        // It works with the daemon down, on purpose. A scheduler that is not
-        // running must not be able to stop a person from updating their own
-        // machine — see `update_window::begin`.
-        Command {
-            id: "system-update",
-            label: key::CMD_SYSTEM_UPDATE,
-        },
-        // AND THE VIEW THAT WATCHES ONE HAPPEN, in the footer's region — the
-        // same `update_window::View` as the window below, which starts it,
-        // answers the brain's countdown and follows both journals too.
-        Command {
-            id: "update-open",
-            label: key::CMD_UPDATE_OPEN,
-        },
-        // AND THE WINDOW THAT WATCHES ONE HAPPEN — the door the modeline's
-        // animated mark opens.
-        //
-        // It is a command of the registry and not a key of a view for the same
-        // reason `brain-abort` is: the mark appears on the footer's own line,
-        // with no window open, and the mouse may not reach a door the keyboard
-        // does not. It also opens with NOTHING running, which is when somebody
-        // wants to read what the last run did.
-        Command {
-            id: "update-watch",
-            label: key::CMD_UPDATE_WATCH,
-        },
+        // (THE UPDATE'S THREE — the whole sequence by hand, and the view that
+        // watches one in the footer and in a window — are its window's own
+        // table, `update_window::COMMANDS`, registered with these below.)
         Command {
             id: "monitor-bottom",
             label: key::CMD_MONITOR_BOTTOM,
@@ -3357,8 +3468,8 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             label: key::CMD_MODELINE_ADAPT_KIOSK,
         },
         // THE BARS HIDDEN, one way or the other, or shown again — see
-        // `crate::hidden`. By name only (`BY_NAME_ONLY`): the key is the
-        // leader pressed again at the root.
+        // `crate::hidden`. By name only (`BY_NAME_ONLY`): the key of the
+        // cycle is a tap of `Ctrl` at the leader's root.
         Command {
             id: "footer-hide-push",
             label: key::CMD_FOOTER_HIDE_PUSH,
@@ -3386,6 +3497,637 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         Command {
             id: "kiosk-tab-later",
             label: key::CMD_KIOSK_TAB_LATER,
+        },
+        // THE STRIP'S THREE ABOUT THE LOUDEST NOTICE: put it away, put it off
+        // by its first snooze, and do its first control — and, named, any
+        // action a module offers (`brain-act <module> <action>`).
+        Command {
+            id: "brain-dismiss",
+            label: key::CMD_BRAIN_DISMISS,
+        },
+        Command {
+            id: "brain-snooze",
+            label: key::CMD_BRAIN_SNOOZE,
+        },
+        Command {
+            id: "brain-act",
+            label: key::CMD_BRAIN_ACT,
+        },
+        // ── end of brain-ui ──
+        Command {
+            id: "leader-set-default",
+            label: key::CMD_LEADER_SET_DEFAULT,
+        },
+        Command {
+            id: "footer-bars-cycle",
+            label: key::CMD_FOOTER_BARS_CYCLE,
+        },
+        Command {
+            id: "leader-close",
+            label: key::CMD_LEADER_CLOSE,
+        },
+        Command {
+            id: "minibuffer-fold-open",
+            label: key::CMD_MINIBUFFER_FOLD_OPEN,
+        },
+        Command {
+            id: "minibuffer-fold-close",
+            label: key::CMD_MINIBUFFER_FOLD_CLOSE,
+        },
+        Command {
+            id: "alert-dismiss",
+            label: key::CMD_ALERT_DISMISS,
+        },
+        // THE FOOTER'S OWN SETTINGS, `LEADER s r` — the bars' mode, what the
+        // free minibuffer shows, and the kiosk's adapter (`footer_settings`).
+        Command {
+            id: "footer-settings-open",
+            label: key::CMD_FOOTER_SETTINGS_OPEN,
+        },
+        Command {
+            id: "footer-settings-window",
+            label: key::CMD_FOOTER_SETTINGS_WINDOW,
+        },
+        Command {
+            id: "footer-settings-up",
+            label: key::CMD_FOOTER_SETTINGS_UP,
+        },
+        Command {
+            id: "footer-settings-down",
+            label: key::CMD_FOOTER_SETTINGS_DOWN,
+        },
+        Command {
+            id: "footer-settings-enter",
+            label: key::CMD_FOOTER_SETTINGS_ENTER,
+        },
+        Command {
+            id: "footer-hours",
+            label: key::CMD_FOOTER_HOURS,
+        },
+        // THE ICONS APP (`crate::icons`): the footer's region and the window,
+        // a screen each, and the Lucide colour's question.
+        Command {
+            id: "icons-open",
+            label: key::CMD_ICONS_OPEN,
+        },
+        Command {
+            id: "icons-window",
+            label: key::CMD_ICONS_WINDOW,
+        },
+        Command {
+            id: "icons-nerd-fonts",
+            label: key::CMD_ICONS_NERD_FONTS,
+        },
+        Command {
+            id: "icons-lucide",
+            label: key::CMD_ICONS_LUCIDE,
+        },
+        Command {
+            id: "icons-unicode",
+            label: key::CMD_ICONS_UNICODE,
+        },
+        Command {
+            id: "icons-colour",
+            label: key::CMD_ICONS_COLOUR,
+        },
+        // THE CALCULATOR, `LEADER =` — the footer's door and the window's
+        // (`calc`, `calc_window`).
+        Command {
+            id: "calc-open",
+            label: key::CMD_CALC_OPEN,
+        },
+        Command {
+            id: "calc-window",
+            label: key::CMD_CALC_WINDOW,
+        },
+        // THE PLAYER'S DOORS (2026-09-30): the seeks beside the clock, the
+        // picture folded away, the queue saved again, the countries' order,
+        // the lyrics translated — keys of the view, reached by name — and
+        // the website page (`LEADER p h`).
+        Command {
+            id: "player-rewind",
+            label: key::CMD_PLAYER_REWIND,
+        },
+        Command {
+            id: "player-forward",
+            label: key::CMD_PLAYER_FORWARD,
+        },
+        Command {
+            id: "player-picture-fold",
+            label: key::CMD_PLAYER_PICTURE_FOLD,
+        },
+        Command {
+            id: "player-save-queue-again",
+            label: key::CMD_PLAYER_SAVE_QUEUE_AGAIN,
+        },
+        Command {
+            id: "player-countries-order",
+            label: key::CMD_PLAYER_COUNTRIES_ORDER,
+        },
+        Command {
+            id: "player-lyrics-translate",
+            label: key::CMD_PLAYER_LYRICS_TRANSLATE,
+        },
+        Command {
+            id: "player-website",
+            label: key::CMD_PLAYER_WEBSITE,
+        },
+        // A LISTING OF THE CATALOGUE'S KEYS (`player::OF_THE_VIEW`,
+        // `crate::player_catalog`).
+        Command {
+            id: "player-listing-earlier",
+            label: key::CMD_PLAYER_LISTING_EARLIER,
+        },
+        Command {
+            id: "player-listing-later",
+            label: key::CMD_PLAYER_LISTING_LATER,
+        },
+        Command {
+            id: "player-listing-first",
+            label: key::CMD_PLAYER_LISTING_FIRST,
+        },
+        Command {
+            id: "player-listing-last",
+            label: key::CMD_PLAYER_LISTING_LAST,
+        },
+        Command {
+            id: "player-listing-full",
+            label: key::CMD_PLAYER_LISTING_FULL,
+        },
+        Command {
+            id: "player-listing-layout",
+            label: key::CMD_PLAYER_LISTING_LAYOUT,
+        },
+        Command {
+            id: "player-listing-source",
+            label: key::CMD_PLAYER_LISTING_SOURCE,
+        },
+        Command {
+            id: "player-listing-letter",
+            label: key::CMD_PLAYER_LISTING_LETTER,
+        },
+        Command {
+            id: "player-listing-order",
+            label: key::CMD_PLAYER_LISTING_ORDER,
+        },
+        // `LEADER v` — THE VIDEO CATALOGUE (`video_metrics`): its two doors, a
+        // scan now, the view's keys and the values it asks to be typed.
+        Command {
+            id: "video-metrics-open",
+            label: key::CMD_VIDEO_METRICS_OPEN,
+        },
+        Command {
+            id: "video-metrics-window",
+            label: key::CMD_VIDEO_METRICS_WINDOW,
+        },
+        Command {
+            id: "video-metrics-scan",
+            label: key::CMD_VIDEO_METRICS_SCAN,
+        },
+        Command {
+            id: "video-metrics-up",
+            label: key::CMD_VIDEO_METRICS_UP,
+        },
+        Command {
+            id: "video-metrics-down",
+            label: key::CMD_VIDEO_METRICS_DOWN,
+        },
+        Command {
+            id: "video-metrics-less",
+            label: key::CMD_VIDEO_METRICS_LESS,
+        },
+        Command {
+            id: "video-metrics-more",
+            label: key::CMD_VIDEO_METRICS_MORE,
+        },
+        Command {
+            id: "video-metrics-enter",
+            label: key::CMD_VIDEO_METRICS_ENTER,
+        },
+        Command {
+            id: "video-metrics-page-back",
+            label: key::CMD_VIDEO_METRICS_PAGE_BACK,
+        },
+        Command {
+            id: "video-metrics-page-on",
+            label: key::CMD_VIDEO_METRICS_PAGE_ON,
+        },
+        Command {
+            id: "video-metrics-layout",
+            label: key::CMD_VIDEO_METRICS_LAYOUT,
+        },
+        Command {
+            id: "video-metrics-search",
+            label: key::CMD_VIDEO_METRICS_SEARCH,
+        },
+        Command {
+            id: "video-metrics-player",
+            label: key::CMD_VIDEO_METRICS_PLAYER,
+        },
+        Command {
+            id: "video-metrics-kiosk",
+            label: key::CMD_VIDEO_METRICS_KIOSK,
+        },
+        Command {
+            id: "video-metrics-download",
+            label: key::CMD_VIDEO_METRICS_DOWNLOAD,
+        },
+        Command {
+            id: "video-metrics-hide",
+            label: key::CMD_VIDEO_METRICS_HIDE,
+        },
+        Command {
+            id: "video-metrics-delete",
+            label: key::CMD_VIDEO_METRICS_DELETE,
+        },
+        Command {
+            id: "video-metrics-add-channel",
+            label: key::CMD_VIDEO_METRICS_ADD_CHANNEL,
+        },
+        Command {
+            id: "video-metrics-channel-score",
+            label: key::CMD_VIDEO_METRICS_CHANNEL_SCORE,
+        },
+        Command {
+            id: "video-metrics-points",
+            label: key::CMD_VIDEO_METRICS_POINTS,
+        },
+        Command {
+            id: "video-metrics-days",
+            label: key::CMD_VIDEO_METRICS_DAYS,
+        },
+        Command {
+            id: "video-metrics-band",
+            label: key::CMD_VIDEO_METRICS_BAND,
+        },
+        Command {
+            id: "video-metrics-words",
+            label: key::CMD_VIDEO_METRICS_WORDS,
+        },
+        Command {
+            id: "video-metrics-second-tags",
+            label: key::CMD_VIDEO_METRICS_SECOND_TAGS,
+        },
+        Command {
+            id: "video-metrics-weight",
+            label: key::CMD_VIDEO_METRICS_WEIGHT,
+        },
+        // THE SECURITY CENTRE (`crate::security`): the view's two doors, the
+        // leader's toggles and checks, the view's keys, and the questions its rows
+        // ask — each an arm of `run_with`.
+        Command {
+            id: "security-open",
+            label: key::CMD_SECURITY_OPEN,
+        },
+        Command {
+            id: "security-window",
+            label: key::CMD_SECURITY_WINDOW,
+        },
+        Command {
+            id: "security-relax",
+            label: key::CMD_SECURITY_RELAX,
+        },
+        Command {
+            id: "security-shields",
+            label: key::CMD_SECURITY_SHIELDS,
+        },
+        Command {
+            id: "security-firewall",
+            label: key::CMD_SECURITY_FIREWALL,
+        },
+        Command {
+            id: "security-check-password",
+            label: key::CMD_SECURITY_CHECK_PASSWORD,
+        },
+        Command {
+            id: "security-check-email",
+            label: key::CMD_SECURITY_CHECK_EMAIL,
+        },
+        Command {
+            id: "security-check-file",
+            label: key::CMD_SECURITY_CHECK_FILE,
+        },
+        Command {
+            id: "security-down",
+            label: key::CMD_SECURITY_DOWN,
+        },
+        Command {
+            id: "security-up",
+            label: key::CMD_SECURITY_UP,
+        },
+        Command {
+            id: "security-enter",
+            label: key::CMD_SECURITY_ENTER,
+        },
+        Command {
+            id: "security-left",
+            label: key::CMD_SECURITY_LEFT,
+        },
+        Command {
+            id: "security-right",
+            label: key::CMD_SECURITY_RIGHT,
+        },
+        Command {
+            id: "security-rule-add",
+            label: key::CMD_SECURITY_RULE_ADD,
+        },
+        Command {
+            id: "security-rule-delete",
+            label: key::CMD_SECURITY_RULE_DELETE,
+        },
+        Command {
+            id: "security-enrol",
+            label: key::CMD_SECURITY_ENROL,
+        },
+        Command {
+            id: "security-password",
+            label: key::CMD_SECURITY_PASSWORD,
+        },
+        Command {
+            id: "security-rule",
+            label: key::CMD_SECURITY_RULE,
+        },
+        Command {
+            id: "security-vt-key",
+            label: key::CMD_SECURITY_VT_KEY,
+        },
+        Command {
+            id: "security-vt-forget",
+            label: key::CMD_SECURITY_VT_FORGET,
+        },
+        Command {
+            id: "security-home",
+            label: key::CMD_SECURITY_HOME,
+        },
+        // THE PERSON'S CONTAINERS, `LEADER s o` (`crate::containers`): the
+        // two doors, and the view's own keys (`containers::OF_THE_VIEW`).
+        Command {
+            id: "containers-open",
+            label: key::CMD_CONTAINERS_OPEN,
+        },
+        Command {
+            id: "containers-window",
+            label: key::CMD_CONTAINERS_WINDOW,
+        },
+        Command {
+            id: "containers-down",
+            label: key::CMD_CONTAINERS_DOWN,
+        },
+        Command {
+            id: "containers-up",
+            label: key::CMD_CONTAINERS_UP,
+        },
+        Command {
+            id: "containers-enter",
+            label: key::CMD_CONTAINERS_ENTER,
+        },
+        Command {
+            id: "containers-left",
+            label: key::CMD_CONTAINERS_LEFT,
+        },
+        Command {
+            id: "containers-right",
+            label: key::CMD_CONTAINERS_RIGHT,
+        },
+        Command {
+            id: "containers-next-kind",
+            label: key::CMD_CONTAINERS_NEXT_KIND,
+        },
+        Command {
+            id: "containers-previous-kind",
+            label: key::CMD_CONTAINERS_PREVIOUS_KIND,
+        },
+        Command {
+            id: "containers-next-tab",
+            label: key::CMD_CONTAINERS_NEXT_TAB,
+        },
+        Command {
+            id: "containers-previous-tab",
+            label: key::CMD_CONTAINERS_PREVIOUS_TAB,
+        },
+        Command {
+            id: "containers-start-stop",
+            label: key::CMD_CONTAINERS_START_STOP,
+        },
+        Command {
+            id: "containers-restart",
+            label: key::CMD_CONTAINERS_RESTART,
+        },
+        Command {
+            id: "containers-remove",
+            label: key::CMD_CONTAINERS_REMOVE,
+        },
+        Command {
+            id: "containers-logs",
+            label: key::CMD_CONTAINERS_LOGS,
+        },
+        Command {
+            id: "containers-shell",
+            label: key::CMD_CONTAINERS_SHELL,
+        },
+        Command {
+            id: "containers-inspect",
+            label: key::CMD_CONTAINERS_INSPECT,
+        },
+        Command {
+            id: "containers-pull",
+            label: key::CMD_CONTAINERS_PULL,
+        },
+        Command {
+            id: "containers-build",
+            label: key::CMD_CONTAINERS_BUILD,
+        },
+        Command {
+            id: "containers-login",
+            label: key::CMD_CONTAINERS_LOGIN,
+        },
+        Command {
+            id: "containers-login-password",
+            label: key::CMD_CONTAINERS_LOGIN_PASSWORD,
+        },
+        Command {
+            id: "containers-prune",
+            label: key::CMD_CONTAINERS_PRUNE,
+        },
+        Command {
+            id: "containers-reveal",
+            label: key::CMD_CONTAINERS_REVEAL,
+        },
+        // THE BELONGINGS, `LEADER s v` (`crate::belongings`).
+        Command {
+            id: "belongings-open",
+            label: key::CMD_BELONGINGS_OPEN,
+        },
+        Command {
+            id: "belongings-window",
+            label: key::CMD_BELONGINGS_WINDOW,
+        },
+        Command {
+            id: "belongings-sync",
+            label: key::CMD_BELONGINGS_SYNC,
+        },
+        Command {
+            id: "belongings-up",
+            label: key::CMD_BELONGINGS_UP,
+        },
+        Command {
+            id: "belongings-down",
+            label: key::CMD_BELONGINGS_DOWN,
+        },
+        Command {
+            id: "belongings-less",
+            label: key::CMD_BELONGINGS_LESS,
+        },
+        Command {
+            id: "belongings-more",
+            label: key::CMD_BELONGINGS_MORE,
+        },
+        Command {
+            id: "belongings-enter",
+            label: key::CMD_BELONGINGS_ENTER,
+        },
+        Command {
+            id: "belongings-keep-local",
+            label: key::CMD_BELONGINGS_KEEP_LOCAL,
+        },
+        Command {
+            id: "belongings-take-remote",
+            label: key::CMD_BELONGINGS_TAKE_REMOTE,
+        },
+        Command {
+            id: "belongings-keep-both",
+            label: key::CMD_BELONGINGS_KEEP_BOTH,
+        },
+        Command {
+            id: "belongings-apply",
+            label: key::CMD_BELONGINGS_APPLY,
+        },
+        Command {
+            id: "belongings-abandon",
+            label: key::CMD_BELONGINGS_ABANDON,
+        },
+        Command {
+            id: "belongings-all-local",
+            label: key::CMD_BELONGINGS_ALL_LOCAL,
+        },
+        Command {
+            id: "belongings-all-remote",
+            label: key::CMD_BELONGINGS_ALL_REMOTE,
+        },
+        Command {
+            id: "belongings-repository",
+            label: key::CMD_BELONGINGS_REPOSITORY,
+        },
+        Command {
+            id: "belongings-add",
+            label: key::CMD_BELONGINGS_ADD,
+        },
+        Command {
+            id: "belongings-auth",
+            label: key::CMD_BELONGINGS_AUTH,
+        },
+        Command {
+            id: "belongings-keygen",
+            label: key::CMD_BELONGINGS_KEYGEN,
+        },
+        Command {
+            id: "belongings-copy-key",
+            label: key::CMD_BELONGINGS_COPY_KEY,
+        },
+        Command {
+            id: "belongings-token",
+            label: key::CMD_BELONGINGS_TOKEN,
+        },
+        Command {
+            id: "belongings-user",
+            label: key::CMD_BELONGINGS_USER,
+        },
+        Command {
+            id: "belongings-passphrase",
+            label: key::CMD_BELONGINGS_PASSPHRASE,
+        },
+        Command {
+            id: "belongings-period",
+            label: key::CMD_BELONGINGS_PERIOD,
+        },
+        // THE SEARCH OVER EVERYTHING, in its four doors.
+        Command {
+            id: "fast-access-open",
+            label: key::CMD_FAST_ACCESS_OPEN,
+        },
+        Command {
+            id: "fast-access-window",
+            label: key::CMD_FAST_ACCESS_WINDOW,
+        },
+        Command {
+            id: "fast-access-column",
+            label: key::CMD_FAST_ACCESS_COLUMN,
+        },
+        Command {
+            id: "fast-access-float",
+            label: key::CMD_FAST_ACCESS_FLOAT,
+        },
+        // WHAT A DOOR OF THE SEARCH ASKS THE FOOTER TO OPEN, which outlives
+        // the window: by name only, each with its argument.
+        Command {
+            id: "fast-access-launch",
+            label: key::CMD_FAST_ACCESS_LAUNCH,
+        },
+        Command {
+            id: "fast-access-open-path",
+            label: key::CMD_FAST_ACCESS_OPEN_PATH,
+        },
+        Command {
+            id: "fast-access-reveal",
+            label: key::CMD_FAST_ACCESS_REVEAL,
+        },
+        Command {
+            id: "fast-access-man",
+            label: key::CMD_FAST_ACCESS_MAN,
+        },
+        // THE RANKING and its keys (`crate::player_ranking`).
+        Command {
+            id: "player-ranking",
+            label: key::CMD_PLAYER_RANKING,
+        },
+        Command {
+            id: "player-ranking-more",
+            label: key::CMD_PLAYER_RANKING_MORE,
+        },
+        Command {
+            id: "player-ranking-earlier",
+            label: key::CMD_PLAYER_RANKING_EARLIER,
+        },
+        Command {
+            id: "player-ranking-later",
+            label: key::CMD_PLAYER_RANKING_LATER,
+        },
+        Command {
+            id: "player-ranking-first",
+            label: key::CMD_PLAYER_RANKING_FIRST,
+        },
+        Command {
+            id: "player-ranking-last",
+            label: key::CMD_PLAYER_RANKING_LAST,
+        },
+        Command {
+            id: "player-ranking-layout",
+            label: key::CMD_PLAYER_RANKING_LAYOUT,
+        },
+        // THE SCREENS' VERTICAL GESTURES (`S-<up>`/`S-<down>` on the
+        // arrangement): a screen above or below its neighbours.
+        Command {
+            id: "display-rise",
+            label: key::CMD_DISPLAY_RISE,
+        },
+        Command {
+            id: "display-sink",
+            label: key::CMD_DISPLAY_SINK,
+        },
+        // THE CLIPBOARD'S WINDOW: the second screen of the footer's history.
+        Command {
+            id: "clipboard-window",
+            label: key::CMD_CLIPBOARD_WINDOW,
         },
     ];
 
@@ -3502,9 +4244,11 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         // cost the clipboard, which is used all day, a second keystroke to
         // house a screenshot, which is not. The screenshot went to `m`.
         //
-        // A command here is only legal because nothing hangs off `c` any more:
-        // a prefix that is also a command is the `PrefixWithCommand` collision.
-        ("c", "clipboard-open", None),
+        // `c` IS A GROUP AGAIN, of the clipboard's two doors: `c c` the
+        // footer's region and `c w` the window — the `s n n` / `s n w` shape,
+        // and a prefix with no command of its own, which is what the
+        // `PrefixWithCommand` collision asks.
+        ("c c", "clipboard-open", None),
         // `a` for APPLICATIONS, at the first level. It was free, and an
         // application launcher is a first-level thing: if it costs two
         // keys, the person goes back to opening everything through the terminal.
@@ -3618,12 +4362,6 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         // `b` for BROWSER — the person's own Chrome as a kiosk, without its
         // bars. Everything it does is then under `,` while it has the focus.
         ("m b", "kiosk-open", None),
-        // `i` for ICONS, and not `g` for glyphs: the Nerd Fonts browser is the
-        // first collection, and others are going to come in — the group is born with the
-        // name of what it is going to hold, and not with the first item's.
-        ("m i n", "glyphs-nerd-fonts", None),
-        ("m i u", "unicode-symbols", None),
-        ("m i l", "lucide-icons", None),
         // `LEADER s m` — the memory panel. The machine already had a policy
         // against freezing and no screen ever said so; this is where it
         // becomes something one can look at, and loosen.
@@ -3666,14 +4404,9 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         ("i b", "software-web-new", None),
         ("i u", "software-maintenance", None),
         ("i a", "software-android", None),
-        // `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory
-        // panel and the disk formatter: `s u u` opens its view (the doubled
-        // letter every view here uses) and `s u w` its window — `w` for
-        // WINDOW, the letter every view with a second door uses — and `s u n`
-        // starts it NOW, the key the view itself teaches as `u`.
-        ("s u u", "update-open", None),
-        ("s u w", "update-watch", None),
-        ("s u n", "system-update", None),
+        // (`LEADER s u` — THE UPDATE, its view, its window and the sequence
+        // now — is its window's own table, `update_window::BINDINGS`, taken
+        // whole below.)
         // `LEADER s d` — THE SCREENS. `s d d` opens the view (the doubled
         // letter, the convention `s p p`, `s n n`, `t t` and `. .` already
         // use) and `s d w` the window; everything about ONE screen is a letter
@@ -3733,10 +4466,13 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         // owner gave `d` to the development group. Bound through the constant
         // the sentences teach it by, so the two cannot drift apart.
         (GLANCE_KEYS, "world-glance", None),
-        // `d` FOR DEVELOPMENT, the tools for whoever builds this distro, and
-        // `r` resizes the screen. Written out, and not through a constant, so
-        // the check that every key reaches an arm of `run_with` reads it.
-        ("d r", "dev-resizer", None),
+        // `/` FOR DEVELOPMENT, the tools for whoever builds this distro, and
+        // `r` resizes the screen. It was `d`, which the owner gave to the fast
+        // access (2026-09-30): a key the person reaches for every day, where
+        // `/` is one a builder of the distro learns once. Written out, and not
+        // through a constant, so the check that every key reaches an arm of
+        // `run_with` reads it.
+        ("/ r", "dev-resizer", None),
         // `s q` — THE WAYS OUT, under SYSTEM at the owner's word.
         //
         // They held a letter of their own at the first level, and what they do
@@ -3829,6 +4565,65 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         ("s s r", "syncthing-resume-all", None),
         ("s s d", "syncthing-add-device", None),
         ("s s f", "syncthing-add-folder", None),
+        // `s r` — THE FOOTER'S OWN SETTINGS, on a letter of `s` still free:
+        // the doubled key is the footer's door, `w` the window's.
+        ("s r r", "footer-settings-open", None),
+        ("s r w", "footer-settings-window", None),
+        // `i` for ICONS, and not `g` for glyphs: the group holds the three
+        // collections. `m i i` and `m i w` are the two doors, so the group
+        // folds into `LEADER m i`; a screen of its own is `m i n|l|u`, in the
+        // whole tree.
+        ("m i i", "icons-open", None),
+        ("m i w", "icons-window", None),
+        ("m i n", "icons-nerd-fonts", None),
+        ("m i l", "icons-lucide", None),
+        ("m i u", "icons-unicode", None),
+        // `=` — THE CALCULATOR, the key a sum ends with: the doubled key is
+        // the footer's door, `w` the window's.
+        ("= =", "calc-open", None),
+        ("= w", "calc-window", None),
+        // `h` FOR A PAGE OF THE WEB — a video from a website, by its
+        // address (`crate::player_website`).
+        ("p h", "player-website", None),
+        // `v` — THE VIDEO CATALOGUE, on a top-level letter the design left free:
+        // the doubled key is the footer's door, `w` the window's, `s` a scan now.
+        ("v v", "video-metrics-open", None),
+        ("v w", "video-metrics-window", None),
+        ("v s", "video-metrics-scan", None),
+        // `s e` — THE SECURITY CENTRE: the doubled key the footer's door, `w`
+        // the window's; then the window without a password, the shields, the
+        // firewall, and the three online checks.
+        ("s e e", "security-open", None),
+        ("s e w", "security-window", None),
+        ("s e r", "security-relax", None),
+        ("s e b", "security-shields", None),
+        ("s e f", "security-firewall", None),
+        ("s e p", "security-check-password", None),
+        ("s e m", "security-check-email", None),
+        ("s e v", "security-check-file", None),
+        // `s o` — THE PERSON'S CONTAINERS, on a letter of `s` still free: the
+        // doubled key is the footer's door, `w` the window's.
+        ("s o o", "containers-open", None),
+        ("s o w", "containers-window", None),
+        // THE BELONGINGS: the view in the footer, in a window, and a sync
+        // from anywhere — the passphrase asked on the door's own line.
+        ("s v v", "belongings-open", None),
+        ("s v w", "belongings-window", None),
+        ("s v s", "belongings-sync", None),
+        // `d` — THE SEARCH OVER EVERYTHING: the doubled key the footer's door,
+        // `w` the window's, `c` the column's; and `SPC`, the window floating
+        // over the whole room — the one key a search should be.
+        ("d d", "fast-access-open", None),
+        ("d w", "fast-access-window", None),
+        ("d c", "fast-access-column", None),
+        ("SPC", "fast-access-float", None),
+        // `k` FOR THE RANKING of the video catalogue — its videos, best
+        // first, a click from the queue (`crate::player_ranking`).
+        ("p k", "player-ranking", None),
+        // THE CLIPBOARD, TWO DOORS: `c c` the footer, `c w` the window — and
+        // folded, `LEADER c` is still the footer and `LEADER LEADER c` the
+        // window (`folds`).
+        ("c w", "clipboard-window", None),
     ];
 
     /// The digits as `&'static str`, so the binding can carry them.
@@ -3869,10 +4664,11 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         ("n", key::GROUP_NOTIFICATION),
         // `i` FOR THE PERSON'S OWN PROGRAMS — see the bindings.
         ("i", key::GROUP_SOFTWARE),
-        // `d` FOR DEVELOPMENT: tools for whoever builds this distro — the
-        // screen resizer today, and more to come. It held the glance, which
-        // went to `g`.
-        ("d", key::GROUP_DEV),
+        // `/` FOR DEVELOPMENT: tools for whoever builds this distro — the
+        // screen resizer today, and more to come. It was `d` (which held the
+        // glance before that, gone to `g`); `d` and `SPC` at the root are the
+        // fast access's now, and this group leaves them free.
+        ("/", key::GROUP_DEV),
         // `s` for SYSTEM — what the machine is doing to itself, as opposed to
         // what one is doing with it: memory, disks, the update, the theme —
         // and the network and Syncthing, which moved in from the first level.
@@ -3890,11 +4686,33 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         ("s g", key::GROUP_GEO),
         ("s u", key::GROUP_UPDATE),
         ("s q", key::GROUP_QUIT),
+        ("s r", key::GROUP_FOOTER_SETTINGS),
+        ("=", key::GROUP_CALC),
+        ("v", key::GROUP_VIDEO_METRICS),
+        ("s e", key::GROUP_SECURITY),
+        ("s o", key::GROUP_CONTAINERS),
+        ("s v", key::GROUP_BELONGINGS),
+        ("d", key::GROUP_FAST_ACCESS),
+        ("c", key::GROUP_CLIPBOARD),
     ];
 
     let mut registry = Registry::fresh();
-    for c in COMMANDS {
+    // THE UPDATE'S COMMANDS ARE ITS WINDOW'S (`update_window::COMMANDS`), and
+    // they are registered here like every other: the leader spells none of
+    // them, and the window is the one file outside the update's module that
+    // may.
+    for c in COMMANDS.iter().chain(crate::update_window::COMMANDS) {
         registry.register(*c)?;
+    }
+
+    // THE BRAIN MODULES' ACTIONS, each as a named command — generated, and
+    // naming no module: `<module>-<action>`, labelled by the module's own
+    // `cmd-<module>-<action>` (see `a_module_action`).
+    for (_, action) in ronoctua_brain::compiled::ACTIONS {
+        registry.register(Command {
+            id: action.command,
+            label: action.label,
+        })?;
     }
 
     // THE COMPOSITOR'S DEEDS, each as a named command.
@@ -3951,6 +4769,8 @@ pub fn default_of() -> Result<(Trees, Registry)> {
     let (menu_bindings, menu_groups) = crate::window_menu::leader_bindings();
     let written: Vec<(String, &str, Option<&str>)> = BINDINGS
         .iter()
+        // AND THE UPDATE'S, from its window's table — see the commands above.
+        .chain(crate::update_window::BINDINGS)
         .map(|(s, c, a)| ((*s).to_owned(), *c, *a))
         .chain(ranges.map(|(s, c, a)| (s, c, Some(a))))
         .collect();
@@ -4047,6 +4867,88 @@ pub const EVERY_WORKSPACE_KEYS: &str = "0";
 
 /// The key that zooms the workspace in front out and back, likewise.
 pub const OVERVIEW_KEYS: &str = "TAB TAB";
+
+/// How `brain-dismiss` and `brain-snooze` are typed — inside the brain's
+/// buffer, beside `, n` for the notice's first control and for the reason the
+/// countdown's two are `, a` and `, p`: the strip PRINTS these, and a key
+/// written in the table and again in the drawing would be two answers to
+/// "which key puts it away".
+pub const BRAIN_DISMISS_KEYS: &str = ", x";
+
+/// See [`BRAIN_DISMISS_KEYS`].
+pub const BRAIN_SNOOZE_KEYS: &str = ", z";
+
+/// Whether a command is a brain module's action (`<module>-<action>`, from
+/// `ronoctua_brain::compiled::ACTIONS`).
+///
+/// # Why they are commands, and reached by name only
+///
+/// A notice's button is an action, and an action is a COMMAND of the registry
+/// rather than a special case inside the strip: `LEADER :` runs it by name,
+/// the brain's `, n` and the strip's click reach it through `brain-act`, and a
+/// question an action asks comes back as the command's argument. The list is
+/// the generated one, so a module's folder adds its actions here without this
+/// file naming it — and none of them has a sequence, for the reason the Emacs
+/// watch's button gave first: a key for it would be a key that does nothing on
+/// every machine where there is nothing to say, which is almost all of them,
+/// almost all of the time. So both orphan checks (`check-keymap` and the test
+/// beside it) excuse them the way they excuse `BY_NAME_ONLY`.
+#[must_use]
+pub fn a_module_action(id: &str) -> bool {
+    ronoctua_brain::compiled::ACTIONS
+        .iter()
+        .any(|(_, action)| action.command == id)
+}
+
+/// The action a module action's command names, out of the generated list —
+/// what `run_with` sends when the footer holds no mind to find it in.
+///
+/// A COMMAND THE REGISTRY LISTS ANSWERS, mind or not: before the brain has
+/// spoken (or with no brain at all) it fell through to "does nothing yet",
+/// which is the one thing it is not. With this it is sent, and the door says
+/// what came back — the brain's answer, or that the brain is not answering.
+#[must_use]
+pub fn module_action(id: &str) -> Option<crate::brain::Acting> {
+    ronoctua_brain::compiled::ACTIONS
+        .iter()
+        .find(|(_, action)| action.command == id)
+        .map(|(module, action)| crate::brain::Acting {
+            module: (*module).to_owned(),
+            action: action.id.to_owned(),
+            command: id.to_owned(),
+            asks: action.asks.map(str::to_owned),
+        })
+}
+
+/// A module action's command is found without a mind, and a command that is
+/// not one is not.
+///
+/// THE DEFECT THIS CATCHES: `LEADER : <module>-<action>` before the brain had
+/// spoken — or with no brain — answered "does nothing yet", because only the
+/// mind was asked what the command was. Every generated action, and no id is
+/// written here: naming a module outside its folder is what
+/// `brain-modules-are-sealed` refuses.
+#[cfg(test)]
+mod module_action_tests {
+    #[test]
+    fn every_generated_action_is_found_without_a_mind() {
+        assert!(
+            !ronoctua_brain::compiled::ACTIONS.is_empty(),
+            "no module declares an action, and this proves nothing"
+        );
+        for (module, action) in ronoctua_brain::compiled::ACTIONS {
+            let found = super::module_action(action.command)
+                .unwrap_or_else(|| panic!("`{}` was not found", action.command));
+            assert_eq!(found.module, *module);
+            assert_eq!(found.action, action.id);
+            assert_eq!(found.command, action.command);
+            assert_eq!(found.asks.as_deref(), action.asks);
+            assert!(super::a_module_action(action.command));
+        }
+        assert!(super::module_action("files-open").is_none());
+        assert!(!super::a_module_action("files-open"));
+    }
+}
 
 /// The launcher's keys — its table lives in the view, `crate::apps::OF_THE_VIEW`.
 pub const OF_LAUNCHER_VIEW: &[(&str, &str)] = crate::apps::OF_THE_VIEW;
@@ -4146,6 +5048,31 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     // THE KIOSK'S VIEW AND ITS `,` GROUP, one table (`kiosk_view::ROOT`) and
     // its two lists.
     out.extend(crate::kiosk_view::reached());
+
+    // THE FOOTER SETTINGS' KEYS, one table (`footer_settings::OF_THE_VIEW`).
+    out.extend(crate::footer_settings::reached());
+
+    // THE ICONS APP: its question, reached from its page's colour row.
+    out.extend(crate::icons::reached());
+
+    // THE VIDEO CATALOGUE'S KEYS AND QUESTIONS, one table each
+    // (`video_metrics::OF_THE_VIEW`, `video_metrics::Ask`).
+    out.extend(crate::video_metrics::reached());
+
+    // THE SECURITY CENTRE'S KEYS, ROWS AND QUESTIONS (`security::reached`).
+    out.extend(crate::security::reached());
+
+    // THE CONTAINERS' KEYS, one table (`containers::OF_THE_VIEW`).
+    out.extend(crate::containers::reached());
+
+    // THE BELONGINGS' KEYS AND ROWS, one table each (`belongings::OF_THE_VIEW`,
+    // `OF_THE_ROWS`).
+    out.extend(crate::belongings::reached());
+
+    // THE SEARCH'S COMMANDS: its doors, and what a door of it hands the
+    // footer (`fast_access::COMMANDS`).
+    out.extend(crate::fast_access::reached());
+
     out
 }
 
@@ -4181,7 +5108,7 @@ mod tests {
                     .read_line(&mut line)
                     .expect("read");
                 let reply = match line.trim() {
-                    "states" => "filter\nnormal n\nfilter f\nsheet s".to_owned(),
+                    "states" => "filter warning\nnormal n\nfilter f\nsheet s".to_owned(),
                     order => {
                         seen.lock().expect("lock").push(order.to_owned());
                         "ok".to_owned()
@@ -4191,10 +5118,12 @@ mod tests {
             }
         });
 
-        let (now, listed) = super::buffer_states_at(&path).expect("read the states");
+        let (now, tone, listed) = super::buffer_states_at(&path).expect("read the states");
         // THE CURRENT ONE IS THE FIRST LINE and is NOT in the list — that is the
-        // whole reason the shape differs from the keymap's.
+        // whole reason the shape differs from the keymap's. Its tone rides on
+        // the same line.
         assert_eq!(now, "filter");
+        assert_eq!(tone, ronoctua_protocol::Tone::Warning);
         assert_eq!(
             listed,
             vec![
@@ -4393,7 +5322,8 @@ mod tests {
         // all ends without pointing at anything, and one that HAS no case (a digit,
         // punctuation) too.
         let (tree, _) = default_of().expect("the default keymap has to close");
-        for c in ['ç', '='] {
+        // `¬` AND NOT `=`, which the calculator took (`LEADER =`).
+        for c in ['ç', '¬'] {
             let mut l = Leader::default();
             l.activate();
             assert!(
@@ -4511,7 +5441,7 @@ mod tests {
             // all of them would spend the whole keymap on what is almost never
             // used. The exception is recognisable by its prefix, so it cannot
             // grow without someone writing `wm-` on purpose.
-            if c.id.starts_with("wm-") || BY_NAME_ONLY.contains(&c.id) {
+            if c.id.starts_with("wm-") || BY_NAME_ONLY.contains(&c.id) || a_module_action(c.id) {
                 continue;
             }
             assert!(
@@ -4570,15 +5500,15 @@ mod tests {
         let (tree, _) = default_of().unwrap();
         let mut l = Leader::default();
         l.activate();
-        // `m i n` — THREE keys, which is also what this test wants: a sequence
+        // `s q h` — THREE keys, which is also what this test wants: a sequence
         // that runs has to be walked to the end, and a two-key one cannot tell
-        // "the last key ran it" from "any key after a group runs it". The
-        // browsers keep the `i` prefix inside `m`; see the bindings.
-        l.key(&tree, Key::simple(Sym::Char('m')));
-        l.key(&tree, Key::simple(Sym::Char('i')));
+        // "the last key ran it" from "any key after a group runs it". `s q`
+        // has one door, so it does not fold in the set a leader starts in.
+        l.key(&tree, Key::simple(Sym::Char('s')));
+        l.key(&tree, Key::simple(Sym::Char('q')));
         assert_eq!(
-            l.key(&tree, Key::simple(Sym::Char('n'))),
-            Effect::Run("glyphs-nerd-fonts", None)
+            l.key(&tree, Key::simple(Sym::Char('h'))),
+            Effect::Run("power-hibernate", None)
         );
         // Leaving the leader after executing is what gives the keyboard back to the
         // buffers. Staying active would leave the system with no input.
@@ -4595,8 +5525,9 @@ mod tests {
     /// window — by `f w`.
     ///
     /// AND THEN FOR THE THREE SETS (2026-09-28): the submenu is still there,
-    /// whole, after a tap of `Ctrl`; the leader alone runs the footer's door on
-    /// `.`, and after a tap of `Alt` the same `.` is the window. In the full
+    /// whole, in the full set (the leader pressed twice more); the leader
+    /// alone runs the footer's door on `.`, and pressed again the same `.` is
+    /// the window. In the full
     /// tree `.` ALONE still runs nothing — a prefix that also executed would
     /// run a command while somebody is still typing, which is the rule the
     /// keymap refuses in writing.
@@ -4716,32 +5647,54 @@ mod tests {
         }
     }
 
-    /// FAILS IF: `LEADER d` stops being the development group with the
-    /// resizer at `d r`, or the glance leaves `g` — or the constant its
+    /// FAILS IF: `LEADER /` stops being the development group with the
+    /// resizer at `/ r`, the development group holds `d` again — the fast
+    /// access's (2026-09-30) — or the glance leaves `g`, or the constant its
     /// sentences teach it by stops being the key that runs it.
     #[test]
-    fn the_dev_group_is_d_and_the_glance_is_g() {
-        // THE DEFAULT SET, which is where a sequence starts; `d` folds in none.
+    fn the_dev_group_is_slash_and_the_glance_is_g() {
+        // THE DEFAULT SET, which is where a sequence starts; `/` folds in none.
         let (trees, _) = default_of().unwrap();
         let tree = &trees.footer;
         let runs = |keys: &str| match tree.resolve(&parse_sequence(keys).unwrap()) {
             ronoctua_keymap::Resolution::Command(id, None) => Some(id),
             _ => None,
         };
-        assert_eq!(runs("d r"), Some("dev-resizer"));
+        assert_eq!(runs("/ r"), Some("dev-resizer"));
         assert_eq!(runs("g"), Some("world-glance"));
         assert_eq!(GLANCE_KEYS, "g");
         assert_eq!(runs(GLANCE_KEYS), Some("world-glance"));
-        assert_eq!(runs("d"), None, "`d` runs something, so it is no group");
+        assert_eq!(runs("/"), None, "`/` runs something, so it is no group");
         let ronoctua_keymap::Resolution::Prefix(root) = tree.resolve(&[]) else {
             panic!("the root is not a list");
         };
-        let d = root
+        let dev = root
             .iter()
-            .find(|e| e.key == "d")
-            .expect("no `d` at the root");
-        assert_eq!(d.command, None, "`d` is a command and not a group");
-        assert_eq!(d.label, key::GROUP_DEV);
+            .find(|e| e.key == "/")
+            .expect("no `/` at the root");
+        assert_eq!(dev.command, None, "`/` is a command and not a group");
+        assert_eq!(dev.label, key::GROUP_DEV);
+        // `d` IS NOT THE DEVELOPMENT GROUP'S ANY MORE, in any set: whatever
+        // the fast access binds there, the resizer is not under it.
+        for set in Set::ALL {
+            let t = trees.of(set);
+            assert!(
+                !matches!(
+                    t.resolve(&parse_sequence("d r").unwrap()),
+                    ronoctua_keymap::Resolution::Command("dev-resizer", _)
+                ),
+                "`d r` still runs the resizer in the {set:?} set"
+            );
+            let ronoctua_keymap::Resolution::Prefix(root) = t.resolve(&[]) else {
+                panic!("the root of the {set:?} set is not a list");
+            };
+            assert!(
+                !root
+                    .iter()
+                    .any(|e| e.key == "d" && e.label == key::GROUP_DEV),
+                "`d` is still the development group in the {set:?} set"
+            );
+        }
     }
 
     /// FAILS IF: the root list draws the nine digits as nine rows again, or
@@ -4851,26 +5804,50 @@ mod tests {
     }
 
     /// FAILS IF: the chord on screen stops saying which set the next key
-    /// walks — `SUPER ALT-`, `SUPER CTRL s n-` — or the default set grows a
-    /// word of its own.
+    /// walks — as the leader pressed again, `SUPER SUPER-`, `SUPER SUPER SUPER
+    /// s n-` — or the default set grows a word of its own.
     #[test]
     fn the_prefix_names_the_set() {
         let (trees, _) = default_of().unwrap();
         let mut l = Leader::default();
         l.activate();
         assert!(l.set(Set::Window));
-        assert_eq!(l.prefix("SUPER"), format!("SUPER {WINDOW_SET_KEY}-"));
-        assert_eq!(l.raw_prefix("SUPER"), format!("SUPER {WINDOW_SET_KEY}"));
-        // THE LAST TAP WINS, while nothing has been typed.
+        assert_eq!(l.prefix("SUPER"), "SUPER SUPER-");
+        assert_eq!(l.raw_prefix("SUPER"), "SUPER SUPER");
+        // THE LAST SWITCH WINS, while nothing has been typed.
         assert!(l.set(Set::Full));
         l.key(&trees, Key::simple(Sym::Char('s')));
         l.key(&trees, Key::simple(Sym::Char('n')));
-        assert_eq!(l.prefix("SUPER"), format!("SUPER {FULL_SET_KEY} s n-"));
-        assert_eq!(l.raw_prefix("SUPER"), format!("SUPER {FULL_SET_KEY} s n"));
+        assert_eq!(l.prefix("SUPER"), "SUPER SUPER SUPER s n-");
+        assert_eq!(l.raw_prefix("SUPER"), "SUPER SUPER SUPER s n");
+        // AND THE NESTED LOOP'S LEADER, three keys long, is repeated whole.
+        l.activate();
+        assert!(l.set(Set::Window));
+        assert_eq!(l.prefix("CTRL ALT SPC"), "CTRL ALT SPC CTRL ALT SPC-");
         // AND THE DEFAULT IS THE LEADER ALONE, from every opening.
         l.activate();
         assert_eq!(l.set_now(), Set::Footer);
         assert_eq!(l.prefix("SUPER"), "SUPER-");
+    }
+
+    /// FAILS IF: the leader pressed again stops walking the three sets in
+    /// order — default, windows, the whole tree, and round to the default —
+    /// or a set's key stops being the leader once per press, or a set's
+    /// command stops being registered and handled.
+    #[test]
+    fn the_leader_again_walks_the_sets_round() {
+        assert_eq!(Set::Footer.next(), Set::Window);
+        assert_eq!(Set::Window.next(), Set::Full);
+        assert_eq!(Set::Full.next(), Set::Footer);
+        assert_eq!(Set::Footer.key_with("SUPER"), None);
+        assert_eq!(Set::Window.key_with("SUPER").as_deref(), Some("SUPER"));
+        assert_eq!(Set::Full.key_with("SUPER").as_deref(), Some("SUPER SUPER"));
+        let (_, registry) = default_of().unwrap();
+        for set in Set::ALL {
+            let id = set.command();
+            assert!(registry.search(id).is_some(), "`{id}` is not registered");
+            assert!(BY_NAME_ONLY.contains(&id), "`{id}` has a sequence?");
+        }
     }
 
     /// FAILS IF: the set can be switched anywhere but the root of an open
@@ -4993,8 +5970,8 @@ mod tests {
     /// FAILS IF: a group folds that did not, or stops folding — the rule's
     /// answer over the real tables, pinned. A group added tomorrow that keeps
     /// the two-door convention lands here on purpose, and whoever adds it
-    /// reads why: `LEADER` alone then runs its footer door and `LEADER Alt`
-    /// its window.
+    /// reads why: `LEADER` alone then runs its footer door and `LEADER
+    /// LEADER` its window.
     ///
     /// `w` is NOT here (its doubled key is its `w`), nor any level of the
     /// window menu under it (`w v` has `w v v` and `w v w`, two deeds and no
@@ -5050,7 +6027,20 @@ mod tests {
             ("s b", "bluetooth-open", "bluetooth-window"),
             ("s l", "locale-open", "locale-window"),
             ("s g", "geo-open", "geo-window"),
-            ("s u", "update-open", "update-watch"),
+            (
+                "s u",
+                crate::update_window::OPEN,
+                crate::update_window::WATCH,
+            ),
+            ("s r", "footer-settings-open", "footer-settings-window"),
+            ("m i", "icons-open", "icons-window"),
+            ("=", "calc-open", "calc-window"),
+            ("v", "video-metrics-open", "video-metrics-window"),
+            ("s e", "security-open", "security-window"),
+            ("s o", "containers-open", "containers-window"),
+            ("s v", "belongings-open", "belongings-window"),
+            ("d", "fast-access-open", "fast-access-window"),
+            ("c", "clipboard-open", "clipboard-window"),
         ]
         .into_iter()
         .map(|(g, f, w)| (g.to_owned(), f, w))
@@ -5085,7 +6075,8 @@ mod tests {
             Resolution::Command("network-window", None)
         );
         assert!(matches!(resolve(Set::Full, "s n"), Resolution::Prefix(_)));
-        // THE REST OF A FOLDED GROUP is one tap of `Ctrl` away, and only there.
+        // THE REST OF A FOLDED GROUP is two presses of the leader away, and
+        // only there.
         assert_eq!(
             resolve(Set::Full, "s n a"),
             Resolution::Command("network-airplane", None)
@@ -5113,67 +6104,79 @@ mod tests {
     #[test]
     fn the_taught_keys_start_in_the_default_set() {
         let (trees, _) = default_of().unwrap();
-        let taught = |id: &str| taught_keys(&trees, id, None);
+        let taught = |id: &str| taught_keys_with(&trees, id, None, "SUPER");
         // THE FOOTER'S OWN SEQUENCE, when it has one.
         assert_eq!(taught("transfers-open").as_deref(), Some("t"));
         assert_eq!(taught("notif-open").as_deref(), Some("n"));
         assert_eq!(taught("window-screen-full").as_deref(), Some("w f"));
         assert_eq!(taught("apps-open").as_deref(), Some(APPS_KEYS));
         assert_eq!(taught("brain-open").as_deref(), Some(BRAIN_KEYS));
-        // ELSE THE WINDOW SET'S, after its key.
-        assert_eq!(taught("files-window"), Some(format!("{WINDOW_SET_KEY} .")));
-        // ELSE THE FULL TREE'S.
+        // ELSE THE WINDOW SET'S, after the leader pressed again.
+        assert_eq!(taught("files-window").as_deref(), Some("SUPER ."));
+        // ELSE THE FULL TREE'S, after the leader pressed twice more.
         assert_eq!(
             taught("bluetooth-accept"),
-            Some(format!("{FULL_SET_KEY} {PAIRING_YES_KEYS}"))
+            Some(format!("SUPER SUPER {PAIRING_YES_KEYS}"))
         );
         assert_eq!(
             taught("software-trials"),
-            Some(format!("{FULL_SET_KEY} {SOFTWARE_TRIALS_KEYS}"))
+            Some(format!("SUPER SUPER {SOFTWARE_TRIALS_KEYS}"))
         );
         // AND THE ARGUMENT IS PART OF THE COMMAND.
         assert_eq!(
-            taught_keys(&trees, "workspace-go", Some("3")).as_deref(),
+            taught_keys_with(&trees, "workspace-go", Some("3"), "SUPER").as_deref(),
             Some("3")
         );
         assert_eq!(taught("mx-does-not-exist"), None);
+        // AND THE PROCESS'S OWN LEADER IS WHAT `taught_keys` REPEATS.
+        assert_eq!(
+            taught_keys(&trees, "files-window", None),
+            Some(format!("{} .", crate::leader()))
+        );
     }
 
     /// FAILS IF: a modifier held while the POINTER acts — a Ctrl-click on a
     /// hint, a Ctrl-wheel over the list, a finger down — counts as a tap
-    /// when it comes up, or a tap after the pointer acted stops counting.
+    /// when it comes up, or a tap after the pointer acted stops counting; or
+    /// the on-screen keyboard's tap cycles the bars on another modifier than
+    /// `Ctrl`.
     #[test]
     fn a_modifier_held_while_the_pointer_acts_is_no_tap() {
         use smithay_client_toolkit::seat::keyboard::Keysym;
-        for sym in [Keysym::Control_L, Keysym::Alt_L] {
+        for sym in [Keysym::Control_L, Keysym::Control_R] {
             let mut t = Tap::default();
             t.pressed(sym);
             t.pointer_acted();
-            assert_eq!(t.released(sym), None, "{sym:?}: a chord with the hand");
+            assert!(!t.released(sym), "{sym:?}: a chord with the hand");
         }
         // THE POINTER BEFORE THE PRESS takes nothing from the tap after it.
         let mut t = Tap::default();
         t.pointer_acted();
-        t.pressed(Keysym::Alt_L);
-        assert_eq!(t.released(Keysym::Alt_L), Some(Set::Window));
-        // AND THE ON-SCREEN KEYBOARD'S TAP chooses what the keys choose.
+        t.pressed(Keysym::Control_L);
+        assert!(t.released(Keysym::Control_L));
+        // AND THE ON-SCREEN KEYBOARD'S TAP answers what the keys answer.
         use crate::osk::Modifier;
-        assert_eq!(set_of_osk_tap(Modifier::Alt), Some(Set::Window));
-        assert_eq!(set_of_osk_tap(Modifier::Ctrl), Some(Set::Full));
-        for other in [Modifier::Shift, Modifier::AltGr, Modifier::Super] {
-            assert_eq!(set_of_osk_tap(other), None, "{other:?}");
+        assert!(osk_tap_cycles_the_bars(Modifier::Ctrl));
+        for other in [
+            Modifier::Alt,
+            Modifier::Shift,
+            Modifier::AltGr,
+            Modifier::Super,
+        ] {
+            assert!(!osk_tap_cycles_the_bars(other), "{other:?}");
         }
     }
 
     /// FAILS IF: a tap stops being a tap — a chord counts, a release with no
-    /// press counts, `AltGr` is taken for `Alt`, or `Control_R` held for the
-    /// paging arrows switches the set when it is let go.
+    /// press counts, `Alt` or `AltGr` cycles the bars, a `Ctrl` under a held
+    /// `Alt` counts, or `Control_R` held for the paging arrows cycles the bars
+    /// when it is let go.
     #[test]
-    fn only_a_clean_tap_switches_the_set() {
+    fn only_a_clean_tap_of_ctrl_cycles_the_bars() {
         use smithay_client_toolkit::seat::keyboard::Keysym;
         let tapped = |keys: &[(bool, Keysym)]| {
             let mut t = Tap::default();
-            let mut last = None;
+            let mut last = false;
             for (down, sym) in keys {
                 if *down {
                     t.pressed(*sym);
@@ -5184,125 +6187,104 @@ mod tests {
             last
         };
         // A CLEAN TAP, either hand.
-        assert_eq!(
-            tapped(&[(true, Keysym::Alt_L), (false, Keysym::Alt_L)]),
-            Some(Set::Window)
-        );
-        assert_eq!(
-            tapped(&[(true, Keysym::Alt_R), (false, Keysym::Alt_R)]),
-            Some(Set::Window)
-        );
-        assert_eq!(
-            tapped(&[(true, Keysym::Control_L), (false, Keysym::Control_L)]),
-            Some(Set::Full)
-        );
+        assert!(tapped(&[
+            (true, Keysym::Control_L),
+            (false, Keysym::Control_L)
+        ]));
         // THE RIGHT CTRL TAPPED ALONE is a tap too...
-        assert_eq!(
-            tapped(&[(true, Keysym::Control_R), (false, Keysym::Control_R)]),
-            Some(Set::Full)
-        );
+        assert!(tapped(&[
+            (true, Keysym::Control_R),
+            (false, Keysym::Control_R)
+        ]));
         // ...and HELD WITH AN ARROW it is the paging chord, and no tap.
-        assert_eq!(
-            tapped(&[
-                (true, Keysym::Control_R),
-                (true, Keysym::Right),
-                (false, Keysym::Right),
-                (false, Keysym::Control_R),
-            ]),
-            None
-        );
+        assert!(!tapped(&[
+            (true, Keysym::Control_R),
+            (true, Keysym::Right),
+            (false, Keysym::Right),
+            (false, Keysym::Control_R),
+        ]));
+        // `ALT` CHOOSES NOTHING ANY MORE, either hand (the owner, 2026-09-30).
+        for alt in [Keysym::Alt_L, Keysym::Alt_R] {
+            assert!(!tapped(&[(true, alt), (false, alt)]), "{alt:?}");
+        }
         // A KEY IN BETWEEN is a chord.
-        assert_eq!(
-            tapped(&[
-                (true, Keysym::Alt_L),
-                (true, Keysym::n),
-                (false, Keysym::Alt_L),
-            ]),
-            None
-        );
+        assert!(!tapped(&[
+            (true, Keysym::Control_L),
+            (true, Keysym::n),
+            (false, Keysym::Control_L),
+        ]));
         // A RELEASE WITH NO PRESS: the leader's own `Ctrl` and `Alt` in the
         // nested loop, pressed before the footer had the keyboard.
-        assert_eq!(
-            tapped(&[(false, Keysym::Control_L), (false, Keysym::Alt_L)]),
-            None
-        );
-        // TWO MODIFIERS AT ONCE is a chord.
-        assert_eq!(
-            tapped(&[
-                (true, Keysym::Control_L),
-                (true, Keysym::Alt_L),
-                (false, Keysym::Alt_L),
-                (false, Keysym::Control_L),
-            ]),
-            None
-        );
-        // `AltGr` IS NOT `Alt`.
-        assert_eq!(
-            tapped(&[
-                (true, Keysym::ISO_Level3_Shift),
-                (false, Keysym::ISO_Level3_Shift),
-            ]),
-            None
-        );
+        assert!(!tapped(&[
+            (false, Keysym::Control_L),
+            (false, Keysym::Alt_L)
+        ]));
+        // TWO MODIFIERS AT ONCE is a chord, whichever came first.
+        assert!(!tapped(&[
+            (true, Keysym::Control_L),
+            (true, Keysym::Alt_L),
+            (false, Keysym::Alt_L),
+            (false, Keysym::Control_L),
+        ]));
+        assert!(!tapped(&[
+            (true, Keysym::Alt_L),
+            (true, Keysym::Control_L),
+            (false, Keysym::Control_L),
+        ]));
+        // `AltGr` IS NOTHING HERE.
+        assert!(!tapped(&[
+            (true, Keysym::ISO_Level3_Shift),
+            (false, Keysym::ISO_Level3_Shift),
+        ]));
         // A REPEAT OF THE SAME MODIFIER is still one tap.
-        assert_eq!(
-            tapped(&[
-                (true, Keysym::Alt_L),
-                (true, Keysym::Alt_L),
-                (false, Keysym::Alt_L),
-            ]),
-            Some(Set::Window)
-        );
+        assert!(tapped(&[
+            (true, Keysym::Control_L),
+            (true, Keysym::Control_L),
+            (false, Keysym::Control_L),
+        ]));
         // AND A TAP AFTER A TAP: each release answers its own.
-        assert_eq!(
-            tapped(&[
-                (true, Keysym::Alt_L),
-                (false, Keysym::Alt_L),
-                (true, Keysym::Control_L),
-                (false, Keysym::Control_L),
-            ]),
-            Some(Set::Full)
-        );
+        assert!(tapped(&[
+            (true, Keysym::Alt_L),
+            (false, Keysym::Alt_L),
+            (true, Keysym::Control_L),
+            (false, Keysym::Control_L),
+        ]));
     }
 
-    /// FAILS IF: the leader's hint at the root stops teaching the taps as
-    /// clicks — the pointer has no other way to a set (invariant 19) — or
-    /// teaches a set the leader is already in.
+    /// FAILS IF: the leader's hint at the root stops teaching the NEXT set as
+    /// a click — the pointer has no other way to a set (invariant 19) — or
+    /// teaches it with any key but the leader's own label, or a set the
+    /// leader is already in.
     #[test]
-    fn the_root_teaches_the_other_sets_as_clicks() {
+    fn the_root_teaches_the_next_set_as_a_click() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
         let keys = |set: Set| -> Vec<(String, Option<crate::chrome::Act>)> {
-            set_hint(set, &texts)
+            set_hint(set, "SUPER", &texts)
                 .into_iter()
                 .filter(crate::chrome::Piece::is_a_key)
                 .map(|p| (p.text, p.press))
                 .collect()
         };
         use crate::chrome::Act;
-        assert_eq!(
-            keys(Set::Footer),
-            [
-                (
-                    WINDOW_SET_KEY.to_owned(),
-                    Some(Act::Run("leader-set-window"))
-                ),
-                (FULL_SET_KEY.to_owned(), Some(Act::Run("leader-set-full"))),
-            ]
-        );
-        assert_eq!(
-            keys(Set::Window),
-            [(FULL_SET_KEY.to_owned(), Some(Act::Run("leader-set-full")))]
-        );
-        assert!(keys(Set::Full).is_empty());
+        for (set, next) in [
+            (Set::Footer, "leader-set-window"),
+            (Set::Window, "leader-set-full"),
+            (Set::Full, "leader-set-default"),
+        ] {
+            assert_eq!(
+                keys(set),
+                [("SUPER".to_owned(), Some(Act::Run(next)))],
+                "{set:?}"
+            );
+        }
         // EVERY PIECE SAYS WHICH SHORTCUT IT IS, so the pointer resting on the
         // words reads the command's sentence too — and the words are a word.
-        for p in set_hint(Set::Footer, &texts) {
-            if p.register == crate::chrome::Register::Separator {
-                continue;
+        for set in Set::ALL {
+            for p in set_hint(set, "SUPER", &texts) {
+                let id = p.id.expect("a piece of a shortcut with no id");
+                assert!(texts.has(&format!("cmd-{id}")), "`{id}` has no sentence");
+                assert!(!p.text.contains('['), "a missing word: {}", p.text);
             }
-            let id = p.id.expect("a piece of a shortcut with no id");
-            assert!(texts.has(&format!("cmd-{id}")), "`{id}` has no sentence");
-            assert!(!p.text.contains('['), "a missing word: {}", p.text);
         }
     }
 
@@ -5316,7 +6298,7 @@ mod tests {
             "buffer-next",
             "buffer-close",
             "buffer-terminal",
-            "glyphs-nerd-fonts",
+            "icons-open",
             "session-quit",
             "mx-open",
         ] {
@@ -5445,7 +6427,6 @@ mod tests {
             "player-remove",
             "player-browse",
             "player-add",
-            "player-parent",
             "player-only",
             "player-maximize",
             "player-play-now",
@@ -5560,7 +6541,7 @@ mod tests {
             "keyboard-restore",
             "help",
             "mx-open",
-            // THE LEADER'S TWO OTHER SETS: no sequence reaches them (a tap
+            // THE LEADER'S THREE SETS: no sequence reaches them (the leader
             // is not a key of the tree), and the hint's click and `LEADER :`
             // run them through `run_with`.
             "leader-set-window",
@@ -5579,24 +6560,12 @@ mod tests {
             "monitor-bottom",
             "keyboard-open",
             "memory-open",
-            "brain-start-emacs",
             // THE BRAIN. `brain-open` is the screen; the other two answer the
             // countdown on the footer's own line, with no window open — which
             // is why they are commands of the registry and not keys of a view.
             "brain-open",
             "brain-abort",
             "brain-proceed",
-            // THE UPDATE, outside the brain. `system-update` starts the same
-            // unit the brain starts, `update-open` opens the view in the
-            // footer and `update-watch` the window the modeline's mark opens
-            // — which is why they are commands of the registry rather than
-            // keys of a view.
-            "system-update",
-            "update-open",
-            "update-watch",
-            "glyphs-nerd-fonts",
-            "unicode-symbols",
-            "lucide-icons",
             "buffer-close",
             "buffer-next",
             // THE TRANSFER QUEUE. Only `transfers-open` is a command of the
@@ -5756,6 +6725,161 @@ mod tests {
             "kiosk-tab-later",
             "footer-hide-push",
             "footer-hide-cover",
+            // THE STRIP'S THREE ABOUT A NOTICE, and the actions a module
+            // offers: each an arm of `run_with`, which asks the brain.
+            "brain-dismiss",
+            "brain-snooze",
+            "brain-act",
+            // ── end of brain-ui ──
+            "leader-set-default",
+            "footer-bars-cycle",
+            "leader-close",
+            "minibuffer-fold-open",
+            "minibuffer-fold-close",
+            "alert-dismiss",
+            "footer-settings-open",
+            "footer-settings-window",
+            "footer-settings-up",
+            "footer-settings-down",
+            "footer-settings-enter",
+            "footer-hours",
+            "icons-open",
+            "icons-window",
+            "icons-nerd-fonts",
+            "icons-lucide",
+            "icons-unicode",
+            "icons-colour",
+            "calc-open",
+            "calc-window",
+            "player-rewind",
+            "player-forward",
+            "player-picture-fold",
+            "player-save-queue-again",
+            "player-countries-order",
+            "player-lyrics-translate",
+            "player-website",
+            "player-listing-earlier",
+            "player-listing-later",
+            "player-listing-first",
+            "player-listing-last",
+            "player-listing-full",
+            "player-listing-layout",
+            "player-listing-source",
+            "player-listing-letter",
+            "player-listing-order",
+            "video-metrics-open",
+            "video-metrics-window",
+            "video-metrics-scan",
+            "video-metrics-up",
+            "video-metrics-down",
+            "video-metrics-less",
+            "video-metrics-more",
+            "video-metrics-enter",
+            "video-metrics-page-back",
+            "video-metrics-page-on",
+            "video-metrics-layout",
+            "video-metrics-search",
+            "video-metrics-player",
+            "video-metrics-kiosk",
+            "video-metrics-download",
+            "video-metrics-hide",
+            "video-metrics-delete",
+            "video-metrics-add-channel",
+            "video-metrics-channel-score",
+            "video-metrics-points",
+            "video-metrics-days",
+            "video-metrics-band",
+            "video-metrics-words",
+            "video-metrics-second-tags",
+            "video-metrics-weight",
+            "security-open",
+            "security-window",
+            "security-relax",
+            "security-shields",
+            "security-firewall",
+            "security-check-password",
+            "security-check-email",
+            "security-check-file",
+            "security-down",
+            "security-up",
+            "security-enter",
+            "security-left",
+            "security-right",
+            "security-rule-add",
+            "security-rule-delete",
+            "security-enrol",
+            "security-password",
+            "security-rule",
+            "security-vt-key",
+            "security-vt-forget",
+            "security-home",
+            "containers-open",
+            "containers-window",
+            "containers-down",
+            "containers-up",
+            "containers-enter",
+            "containers-left",
+            "containers-right",
+            "containers-next-kind",
+            "containers-previous-kind",
+            "containers-next-tab",
+            "containers-previous-tab",
+            "containers-start-stop",
+            "containers-restart",
+            "containers-remove",
+            "containers-logs",
+            "containers-shell",
+            "containers-inspect",
+            "containers-pull",
+            "containers-build",
+            "containers-login",
+            "containers-login-password",
+            "containers-prune",
+            "containers-reveal",
+            // THE BELONGINGS (`LEADER s v`, `crate::belongings`).
+            "belongings-open",
+            "belongings-window",
+            "belongings-sync",
+            "belongings-up",
+            "belongings-down",
+            "belongings-less",
+            "belongings-more",
+            "belongings-enter",
+            "belongings-keep-local",
+            "belongings-take-remote",
+            "belongings-keep-both",
+            "belongings-apply",
+            "belongings-abandon",
+            "belongings-all-local",
+            "belongings-all-remote",
+            "belongings-repository",
+            "belongings-add",
+            "belongings-auth",
+            "belongings-keygen",
+            "belongings-copy-key",
+            "belongings-token",
+            "belongings-user",
+            "belongings-passphrase",
+            "belongings-period",
+            "fast-access-open",
+            "fast-access-window",
+            "fast-access-column",
+            "fast-access-float",
+            "fast-access-launch",
+            "fast-access-open-path",
+            "fast-access-reveal",
+            "fast-access-man",
+            // THE RANKING and its keys, arms of `run_with`.
+            "player-ranking",
+            "player-ranking-more",
+            "player-ranking-earlier",
+            "player-ranking-later",
+            "player-ranking-first",
+            "player-ranking-last",
+            "player-ranking-layout",
+            "display-rise",
+            "display-sink",
+            "clipboard-window",
         ];
         let (tree, registry) = default_of().unwrap();
         for id in super::reachable(&tree.full) {
@@ -5776,15 +6900,22 @@ mod tests {
             if matches!(id, "workspace-go" | "workspace-move") {
                 continue;
             }
+            // THE UPDATE'S THREE are dispatched by the one question the
+            // footer asks its window (`update_window::order_of`), the same
+            // function `run_with` calls — so being answered there IS being
+            // handled.
             assert!(
-                WITH_ACTION.contains(&id),
+                WITH_ACTION.contains(&id) || crate::update_window::order_of(id).is_some(),
                 "`{id}` has a key and `surface::run_command` does not handle it: \
                  it would show up in the list and do nothing"
             );
         }
         // And the inverse: an id in the list above that left the registry would become a
         // dead branch in the `match`, waiting for a key that does not exist.
-        for id in WITH_ACTION {
+        for id in WITH_ACTION
+            .iter()
+            .chain(crate::update_window::COMMANDS.iter().map(|c| &c.id))
+        {
             assert!(
                 registry.search(id).is_some(),
                 "`{id}` is in the handled list and no longer exists"

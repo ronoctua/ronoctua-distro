@@ -27,6 +27,12 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+// WHAT A PANEL SHOWS AND WHAT IS INSIDE A FILE LEFT FOR `crate::inspection`
+// and `crate::inspection_sheet`, and are named here too: the doors and the
+// other views reached them through this module, and still do.
+pub use crate::inspection::Ask;
+pub use crate::inspection_sheet::Fact;
+
 use ronoctua_files::{
     Entry, Kind,
     listing::{self, Order, Sort},
@@ -37,7 +43,6 @@ use ronoctua_files::{
     when::Zone,
     who::Roster,
 };
-use ronoctua_inspect::motion::Show;
 use ronoctua_keymap::{Key, Sym};
 use ronoctua_tokens::Color;
 use ronoctua_transfers::Work;
@@ -237,14 +242,6 @@ const EDGE_RIGHT: u16 = ronoctua_tokens::space::FILES_EDGERIGHT;
 /// priorities backwards.
 const NAME_FLOOR: u16 = 12;
 
-/// A bound on the work of wrapping a refusal, in lines.
-///
-/// Not a limit anybody reaches: the longest sentence this system has is 94
-/// cells, which is four rows in the narrowest panel. It is here so that a
-/// refusal carrying something pathological cannot make the wrapper walk a
-/// megabyte — the same bound `fold::wrap_pieces` and `layout::wrap` carry.
-const REFUSAL_CEILING: usize = 64;
-
 /// The narrowest the sidebar may be squeezed to.
 ///
 /// Two cells of glyph and air, plus eleven for a name: `screenshot` is ten and
@@ -282,43 +279,7 @@ const SIDE_EJECT: u16 = ronoctua_tokens::space::FILES_SIDEBAREJECT;
 /// it the value elides on the row that exists to carry the value, which is the
 /// same argument [`NAME_FLOOR`] makes about a name and [`SIDE_FLOOR`] about a
 /// place.
-const PANEL_FLOOR: u16 = 24;
-
-/// A BLANK ROW AT THE END OF THE FACTS — CONTENT, and never a reserve.
-///
-/// The expand button is drawn in the panel's bottom-right corner, so scrolled
-/// to the last fact it would sit on top of one. The sheet therefore has one
-/// more ROW than it has facts and that row is empty: it comes into view only
-/// once everything else has been scrolled past, which is the owner's own
-/// requirement — *"uma linha em branco ao final do conteúdo, ou seja, uma
-/// linha em branco que apareça apenas após scroll down todo o conteúdo"*.
-///
-/// # The first shape of this took the line off the PANEL, and he read the cost
-///
-/// *"Você fez a coluna perder uma linha de informação em um espaço que já é
-/// pequeno e já mostra poucas linhas."* A reserve costs a fact on EVERY screen;
-/// a row at the end of the content costs one only where the button would
-/// otherwise have covered something. The two are one line of code apart and
-/// they are not the same promise.
-const BLANK: usize = 1;
-
-/// THE WIDTH ONE COLUMN OF THE EXPANDED FACTS IS MEASURED AGAINST.
-///
-/// `space.view.labelCells` is where every list in this system starts its value,
-/// and [`PANEL_FLOOR`] is the least room in which a fact still reads — the
-/// widest ordinary one is `Dimensions  3024 × 4032`, twenty-three cells. A
-/// column that holds both is a column where neither half is cut, and that is
-/// what expanding is FOR.
-///
-/// # The other answer was read off the screen
-///
-/// Measured against [`PANEL_CEILING`] alone, the owner's region came out as
-/// FOUR columns of forty-three: *"em vez de 4 colunas pequenas … seria melhor
-/// que tivesse sido dividido em 3 colunas maiores, pois assim o conteúdo das
-/// labels e valores maiores aparecerão com mais caracteres em tela, assim
-/// melhorando a leitura"*. At this width the same region is three columns of
-/// fifty-eight — five more cells of label and ten more of value on every row.
-const FACT_COLUMN: u16 = ronoctua_tokens::space::VIEW_LABELCELLS + PANEL_FLOOR;
+pub(crate) const PANEL_FLOOR: u16 = 24;
 
 /// THE THREE WIDTHS A THUMBNAIL IS DRAWN AT, in cells, smallest first.
 ///
@@ -487,12 +448,12 @@ const _: () = assert!(
 /// when it is asked of the last frame's instead.
 ///
 /// And it gives up the air first, for the reason `files::globe_texture` was
-/// written: `picture_in` sheds `space.files.pictureAir` on all four sides and
+/// written: `picture_in` sheds `files::picture_air` on all four sides and
 /// `Area::centre` then shrinks what it is handed to fit what is left, so a
 /// picture decoded at the box's size is always drawn a little smaller than it
 /// was decoded.
 fn thumb_side(g: ronoctua_design::Grid, cell: f32, line: f32) -> u32 {
-    let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR) * 2.0;
+    let air = crate::files::picture_air() * 2.0;
     let deep = usize::from(g.down).saturating_sub(usize::from(THUMB_NAME));
     #[allow(clippy::cast_precision_loss)]
     let wide = f32::from(g.step.saturating_sub(ronoctua_design::GAP)).mul_add(cell, -air);
@@ -520,15 +481,6 @@ fn thumb_lines(cells: u16) -> u16 {
 /// grow with the screen: a fact is as long as it is.
 const PANEL_CEILING: u16 = 40;
 
-/// How many lines a PREVIEW wants before it is a picture rather than a smudge.
-///
-/// The same number the bottom strip takes, and deliberately the same: it is one
-/// answer to one question — "how short may a preview get and still be worth
-/// drawing" — and two numbers for it would be two answers.
-fn preview_lines() -> u16 {
-    ronoctua_tokens::space::FILES_STRIPLINES
-}
-
 /// What the toggle says when it turns a panel on at a width that cannot hold
 /// it.
 ///
@@ -536,75 +488,6 @@ fn preview_lines() -> u16 {
 /// `files-sidebar-only` already has, and for the same reason: from the outside,
 /// a key that refuses and a key that is dead look the same.
 const PANEL_NO_ROOM: &str = ronoctua_i18n::key::FILES_PANEL_NO_ROOM;
-
-/// What the preview panel says when there is no picture in it.
-///
-/// Not "the file could not be read" — that is what `ronoctua_inspect`'s own
-/// refusals say, and they win when there is one. This is the answer for a
-/// directory, a broken link and a file the tools have not been asked about
-/// yet: there is no picture, and the panel says so instead of drawing a large
-/// icon that says what the listing's own icon column already said.
-const NO_PREVIEW: &str = ronoctua_i18n::key::FILES_NO_PREVIEW;
-/// What a transport key says when there is no film under the cursor.
-const NOTHING_PLAYING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
-/// What the sound key says on a film that carries none.
-const NO_SOUND_IN_IT: &str = ronoctua_i18n::key::FILES_SOUND_NONE;
-/// What pressing an entry that is not on this machine says.
-const ENTRY_NOT_HERE: &str = ronoctua_i18n::key::FILES_ENTRY_NOT_HERE;
-/// What the queue keys say on a list where nothing can be played.
-const NOTHING_TO_PLAY: &str = ronoctua_i18n::key::FILES_LIST_NOTHING;
-/// And at either end of one.
-const LIST_AT_START: &str = ronoctua_i18n::key::FILES_LIST_AT_START;
-/// And at either end of one.
-const LIST_AT_END: &str = ronoctua_i18n::key::FILES_LIST_AT_END;
-/// What either whole-region key says with nothing under the cursor.
-const THEATRE_NOTHING: &str = ronoctua_i18n::key::FILES_THEATRE_NOTHING;
-/// And what it says about a panel that is not on the screen to be expanded.
-const WIDE_HIDDEN: &str = ronoctua_i18n::key::FILES_WIDE_HIDDEN;
-/// The whole region, given to the preview.
-const THEATRE_ON: &str = ronoctua_i18n::key::FILES_THEATRE_ON;
-/// And given back.
-const THEATRE_OFF: &str = ronoctua_i18n::key::FILES_THEATRE_OFF;
-/// The whole region, given to the facts.
-const FACTS_WIDE_ON: &str = ronoctua_i18n::key::FILES_FACTS_WIDE_ON;
-/// And given back.
-const FACTS_WIDE_OFF: &str = ronoctua_i18n::key::FILES_FACTS_WIDE_OFF;
-
-/// How far one key moves along a film, in seconds.
-///
-/// Five, which is about a sentence of speech and a shot of picture: enough to
-/// be worth a key press and short enough to be held down.
-const SEEK_STEP: f64 = 5.0;
-
-/// How far one key turns a shape, in radians.
-///
-/// About nine degrees: forty presses go all the way round, which is few enough
-/// to be worth holding the key down for and many enough to stop on the face
-/// one wanted. The pointer is the coarse gesture and this is the fine one.
-const SPIN_STEP: f32 = 0.15;
-
-// How far a key moves the globe — the globe's own step, which every view
-// that embeds one shares.
-use crate::globe::GLOBE_STEP;
-
-/// How much one key moves a shape nearer or further — the globe's own step,
-/// the two figures of one panel answering one key the same way.
-const ZOOM_STEP: f32 = crate::globe::KEY_ZOOM;
-
-// How much one notch of the wheel does — the globe's, which the shape
-// borrows so the two figures of one panel answer a wheel alike.
-use crate::globe::WHEEL_ZOOM;
-
-/// The most lines a panel may ASK the region for.
-///
-/// Asking is not getting — the footer's ceiling is `expansion.maxLines` and a
-/// window has the height somebody dragged it to — but a number that leaves
-/// `View::panel_lines` is a number somebody multiplies, and a two-thousand-line
-/// file must not be able to ask for two thousand lines of anything.
-///
-/// Sixty-four: more than any door's height, less than anything worth
-/// multiplying.
-const PANEL_WANT: usize = 64;
 
 /// Which way a bar's track runs.
 ///
@@ -627,102 +510,6 @@ pub enum Axis {
     Time,
 }
 
-/// What a film in the preview is DOING.
-///
-/// # It is not the frame, and it is not the file
-///
-/// The frame is what arrived; this is what was asked for. Keeping them apart is
-/// what lets the picture keep showing the last frame while the film is paused,
-/// and what lets `wants_motion` compare a wish against an order without
-/// consulting pixels.
-///
-/// Every field resets when the cursor lands on another file: coming back to a
-/// film starts it, and never resumes somebody else's pause.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Transport {
-    /// Whether there should be a child at all.
-    ///
-    /// `false` is the film having ENDED, or having been stopped. Pausing does
-    /// not clear it — a paused film keeps its child, which is what makes
-    /// resuming instant instead of a 108-to-242-millisecond seek.
-    pub on: bool,
-    /// Whether it is held on one frame.
-    pub paused: bool,
-    /// Whether the sound was asked for.
-    ///
-    /// Off by default, which is the owner's decision and the only sensible one
-    /// for a panel that follows a cursor: a preview that speaks when a cursor
-    /// passes over a file is a preview one turns off.
-    pub sound: bool,
-    /// Where the child was told to start, in seconds.
-    ///
-    /// This and not [`Transport::at`] is what the player is given: `at` moves
-    /// with every frame, and a wish that moved with every frame would respawn
-    /// the film thirty times a second.
-    pub from: f64,
-    /// Where the picture is now, in seconds.
-    pub at: f64,
-}
-
-impl Default for Transport {
-    fn default() -> Self {
-        Self {
-            // IT PLAYS ON ARRIVAL. A film in a preview that waits to be
-            // started is a preview that shows one frame, which is the still
-            // picture it already had.
-            on: true,
-            paused: false,
-            sound: false,
-            from: 0.0,
-            at: 0.0,
-        }
-    }
-}
-
-impl Transport {
-    /// How the transport stands the instant the cursor LANDS on a file.
-    ///
-    /// # A film runs and a sound waits, and they are not the same question
-    ///
-    /// A film that waited would show one frame — the still it already had —
-    /// so there is nothing to see until somebody presses a key, and the key
-    /// would be a tax on every video walked past.
-    ///
-    /// A SOUND is the other way round, and the owner asked for it in as many
-    /// words: it never starts by itself. A panel that begins speaking because
-    /// a cursor passed over a file is a panel one turns off — which is the
-    /// argument [`Transport::sound`] already makes about a film's audio, one
-    /// register louder, because here the sound is the whole content.
-    ///
-    /// And `on: false` rather than `paused: true`: a pause still spawns a
-    /// child, holds the file open and hands it to the five-minute killer, for
-    /// a file nobody has asked to hear. With `on` clear there is no child at
-    /// all, the panel shows the cover, and `play_pause`'s third state already
-    /// means "start from the top".
-    fn arriving(show: Option<Show>, a_list: bool) -> Self {
-        if a_list {
-            // A LIST IS SOUND BY ANOTHER NAME, and the owner's rule reaches it
-            // for the same reason: nine tracks starting because a cursor
-            // passed over an `.m3u` is the panel one turns off.
-            return Self {
-                on: false,
-                sound: true,
-                ..Self::default()
-            };
-        }
-        match show {
-            // AND THE SOUND IS ON, because a sound player that is silent is
-            // not a player. It costs nothing while `on` is false.
-            Some(Show::Sound { .. }) => Self {
-                on: false,
-                sound: true,
-                ..Self::default()
-            },
-            _ => Self::default(),
-        }
-    }
-}
-
 /// A scrollbar somebody could grab: whose it is, which way it runs, and where.
 ///
 /// Named because three functions hand it about — each door's "draw them all"
@@ -739,21 +526,21 @@ pub type Bar = (Pane, Axis, (f32, f32, f32, f32));
 /// where the content must STOP — which is what this constant is for. The third
 /// was missing, and the owner photographed a line of code running under the
 /// thumb.
-const BAR: u16 = 1;
+pub(crate) const BAR: u16 = 1;
 
 /// What tells a moving frame's texture from its file's photograph.
 ///
 /// A suffix and not a second field, because the doors carry ONE key from
 /// `View::preview_key` to `Images::upload_it` and back — see that function for
 /// why there have to be two textures at all.
-const FRAME_MARK: &str = ":frame";
+pub(crate) const FRAME_MARK: &str = ":frame";
 
 /// Where the sound glyph sits, counted from the transport's first cell.
 ///
 /// Two, which is one for the play glyph and one of air. Named for the reason
 /// [`BAR`] is: the row is built here and the track is drawn by the doors, and a
 /// number written twice is a number that stops agreeing.
-const TRANSPORT_SOUND: u16 = 2;
+pub(crate) const TRANSPORT_SOUND: u16 = 2;
 
 /// How many cells the expand button takes on the transport's row.
 ///
@@ -957,22 +744,8 @@ pub fn ink(colour: ronoctua_tokens::Color) -> String {
     format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
 }
 
-/// What the facts key says when there is nothing to scroll.
-///
-/// A key that does nothing and says nothing is the one outcome this project
-/// treats as a defect: from the outside, a refusal and a dead key look the
-/// same. It is `files-sidebar-only`'s shape, once more.
-const FACTS_ALL_SHOWN: &str = ronoctua_i18n::key::FILES_FACTS_ALL_SHOWN;
 /// What the preview says when there is nothing more of it to reach.
-const PREVIEW_ALL_SHOWN: &str = ronoctua_i18n::key::FILES_PREVIEW_ALL_SHOWN;
-
-/// One fact, in full, on the message line.
-///
-/// A panel is [`PANEL_FLOOR`] cells and a path is two hundred characters, so
-/// the row that had to be cut is exactly the row somebody wants to read whole.
-/// It goes where which-key already puts a description; nothing floats
-/// (invariant 14).
-const FACT_SAYS: &str = ronoctua_i18n::key::FILES_FACT_SAYS;
+pub(crate) const PREVIEW_ALL_SHOWN: &str = ronoctua_i18n::key::FILES_PREVIEW_ALL_SHOWN;
 
 /// How many cells a sidebar row wants: the glyph, its air, the name, and the
 /// eject glyph when there is one.
@@ -1030,76 +803,6 @@ pub enum Panel {
     Preview,
     /// What the file IS, in as much detail as the tools on the machine can say.
     Info,
-}
-
-/// One row of the info panel: what it says, and what it offers.
-///
-/// The label and the value are already WORDS by the time they are here —
-/// `sheet_of` resolves them through the view's own bundle — because a `Choice`
-/// and a filename follow the same rule: text on screen is text, and a key that
-/// reached the screen is the defect invariant 8 exists to refuse.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Fact {
-    /// What it is called.
-    pub label: String,
-    /// What it says.
-    pub value: String,
-    /// What acting on it reaches — and [`Doable::Nothing`] for the facts one
-    /// only reads.
-    pub does: Doable,
-    /// WHAT THIS ROW SAYS UNDER THE POINTER, when `label: value` is not the
-    /// honest answer.
-    ///
-    /// A date is the case that made it exist: the column has room for
-    /// `2026-09-03 12:45` and the question somebody asks by pointing at it is
-    /// *which second, and in whose time*. Every other row leaves it `None` and
-    /// gets the generic sentence, which carries both halves un-elided and is
-    /// the right answer for a path or a size.
-    ///
-    /// It is NOT a `Doable`: that enum answers "what can be DONE here", and a
-    /// date is not something one edits — a row that lit up and then refused
-    /// would be worse than one that never promised.
-    pub says: Option<Explanation>,
-}
-
-/// WHAT A REMEMBERED SHEET WAS BUILT FOR.
-///
-/// Everything here can change what the sheet says; nothing here changes without
-/// the sheet needing to be built again. See `View::remembered`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SheetFor {
-    /// The entry the sheet is about.
-    name: String,
-    /// Its mtime, because a file rewritten in place keeps its name.
-    modified: i64,
-    /// What a directory measured to, when one has been.
-    measured: Option<u64>,
-    /// Which inspection has come back for it.
-    looked: Option<String>,
-    /// Which language it was written in, by the identity of the bundle.
-    said: usize,
-}
-
-/// What a row of the info panel offers, if anything.
-///
-/// **Every variant is something the LISTING already reaches**, and that is the
-/// whole point of the enum: the panel is a second place to press the same
-/// targets, never a second implementation of them. A variant here with no
-/// counterpart in `row_of` would be a gesture that only exists in one of the
-/// two places one can see the same file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Doable {
-    /// Nothing. A date is not something one edits, a path is not somewhere one
-    /// types, and a file's size is what the kernel says it is. A row that lit
-    /// up and then refused would be worse than one that never promised —
-    /// `menu::Applies` states that rule and this is it, one register down.
-    Nothing,
-    /// The permission triplet: one target per character, as `Column::Perms`.
-    Mode,
-    /// `owner:group`: two targets, as `Column::Owner` and `Column::Group`.
-    Ownership,
-    /// A directory's size, which is a walk — as `TAB` on a directory.
-    Measure,
 }
 
 /// How many cells the two panels take on the RIGHT — and ZERO when they withdraw.
@@ -1686,7 +1389,7 @@ pub enum Ink {
 /// # And the air is the picture's own
 ///
 /// A fallback glyph stands where a picture would be, so it gives up the same
-/// `space.files.pictureAir` on both sides that `picture_in` sheds — otherwise
+/// `files::picture_air` on both sides that `picture_in` sheds — otherwise
 /// the one cell that has no picture is the one whose ink touches its
 /// neighbour's.
 #[must_use]
@@ -1706,7 +1409,7 @@ pub fn run_size(ink: Ink, base: f32, line: f32) -> ronoctua_render::Size {
             nth,
         ),
         Ink::Fills(lines) => {
-            let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR) * 2.0;
+            let air = crate::files::picture_air() * 2.0;
             ronoctua_render::Size::OnTheCell((f32::from(lines) * line - air).max(base))
         }
     }
@@ -1958,7 +1661,7 @@ pub fn globe_px(
 ///
 /// # Why it is not the box
 ///
-/// Because [`picture_in`] gives up `space.files.pictureAir` on each of the four
+/// Because [`picture_in`] gives up `files::picture_air` on each of the four
 /// sides before anything is fitted into it, and `Area::centre` then SHRINKS
 /// whatever it is given to fit what is left. A texture asked for at the outer
 /// size is therefore always drawn a little smaller than it was painted — by
@@ -1972,14 +1675,44 @@ pub fn globe_px(
 ///
 /// The preview has always subtracted it (`measured_preview`); this is the same
 /// subtraction, in one place, for the door that forgot.
+///
+/// It is in LOGICAL pixels; [`globe_texture_at`] is the same box at a
+/// screen's scale, which is what is PAINTED.
 #[must_use]
 pub fn globe_texture(space: ronoctua_render::image::Area) -> (u32, u32) {
-    let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR) * 2.0;
+    let air = crate::files::picture_air() * 2.0;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     (
         (space.width - air).max(0.0) as u32,
         (space.height - air).max(0.0) as u32,
     )
+}
+
+/// [`globe_texture`] at a screen's scale — the texture PAINTED: `picture_in`
+/// fits it back into the logical box, so the globe is as sharp as the letters
+/// beside it (`crate::hidpi`).
+#[must_use]
+pub fn globe_texture_at(space: ronoctua_render::image::Area, scale: i32) -> (u32, u32) {
+    let by = u32::try_from(scale.max(1)).unwrap_or(1);
+    let (w, h) = globe_texture(space);
+    (w.saturating_mul(by), h.saturating_mul(by))
+}
+
+/// The air a picture keeps from every side of its box, in logical pixels:
+/// `space.files.pictureAirPct` of a CELL at the size of the text now.
+///
+/// A FRACTION OF A CELL, not a number of pixels, because the reason for the
+/// air is written in cells — a whole cell would read as a column gap, a
+/// sliver would read as cut — and a cell is 10.8 px at 100 % and 21.6 at
+/// 200 %: six pixels was the fraction the argument meant only at the first.
+#[must_use]
+pub fn picture_air() -> f32 {
+    // IN WHOLE PIXELS: an edge of a picture on a fraction of a pixel is a
+    // blurred edge, and every box this air is taken from is in whole pixels.
+    (ronoctua_tokens::metrics::cell_width(ronoctua_tokens::text::size())
+        * f32::from(ronoctua_tokens::space::FILES_PICTUREAIRPCT)
+        / 100.0)
+        .round()
 }
 
 /// The preview's picture, centred in its box with air on all four sides.
@@ -1996,7 +1729,7 @@ pub fn globe_texture(space: ronoctua_render::image::Area) -> (u32, u32) {
 /// equal to the space above"* — and centring already promises the halves are equal. The
 /// missing half of the promise is that neither of them is zero.
 ///
-/// So the box gives up `space.files.pictureAir` on each of its four sides
+/// So the box gives up `files::picture_air` on each of its four sides
 /// before anything is fitted into it. One function, two doors, because the
 /// arithmetic that was written out twice is the arithmetic that came out
 /// different twice.
@@ -2006,7 +1739,7 @@ pub fn picture_in(
     w: u32,
     h: u32,
 ) -> ronoctua_render::image::Area {
-    let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR);
+    let air = crate::files::picture_air();
     // AND IT ALWAYS FITS, and never stretches to fill.
     //
     // Drawing a frame across the box unconditionally was the first shape of
@@ -2179,6 +1912,11 @@ pub enum Hit {
     Group(usize),
     /// The size of a directory: measure it, as `TAB` on a directory does.
     Measure(usize),
+    /// A row of the facts that CHANGES the file — the name, the date, a tag,
+    /// a detail, the place: ask the question it asks, as `RET` on that row
+    /// with the facts focused does (`View::amend`). Carries the listing row
+    /// the facts are about and what the row offers.
+    Amend(usize, crate::inspection_sheet::Doable),
     /// The globe at the top of the info panel.
     ///
     /// One target for the whole picture, and the drag is resolved from it: a
@@ -2278,6 +2016,9 @@ pub enum Hit {
     /// the listing's section carries the modal's rows, and clearing there
     /// would take away the marks the menu's own title is counting.
     Air,
+    /// THE GIT LINE under the path (`crate::git_line`): open the history, as
+    /// `C-h` does and through its code.
+    Git,
     /// Nothing happens here.
     Nothing,
 }
@@ -3023,7 +2764,7 @@ fn eject_room(row: &ronoctua_files::sidebar::Row) -> u16 {
 }
 
 /// Text width in CELLS, by cluster.
-fn width_of(s: &str) -> u16 {
+pub(crate) fn width_of(s: &str) -> u16 {
     ronoctua_render::layout::width(s)
 }
 
@@ -3032,148 +2773,7 @@ fn width_of(s: &str) -> u16 {
 /// Integer arithmetic, and it rounds DOWN: half a cell does not exist on this
 /// grid, and a glyph one cell left of centre reads as centred while a glyph
 /// half a cell anywhere reads as blurred.
-/// One line of the text preview, cut into the coloured runs of its highlight.
-///
-/// # Bytes to CELLS, and the ruler is the clusters'
-///
-/// `Field::at` is in cells; a `Range` is in bytes. The conversion is
-/// `layout::width`, which counts grapheme CLUSTERS — the same ruler
-/// `Field::covers`, `elide_end` and both painters use. Counting `char`s would
-/// put a field one cell off the column it is drawn in the first time an
-/// accent arrives as a combining mark, and this file has already paid once for
-/// having three rulers.
-///
-/// # And the cut comes AFTER the mapping, never before
-///
-/// Eliding the line first and applying the ranges to what is left would move
-/// every run past the cut. So the line is walked whole, each piece is placed,
-/// and the piece that crosses the edge is the one that gets the ellipsis — in
-/// the colour of whatever it truncated, which is right: it belongs to that run.
-///
-/// # Every field carries the SAME target
-///
-/// Which is what makes `Field::covers`' one-cell overlap harmless: neighbouring
-/// runs answer the same `Hit`, so wherever the pointer lands on a line of code
-/// it means the same thing. A trailing field of blanks goes last so the panel
-/// is clickable across its whole width, including the ragged right end — the
-/// promise the picture path already makes.
-fn text_fields(
-    line: &ronoctua_inspect::text::Line,
-    at: u16,
-    room: u16,
-    column: usize,
-    target: Hit,
-) -> Vec<Field> {
-    let mut out = Vec::new();
-    let mut cut = 0usize;
-    let mut cell = 0usize;
-
-    for r in &line.runs {
-        // A RANGE OUT OF STEP WITH THE TEXT IS A PANIC ON SCREEN, so the
-        // boundary is checked here too. The crate promises it and the tests
-        // lock it; this is the belt beside the braces, because the cost of
-        // being wrong is a dead footer rather than a wrong colour.
-        if r.start < cut
-            || r.end > line.text.len()
-            || !line.text.is_char_boundary(r.start)
-            || !line.text.is_char_boundary(r.end)
-        {
-            continue;
-        }
-        let plain = &line.text[cut..r.start];
-        place(
-            &mut out,
-            plain,
-            at,
-            room,
-            column,
-            cell,
-            ronoctua_tokens::color::TEXT_PRIMARY,
-            &target,
-        );
-        cell += usize::from(ronoctua_render::layout::width(plain));
-        let run = &line.text[r.start..r.end];
-        let color = crate::chrome::syntax_color(r.role);
-        place(&mut out, run, at, room, column, cell, color, &target);
-        cell += usize::from(ronoctua_render::layout::width(run));
-        cut = r.end;
-    }
-    let rest = &line.text[cut.min(line.text.len())..];
-    place(
-        &mut out,
-        rest,
-        at,
-        room,
-        column,
-        cell,
-        ronoctua_tokens::color::TEXT_PRIMARY,
-        &target,
-    );
-
-    // AND THE WHOLE WIDTH IS CLICKABLE. Blanks draw no ink, and `field_at`
-    // walks from the right, so this is what the pointer finds where a short
-    // line leaves the panel ragged.
-    out.push(Field {
-        at,
-        text: " ".repeat(usize::from(room)),
-        color: ronoctua_tokens::color::TEXT_PRIMARY,
-        hit: target,
-        explain: None,
-        ink: Ink::Grid,
-    });
-    out
-}
-
-/// One piece of a preview line, placed at the cell it starts in — less
-/// whatever the sideways offset has taken off the left.
-///
-/// A free function and not a closure inside [`text_fields`], because the
-/// closure would have to own the `Hit` it clones into every field and there is
-/// one per run.
-#[allow(clippy::too_many_arguments)]
-fn place(
-    out: &mut Vec<Field>,
-    text: &str,
-    at: u16,
-    room: u16,
-    column: usize,
-    cell: usize,
-    color: Color,
-    target: &Hit,
-) {
-    let wide = usize::from(ronoctua_render::layout::width(text));
-    // ENTIRELY OFF THE LEFT EDGE: nothing of it is on screen.
-    if wide == 0 || cell + wide <= column {
-        return;
-    }
-    // OR IT STARTS OFF THE EDGE, and only its tail is. `window` cuts by
-    // cluster for the reason `elide_end` does: cutting by byte invents a
-    // drawing.
-    let skip = column.saturating_sub(cell);
-    let placed = cell + skip - column;
-    let left = usize::from(room).saturating_sub(placed);
-    if left == 0 {
-        return;
-    }
-    let piece = ronoctua_render::layout::window(
-        text,
-        u16::try_from(skip).unwrap_or(u16::MAX),
-        u16::try_from(left).unwrap_or(u16::MAX),
-    );
-    if piece.is_empty() {
-        return;
-    }
-    out.push(Field {
-        at: at + u16::try_from(placed).unwrap_or(0),
-        text: piece,
-        color,
-        hit: target.clone(),
-        explain: None,
-        ink: Ink::Grid,
-    });
-}
-
-const fn centred(at: u16, room: u16, what: u16) -> u16 {
+pub(crate) const fn centred(at: u16, room: u16, what: u16) -> u16 {
     at.saturating_add(room.saturating_sub(what) / 2)
 }
 
@@ -3208,8 +2808,10 @@ pub enum Doing {
     ///
     /// The bin's root travels along: the door that carries this out has no
     /// business asking the environment where the trash is a second time and
-    /// possibly getting a different answer.
-    Restore(PathBuf, Vec<String>),
+    /// possibly getting a different answer. SEVERAL bins, because the trash's
+    /// listing gathers the home's and every mounted volume's, and a set
+    /// chosen there can span them — each goes back through its own.
+    Restore(Vec<(PathBuf, Vec<String>)>),
     /// Remove these outright.
     Delete(Vec<PathBuf>),
     /// Overwrite and remove these.
@@ -3234,18 +2836,56 @@ pub enum Doing {
         /// negotiated with the modifier as a preference.
         moves: bool,
     },
-    /// Pack these into an archive.
-    Compress(Vec<PathBuf>, &'static str),
-    /// Unpack this one here.
-    Extract(PathBuf),
+    /// Something about an archive: list it to walk in, take a member out to
+    /// open it, or hand the queue a job on it — `crate::files_archive`.
+    Archive(crate::files_archive::ArchiveDoing),
+    /// Open this encrypted disk with this passphrase, and mount what comes
+    /// out of it — then go in, as mounting does.
+    Unlock {
+        /// The container, by the id the disk border gave it.
+        device: String,
+        /// The passphrase: it goes into the call to udisks and nowhere else.
+        passphrase: ronoctua_consent::keys::Secret,
+        /// What the row calls it, for what is said.
+        name: String,
+    },
+    /// Unmount what came out of this encrypted disk and lock it again,
+    /// leaving the power on.
+    Lock {
+        /// The volume, by the id the disk border gave it.
+        device: String,
+        /// What the row calls it, for what is said when it is locked.
+        name: String,
+    },
     /// Set the permission bits, on every one of them.
     Mode(Vec<PathBuf>, u32),
     /// Set the group, on every one of them.
     Group(Vec<PathBuf>, u32),
     /// Set the owner — the one that needs the privileged unit.
     Owner(Vec<PathBuf>, u32),
+    /// Set when it was modified, in seconds since the epoch. One syscall.
+    Modified(PathBuf, i64),
+    /// Write a song's or a film's tags, through the `ronoctua-tags` program,
+    /// naming the stamp the sheet was read with.
+    Tag(PathBuf, ronoctua_tags::Stamp, Vec<ronoctua_tags::Edit>),
+    /// Write one of a picture's or a PDF's details.
+    Meta(
+        PathBuf,
+        ronoctua_inspect::amend::Holder,
+        ronoctua_inspect::amend::Meta,
+        String,
+    ),
+    /// Take the place out of these files — into a copy beside each when the
+    /// flag says so, over each otherwise. Asked first, always.
+    RemoveLocation(Vec<PathBuf>, bool),
+    /// A change only root may make, with the password the person typed when
+    /// the sudo door asked for it ([`ROOT_PASSWORD`]).
+    RootProved(Root, ronoctua_lookup::keys::Secret),
     /// Walk a directory and report how big it is.
     Measure(PathBuf),
+    /// Check this file with VirusTotal, in the security centre's window —
+    /// the door's business, like the other ones that start a process.
+    VirusTotal(PathBuf),
     /// Mount this volume, by the id the disk border gave it, and go in when it
     /// comes up.
     Mount(String),
@@ -3253,7 +2893,12 @@ pub enum Doing {
     ///
     /// The ID and not the mount point: the point is the thing that disappears,
     /// and a request naming it would name what is no longer there.
-    Unmount(String),
+    ///
+    /// AND WHAT ITS OWN TRASH STILL HOLDS, counted when the row was pressed:
+    /// a stick unmounted with files in its trash leaves with that space still
+    /// taken, and the person is told so (`files-trash-left-on-volume`) — the
+    /// volume's name and the count, or `None` when the trash is empty.
+    Unmount(String, Option<(String, usize)>),
     /// Run this application, by its freedesktop id.
     Launch(String),
     /// Unmount this volume and then cut the power to its drive.
@@ -3261,14 +2906,18 @@ pub enum Doing {
     /// TWO STEPS AND IN THIS ORDER, and the host does the second only when the
     /// first came back: ejecting with a write still in flight is how a stick
     /// leaves with half a file on it. It is the same reason `Unmount` never
-    /// passes `force`.
-    Eject(String),
+    /// passes `force`. It carries what `Unmount` carries, for the same reason.
+    Eject(String, Option<(String, usize)>),
     /// Hand this volume to the formatting buffer.
     ///
     /// The BUFFER asks the questions and the HOST does the work — and the host
     /// re-checks that the volume is one the running system does not need, so
     /// the guard holds even if the buffer names something else.
     Format(String),
+    /// Open the history of the repository at this root (`crate::git_browser`)
+    /// — in the footer's region from the footer's door, in a window of its
+    /// own from the window's.
+    History(PathBuf),
 }
 
 /// A question the view needs answered before it can act.
@@ -3295,11 +2944,29 @@ pub enum Asking {
     /// path and the FOCUSED entry's current mode — two different files — until
     /// this was written out.
     Mode(Vec<PathBuf>, u32),
-    /// Which archive format.
-    Format(Vec<PathBuf>),
+    /// The sheet `compress` and `convert` open: format, level, password and
+    /// volumes, each row turning in place — `crate::files_archive::Sheet`.
+    Sheet(Box<crate::files_archive::Sheet>),
     /// The new name. The one place typing is unavoidable, because the answer
     /// is not on any list.
     Name(PathBuf),
+    /// When it was modified — typed, prefilled with the date it has, in the
+    /// one shape `ronoctua_files::when::instant_of` reads back.
+    Modified(PathBuf),
+    /// A song's or a film's tag — typed, prefilled with what the file says;
+    /// an empty answer takes the tag out. The stamp is the sheet's, so a
+    /// file changed meanwhile is refused rather than overwritten.
+    Tag(PathBuf, ronoctua_tags::Stamp, ronoctua_tags::Field),
+    /// A picture's or a PDF's detail — typed, prefilled; empty takes it out.
+    Meta(
+        PathBuf,
+        ronoctua_inspect::amend::Holder,
+        ronoctua_inspect::amend::Meta,
+    ),
+    /// Take the place out of these: `no` (first, the cursor on it), `a copy
+    /// without it`, or `over the file` — which cannot be undone, and the
+    /// question says so.
+    Location(Vec<PathBuf>),
     /// Which hidden sidebar row to bring back.
     ///
     /// It carries nothing: the choices ARE the answer, and the row's id is what
@@ -3352,6 +3019,15 @@ pub enum Step {
     Say(Explanation),
     /// The opened line was asked something. The DOOR answers.
     Fold(crate::fold::Ask),
+    /// The clipboard's text is wanted — for the question's query when one is
+    /// up, else for the filter. The DOOR reads it, off its loop
+    /// (`crate::pasting`), and hands it to [`View::pasted`].
+    Paste,
+    /// A SECRET is to be asked, on the door's own line and masked: the
+    /// footer's minibuffer, a window's `Ui::ask`. The id is the question's
+    /// (`ask-<id>`, one of `files_archive::QUESTIONS`), and the answer comes
+    /// back to [`View::secret_answered`].
+    Secret(&'static str),
 }
 
 /// One row of the picker.
@@ -3388,6 +3064,13 @@ pub struct Picker {
 }
 
 impl Asking {
+    /// Whether an EMPTY typed answer is an answer: taking a tag or a detail
+    /// out is written by leaving it blank. A blank name or date is nothing.
+    #[must_use]
+    pub const fn takes_blank(&self) -> bool {
+        matches!(self, Self::Tag(..) | Self::Meta(..))
+    }
+
     /// The text key that says what is being asked.
     ///
     /// On `Asking` and not in the drawing, because it is a property of the
@@ -3401,8 +3084,42 @@ impl Asking {
             Self::Owner(_) => texts.t(ronoctua_i18n::key::FILES_ASK_OWNER),
             Self::Group(_) => texts.t(ronoctua_i18n::key::FILES_ASK_GROUP),
             Self::Mode(_, _) => texts.t(ronoctua_i18n::key::FILES_ASK_MODE),
-            Self::Format(_) => texts.t(ronoctua_i18n::key::FILES_ASK_FORMAT),
+            Self::Sheet(sheet) => sheet.title(texts),
             Self::Name(_) => texts.t(ronoctua_i18n::key::FILES_ASK_NAME),
+            Self::Modified(_) => texts.t(ronoctua_i18n::key::FILES_ASK_MODIFIED),
+            Self::Tag(_, _, field) => texts.t_with(
+                ronoctua_i18n::key::FILES_ASK_TAG,
+                &[(
+                    "field",
+                    texts.t(crate::player_metadata::field_key(*field)).as_str(),
+                )],
+            ),
+            Self::Meta(_, _, meta) => texts.t_with(
+                ronoctua_i18n::key::FILES_ASK_META,
+                &[(
+                    "detail",
+                    texts.t(crate::inspection_edit::meta_key(*meta)).as_str(),
+                )],
+            ),
+            Self::Location(paths) => {
+                let name = paths
+                    .first()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                texts.t_args(
+                    ronoctua_i18n::key::FILES_ASK_LOCATION,
+                    &[
+                        (
+                            "n",
+                            ronoctua_i18n::Arg::Number(
+                                i64::try_from(paths.len()).unwrap_or(i64::MAX),
+                            ),
+                        ),
+                        ("name", ronoctua_i18n::Arg::Text(&name)),
+                    ],
+                )
+            }
             Self::Sidebar => texts.t(ronoctua_i18n::key::FILES_SIDEBAR_HIDDEN_ASK),
             // ALREADY A SENTENCE, built where the `Doing` was known.
             Self::Confirm(_, sentence) => sentence.clone(),
@@ -3429,7 +3146,8 @@ impl Picker {
     #[must_use]
     pub fn answer(&self) -> Option<String> {
         if self.typed {
-            return (!self.query.is_empty()).then(|| self.query.clone());
+            return (!self.query.is_empty() || self.asking.takes_blank())
+                .then(|| self.query.clone());
         }
         let shown = self.shown();
         shown
@@ -3460,6 +3178,12 @@ pub enum Report {
     /// udisks said no, and this is WHICH no — plus its own words, for the one
     /// case that has nothing better to say.
     Refused(ronoctua_disks::Refusal, String),
+    /// The sudo door wants the person's password for what is left of this
+    /// change: the door that pressed asks it ([`ROOT_PASSWORD`]) and hands
+    /// the answer back as [`Doing::RootProved`].
+    Password(Root),
+    /// The sudo door refused, for this reason (`security-refusal-<id>`).
+    Door(ronoctua_security::Why),
     /// A disk was plugged in, unplugged, mounted or unmounted — and this is the
     /// machine as it is now.
     ///
@@ -3472,11 +3196,6 @@ pub enum Report {
     /// `Box`ed because it is by far the largest variant and a `Report` is
     /// cloned per message.
     Racked(Box<ronoctua_disks::Rack>),
-    /// What is INSIDE the file the cursor was on — the picture and the facts.
-    ///
-    /// `Box`ed for the same reason `Racked` is: it carries up to a mebibyte of
-    /// RGBA, and a `Report` is moved by value through the channel.
-    Inspected(Box<Looked>),
     /// Somebody else touched the directory on screen, or the sidebar's file.
     ///
     /// # Why this one carries nothing, when `Racked` carries everything
@@ -3498,6 +3217,21 @@ pub enum Report {
     /// reason `ARCHITECTURE.md` already gives about `Racked`: both doors were
     /// carrying a `Report` before this existed.
     Stirred,
+    /// A writer of the facts' editable rows came back — written, or refused
+    /// and why (`inspection_edit::sentence` words it, for both doors). The
+    /// directory is read again either way: a write moves the mtime, and the
+    /// panel asks about the file afresh.
+    Amended(crate::inspection_edit::Amended),
+    /// Something to say once a thread's work is done — the volume's trash an
+    /// unmount left behind (`unmounted`). The key and its arguments; the door
+    /// that holds the bundle words it.
+    Said(Explanation),
+    /// An archive was listed, a member taken out, or a job on one ended —
+    /// answered by [`View::archive_reported`] in both doors.
+    Archive(Box<crate::files_archive::ArchiveReport>),
+    /// THE GIT LINE'S READING, from the door's `git_line::Keeper` — the
+    /// repository the folder on screen is in, read off the loop.
+    Git(Box<crate::git_line::Line>),
 }
 
 /// What is on the clipboard, and whether it moves or copies.
@@ -3571,9 +3305,11 @@ pub struct View {
     /// by the same argument, resolved the other way.
     filter: String,
     sort: Sort,
-    hidden: bool,
     /// The action menu, when it is open, and which of its rows is focused.
     menu: Option<usize>,
+    /// THE GIT LINE'S LAST READING (`crate::git_line`), kept whatever the
+    /// folder: it is drawn only while the folder is inside its repository.
+    git: Option<crate::git_line::Line>,
     /// An action waiting for its key a second time.
     arming: Option<&'static str>,
     /// The question on screen, when there is one.
@@ -3676,43 +3412,13 @@ pub struct View {
     modal_offset: usize,
     /// When the sidebar's file was last read, for "has somebody changed it".
     side_stamp: Option<std::time::SystemTime>,
-    /// Whether the PREVIEW panel is asked for.
+    /// THE TWO PANELS — the preview and the facts — and everything they keep.
     ///
-    /// **ON at the start**, and the key is how one turns it OFF. It used to be
-    /// the other way round, and the argument was the cost — a preview is a
-    /// child process per file walked past. The owner overruled it from the
-    /// screen: the panels are what the manager is FOR, and a feature that has
-    /// to be switched on every time is a feature most of the time nobody has.
-    /// The cost is still real and it is still bounded, by the one thread
-    /// `inspector` runs and by its "only the newest" rule.
-    preview_on: bool,
-    /// Whether the INFO panel is asked for. On at the start, same argument.
-    info_on: bool,
-    /// The first fact the info panel shows.
-    ///
-    /// The panel is as tall as the region and a file can have twenty facts, so
-    /// the list does not always fit — and a list that is cut with nothing
-    /// saying so is the failure this whole file keeps naming. What says so is
-    /// [`View::facts_bar`], and this is what it points at.
-    ///
-    /// It goes back to zero whenever the CURSOR moves: the facts are about the
-    /// focused entry, and keeping a scroll position across two different files
-    /// would open the next one half way down a list it does not have.
-    info_offset: usize,
-    /// Which fact the keyboard is on, once the `TAB` ring has reached the
-    /// panel.
-    ///
-    /// # Why a panel needed a cursor at all
-    ///
-    /// Because the owner asked for one — *"ao apertar `Tab` para ir para a
-    /// seção de infos, deveria ser possível ir para cima e para baixo nos
-    /// itens"* — and because a panel that only scrolled had nothing for a band
-    /// to light, which is the other half of the same report: with the keyboard
-    /// in a panel, nothing on screen changed at all.
-    ///
-    /// It is `side_cursor`'s twin, and it obeys the same rule: the view
-    /// scrolls to keep it in sight rather than the cursor following the view.
-    info_cursor: usize,
+    /// Theirs and not the listing's: what a panel shows is about ONE file, and
+    /// the listing is only the first place a file is chosen from. See
+    /// `crate::inspection`, and [`View::panel`] for how the view tells it what
+    /// it is about before every question.
+    panel: crate::inspection::Panel,
     /// Whether the listing shows the permission triplet, the owner and the
     /// group.
     ///
@@ -3789,155 +3495,6 @@ pub struct View {
     tour: Option<Tour>,
     /// What that player was last told, so an unchanged wish is not a respawn.
     told_tour: Option<crate::motion::Reel>,
-    /// What the tools said about the file the cursor was on.
-    ///
-    /// ONE, and not a map. The panels are about the focused entry and there is
-    /// one of those; a cache of every file walked past would be the footer's
-    /// memory, which is the argument `ronoctua_render::image` already makes
-    /// about the textures it keeps between frames.
-    looked: Option<Looked>,
-    /// The frame a moving file is showing right now.
-    ///
-    /// It REPLACES the still one on screen and does not disturb it in
-    /// `looked`: a file that stops moving — because the cursor left, or the
-    /// preview was switched off — falls back to the picture it always had.
-    frame: Option<crate::motion::Frame>,
-    /// What the film is DOING — the transport, and the whole of it.
-    ///
-    /// Kept beside the frame and never inside it: a frame is what arrived, and
-    /// this is what was asked for. It is reset whenever the cursor lands on
-    /// another file, which is what makes leaving and coming back start the
-    /// film again rather than resume somebody else's pause.
-    transport: Transport,
-    /// The last order the player was given.
-    ///
-    /// [`View::wants_motion`] is the difference between this and what SHOULD be
-    /// running. One comparison, in one place: enumerating the ways a film can
-    /// need restarting is how a case gets missed, which is the lesson
-    /// `wants_look` already carries.
-    told: Option<crate::motion::Reel>,
-    /// Whether the player has been told to hold.
-    ///
-    /// Beside [`Transport::paused`] and not inside it, because they answer two
-    /// different questions: that one is what somebody asked for, this one is
-    /// what the player was told. The difference between them is the order.
-    holding: bool,
-    /// What went wrong with the film, when something did.
-    ///
-    /// **Refusal is a value, not an absence.** A picture that is not there and
-    /// a picture that was refused look the same on screen, and only one of them
-    /// has a sentence — the rule the panels already keep.
-    trouble: Option<crate::motion::Trouble>,
-    /// WHICH panel was asked for the whole region, if either was.
-    ///
-    /// A wish and not a state: [`View::wide`] is what the doors read, and it
-    /// answers `None` the moment there is nothing to give the region TO.
-    ///
-    /// ONE FIELD AND NOT TWO FLAGS, because the region is one. A pair of
-    /// booleans can both say yes, and then the layout has to choose between
-    /// them — a third opinion about a question this shape answers by
-    /// construction.
-    theatre: Option<Panel>,
-    /// Where a shape is being looked at from.
-    ///
-    /// Beside `transport` and for the same reason: it is what was ASKED for,
-    /// not what arrived. Reset when the cursor lands on another file, so
-    /// coming back to a piece shows it the way it is first shown rather than
-    /// at the angle somebody left a different piece at.
-    pose: ronoctua_inspect::solid::Pose,
-    /// The last view of a shape that arrived.
-    turned: Option<crate::stage::Frame>,
-    /// The last order the stage was given.
-    ///
-    /// [`View::wants_turn`] is the difference between this and what SHOULD be
-    /// drawn — the same one comparison in one place that `told` is for the
-    /// film, and for the same reason: enumerating the ways a picture can need
-    /// redrawing is how a case gets missed.
-    told_turn: Option<crate::stage::Turn>,
-    /// What went wrong with the shape, when something did.
-    shape_trouble: Option<ronoctua_inspect::Refusal>,
-    /// Which section the pointer is resting in.
-    ///
-    /// What decides the transport's buttons are drawn — they appear under the
-    /// pointer and the timeline does not, which is the owner's choice. It is a
-    /// `Cell` for the reason `drawn_lines` is: [`View::hit`] runs on every
-    /// pointer motion and takes `&self`.
-    pointing: std::cell::Cell<Option<Pane>>,
-    /// The preview's own box, in pixels, as it was last laid out.
-    ///
-    /// What the frame's size is asked FOR. It cannot come from the door at the
-    /// moment the player is told, because only the layout knows how many cells
-    /// the panel got — so the layout writes it down, once, where it decides.
-    drawn_preview: std::cell::Cell<(f32, f32)>,
-    /// Which entry of the playlist under the cursor is the one being played.
-    ///
-    /// # Why it is here and not on `Transport` or on `Looked`
-    ///
-    /// Not on [`Transport`]: every field there is `Copy`, it is compared by
-    /// value each frame and reset wholesale by two keys.
-    ///
-    /// Not on [`Looked`]: that is what the FILE says, boxed and compared field
-    /// by field. Which entry somebody is on is what the PERSON did, and it
-    /// survives none of the re-reads that answer is subject to.
-    ///
-    /// It is an index into `List::entries` — the drawn rows — and not into the
-    /// playable ones, so the mark and the row are one arithmetic.
-    playing: usize,
-    /// The first line of the text preview that is on screen.
-    ///
-    /// Its own, like `info_offset` and `side_offset`: a gesture over the
-    /// preview must move the preview and nothing else, which is the rule
-    /// [`View::wheel`] writes down.
-    preview_offset: usize,
-    /// Which entry of a PLAYLIST the keyboard is on.
-    ///
-    /// Only a playlist has one: a photograph, a film and a shape have no rows,
-    /// and a page of text has lines that are read rather than chosen. There the
-    /// arrows go on doing what they did — scrolling, or walking the files — and
-    /// what says the panel has the keyboard is its title.
-    preview_cursor: usize,
-    /// The first COLUMN of it, for a line wider than the panel.
-    ///
-    /// The owner asked for sideways scrolling rather than a silent cut: a
-    /// twenty-four-cell panel would otherwise hide most of every line of code
-    /// with an ellipsis and no way to see past it.
-    preview_column: usize,
-    /// The stamp of what was last ASKED for.
-    ///
-    /// It is what stops the host asking again, and it has to be separate from
-    /// [`View::looked`] for the reason `surface`'s `icons` map already
-    /// records: a refusal is an ANSWER, and without somewhere to write "I have
-    /// asked and the answer was no" the same file is asked about on every
-    /// frame.
-    asked: Option<String>,
-    /// How many lines the panels were last DRAWN in.
-    ///
-    /// The same arrangement as [`View::drawn_at`] and for the same reason: a
-    /// key arrives without a height, and how far the facts can scroll depends
-    /// on one. The view cannot work it out — the footer's region has a ceiling
-    /// and a window has the height somebody dragged it to — so the door that
-    /// draws the bar is the one that knows, and [`View::facts_bar`] is where
-    /// every frame of both of them goes through.
-    drawn_lines: std::cell::Cell<u16>,
-    /// How many CELLS wide the panels' content was last drawn in.
-    ///
-    /// The same arrangement as [`View::drawn_lines`] and for the same reason:
-    /// [`View::preview_total`] has to say how tall a wrapped refusal is, and
-    /// that depends on a width nine of its callers do not have. The layout is
-    /// the one place that knows, so the layout writes it down.
-    drawn_panel: std::cell::Cell<u16>,
-    /// How many CELLS wide the FACTS panel was last drawn in.
-    ///
-    /// Its own and not [`View::drawn_panel`], which is the PREVIEW's: the two
-    /// panels are different widths whenever only one of them is on, and with
-    /// the region given away one of them is not drawn at all. What depends on
-    /// this is [`View::info_grid`] — how many columns the facts are laid out in
-    /// — and a grid computed against the other panel's width is a grid the
-    /// painter and the scrollbar disagree about.
-    ///
-    /// The layout is the one place that knows, so the layout writes it down;
-    /// the same arrangement as the two cells above and for the same reason.
-    drawn_info: std::cell::Cell<u16>,
     /// The width the view was last laid out at.
     ///
     /// # Why the view remembers a width
@@ -3962,37 +3519,6 @@ pub struct View {
     /// long for its column walk under the pointer as well as under the cursor
     /// — the owner asked for both.
     pointing_row: std::cell::Cell<Option<usize>>,
-    /// WHETHER THE POINTER IS ON THE GLOBE, remembered where it was resolved.
-    ///
-    /// The wheel arrives with a cell and the answer needs a LINE as well, and
-    /// the door already resolved both to draw the band. Asking again from
-    /// inside `wheel` would be a second opinion about where the picture is —
-    /// which is the whole of what `Panes::section_at` was written to end.
-    pointing_at_the_globe: std::cell::Cell<bool>,
-    /// THE LAST SHEET BUILT, and what it was built for.
-    ///
-    /// # Why this is not an optimisation to be weighed
-    ///
-    /// Because `sheet_of` runs on EVERY painted frame — `sections_of` builds
-    /// all four sections, and the panel is one of them — and it formats one
-    /// Fluent message per row. With a dozen rows that is invisible. Once the
-    /// panel started showing every tag the file carries, a photograph became
-    /// 167 rows and a Pixel DNG 149, and it would have been that many
-    /// formats per frame, forever, while nothing on screen changed.
-    ///
-    /// THE KEY IS WHAT CAN CHANGE THE ANSWER: the name in focus, its mtime
-    /// (the same file rewritten in place is a different sheet), whether a
-    /// directory has been measured, and which inspection has come back. Not
-    /// the language — a language change rebuilds the `Rc<Texts>` this view
-    /// holds, and `texts` is compared by pointer for exactly that reason.
-    remembered: std::cell::RefCell<Option<(SheetFor, Vec<Fact>)>>,
-    /// THE GLOBE THIS VIEW IS SHOWING, when the focused file has a coordinate.
-    ///
-    /// On the VIEW and not on the door, because a view lives in two doors and a
-    /// pose kept in the door would reset the globe when the manager moved from
-    /// the footer to a window. The thread is the door's; this is the value in
-    /// between. See `crate::globe::Globe`, which belongs to no app.
-    globe: std::cell::RefCell<crate::globe::Globe>,
     /// How many cells the NAME column was last drawn in.
     ///
     /// The same arrangement as [`View::drawn_panel`] and for the same reason: a
@@ -4019,121 +3545,21 @@ pub struct View {
     /// so the view keeps a duration and never an idea of where the name has
     /// got to.
     slide_elapsed: std::cell::Cell<std::time::Duration>,
-}
-
-/// What the inspector was asked about one file.
-///
-/// The path travels back with the answer because the cursor moves while a
-/// child process runs: without it the panel would show the previous file's
-/// picture under the current file's name, which is the one failure a preview
-/// must not have.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ask {
-    /// The file, absolute.
-    pub path: PathBuf,
-    /// The type to act on — already through `ronoctua_inspect::settled`.
-    pub mime: &'static str,
-    /// How many pixels across the longer side, before quantisation.
-    pub target: u32,
-    /// The cache key this answer will carry back.
-    pub key: String,
-    /// How wide a tabulation is, in cells.
-    ///
-    /// It travels the way `target` does, and for the same reason: it is a
-    /// TOKEN (`space.files.tabWidth`), and `ronoctua-inspect` does not receive
-    /// token values. Whoever asks holds the tokens.
-    pub tab: usize,
-    /// The waveform's ink, for a sound with no artwork.
-    ///
-    /// It travels the way `tab` does, and for the same reason: it is a TOKEN
-    /// (`surface.wave`), and `ronoctua-inspect` does not receive token values.
-    pub wave: String,
-    /// A film that might belong to this picture, from the SAME folder.
-    ///
-    /// # Why the folder is asked about HERE
-    ///
-    /// An iPhone's Live Photo is two files — `IMG_1.HEIC` and `IMG_1.MOV` —
-    /// and the inspector's whole promise is what is inside ONE file. Knowing
-    /// what else is in the directory is the view's business, and the listing is
-    /// already in memory, so the candidate costs a scan of a `Vec` and no
-    /// syscall.
-    ///
-    /// It is a CANDIDATE and not a pairing: whether the two belong together is
-    /// decided by the `ContentIdentifier` both carry, which is a question about
-    /// what is inside them.
-    pub beside: Option<PathBuf>,
-}
-
-/// What the inspector came back with.
-///
-/// `Eq` is NOT derived, and it is the frame rate's doing: `Moving` carries a
-/// `f64` cadence, and a float has no total equality. `PartialEq` is what the
-/// comparisons here actually want — "is this still the same answer" — and it is
-/// what they have always used.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Looked {
-    /// `Stamp::key()` — what identifies this answer in the texture map.
-    pub key: String,
-    /// The file it is about.
-    pub path: PathBuf,
-    /// The pixels, when there are any.
-    pub rgba: Option<ronoctua_render::image::Rgba>,
-    /// How this file's frames would be produced, when it moves.
-    ///
-    /// The player is started by the DOOR and not here: this crate answers what
-    /// is in a file, and running a child process for as long as a cursor rests
-    /// on it is the shell's business.
-    pub moving: Option<ronoctua_inspect::motion::Moving>,
-    /// The things this file names, when it names things rather than being one.
-    ///
-    /// A playlist has no picture and is not read as text: it is a LIST, and it
-    /// is drawn as one. See [`ronoctua_inspect::playlist`].
-    pub list: Option<ronoctua_inspect::playlist::List>,
-    /// The letters, when there are any and there is no picture.
-    ///
-    /// # Everything expensive is already done
-    ///
-    /// Read, split, de-tabbed and HIGHLIGHTED, once, on the inspector's own
-    /// thread. It has to be: a highlight state carries between lines, so
-    /// colouring "only the visible ones" would still mean running from line
-    /// zero — which is the whole file, per line, per frame. What is left for
-    /// `preview_fields` is indexing one line and walking its handful of runs.
-    pub text: Option<ronoctua_inspect::text::Read>,
-    /// Why there are none, when there are none.
-    pub why: Option<ronoctua_inspect::Refusal>,
-    /// What the tools said the file is.
-    pub facts: Vec<ronoctua_inspect::facts::Fact>,
-    /// The type this was decided to be, already through `settled`.
-    ///
-    /// Carried rather than worked out again: `wants_look` has just resolved it
-    /// and the stage needs the same answer, and two `examined` calls on one
-    /// file is two chances for them to differ.
-    pub mime: &'static str,
-    /// Whether this is a shape the manager turns.
-    ///
-    /// Set only when the mesh actually READ: a `.stl` that is damaged carries
-    /// `false` and a `why` instead, so the panel says what is wrong rather
-    /// than waiting for ever for a frame that is not coming. It is the same
-    /// distinction `moving` makes — the door starts the thread, this only
-    /// says whether there is one to start.
-    pub turns: bool,
-    /// How many of a boundary representation's faces came out as an OUTLINE
-    /// rather than filled.
-    ///
-    /// It is on `Looked` and not only among the facts because the preview says
-    /// it too: a piece drawn part solid and part wire is a piece somebody
-    /// should be told about, and the panel is where they are looking. Zero for
-    /// everything that is not a STEP or an IGES.
-    pub outlined: usize,
-    /// WHERE THE FILE SAYS IT WAS MADE, in signed decimal degrees.
-    ///
-    /// It is on `Looked` and not only among the facts because a coordinate is
-    /// not only a row: it is what a globe is pointed at and what a map is
-    /// opened on. Reading it back out of the fact's formatted value would be a
-    /// second parse of a number this side already had — and `f32` because the
-    /// projection is in `f32` and five decimals is about a metre, which is more
-    /// than any of it needs.
-    pub at: Option<(f32, f32)>,
+    /// THE ARCHIVE THE VIEW HAS WALKED INTO, when it has: `where_` is then the
+    /// archive's path with the folder inside after it, and the rows come from
+    /// its listing (`crate::files_archive`).
+    inside: Option<crate::files_archive::Inside>,
+    /// The archive whose listing was asked for — and the password it was
+    /// asked with — so an answer that arrives after the view moved on is not
+    /// walked into.
+    listing_asked: Option<(PathBuf, Option<ronoctua_consent::keys::Secret>)>,
+    /// What a password the door is asking for is FOR — see
+    /// [`crate::files_archive::Wanting`].
+    wanting: Option<crate::files_archive::Wanting>,
+    /// The archives this view sent jobs about, and the new archive's password
+    /// each was sent with: a refusal for want of a password is answered with a
+    /// question in the door that asked, and only there.
+    sent: Vec<(PathBuf, Option<ronoctua_consent::keys::Secret>)>,
 }
 
 /// An action's technical answer, as an [`Explanation`] with nothing to fill in.
@@ -4142,64 +3568,10 @@ pub struct Looked {
 /// and the empty `args` is the half that would drift: an `Explanation` whose
 /// key expects an argument and whose `args` is empty draws the placeholder in
 /// front of somebody, which is the shape invariant 8 exists to refuse.
-fn does(key: &'static str) -> mode::Explanation {
+pub(crate) fn does(key: &'static str) -> mode::Explanation {
     mode::Explanation {
         key,
         args: Vec::new(),
-    }
-}
-
-/// A fact's value, in words.
-///
-/// TWO SHAPES, and the split is not tidiness. A camera's model is `Pixel 8 Pro`
-/// in every language and translating it would be wrong — the same rule a
-/// `Choice`'s label already follows, because a filename is text and never a
-/// key. A frame rate is not: where the unit goes and what two channels are
-/// called are the LANGUAGE's business, and that belongs in the `.ftl`
-/// (invariant 8).
-///
-/// # Why an argument called `n` crosses as a NUMBER
-///
-/// Because `files-value-channels` and `files-value-pages` are Fluent
-/// SELECTORS, and `facts::Value::Phrase` carries its arguments as `String`.
-/// Given the string `"1"`, Fluent looks for a variant literally named `1` and
-/// falls through to `*[other]`: the screen says **"1 páginas"** with every
-/// check green. It is verbatim the defect `ronoctua_i18n::Arg::Number`'s own
-/// docstring exists for.
-///
-/// The rule is the argument's NAME and not a list of the two keys, so a third
-/// selector arriving later is right by construction — and it is `n` and not
-/// "anything that parses as an integer" on purpose: Fluent groups a number by
-/// locale, so `iso` would become `1,600` and a photograph's dimensions
-/// `3,024 × 4,032`.
-fn fact_said(value: &ronoctua_inspect::facts::Value, texts: &ronoctua_i18n::Texts) -> String {
-    use ronoctua_i18n::Arg;
-    use ronoctua_inspect::facts::Value;
-    match value {
-        Value::Data(text) => text.clone(),
-        Value::Phrase { key, args } => {
-            let crossing: Vec<(&str, Arg<'_>)> = args
-                .iter()
-                .map(|(k, v)| {
-                    // WHICH NAMES CARRY NUMBERS, written down. `n` is the
-                    // count a plural selects on; `w`, `d` and `h` are the
-                    // three sides of a shape's box. Everything else is data —
-                    // a camera model, a date, a licence — and handing THOSE to
-                    // a number formatter would group a year into `2.025`.
-                    if !matches!(*k, "n" | "w" | "d" | "h") {
-                        return (*k, Arg::Text(v.as_str()));
-                    }
-                    if let Ok(n) = v.parse::<i64>() {
-                        (*k, Arg::Number(n))
-                    } else if let Ok(n) = v.parse::<f64>() {
-                        (*k, Arg::Fraction(n))
-                    } else {
-                        (*k, Arg::Text(v.as_str()))
-                    }
-                })
-                .collect();
-            texts.t_args(key, &crossing)
-        }
     }
 }
 
@@ -4215,6 +3587,7 @@ impl View {
         texts: std::rc::Rc<ronoctua_i18n::Texts>,
         side: ronoctua_files::sidebar::Sidebar,
     ) -> Self {
+        let panel = crate::inspection::Panel::new(std::rc::Rc::clone(&texts), zone.clone());
         let mut view = Self {
             texts,
             pane: Pane::Listing,
@@ -4234,13 +3607,13 @@ impl View {
             press: None,
             carry: None,
             filter: String::new(),
+            // THE WHOLE DIRECTORY IS SHOWN, ALWAYS — the owner's rule, and
+            // Unix's own accident refused: there is no key that hides the
+            // dotfiles, because a manager that CAN hide half of `$HOME` is one
+            // somebody ends up using without knowing half is gone.
             sort: Sort::default(),
-            // The owner's rule, and Unix's own accident refused: the whole
-            // directory is shown, and `.` hides the dotfiles for whoever wants
-            // that. A manager that hides half of `$HOME` cannot be used to fix
-            // a dotfile, which is most of why one opens it here.
-            hidden: true,
             menu: None,
+            git: None,
             arming: None,
             picking: None,
             detail: None,
@@ -4251,28 +3624,8 @@ impl View {
             zone,
             bin,
             stamp: None,
-            // THE PANELS COME UP ON. The owner's decision, reported from the
-            // screen: "prévia e info devem estar sempre habilitadas".
-            preview_on: true,
-            info_on: true,
-            info_offset: 0,
-            info_cursor: 0,
-            frame: None,
-            transport: Transport::default(),
-            told: None,
-            holding: false,
-            trouble: None,
-            theatre: None,
-            pose: ronoctua_inspect::solid::Pose::default(),
-            turned: None,
-            told_turn: None,
-            shape_trouble: None,
-            pointing: std::cell::Cell::new(None),
-            drawn_preview: std::cell::Cell::new((0.0, 0.0)),
-            playing: 0,
-            preview_offset: 0,
-            preview_cursor: 0,
-            preview_column: 0,
+            // THE PANELS COME UP ON — see `inspection::Panel::new`.
+            panel,
             // AND THE THREE COLUMNS ONE LOOKS UP COME UP OFF, which is the
             // same decision seen from the other side: what the manager shows
             // without being asked is what one navigates by.
@@ -4286,21 +3639,17 @@ impl View {
             drawn_side: std::cell::Cell::new(0),
             tour: None,
             told_tour: None,
-            looked: None,
-            asked: None,
             drawn_at: std::cell::Cell::new(0),
             fold_shown: std::cell::Cell::new(false),
-            drawn_lines: std::cell::Cell::new(0),
-            drawn_panel: std::cell::Cell::new(0),
-            drawn_info: std::cell::Cell::new(0),
             pointing_row: std::cell::Cell::new(None),
-            pointing_at_the_globe: std::cell::Cell::new(false),
-            remembered: std::cell::RefCell::new(None),
-            globe: std::cell::RefCell::new(crate::globe::Globe::new(crate::globe::Owner::Files)),
             drawn_name: std::cell::Cell::new(0),
             slide_over: std::cell::Cell::new(0),
             slide_since: std::cell::Cell::new(None),
             slide_elapsed: std::cell::Cell::new(std::time::Duration::ZERO),
+            inside: None,
+            listing_asked: None,
+            wanting: None,
+            sent: Vec::new(),
         };
         view.reread();
         // PAST THE WAY OUT, the same landing `enter` makes: opening the
@@ -4358,6 +3707,25 @@ impl View {
         self.cursor
     }
 
+    /// The state the manager is in, for the modeline — and the tone it is
+    /// drawn in. A question about WHO MAY TOUCH a file (its permission, its
+    /// owner, its group, and the "are you sure" that follows one) waits on
+    /// the person and changes what others can do with the file: `Warning`,
+    /// the first state in the system that declares its tone. Any other
+    /// question is a choice (`Standard`, the host's alternate colour), and
+    /// nothing up is `normal`.
+    #[must_use]
+    pub fn state(&self) -> (&'static str, ronoctua_protocol::Tone) {
+        use ronoctua_protocol::Tone;
+        match self.picking.as_ref().map(|p| &p.asking) {
+            Some(Asking::Mode(..) | Asking::Owner(_) | Asking::Group(_) | Asking::Confirm(..)) => {
+                ("permission", Tone::Warning)
+            }
+            Some(_) => ("choose", Tone::Standard),
+            None => (ronoctua_protocol::BASE_STATE, Tone::Standard),
+        }
+    }
+
     /// Whether the action menu is open.
     ///
     /// ONLY THE TESTS ASK. What a door needs to know is whether anything modal
@@ -4408,8 +3776,31 @@ impl View {
     /// a person deletes the wrong file.
     pub fn reread(&mut self) {
         let was = self.focused().map(|e| e.name.clone());
-        self.stamp = listing::stamp(&self.where_);
-        self.entries = listing::read_dir_at(&self.where_, self.sort).unwrap_or_default();
+        // INSIDE AN ARCHIVE the rows are its listing's, walked like a folder
+        // (`crate::files_archive`); everywhere else, the directory's.
+        if let Some(rows) = self.archive_rows() {
+            self.stamp = None;
+            self.entries = rows;
+        } else {
+            self.stamp = listing::stamp(&self.where_);
+            self.entries = listing::read_dir_at(&self.where_, self.sort).unwrap_or_default();
+            // THE TRASH IS EVERY TRASH. A file thrown away on a stick went to the
+            // stick's own bin (`$topdir/.Trash-$uid`), and looking for it in "the
+            // trash" has to find it: every mounted volume's bin is gathered in,
+            // each entry named by its whole path (`Entry::shown` draws the name),
+            // and sorted among the home's by the same rule. A bin never made
+            // gathers nothing.
+            if self.in_trash() {
+                let parent = self.entries.first().filter(|e| e.is_parent()).cloned();
+                let mut all: Vec<Entry> =
+                    self.entries.drain(..).filter(|e| !e.is_parent()).collect();
+                for bin in self.volume_bins() {
+                    all.extend(listing::gathered_from(&bin.files()).unwrap_or_default());
+                }
+                listing::sort_entries(&mut all, self.sort);
+                self.entries = parent.into_iter().chain(all).collect();
+            }
+        }
         self.types = self
             .entries
             .iter()
@@ -4463,9 +3854,17 @@ impl View {
         listing::stamp(&self.where_) != self.stamp
     }
 
-    /// Goes into a directory.
+    /// Goes into a directory — or a folder inside the archive the view has
+    /// walked into; anywhere outside that archive leaves it.
     pub fn enter(&mut self, into: &Path) {
         self.where_ = into.to_path_buf();
+        if self
+            .inside
+            .as_ref()
+            .is_some_and(|i| !into.starts_with(&i.archive))
+        {
+            self.inside = None;
+        }
         self.cursor = 0;
         self.filter.clear();
         self.marks.clear();
@@ -4785,7 +4184,7 @@ impl View {
             let side = if panes.sidebar == 0 {
                 0
             } else {
-                self.side.shown(self.hidden).len()
+                self.side.shown().len()
             };
             // AND THE PANELS' OWN, when they are on the RIGHT. Down in the
             // strip they take LINES OF THEIR OWN and none of the listing's, so
@@ -4794,7 +4193,7 @@ impl View {
             let panel = if panes.right == 0 {
                 0
             } else {
-                self.panel_lines()
+                self.panels_want()
             };
             self.shown.len().max(side).max(panel).max(1)
         })
@@ -4816,12 +4215,12 @@ impl View {
             let side = if panes.sidebar == 0 {
                 0
             } else {
-                self.side.shown(self.hidden).len()
+                self.side.shown().len()
             };
             let panel = if panes.right == 0 {
                 0
             } else {
-                self.panel_lines()
+                self.panels_want()
             };
             self.shown
                 .len()
@@ -4935,7 +4334,7 @@ impl View {
         }
         let sidebar = sidebar_columns(width, self.sidebar_showing(), self.side_content());
         let beside = width.saturating_sub(if sidebar == 0 { 0 } else { sidebar + RULE });
-        let wanted = u16::from(self.preview_on) + u16::from(self.info_on);
+        let wanted = u16::from(self.panel.preview_on) + u16::from(self.panel.info_on);
         let right = right_columns(beside, wanted > 0, wanted);
         Panes {
             sidebar,
@@ -4953,7 +4352,7 @@ impl View {
                 // It costs the listing four rows, and only for a file that
                 // carries a coordinate: the strip is back to four the moment
                 // the cursor moves to one that does not.
-                if self.info_on && self.wants_a_globe() {
+                if self.panel.info_on && self.wants_a_globe() {
                     ronoctua_tokens::space::FILES_STRIPLINES
                         .max(ronoctua_tokens::space::ATLAS_LINES + 2)
                 } else {
@@ -4962,8 +4361,8 @@ impl View {
             } else {
                 0
             },
-            preview: self.preview_on,
-            info: self.info_on,
+            preview: self.panel.preview_on,
+            info: self.panel.info_on,
             whole: false,
         }
     }
@@ -4977,380 +4376,14 @@ impl View {
     #[cfg(test)]
     #[must_use]
     pub const fn preview_showing(&self) -> bool {
-        self.preview_on
+        self.panel.preview_on
     }
 
     /// Whether the info panel is asked for.
     #[cfg(test)]
     #[must_use]
     pub const fn info_showing(&self) -> bool {
-        self.info_on
-    }
-
-    /// HOW MANY ROWS OF THE FACTS' CONTENT THE GLOBE TAKES, and the ONE place
-    /// that decides.
-    ///
-    /// Zero unless the panel is on, the focused file carries a coordinate and
-    /// this machine has world data — and then `space.atlas.lines`, clamped so
-    /// at least two facts are left. Everything asks it; nothing else decides,
-    /// which is the sentence `Section` opens with.
-    pub fn globe_lines(&self) -> usize {
-        if !self.panes(self.drawn_at.get()).info || !self.wants_a_globe() {
-            return 0;
-        }
-        // AND THE SUBJECT IS ASKED, NEVER THE GLOBE.
-        //
-        // This asked the globe whether it was POINTED for one round, and that
-        // is a deadlock with no symptom: the component is pointed by
-        // `measured_globe`, the door only calls that when `globe_px` hands back
-        // a box, and `globe_px` refuses a box of fewer than two lines. Zero lines reserved → no box →
-        // nobody points it → zero lines for ever. The screen showed a photo
-        // with a coordinate in it and a panel of plain facts, which reads as
-        // the coordinate not being there.
-        //
-        // ITS FULL ASK OR NOTHING, and two facts left over.
-        //
-        // A disc squeezed into the two lines a bottom strip could spare is not
-        // a globe — it is one line of picture under one line of address, which
-        // says less than the coordinate it replaced. `space.atlas.lines` is
-        // what the drawing was measured for; a panel that cannot give that
-        // many shows the facts, the coordinate among them.
-        //
-        // AND THE STRIP GROWS SO THAT IT CAN, which is the other half of this:
-        // see `View::panes`. Without it the window door — where the panels are
-        // a four-line strip until the window is ninety-six cells wide — never
-        // had the room and never drew a globe at all, which is what the owner
-        // photographed.
-        let room = usize::from(self.drawn_lines.get());
-        let want = usize::from(ronoctua_tokens::space::ATLAS_LINES);
-        if room < want + 2 { 0 } else { want }
-    }
-
-    /// THE GLOBE'S ROWS ARE CONTENT, AND THEY SCROLL WITH IT.
-    ///
-    /// # Why they stopped being chrome
-    ///
-    /// They were `Section::above` — the panel's first lines, pinned, the
-    /// arrangement the listing's path and header have. Two things were wrong
-    /// with that and the owner found both.
-    ///
-    /// The first is arithmetic: a pinned band makes the bar's track shorter
-    /// than the panel (`Section::visible`) while the DRAG measured the panel
-    /// (`Room::panel`), so grabbing the thumb over a file with a globe threw it
-    /// far below the hand — *"a barra da scrollbar se desloca imediatamente
-    /// muito abaixo da posição de onde está o cursor"*. With the rows inside
-    /// the scroll there is no `above` to disagree about.
-    ///
-    /// The second is what he asked for next, and it is the better screen: the
-    /// globe costs six of the footer's lines, and pinned it costs them
-    /// for as long as the file is under the cursor. Scrolling gives them back —
-    /// *"ao arrastar a scrollbar ele se move junto liberando espaço para linhas
-    /// de conteúdo"* — which is also what retired `C-g`.
-    ///
-    /// # And the PICTURE shrinks rather than sliding out
-    ///
-    /// Because nothing in this renderer clips: an image drawn half outside its
-    /// panel is drawn over the listing above it, not cut. So what the door is
-    /// given is the rows the globe still HAS — `globe_rows() - offset` — and
-    /// `Area::centre` fits the picture into them. The map gives its lines to
-    /// the facts from the bottom up, and at `offset >= globe_rows()` there is
-    /// no picture to ask a thread for at all.
-    #[must_use]
-    pub fn globe_rows(&self) -> usize {
-        if self.globe_columns() > 0 {
-            return 0;
-        }
-        self.globe_lines()
-    }
-
-    /// Whether this file, on this machine, has a globe to draw at all.
-    ///
-    /// THE SUBJECT AND NOTHING ELSE: what the file carries and whether this
-    /// build has the world table. Both are known before a single line is
-    /// measured, which is what
-    /// lets the LAYOUT ask it — [`View::panes`] grows the strip by it, and a
-    /// predicate that looked at the drawing would be the deadlock this file
-    /// records one function up.
-    ///
-    /// **It does not ask `Globe::absent`.** That is the answer for ONE
-    /// coordinate and it arrives from a thread a frame or two later; a strip
-    /// whose height followed it would change under the hand. When it comes back
-    /// absent the lines stay and the address line says so — which is the same
-    /// arrangement the preview has for a refusal: a refusal is a VALUE.
-    #[must_use]
-    pub fn wants_a_globe(&self) -> bool {
-        self.looked.as_ref().is_some_and(|l| l.at.is_some()) && crate::globe::present()
-    }
-
-    /// How many ROWS of content the panel has room for, which is all its lines.
-    ///
-    /// NOTHING IS SUBTRACTED ANY MORE, and that is the repair: the globe's rows
-    /// scroll with the facts (see [`View::globe_rows`]) and the blank row at the
-    /// end is content too (see [`BLANK`]). A number here that the DRAG did not
-    /// also subtract is the misalignment the owner reported.
-    pub fn info_room(&self) -> usize {
-        usize::from(self.drawn_lines.get())
-    }
-
-    /// The facts' offset, KEPT INSIDE WHAT THERE IS TO SCROLL.
-    ///
-    /// # Why it is clamped when it is read and not when it is written
-    ///
-    /// Because what makes it too big is not a write: it is the GRID changing
-    /// underneath it. `C-W` turns one column of forty rows into three of
-    /// fourteen, and an offset of thirty is then past the end — the owner read
-    /// exactly that off the screen: *"ao arrastar a scrollbar totalmente para
-    /// baixo no modo não expandido, e depois trocar para o modo expandido, todo
-    /// o conteúdo … sobe a ponto de sumir da tela"*.
-    ///
-    /// Clamping on READ also keeps the place: give the region back and the
-    /// stored offset is inside range again, so the sheet is where it was left.
-    fn facts_offset(&self, total: usize) -> usize {
-        self.info_offset
-            .min(total.saturating_sub(self.info_room().max(1)))
-    }
-
-    /// HOW MANY COLUMNS OF `FACT_COLUMN` THE PANEL'S WIDTH HOLDS, at least one.
-    ///
-    /// Measured against the panel's own width and not the content's, for the
-    /// reason `sections_of` writes out about the same cell: `content_room` is a
-    /// cell narrower when there is a scrollbar, and whether there IS one is the
-    /// question this answer decides.
-    fn fits_columns(&self) -> usize {
-        usize::from(self.drawn_info.get() / FACT_COLUMN).max(1)
-    }
-
-    /// HOW MANY COLUMNS THE GLOBE TAKES — one, or none at all.
-    ///
-    /// # Why it is a column there and a band here
-    ///
-    /// Beside the listing the facts are one narrow column, so the only place a
-    /// picture can go is across their top — that is [`View::globe_rows`], and
-    /// those rows SCROLL, which is what gives their lines back.
-    ///
-    /// With the region given away that is the wrong shape twice over: the band
-    /// is as wide as the screen and a disc never grows, so most of it is empty,
-    /// and the facts start a picture's height down the page. The owner
-    /// photographed exactly that — *"há um enorme espaço em branco
-    /// disperdiçado acima das colunas de conteúdo … não há uma coluna com o
-    /// mapa"*. So the globe becomes the FIRST COLUMN, the height of the panel,
-    /// and the facts fill the rest.
-    ///
-    /// **Only where the facts still have a column of their own.** A globe that
-    /// took the one column there was room for would leave the sheet nowhere to
-    /// be, which is a picture winning an argument against the thing it
-    /// annotates.
-    fn globe_columns(&self) -> usize {
-        if self.wide() != Some(Panel::Info) || !self.wants_a_globe() {
-            return 0;
-        }
-        usize::from(self.fits_columns() >= 2)
-    }
-
-    /// THE FACTS' GRID: how many columns the GLOBE takes, how many the FACTS
-    /// take, and how many ROWS that makes them. The ONE place that decides.
-    ///
-    /// `(0, 1, facts + 1)` in the ordinary panel, which is what it has always
-    /// been plus the blank row at the end (see [`BLANK`]). With the region
-    /// given away it becomes a newspaper: the facts fill the first column top
-    /// to bottom and then the next, so a ROW of the panel holds one fact out of
-    /// each column, and the globe — if there is one — has the leftmost column
-    /// to itself.
-    ///
-    /// # Why the columns arrive only with the region
-    ///
-    /// Because a panel beside the listing is already a column of a page, and a
-    /// second column inside it would be a second thing to read past in
-    /// twenty-four cells. The owner asked for the columns as the EXPANDED
-    /// view's own answer — *"ao expandir, todo o conteúdo seja dividido em
-    /// algumas colunas, dentro do espaço disponível"* — and nothing about the
-    /// narrow panel changes because of it.
-    ///
-    /// # Why the count comes from the width AND from the facts
-    ///
-    /// From the width, because that is the requirement in his own words — *"a
-    /// quantidade de colunas depende do tamanho disponível na tela"* — and
-    /// [`FACT_COLUMN`] is what a column is measured against.
-    ///
-    /// And from the facts, because a column nobody fills is white space with a
-    /// ragged edge down it: eight facts in five columns is one fact each and
-    /// four columns of nothing. Never more columns than the facts need in order
-    /// to fit the lines there are.
-    fn grid_of(&self, facts: usize) -> (usize, usize, usize) {
-        // THE BLANK ROW IS ONE OF THE SHEET'S, counted here so that every
-        // caller — the bar, the wheel, the paging key and the painter — gets
-        // the same answer about how far there is to scroll.
-        let all = facts.saturating_add(BLANK);
-        if self.wide() != Some(Panel::Info) {
-            return (0, 1, all);
-        }
-        let globe = self.globe_columns();
-        let lines = self.info_room().max(1);
-        let room = self.fits_columns().saturating_sub(globe).max(1);
-        let columns = room.min(all.div_ceil(lines).max(1));
-        (globe, columns, all.div_ceil(columns))
-    }
-
-    /// The same grid, asked without the sheet in hand.
-    ///
-    /// `sheet()` is remembered but it hands back a CLONE, so the painter —
-    /// which already holds the sheet — asks [`View::grid_of`] instead. This is
-    /// for the keys and the wheel, which arrive with nothing.
-    #[must_use]
-    pub fn info_grid(&self) -> (usize, usize, usize) {
-        self.grid_of(self.sheet().len())
-    }
-
-    /// HOW MANY ROWS OF CONTENT THE FACTS PANEL HAS: the globe's, then the
-    /// grid's. What the bar, the wheel, the paging key and the DRAG all
-    /// measure against, and the one place it is added up.
-    #[must_use]
-    pub fn info_total(&self) -> usize {
-        self.globe_rows().saturating_add(self.info_grid().2)
-    }
-
-    /// WHERE THE GLOBE GOES inside the facts panel: how many LINES it is given
-    /// and how many CELLS wide it is. `None` when there is none to draw.
-    ///
-    /// The one answer both doors ask, because the picture that is DRAWN has to
-    /// be the picture that was MEASURED — and there are two shapes now, the
-    /// band across the panel's top and the column of the expanded sheet.
-    #[must_use]
-    pub fn globe_place(&self) -> Option<(usize, u16, usize)> {
-        if self.globe_columns() > 0 {
-            let (globe, columns, _) = self.info_grid();
-            let wide = u16::try_from(globe + columns).unwrap_or(1).max(1);
-            // THE BAR'S CELL PAID FOR WHETHER OR NOT THERE IS ONE.
-            //
-            // The fields divide `content_room`, which is a cell narrower when
-            // the sheet scrolls; this divides the panel's own width, because
-            // the grid must not be measured against an answer that depends on
-            // it. Taking the cell off here makes the picture's column the
-            // narrower of the two in every case — a cell of air on a picture's
-            // right is invisible, and a cell of overlap is the picture touching
-            // the next column's first letter.
-            return Some((
-                usize::from(self.drawn_lines.get()),
-                self.drawn_info.get().saturating_sub(BAR) / wide,
-                // A COLUMN DOES NOT SCROLL, so none of it has gone.
-                0,
-            ));
-        }
-        // THE ROWS IT STILL HAS, and how many have gone.
-        //
-        // Its band SCROLLS, so `offset` rows of it are off the top — and the
-        // picture keeps its SIZE while they go, because what is cut is the
-        // DRAWING and not the box (`crate::globe::paint`). The owner read the
-        // other answer off the screen: *"o globo vai encolhendo … quero que o
-        // globo mantenha o tamanho"*.
-        let air = self.globe_rows();
-        let gone = self.facts_offset(air.saturating_add(self.info_grid().2));
-        let left = air.saturating_sub(gone);
-        (left > 0).then(|| (left, self.drawn_info.get(), gone.min(air)))
-    }
-
-    /// How many LINES the panels want, when they sit on the right.
-    ///
-    /// The taller of the two, and it is what makes `row_count` and `rows_from`
-    /// agree: a region that reserved lines nothing draws into is blank space
-    /// below the listing, which reads as the manager having lost the rest of
-    /// it. The preview asks for [`preview_lines`] whatever is in it — a picture
-    /// one line tall is not a picture — and the info panel asks for as many
-    /// lines as it has facts.
-    ///
-    /// **Asking is not getting.** The footer's region has a ceiling in lines
-    /// (invariant 14) and a photograph has more facts than that, so what the
-    /// panel is GIVEN is the door's business and can be less than this.
-    /// What says so on screen is [`View::facts_bar`]; before it there was
-    /// nothing, and the facts past the ceiling were simply not there.
-    fn panel_lines(&self) -> usize {
-        // NOTHING UNDER THE CURSOR, NOTHING TO ASK FOR. A query that matches no
-        // file leaves both panels with no subject, and a region that stayed at
-        // its ceiling to hold two empty boxes is a region that stopped
-        // answering the person typing. `leader-vm` is what caught it: typing
-        // `zzz` has to narrow the list, and with the panels on by default it
-        // did not — 288 px before and 288 px after.
-        //
-        // It is the panels' own rule, not an exception to it: they are always
-        // ON, and what they ask for is what they have to say.
-        if self.focused().is_none() {
-            return 0;
-        }
-        // AND WITH THE REGION GIVEN AWAY THE PREVIEW ASKS FOR EVERYTHING.
-        //
-        // `C-w` means "the whole region", so asking for a picture's four lines
-        // would be the key contradicting itself: the footer's region grows to
-        // what its panels ask for, and it stayed four lines tall. The ceiling
-        // still holds (invariant 14) — this is a request, and the door's own
-        // limit in lines is what answers it.
-        if self.whole() {
-            return usize::from(ronoctua_tokens::space::EXPANSION_MAXLINES);
-        }
-        // AND THE PANELS ASK FOR WHAT THEY HAVE TO SAY, which is a picture's
-        // box or a sheet's rows.
-        //
-        // This is what makes the region grow to its ceiling whenever the
-        // manager is open, and that is deliberate rather than a side effect:
-        // the panels are on from the start now, and a panel given four lines
-        // out of a sheet of ten is a panel one has to scroll to read at all.
-        // The ceiling still holds (invariant 14), and `View::facts_bar` is
-        // what says the sheet was cut when even the ceiling is not enough —
-        // which for a photograph it never is.
-        //
-        // The cost is that the region's HEIGHT stops being an answer to what
-        // was typed; `leader-vm` used to read it that way and now reads the
-        // text instead, which is what it was actually asking about.
-        let mut lines = 0usize;
-        if self.preview_on {
-            // A PICTURE'S BOX, OR THE FILE'S OWN LINES.
-            //
-            // Without the second half a markdown file would be given four
-            // lines in the footer — the picture's box — because the sheet
-            // beside it is short. The owner asked to be able to scroll the
-            // preview "to see a good part of the content", and four lines is
-            // not a good part of anything.
-            //
-            // `PANEL_WANT` is a CEILING and it is not decoration: `take` in
-            // this file was once handed `usize::MAX` as a sentinel and
-            // twenty-seven tests grew a `Vec` of two-to-the-sixty-four rows
-            // until the machine's fourteen gibibytes were gone. A number that
-            // leaves this function is a number somebody multiplies.
-            lines =
-                lines.max(usize::from(preview_lines()).max(self.preview_total().min(PANEL_WANT)));
-        }
-        if self.info_on {
-            // AND THE GLOBE'S LINES ON TOP OF THE FACTS', because they do not
-            // share: the globe takes the panel's first lines and the facts get
-            // what is left. Without this the region would grow to the sheet's
-            // height and the globe would push exactly that many facts off the
-            // bottom.
-            //
-            // `globe_lines` asks `drawn_lines`, which is the LAST frame's — so
-            // on the very first frame the globe asks for nothing and the panel
-            // settles a frame later. That is the same one-frame lag `fold`
-            // already has, and for the same reason: what the region can spare
-            // is remembered where it was measured, never asked from inside the
-            // sum (`the-footer-does-not-ask-itself`).
-            // AND THE SUBJECT IS ASKED HERE TOO, for the reason `globe_lines`
-            // writes out: a globe that is only pointed once a box exists can
-            // never ask for the lines that make the box.
-            let mine = if self.wants_a_globe() {
-                usize::from(ronoctua_tokens::space::ATLAS_LINES)
-            } else {
-                0
-            };
-            // AND THE BLANK ROW ON TOP OF BOTH, so a sheet that fits does not
-            // grow a scrollbar for the empty line at the end of it.
-            lines = lines.max(self.sheet().len().saturating_add(mine) + BLANK);
-        }
-        // AND THE TITLE IS A LINE THEY NEED. It does not scroll, so a panel
-        // given exactly as many lines as it has to SAY would push its last row
-        // out and grow a scrollbar for it — a bar about one line, which is the
-        // kind of chrome about nothing the listing's own bar refuses to be.
-        //
-        // Only when there is something to title. Asking for a line here with
-        // both panels off would grow the region for a panel that is not drawn.
-        lines
+        self.panel.info_on
     }
 
     /// THE WAVEFORM'S INK IN A CELL, and there is none.
@@ -5407,7 +4440,7 @@ impl View {
     /// How many cells the widest sidebar row wants.
     fn side_content(&self) -> u16 {
         self.side
-            .shown(self.hidden)
+            .shown()
             .into_iter()
             .flatten()
             .map(side_row_width)
@@ -5428,7 +4461,7 @@ impl View {
     /// the listing loses its columns to hold it.
     #[must_use]
     pub fn sidebar_showing(&self) -> bool {
-        self.side.showing() && self.side.how_many(self.hidden) > 0
+        self.side.showing() && self.side.how_many() > 0
     }
 
     /// Where the path row begins and how many cells it has.
@@ -5780,20 +4813,24 @@ impl View {
             // mark and focus already keep, and for the same reason. Deriving
             // the glyph from `mounted` instead would redraw an internal
             // partition as a stick the moment somebody unmounted it.
-            Target::Device(_) => {
-                if row.removable {
-                    icon::DISK_REMOVABLE
-                } else {
-                    icon::DISK
-                }
-            }
+            // AN ENCRYPTED ONE WEARS ITS LOCK instead: that it is locked is
+            // what decides what pressing it does (it asks for the passphrase).
+            Target::Device(_) => match row.seal {
+                Some(ronoctua_files::sidebar::Seal::Locked) => icon::DEVICE_LOCKED,
+                Some(ronoctua_files::sidebar::Seal::Unlocked) => icon::DEVICE_UNLOCKED,
+                None if row.removable => icon::DISK_REMOVABLE,
+                None => icon::DISK,
+            },
         };
         // An unmounted device is DIM: it is a place one cannot walk into yet.
-        // Everything else is ordinary text, and the cursor is the accent — the
-        // same three tones the listing uses.
+        // So is a QUIET one (udisks' `HintIgnore`: the ESP, a stick's EFI
+        // helper) — listed, last in its block, and in the quiet register, so
+        // it is there for whoever needs it and out of the way of whoever does
+        // not. Everything else is ordinary text, and the cursor is the accent
+        // — the same three tones the listing uses.
         let tone = if focused {
             color::STATE_ACCENT
-        } else if row.mounted == Some(false) {
+        } else if row.mounted == Some(false) || row.quiet {
             color::TEXT_DIM
         } else {
             color::TEXT_SECONDARY
@@ -5865,246 +4902,6 @@ impl View {
         fields
     }
 
-    /// One line of the two panels, wherever they sit.
-    ///
-    /// `n` is the line INSIDE the panels' block: with them on the right it is
-    /// the listing's own line number, and down in the strip it is the strip's.
-    /// The panels do not know which, and that is the point — one builder, two
-    /// places, and no branch that could answer differently in each.
-    fn panel_fields(
-        &self,
-        n: usize,
-        rows: usize,
-        boxes: &[(Panel, u16, u16)],
-        sheet: &[Fact],
-        texts: &ronoctua_i18n::Texts,
-    ) -> Vec<Field> {
-        boxes
-            .iter()
-            .flat_map(|(which, at, room)| match which {
-                Panel::Preview => self.preview_fields(n, rows, *at, *room, texts),
-                Panel::Info => self.info_fields(n, rows, *at, *room, sheet),
-            })
-            .collect()
-    }
-
-    /// The preview panel's line `n`.
-    ///
-    /// **THE PANEL ALWAYS DRAWS SOMETHING.** With a picture the fields are
-    /// BLANK — the texture is not text, and what these carry is the click
-    /// target, so that clicking a picture of a file opens it exactly as
-    /// clicking its name does.
-    ///
-    /// # With no picture it is a SENTENCE, and no longer a glyph
-    ///
-    /// It used to draw the type's icon, big and centred, with the reason under
-    /// it. The owner asked for the icon to go: *"when there is no preview,
-    /// instead of showing an icon it should say, in a very discreet
-    /// formatting, that there is no preview"* — and he is right about what the glyph was doing.
-    /// It said what the file IS, which the listing's own icon column already
-    /// says on the row the cursor is on, and it said it at the size of a
-    /// picture, so an empty panel looked like a panel with something in it.
-    ///
-    /// So: one dim line, and it says the REASON when the tools gave one and
-    /// the plain sentence when they did not. A blank panel and a refused panel
-    /// must not look the same — that is `ronoctua-inspect`'s rule, "refusal is
-    /// a VALUE, not an absence" — and now neither of them is blank.
-    /// The transport's own line: the two buttons, the timeline and the clock.
-    ///
-    /// ```text
-    /// ▶  🔇   ▁▁▁▁▁▁▁●▁▁▁▁▁▁▁▁▁   1:23 / 5:40
-    /// ```
-    ///
-    /// # It is drawn ON the film, and all of it arrives with the pointer
-    ///
-    /// The owner asked for both: *"quero que todos os controles do player
-    /// apareçam por cima do vídeo/gif, de forma a deixar o vídeo/gif ocupando
-    /// toda a altura possível"*, and *"tudo deve sumir e aparecer apenas com o
-    /// hover do mouse sobre QUALQUER parte do elemento de preview"*.
-    ///
-    /// So the picture keeps the whole panel and this row is painted over its
-    /// last line, on a half-transparent band so the glyphs read against a bright
-    /// frame as well as a dark one. And nothing here is drawn unless the
-    /// pointer is somewhere in the preview — the timeline included, which used
-    /// to stay.
-    ///
-    /// The CELLS are still fixed whatever the pointer does. That is not the
-    /// same question: what comes and goes is the ink, and a track that changed
-    /// LENGTH on hover would slide the play cursor out from under the pointer
-    /// in the instant of the click.
-    ///
-    /// The track itself is drawn by the DOOR, as a rectangle, for the reason
-    /// every other bar is: where it is drawn is where it is grabbed, and a row
-    /// of glyphs cannot promise that. What is here is the room it occupies and
-    /// the two things one clicks.
-    fn transport_fields(
-        &self,
-        at: u16,
-        room: u16,
-        time: Option<&ronoctua_design::Scroll>,
-    ) -> Vec<Field> {
-        // A BACKING FIELD FIRST, AND ALWAYS — even with the controls away.
-        //
-        // Without it this row carries nothing, `Row::field_at` answers `None`,
-        // and `View::hit` therefore answers `None` for every point on it. The
-        // consequence is the one the owner ruled out in as many words —
-        // *"inclusive deve se manter em tela com o hover nos próprios
-        // controles"*: reaching for the play glyph would land on a line that
-        // resolves to no section, the pointer would stop being "in the
-        // preview", and the controls would vanish from under the hand going
-        // for them.
-        let mut out = vec![Field {
-            at,
-            text: " ".repeat(usize::from(room)),
-            color: ronoctua_tokens::color::TEXT_PRIMARY,
-            // AND THE TRANSPORT'S BACKING FIELD TOGGLES TOO, so the whole row
-            // answers the way the picture above it does — including the air
-            // between the buttons and the clock.
-            hit: Hit::Play,
-            explain: None,
-            ink: Ink::Grid,
-        }];
-        // AND NOTHING MORE WITHOUT THE POINTER — for a film. The row still
-        // holds the panel's last line either way, so the picture does not move
-        // when they arrive.
-        //
-        // A SOUND KEEPS ITS CONTROLS, which is the owner's word and the reason
-        // this asks `transport_inked` rather than the pointer directly.
-        if !self.transport_inked() {
-            return out;
-        }
-        let at = at.saturating_add(TRANSPORT_LEAD);
-        let holding = self.transport.paused || !self.transport.on;
-        let glyph = |g: char| g.to_string();
-        out.push(Field {
-            at,
-            text: glyph(if holding {
-                ronoctua_tokens::icon::PLAY
-            } else {
-                ronoctua_tokens::icon::PAUSE
-            }),
-            color: ronoctua_tokens::color::TEXT_PRIMARY,
-            hit: Hit::Play,
-            explain: Some(Explanation {
-                key: if holding {
-                    ronoctua_i18n::key::FILES_PLAY_RESUME
-                } else {
-                    ronoctua_i18n::key::FILES_PLAY_HOLD
-                },
-                args: Vec::new(),
-            }),
-            ink: Ink::Grid,
-        });
-        // AND THE SOUND, WHICH A SILENT FILM DOES NOT OFFER. A control that
-        // does nothing where it is drawn is the shape `menu::Applies` exists to
-        // refuse — and here it would also be a lie, because ffmpeg refuses the
-        // whole command when there is no audio stream to fill the output with.
-        if self.has_sound() {
-            out.push(Field {
-                at: at.saturating_add(TRANSPORT_SOUND),
-                text: glyph(if self.transport.sound {
-                    ronoctua_tokens::icon::VOLUME
-                } else {
-                    ronoctua_tokens::icon::VOLUME_OFF
-                }),
-                color: ronoctua_tokens::color::TEXT_PRIMARY,
-                hit: Hit::Sound,
-                explain: Some(Explanation {
-                    key: if self.transport.sound {
-                        ronoctua_i18n::key::FILES_SOUND_OFF
-                    } else {
-                        ronoctua_i18n::key::FILES_SOUND_ON
-                    },
-                    args: Vec::new(),
-                }),
-                ink: Ink::Grid,
-            });
-        }
-        // AND THE CLOCK, at the right-hand end, in the file's own terms. A film
-        // with no length has none, which is the GIF: it loops, and "0:03 / "
-        // with nothing after it says less than nothing.
-        if let Some(time) = time {
-            let said = clock_text(time);
-            let wide = width_of(&said);
-            out.push(Field {
-                at: at
-                    .saturating_add(room)
-                    .saturating_sub(TRANSPORT_LEAD)
-                    .saturating_sub(TRANSPORT_LEAD)
-                    // AND THE BUTTON PAST IT, which is where the owner asked
-                    // for it. `track_px` takes the same cells off the other
-                    // end of the track, so the air stays identical.
-                    .saturating_sub(TRANSPORT_THEATRE)
-                    .saturating_sub(wide),
-                text: said,
-                color: ronoctua_tokens::color::TEXT_PRIMARY,
-                hit: Hit::Nothing,
-                explain: None,
-                ink: Ink::Grid,
-            });
-        }
-        // AND THE EXPAND BUTTON, at the very end of the row.
-        //
-        // WITH THE PLAYER, because that is where the owner put it: *"esse botão
-        // deve aparecer junto com o player à direita da marcação de tempo"*.
-        // Without one it goes in the panel's corner instead — see
-        // `theatre_field`.
-        out.push(
-            self.theatre_field(
-                at.saturating_add(room)
-                    .saturating_sub(TRANSPORT_LEAD)
-                    .saturating_sub(TRANSPORT_LEAD),
-                Panel::Preview,
-            ),
-        );
-        out
-    }
-
-    /// The button that gives a panel the whole region, and gives it back.
-    ///
-    /// One field, drawn in three places — on the transport's row beside the
-    /// clock, in the preview's bottom-right corner when there is no transport,
-    /// and in the facts' bottom-right corner. The GLYPH says which way it goes,
-    /// which is the owner's own requirement: *"um botão de expandir (e de
-    /// reduzir, quando estiver expandindo)"*.
-    ///
-    /// `which` is the panel whose corner this is, and it is carried rather than
-    /// derived: both corners can be on screen at the same moment, and a button
-    /// that only said "expand" would say nothing about what.
-    fn theatre_field(&self, at: u16, which: Panel) -> Field {
-        let wide = self.wide() == Some(which);
-        // THE SENTENCE NAMES THE PANEL, because with two of them "the whole
-        // region" no longer says which thing is about to fill it.
-        let (on, off) = match which {
-            Panel::Preview => (
-                ronoctua_i18n::key::FILES_THEATRE_ON,
-                ronoctua_i18n::key::FILES_THEATRE_OFF,
-            ),
-            Panel::Info => (
-                ronoctua_i18n::key::FILES_FACTS_WIDE_ON,
-                ronoctua_i18n::key::FILES_FACTS_WIDE_OFF,
-            ),
-        };
-        Field {
-            at,
-            text: if wide {
-                ronoctua_tokens::icon::THEATRE_OFF
-            } else {
-                ronoctua_tokens::icon::THEATRE
-            }
-            .to_string(),
-            color: ronoctua_tokens::color::TEXT_PRIMARY,
-            hit: Hit::Theatre(which),
-            // AND IT SAYS WHICH WAY IT GOES on the line above, as every drawn
-            // control in this manager does.
-            explain: Some(Explanation {
-                key: if wide { off } else { on },
-                args: Vec::new(),
-            }),
-            ink: Ink::Grid,
-        }
-    }
-
     /// Whether a hover band belongs on a section at all.
     ///
     /// # A picture has no LINES to light
@@ -6137,891 +4934,6 @@ impl View {
         self.band_belongs(self.panes(width).section_at(cell, width, in_strip))
     }
 
-    /// Whether the transport's controls are on screen right now.
-    ///
-    /// What the doors ask before painting the band, the track and the cursor —
-    /// all three arrive and leave together.
-    #[must_use]
-    pub fn transport_showing(&self) -> bool {
-        self.plays_here() && self.transport_inked()
-    }
-
-    /// Whether the transport's INK is drawn — as opposed to its cells.
-    ///
-    /// # A film's controls come and go, and a sound's never leave
-    ///
-    /// A film's hide with the pointer, which is the owner's decision and what
-    /// keeps the picture whole: the controls sit ON the film, and a band
-    /// across it permanently is chrome across a picture.
-    ///
-    /// A SOUND has nothing under them to uncover — the panel IS the player —
-    /// and the owner asked for them to stay. A player one has to find with the
-    /// mouse before one can stop it is not a player.
-    ///
-    /// The CELLS are reserved either way, by `plays_here`, so the row never
-    /// changes height under a pointer and the track never slides out from
-    /// under a click.
-    fn transport_inked(&self) -> bool {
-        self.sound_here() || self.pointing_at_preview()
-    }
-
-    /// Whether what is under the cursor is a SOUND rather than a picture.
-    fn sound_here(&self) -> bool {
-        self.plays_here()
-            && self.looked.as_ref().is_some_and(|l| {
-                // A LIST IS SOUND BY ANOTHER NAME. Its controls stay for the
-                // same reason a track's do: the panel IS the player, and
-                // there is nothing under them to uncover.
-                l.list.is_some()
-                    || l.moving
-                        .as_ref()
-                        .is_some_and(|m| matches!(m.show, Show::Sound { .. }))
-            })
-    }
-
-    /// Whether the pointer is anywhere in the facts.
-    ///
-    /// ANYWHERE, as the preview's twin below reads it: `View::hit` resolves the
-    /// SECTION first, so resting on a value, on a label or on the air beside
-    /// them all keep the button out.
-    fn pointing_at_info(&self) -> bool {
-        self.pointing.get() == Some(Pane::Info)
-    }
-
-    /// Whether the pointer is anywhere in the preview.
-    ///
-    /// ANYWHERE, which is the owner's word: the picture, the controls, the air
-    /// beside them. `View::hit` resolves the SECTION first, and every line of
-    /// the preview carries a field — so resting on the play glyph keeps the
-    /// controls up exactly as resting on the film does.
-    fn pointing_at_preview(&self) -> bool {
-        self.pointing.get() == Some(Pane::Preview)
-    }
-
-    /// Whether what is under the cursor carries any sound.
-    fn has_sound(&self) -> bool {
-        self.looked.as_ref().is_some_and(|l| {
-            // A LIST NAMES SOUND, and the key that turns it off must be
-            // offered — a control that is not drawn is a key one cannot
-            // discover, which is the argument the silent film's refusal makes
-            // from the other side.
-            l.list.is_some() || l.moving.as_ref().is_some_and(|m| m.shape.sound)
-        })
-    }
-
-    fn preview_fields(
-        &self,
-        n: usize,
-        rows: usize,
-        at: u16,
-        room: u16,
-        texts: &ronoctua_i18n::Texts,
-    ) -> Vec<Field> {
-        let out = self.preview_content(n, rows, at, room, texts);
-        // AND THE EXPAND BUTTON, IN THE CORNER — the two cases without a
-        // player.
-        //
-        // The owner gave both: *"quando não houver player, deve aparecer com o
-        // hover do mouse no canto inferior direito nos casos de conteúdo grande
-        // que ocupe o espaço de todo o preview, e para quando o conteúdo não
-        // for grande, deve aparecer no canto inferior direito do preview mesmo
-        // quando não houver hover do mouse, pois nesse caso não haverá conteúdo
-        // abaixo dele, então ele não cobrirá nada"*.
-        //
-        // So the rule is exactly "does it cover anything?": over content it
-        // waits for the pointer, and over a blank corner it simply stays. With
-        // a player it is not here at all — it rides the transport's row, beside
-        // the clock.
-        // A PANEL WITH NO FILE UNDER THE CURSOR HAS NOTHING TO EXPAND, and
-        // `preview_content` answers with no fields at all there. The guard is
-        // the FILE and not the emptiness of the line: a short sentence leaves
-        // the last line empty too, and that is exactly the case the button is
-        // always drawn in.
-        // THE BUTTON IS NOT PUSHED HERE. It goes on the panel's LAST line,
-        // which this loop cannot see — the transport and the sideways bar are
-        // added after it. See `View::sections_of`.
-        let _ = (n, rows);
-        out
-    }
-
-    /// Whether the preview's last line has something on it already.
-    ///
-    /// A picture, a film and a shape take the whole panel by construction; a
-    /// list, a text and a wrapped refusal reach the last line only when they
-    /// are long enough, and where the panel is scrolled to decides that.
-    fn theatre_covers(&self, rows: usize) -> bool {
-        if self.looking_still()
-            || self
-                .looked
-                .as_ref()
-                .is_some_and(|l| l.rgba.is_some() || l.moving.is_some() || l.turns)
-        {
-            return true;
-        }
-        self.preview_total().saturating_sub(self.preview_offset) >= rows
-    }
-
-    /// The preview's own content, a line at a time.
-    fn preview_content(
-        &self,
-        n: usize,
-        rows: usize,
-        at: u16,
-        room: u16,
-        texts: &ronoctua_i18n::Texts,
-    ) -> Vec<Field> {
-        let Some(entry) = self.focused() else {
-            return Vec::new();
-        };
-        let path = self.where_.join(&entry.name);
-        let looked = self.looked.as_ref().filter(|l| l.path == path);
-        // WHAT A CLICK ON THE PREVIEW DOES, and it is no longer "open it".
-        //
-        // The owner asked for both halves: *"ao clicar com o mouse em qualquer
-        // preview, não quero mais que abra o arquivo; e ao clicar em vídeos ou
-        // gif animado, quero que ocorra um toggle no play/pause"*.
-        //
-        // Opening was the old answer and it was a hazard on a panel one now
-        // points at constantly — the controls only appear under the pointer, so
-        // reaching for them means putting the pointer on the picture, and a
-        // stray click launched the file in another program.
-        let target = if looked.is_some_and(|l| l.moving.is_some()) {
-            Hit::Play
-        } else {
-            Hit::Nothing
-        };
-        // A FIELD OF BLANKS, and not "no field at all". A picture has no text
-        // to hit-test against, and a panel one cannot click would be the mouse
-        // reaching less than the keyboard — the one direction
-        // `files-everything-has-a-key` rules out.
-        //
-        // THREE CASES SHARE IT, and the last two are the owner's report.
-        //
-        // A picture; a file that MOVES, which now has no still at all and whose
-        // frames go over these blanks; and a file still being LOOKED AT. That
-        // third one is *"momentos antes do preview aparecer, é mostrada a
-        // mensagem 'no preview', que é desnecessária, pois há um preview sendo
-        // carregado"* — the answer had not arrived, so the panel fell through
-        // to the sentence for "nothing here", and the sentence was replaced by
-        // a picture a fraction of a second later. An empty panel is the honest
-        // drawing of "not yet".
-        // A SHAPE IS THE FOURTH CASE, and it is the same one as the film: it
-        // has no still either, its views go over these blanks, and without it
-        // the panel falls through to "no preview" — a sentence about a file
-        // that is about to be drawn, which is the very report this arm was
-        // added for.
-        let coming = self.looking_still();
-        if coming || looked.is_some_and(|l| l.rgba.is_some() || l.moving.is_some() || l.turns) {
-            // A SENTENCE OVER THE PICTURE, and only when part of the piece is
-            // not filled.
-            //
-            // A boundary representation is meshed face by face, and one this
-            // reader cannot mesh is drawn as its own outline instead — see
-            // `ronoctua_inspect::mesh::brep`. A piece that comes out part
-            // solid and part wire is a piece somebody should be TOLD about,
-            // and the panel is where they are already looking.
-            //
-            // It goes on the LAST line, and it reads because of the drawing
-            // order the transport band already relies on: rectangles, then
-            // images, then text.
-            let outlined = looked.map_or(0, |l| l.outlined);
-            if outlined > 0 && rows > 0 && n + 1 == rows {
-                // `t_args` AND NOT `t_with`: the sentence has a plural branch,
-                // and Fluent picks one on a NUMBER. A string carries no branch
-                // and would print "1 faces".
-                let said = texts.t_args(
-                    ronoctua_i18n::key::FILES_PREVIEW_OUTLINED,
-                    &[(
-                        "n",
-                        ronoctua_i18n::Arg::Number(i64::try_from(outlined).unwrap_or(i64::MAX)),
-                    )],
-                );
-                let said = ronoctua_render::layout::elide_end(&said, room);
-                return vec![Field {
-                    at: centred(at, room, width_of(&said)),
-                    text: said,
-                    color: ronoctua_tokens::color::TEXT_DIM,
-                    hit: target,
-                    explain: None,
-                    ink: Ink::Grid,
-                }];
-            }
-            return vec![Field {
-                at,
-                text: " ".repeat(usize::from(room)),
-                color: ronoctua_tokens::color::TEXT_PRIMARY,
-                hit: target,
-                explain: None,
-                ink: Ink::Grid,
-            }];
-        }
-        // A LIST OF THINGS TO PLAY, which is a list and not a picture and not
-        // text — `audio/x-mpegurl` descends from `text/plain`, so without this
-        // arm an `.m3u` would be shown as source code with its paths coloured.
-        if let Some(list) = self.showing_list() {
-            let row = n.saturating_add(self.preview_offset);
-            if list.cut && row == list.entries.len() {
-                let said = texts.t_with(
-                    ronoctua_i18n::key::FILES_PREVIEW_CUT,
-                    &[("lines", &list.entries.len().to_string())],
-                );
-                let said = ronoctua_render::layout::elide_end(&said, room);
-                return vec![Field {
-                    at: centred(at, room, width_of(&said)),
-                    text: said,
-                    color: ronoctua_tokens::color::TEXT_DIM,
-                    hit: Hit::Nothing,
-                    explain: None,
-                    ink: Ink::Grid,
-                }];
-            }
-            let Some(entry) = list.entries.get(row) else {
-                return Vec::new();
-            };
-            return self.entry_fields(entry, row, at, room);
-        }
-        // THE FILE'S OWN CONTENT, when there is any. It comes BEFORE the
-        // sentence for the same reason the picture comes before both: a panel
-        // that has something to show shows it.
-        if let Some(t) = self.showing_text() {
-            let row = n.saturating_add(self.preview_offset);
-            // THE LAST ROW SAYS THE FILE GOES ON, and it is only ever seen at
-            // the end of the scroll — which is exactly when it is the true
-            // thing to say. It is a row and not a refusal: a refusal means
-            // there is nothing on screen, and there are two thousand lines.
-            if t.cut && row == t.lines.len() {
-                let said = texts.t_with(
-                    ronoctua_i18n::key::FILES_PREVIEW_CUT,
-                    &[("lines", &t.lines.len().to_string())],
-                );
-                let said = ronoctua_render::layout::elide_end(&said, room);
-                return vec![Field {
-                    at: centred(at, room, width_of(&said)),
-                    text: said,
-                    color: ronoctua_tokens::color::TEXT_DIM,
-                    hit: target,
-                    explain: None,
-                    ink: Ink::Grid,
-                }];
-            }
-            let Some(line) = t.lines.get(row) else {
-                return Vec::new();
-            };
-            return text_fields(line, at, room, self.preview_column, target);
-        }
-        // THE SENTENCE, WRAPPED — and it was one line cut with an ellipsis.
-        //
-        // The owner selected `playlist.asx` and read half a refusal: that
-        // sentence is 71 cells in en-GB and the panel is 24 to 40
-        // (`PANEL_FLOOR`..`PANEL_CEILING`), with four empty rows under it. A
-        // line that does not fit is not a reason to say less — `layout::wrap`
-        // exists and hands back EVERYTHING, so the caller can hang a bar on the
-        // rest, which is what `preview_total` now counts.
-        //
-        // WHOLE-REGION MODE IS UNCHANGED BY CONSTRUCTION: there `room` is the
-        // whole width, every sentence this system has fits on one line, and
-        // `lines.len()` is 1 — so the file's name goes on the row it always
-        // went on.
-        let refused = looked.and_then(|l| l.why.as_ref());
-        let said = match refused {
-            Some(why) => {
-                let args: Vec<(&str, String)> = why.args();
-                let borrowed: Vec<(&str, &str)> =
-                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                texts.t_with(why.key(), &borrowed)
-            }
-            None => texts.t(NO_PREVIEW),
-        };
-        let wrapped = ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING);
-        // AND A REFUSAL IS READ, WHICH IS WHY IT IS NOT CENTRED.
-        //
-        // The owner's words, and he drew the line himself: *"as mensagens de
-        // erro que aparecem no preview, diferente da mensagem 'no preview',
-        // devem ficar alinhadas à esquerda"*. `no preview` is two words and
-        // sits in the middle of an empty panel like a label; a refusal is a
-        // SENTENCE, it wraps over three or four rows of a panel twenty-four
-        // cells wide, and centred wrapped text gives every row a different
-        // left edge — so the eye has to hunt for the start of each one.
-        //
-        // One rule for the whole block, including the file's name underneath
-        // it in whole-region mode: a centred name under a left-aligned
-        // sentence would be two alignments in one paragraph.
-        let start = |what: u16| {
-            if refused.is_some() {
-                at
-            } else {
-                centred(at, room, what)
-            }
-        };
-        // TWO LINES WITH THE WHOLE REGION, and one without.
-        //
-        // The sentence says a preview could not be made; with the region given
-        // over to it, the owner asked for the file to say WHICH file it is —
-        // *"também mostrar o nome completo do arquivo, ou path caso for um
-        // diretório; mas apenas no modo preview largo"*. In the narrow panel
-        // the name is a cell away in the listing; with the listing gone it is
-        // nowhere, and a whole screen saying only "no preview" says nothing.
-        let named = self.wide() == Some(Panel::Preview);
-        if named && n == wrapped.len() {
-            let entry = self.focused();
-            let said = entry.map_or_else(String::new, |e| {
-                // A DIRECTORY IS A PLACE and a file is a name, which is what
-                // the owner distinguished: what identifies a folder is the path
-                // one has walked to it, and what identifies a file is what it
-                // is called.
-                if matches!(e.kind, ronoctua_files::Kind::Directory) {
-                    self.where_.join(&e.name).display().to_string()
-                } else {
-                    e.name.clone()
-                }
-            });
-            if said.is_empty() {
-                return Vec::new();
-            }
-            let said = ronoctua_render::layout::elide_middle(&said, room);
-            return vec![Field {
-                at: start(width_of(&said)),
-                text: said,
-                color: ronoctua_tokens::color::TEXT_SECONDARY,
-                hit: target,
-                explain: None,
-                ink: Ink::Grid,
-            }];
-        }
-        // AND NOTHING PAST THE SENTENCE: a line that does nothing must not look
-        // like a line that does something, which is the rule the blank rows of
-        // a short listing already follow.
-        let Some(text) = wrapped.get(n).cloned() else {
-            return Vec::new();
-        };
-        vec![Field {
-            at: start(width_of(&text)),
-            text,
-            // THE DIMMEST TEXT THERE IS, which is the whole of the "very
-            // discreet formatting" that was asked for: no box, no rule, no
-            // second size. Hierarchy is colour and air (invariant 15).
-            color: ronoctua_tokens::color::TEXT_DIM,
-            hit: target,
-            explain: None,
-            ink: Ink::Grid,
-        }]
-    }
-
-    /// The info panel's line `n`: one fact, label and value.
-    ///
-    /// # Why a row here answers the pointer like a row of the listing
-    ///
-    /// Because it is the same fact about the same file. The panel used to be
-    /// `Hit::Nothing` throughout, on the grounds that "a fact is not something
-    /// one acts on" — and that was true of a date and false of everything the
-    /// listing's own row already lets one change. The owner reported it as
-    /// exactly that asymmetry: the permission letters are clickable in the
-    /// table and dead in the panel that exists to show them.
-    ///
-    /// So the targets come from [`Fact::does`], which is decided once in
-    /// [`View::sheet_of`], and every one of them is a target the LISTING
-    /// already produces — the same `Hit`, the same `confirm_mode`, the same
-    /// picker. There is no second machinery, which is what stops the two
-    /// disagreeing about what clicking a `w` does.
-    ///
-    /// **And what a row cannot offer is not drawn as if it could.** A size is
-    /// not a number one types and a date is not something one edits: those
-    /// stay `Hit::Nothing`, with the `explain` that carries the value
-    /// UN-ELIDED — the row that had to be cut to fit is exactly the row
-    /// somebody wants to read in full, and the message line is where it goes.
-    /// Nothing floats (invariant 14).
-    /// The globe's own rows: its targets, and the address under it.
-    ///
-    /// EVERY LINE CARRIES A FIELD, and one with no text at that. It is not an
-    /// invention: the film's transport row already has a background field for
-    /// exactly this reason — without one `hit` answers `None` over the picture,
-    /// and a control the pointer cannot name is a control that runs away from
-    /// the hand reaching for it.
-    ///
-    /// The LAST line is the address, because that is where the owner asked for
-    /// it: *"abaixo do globo apareça o endereço detectado"*.
-    fn globe_fields(&self, n: usize, air: usize, at: u16, room: u16) -> Vec<Field> {
-        let last = air.saturating_sub(1);
-        if n == last {
-            let globe = self.globe.borrow();
-            let said = globe.address().map_or_else(
-                || {
-                    if globe.absent() {
-                        self.texts.t(ronoctua_i18n::key::ATLAS_ABSENT)
-                    } else {
-                        String::new()
-                    }
-                },
-                |a| crate::globe::said(a, &self.texts),
-            );
-            return vec![Field {
-                at,
-                text: ronoctua_render::layout::elide_end(&said, room),
-                color: ronoctua_tokens::color::TEXT_PRIMARY,
-                // THE ADDRESS IS A DOOR, and the only one on this screen that
-                // goes out of the machine.
-                hit: if said.is_empty() {
-                    Hit::Globe
-                } else {
-                    Hit::GlobeMap
-                },
-                // THE WHOLE OF IT, AND WHAT PRESSING IT DOES — the address is
-                // three names and a comma and the panel is twenty-four cells,
-                // and the same line has to say that this one leaves the
-                // machine. The network view names its two hosts for the same
-                // reason: what goes out is said before it goes.
-                explain: (!said.is_empty()).then(|| mode::Explanation {
-                    key: ronoctua_i18n::key::FILES_EXPLAIN_GLOBE_ADDRESS,
-                    args: vec![("value", said.clone())],
-                }),
-                ink: Ink::Grid,
-            }];
-        }
-        // THE PICTURE'S OWN LINES: no text, a target, and the sentence that
-        // teaches the gesture.
-        //
-        // AND THE CELL THE DOT LANDED IN IS A TARGET OF ITS OWN, because WHERE
-        // A THING IS DRAWN IS WHERE IT IS GRABBED — the rule the scrollbars
-        // keep. The globe's thread reports the dot's pixels with the frame, so
-        // this is one projection answering both "draw it here" and "this is
-        // what was pressed"; a second opinion would be a dot the eye sees in
-        // one place and the hand finds in another.
-        let globe = self.globe.borrow();
-        let cell = ronoctua_tokens::metrics::cell_width(ronoctua_tokens::text::size());
-        let line = ronoctua_tokens::metrics::line_height(ronoctua_tokens::text::size());
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let dot = globe.dot().and_then(|(x, y)| {
-            let row = (y / line) as usize;
-            (row == n).then(|| at.saturating_add((x / cell) as u16))
-        });
-        // A FIELD IS AS WIDE AS ITS TEXT, and these two carry none.
-        //
-        // They were born with `String::new()`, and `Field::covers` is
-        // `cell >= at && cell < at + width_of(text) + 1` — so each of them owned
-        // exactly ONE cell of a picture hundreds of pixels wide. Every symptom
-        // the owner reported is that one line: the drag never started (the
-        // press looks for `Hit::Globe` and found nothing), the wheel scrolled
-        // the facts underneath (the door asks the same hit before it lets the
-        // figure swallow the gesture), and the dot could not be clicked.
-        //
-        // SPACES, and it is not a trick: it is what `transport_fields` already
-        // does for the film's controls, one panel along, for the same reason —
-        // the row has to be nameable everywhere it is DRAWN. Nothing of this
-        // reaches the screen; the picture is painted over it.
-        let mut fields = vec![Field {
-            at,
-            text: " ".repeat(usize::from(room)),
-            color: ronoctua_tokens::color::TEXT_DIM,
-            hit: Hit::Globe,
-            explain: Some(does(ronoctua_i18n::key::FILES_EXPLAIN_GLOBE)),
-            ink: Ink::Grid,
-        }];
-        if let Some(where_) = dot {
-            // AND THE DOT IS GRABBED WHERE IT IS DRAWN, which is a disc and not
-            // a point: `space.atlas.dotRadius` is in tenths of a pixel, so the
-            // target is the cells the halo covers, and never fewer than one.
-            // A one-cell target on a mark that is drawn wider is a mark the eye
-            // finds and the hand misses.
-            let radius = f32::from(ronoctua_tokens::space::ATLAS_DOTRADIUS) / 10.0;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let wide = ((radius * 2.0 / cell).ceil() as u16).max(1);
-            fields.push(Field {
-                at: where_.saturating_sub(wide / 2),
-                text: " ".repeat(usize::from(wide)),
-                color: ronoctua_tokens::color::TEXT_DIM,
-                hit: Hit::GlobeDot,
-                explain: Some(does(ronoctua_i18n::key::FILES_EXPLAIN_GLOBE_DOT)),
-                ink: Ink::Grid,
-            });
-        }
-        fields
-    }
-
-    /// ONE LINE OF THE FACTS PANEL: the globe — as a band's row or as a
-    /// column — one fact out of each of the other columns, and the expand
-    /// button where the line is the last one.
-    ///
-    /// One column in the ordinary panel, several with the region given away —
-    /// [`View::grid_of`] is what says which, and it is the only thing that
-    /// does. The line is a `Row` like any other, so `hit`, the hover band, a
-    /// click and a key all keep going through the machine that already exists.
-    fn info_fields(&self, n: usize, rows: usize, at: u16, room: u16, sheet: &[Fact]) -> Vec<Field> {
-        let (globe, columns, tall) = self.grid_of(sheet.len());
-        let wide = u16::try_from(globe + columns).unwrap_or(1).max(1);
-        let each = room / wide;
-        let mut out = Vec::new();
-        // THE GLOBE'S OWN COLUMN, and it is the same builder the band uses:
-        // one picture, one target, one address line, wherever it is put.
-        if globe > 0 {
-            out.extend(self.globe_fields(n, rows, at, each));
-        }
-        // THE OFFSET IS THE PANEL'S OWN. The listing scrolls with the region
-        // and the facts do not: they are about ONE entry, and there are more
-        // of them than the region has lines. See `View::facts_bar`.
-        let air = self.globe_rows();
-        let row = n.saturating_add(self.facts_offset(air.saturating_add(tall)));
-        if row < air {
-            // A ROW OF THE GLOBE'S BAND, which SCROLLS: it is content, not
-            // chrome. `air - offset` of them are left on screen and they are
-            // the panel's first lines, so the address stays at the picture's
-            // foot as the picture gives its lines back. See `View::globe_rows`.
-            out.extend(self.globe_fields(row, air, at, room));
-        } else {
-            for c in 0..columns {
-                // COLUMN-MAJOR, which is what "divided into columns" means: the
-                // facts fill the first column top to bottom and then the next,
-                // so reading DOWN a column is reading the sheet in its own
-                // order. Row by row would put the second fact beside the first,
-                // and a sheet one reads left to right is a table nobody wrote.
-                //
-                // PAST THE LAST FACT IS THE BLANK ROW, which `sheet.get`
-                // answers `None` for — see [`BLANK`].
-                let k = row - air;
-                let Some(fact) = sheet.get(c.saturating_mul(tall).saturating_add(k)) else {
-                    continue;
-                };
-                let mine = u16::try_from(globe + c).unwrap_or(0).saturating_mul(each);
-                // AND THE LAST COLUMN TAKES WHAT THE DIVISION LEFT OVER, which
-                // is the rule `Panes::boxes` already follows for the panels
-                // themselves: cells left at the right-hand end are cells
-                // nothing draws in, and the owner measured that once already.
-                let span = if c + 1 == columns {
-                    room.saturating_sub(mine)
-                } else {
-                    each
-                };
-                out.extend(self.fact_fields(fact, at.saturating_add(mine), span));
-            }
-        }
-        // AND THE EXPAND BUTTON, IN THE CORNER, on the panel's last line.
-        //
-        // OVER whatever that line holds, which is the rule the preview's own
-        // corner already follows and which the owner set there: a control that
-        // covers content while the hand is on it is a control one can reach,
-        // and scrolled to the end it covers the blank row instead of a fact.
-        //
-        // PUSHED LAST so that `lit_field` — an `rposition` — hands the cell to
-        // it rather than to the value underneath: what the eye sees lit is by
-        // construction what the click takes.
-        // AND NOT HERE EITHER — see `View::sections_of`, which knows which
-        // line is the last one.
-        out
-    }
-
-    /// ONE FACT, in the cells one column of the grid gives it.
-    ///
-    /// Its own function because the arithmetic below is written once and used
-    /// by every column: a label a third of the way across, a value after it,
-    /// and a cell at the end. Two copies of it would be two answers to "where
-    /// does this value start", which is the divergence this file is the record
-    /// of.
-    fn fact_fields(&self, fact: &Fact, at: u16, room: u16) -> Vec<Field> {
-        // THE LABEL IS DIM AND THE VALUE IS NOT — hierarchy by colour, never by
-        // size, which is what the two `nothing_*` rules already ask of every
-        // buffer. The label gets a third of the panel and the value the rest:
-        // the label is looked past and the value is read.
-        let for_label = (room / 3)
-            .max(1)
-            // AND NEVER WIDER THAN A LABEL IS. `space.view.labelCells` is the
-            // column every other list in this system starts its values at, and
-            // it is what the third has to answer to once the panel can be two
-            // hundred cells wide: a third of that is a one-word label sixty-six
-            // cells away from the value it names. In the narrow panel the third
-            // is the smaller of the two and nothing changes.
-            .min(ronoctua_tokens::space::VIEW_LABELCELLS.max(1));
-        let value_at = at.saturating_add(for_label).saturating_add(1);
-        // AND ONE CELL AT THE END IS THE BAR'S, always.
-        //
-        // Reserved whether or not there is one to draw, because a column that
-        // gave a cell back when the last fact was scrolled into view would
-        // re-elide every value on the row underneath it — layout that moves
-        // while one reads is worse than a cell of air. See `View::facts_bar`
-        // for why the bar cannot sit in the surface's own last cell.
-        let for_value = room.saturating_sub(for_label + 2);
-        // THE SENTENCE IS THE ROW'S, and both halves give it.
-        //
-        // The value always explained and the label never did, and the owner
-        // reported the half that was missing: *"às vezes há legendas que não
-        // cabem na linha e são cortadas, porém, nesses casos, ao colocar o
-        // cursor do mouse sobre a legenda e sobre o valor, o texto deles deve
-        // aparecer por completo no minibuffer"*. A label cut to eight cells
-        // and a value cut to sixteen are two halves of ONE fact, and putting
-        // them back together is what this line is for.
-        //
-        // And ALWAYS, unlike the listing's name, which explains only when it
-        // was cut. The two are different kinds of row and the rule follows the
-        // kind: a name sits on a row of seven fields, five of which already
-        // speak, so explaining one that fits spends the line saying what the
-        // eye just read. A panel row is two fields in a column twenty-four
-        // cells wide, where `(room / 3)` cuts nearly every label there is — and
-        // a sentence that appeared and vanished between adjacent rows would
-        // read as a flaky tooltip rather than as a rule.
-        // WHAT THE ROW SAYS, and the row is what decides. A date carries its
-        // own sentence because `label: value` is not the honest answer for one
-        // — the column shows a minute and the question is which second, in
-        // whose time. Everything else takes the generic one.
-        let says = fact.says.clone().unwrap_or_else(|| mode::Explanation {
-            key: FACT_SAYS,
-            args: vec![("label", fact.label.clone()), ("value", fact.value.clone())],
-        });
-        let mut fields = vec![Field {
-            at,
-            text: ronoctua_render::layout::elide_end(&fact.label, for_label),
-            color: ronoctua_tokens::color::TEXT_DIM,
-            hit: Hit::Nothing,
-            explain: Some(says.clone()),
-            ink: Ink::Grid,
-        }];
-        let acted = match fact.does {
-            Doable::Mode => self.mode_fields(value_at, for_value),
-            Doable::Ownership => self.ownership_fields(value_at, for_value, &fact.value),
-            Doable::Measure => self.measure_field(value_at, for_value, &fact.value),
-            Doable::Nothing => Vec::new(),
-        };
-        if acted.is_empty() {
-            fields.push(Field {
-                at: value_at,
-                text: ronoctua_render::layout::elide_end(&fact.value, for_value),
-                color: ronoctua_tokens::color::TEXT_PRIMARY,
-                hit: Hit::Nothing,
-                // THE WHOLE VALUE, for the line that explains. A path of two
-                // hundred characters is exactly the fact one opened the panel
-                // to read, and the panel is twenty-four cells wide.
-                //
-                // THE SAME SENTENCE THE LABEL GIVES, built once above: two
-                // halves of one fact cannot come to answer differently if
-                // there is only one answer.
-                explain: Some(says),
-                ink: Ink::Grid,
-            });
-        } else {
-            fields.extend(acted);
-        }
-        fields
-    }
-
-    /// The permission triplet inside the info panel, one target per character.
-    ///
-    /// The same ten cells the listing's `Perms` column draws, from the same
-    /// `mode::cells`, with the same `Hit`s and the same sentences — and then
-    /// the octal, which is not a target because there is nothing to flip in
-    /// it. Anything past `room` is DROPPED rather than drawn: nothing leaks
-    /// off the screen, which is the one rule that never gives way.
-    fn mode_fields(&self, at: u16, room: u16) -> Vec<Field> {
-        let Some(entry) = self.focused() else {
-            return Vec::new();
-        };
-        let owner = self
-            .roster
-            .person(entry.uid)
-            .map_or_else(|| entry.uid.to_string(), ToOwned::to_owned);
-        let group = self
-            .roster
-            .group(entry.gid)
-            .map_or_else(|| entry.gid.to_string(), ToOwned::to_owned);
-        let n = self.cursor;
-        let mut fields = Vec::new();
-        for (k, cell) in mode::cells(entry.mode).into_iter().enumerate() {
-            let Ok(k) = u16::try_from(k) else { break };
-            if k >= room {
-                break;
-            }
-            let hit = match (cell.special, cell.segment) {
-                (Some(s), _) => Hit::Special(n, s),
-                (None, mode::Segment::Bit(who, what)) => Hit::Bit(n, who, what),
-                (None, mode::Segment::Kind) => Hit::Nothing,
-            };
-            fields.push(Field {
-                at: at + k,
-                text: cell.letter.to_string(),
-                color: if cell.set {
-                    ronoctua_tokens::color::TEXT_PRIMARY
-                } else {
-                    ronoctua_tokens::color::TEXT_DIM
-                },
-                hit,
-                explain: Some(mode::explain(cell, entry.mode, &owner, &group)),
-                ink: Ink::Grid,
-            });
-        }
-        // THE OCTAL, when there is room for it whole. Half of `(0644)` is not
-        // a mode, and a mode read wrong is worse than one not shown.
-        let number = mode::octal(entry.mode);
-        let octal = format!("({number})");
-        let used = u16::try_from(fields.len()).unwrap_or(room);
-        let left = room.saturating_sub(used + 1);
-        if left >= width_of(&octal) {
-            let start = at + used + 1;
-            // EACH DIGIT IS ITS OWN FIELD, and the brackets are punctuation.
-            //
-            // The number was ONE field with ONE sentence saying what the form
-            // is — "one digit for the owner, one for the group, one for
-            // everybody else" — which is a definition of octal and not an
-            // answer about THIS file. The owner pointed at the digits and got
-            // it: *"o minibuffer está mostrando uma explicação genérica, em vez
-            // de explicar para cada número, o que o número representa"*.
-            //
-            // Ten letters each explain themselves; there is no reason three
-            // digits should not. What each one says is whose part of the number
-            // it is and what that value permits — which is the SAME question
-            // the letters answer, asked three characters at a time.
-            //
-            // The brackets keep the general sentence: pointing at the shape
-            // still says what the shape is.
-            let whole = Explanation {
-                key: ronoctua_i18n::key::FILES_EXPLAIN_OCTAL,
-                args: vec![("octal", number.clone())],
-            };
-            fields.push(Field {
-                at: start,
-                text: "(".to_owned(),
-                color: ronoctua_tokens::color::TEXT_DIM,
-                hit: Hit::Nothing,
-                explain: Some(whole.clone()),
-                ink: Ink::Grid,
-            });
-            let kind = mode::kind_word(entry.kind);
-            for (i, digit) in number.chars().enumerate() {
-                let Ok(k) = u16::try_from(i) else { break };
-                let part = mode::part_of(number.chars().count(), i);
-                // THE VERBS ARE RESOLVED HERE, because this is where the texts
-                // are: `mode` is the FILE half and knows no language. The
-                // fragment goes in as an argument, which is what the address
-                // under the globe already does with a name.
-                // THE VALUE GOES IN AS A NUMBER, and that is not a detail:
-                // a Fluent selector matches `[6]` against a NUMBER, and a
-                // string argument falls through to the default branch. Every
-                // digit said `can read, change and run it` — the `*[7]` — and
-                // the test that printed the three lines is what showed it.
-                // `AGENTS.md` records the same trap on the months.
-                let can = self.texts.t_args(
-                    ronoctua_i18n::key::FILES_OCTAL_CAN,
-                    &[
-                        ("kind", ronoctua_i18n::Arg::Text(kind)),
-                        (
-                            "bits",
-                            ronoctua_i18n::Arg::Number(i64::from(digit.to_digit(8).unwrap_or(0))),
-                        ),
-                    ],
-                );
-                fields.push(Field {
-                    at: start + 1 + k,
-                    text: digit.to_string(),
-                    color: ronoctua_tokens::color::TEXT_DIM,
-                    // NOTHING TO CLICK — there is no bit in a number to turn,
-                    // and a target that lights and then refuses is worse than
-                    // one that never promised (`menu::Applies`, one register
-                    // down).
-                    hit: Hit::Nothing,
-                    explain: Some(Explanation {
-                        key: ronoctua_i18n::key::FILES_EXPLAIN_OCTAL_DIGIT,
-                        args: vec![
-                            ("part", part.word().to_owned()),
-                            ("digit", digit.to_string()),
-                            ("octal", number.clone()),
-                            (
-                                "name",
-                                match part {
-                                    mode::Part::Group => group.clone(),
-                                    _ => owner.clone(),
-                                },
-                            ),
-                            ("can", can),
-                        ],
-                    }),
-                    ink: Ink::Grid,
-                });
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            let after = start + 1 + number.chars().count() as u16;
-            fields.push(Field {
-                at: after,
-                text: ")".to_owned(),
-                color: ronoctua_tokens::color::TEXT_DIM,
-                hit: Hit::Nothing,
-                explain: Some(whole),
-                ink: Ink::Grid,
-            });
-        }
-        fields
-    }
-
-    /// `owner:group` inside the info panel, as two targets and a colon.
-    ///
-    /// The colon is `Hit::Nothing` on purpose: it is punctuation between two
-    /// answers, and a click on it could only guess which of the two was meant.
-    fn ownership_fields(&self, at: u16, room: u16, value: &str) -> Vec<Field> {
-        let Some((owner, group)) = value.split_once(':') else {
-            return Vec::new();
-        };
-        let n = self.cursor;
-        let mut fields = Vec::new();
-        let mut used = 0u16;
-        let mut put = |text: String, hit: Hit, explain: Option<Explanation>, dim: bool| {
-            let left = room.saturating_sub(used);
-            if left == 0 {
-                return;
-            }
-            let text = ronoctua_render::layout::elide_end(&text, left);
-            let width = width_of(&text);
-            fields.push(Field {
-                at: at + used,
-                text,
-                color: if dim {
-                    ronoctua_tokens::color::TEXT_DIM
-                } else {
-                    ronoctua_tokens::color::TEXT_PRIMARY
-                },
-                hit,
-                explain,
-                ink: Ink::Grid,
-            });
-            used += width;
-        };
-        put(
-            owner.to_owned(),
-            Hit::Owner(n),
-            Some(Explanation {
-                key: ronoctua_i18n::key::FILES_EXPLAIN_OWNER,
-                args: vec![("who", owner.to_owned())],
-            }),
-            false,
-        );
-        put(":".to_owned(), Hit::Nothing, None, true);
-        put(
-            group.to_owned(),
-            Hit::Group(n),
-            Some(Explanation {
-                key: ronoctua_i18n::key::FILES_EXPLAIN_GROUP,
-                args: vec![("who", group.to_owned())],
-            }),
-            false,
-        );
-        fields
-    }
-
-    /// A DIRECTORY's size inside the info panel: the same walk `TAB` asks for.
-    ///
-    /// Only a directory gets one, and that is decided in [`View::sheet_of`]. A
-    /// file's size is a fact the kernel already knows and nothing can change
-    /// from here — so it is drawn, and it is not a target.
-    fn measure_field(&self, at: u16, room: u16, value: &str) -> Vec<Field> {
-        let Some(entry) = self.focused() else {
-            return Vec::new();
-        };
-        vec![Field {
-            at,
-            text: ronoctua_render::layout::elide_end(value, room),
-            color: ronoctua_tokens::color::TEXT_PRIMARY,
-            hit: Hit::Measure(self.cursor),
-            explain: Some(Explanation {
-                key: ronoctua_i18n::key::FILES_EXPLAIN_MEASURE,
-                args: vec![("bytes", entry.bytes.to_string())],
-            }),
-            ink: Ink::Grid,
-        }]
-    }
-
     /// The panels' own lines, when they sit in the STRIP along the bottom.
     ///
     /// A separate list and not more rows of the listing, because the strip does
@@ -7042,10 +4954,16 @@ impl View {
         // `sections()`, so the row's anchor has to be decided here too — it is
         // the same row, reached by the other door's own arithmetic.
         let last = usize::from(panes.strip).saturating_sub(1);
-        let transport = self.plays_here();
+        let transport = self.panel().plays_here();
         (0..usize::from(panes.strip))
             .map(|n| Row {
-                fields: self.panel_fields(n, usize::from(panes.strip), &boxes, &sheet, texts),
+                fields: self.panel().panel_fields(
+                    n,
+                    usize::from(panes.strip),
+                    &boxes,
+                    &sheet,
+                    texts,
+                ),
                 marked: false,
                 foot: transport && n == last,
                 focused: false,
@@ -7065,6 +4983,14 @@ impl View {
             .clone()
             .unwrap_or_else(|| String::from(ronoctua_i18n::key::FILES_SIDEBAR_TRASH));
         let key = match (&row.target, row.mounted) {
+            // AN ENCRYPTED DISK SAYS WHICH IT IS: locked, it asks for its
+            // passphrase before it mounts; open, ejecting locks it again.
+            (Target::Device(_), _) if row.seal == Some(ronoctua_files::sidebar::Seal::Locked) => {
+                ronoctua_i18n::key::FILES_ENCRYPTED_LOCKED
+            }
+            (Target::Device(_), _) if row.seal == Some(ronoctua_files::sidebar::Seal::Unlocked) => {
+                ronoctua_i18n::key::FILES_ENCRYPTED_UNLOCKED
+            }
             // AN UNMOUNTED DEVICE SAYS SO, and a mounted one does not — the one
             // difference a person has to know before pressing the key, because
             // one of the two takes a moment and asks the system for something.
@@ -7195,7 +5121,7 @@ impl View {
                 mime,
                 key,
                 wave: wave.clone(),
-                paint: Self::paint_of(),
+                paint: crate::inspection::Panel::paint_of(),
                 tint: tint.clone(),
             });
         }
@@ -7861,9 +5787,9 @@ impl View {
             // `layout::wrap` breaks a word that has no spaces in it by CLUSTER,
             // which is what a filename is.
             let shown = match (&entry.target, entry.broken()) {
-                (Some(t), false) => format!("{} → {t}", entry.name),
-                (Some(t), true) => format!("{} ⇢ {t}", entry.name),
-                (None, _) => entry.name.clone(),
+                (Some(t), false) => format!("{} → {t}", entry.shown()),
+                (Some(t), true) => format!("{} ⇢ {t}", entry.shown()),
+                (None, _) => entry.shown().to_owned(),
             };
             // AND AT THE SMALLEST STEP IT IS DRAWN SMALLER. Six cells is six
             // characters of a filename at the body size and half as many again
@@ -7998,9 +5924,9 @@ impl View {
                     // A symlink says where it goes, because that is the one
                     // thing about it a listing cannot leave out.
                     let shown = match (&entry.target, entry.broken()) {
-                        (Some(t), false) => format!("{} → {t}", entry.name),
-                        (Some(t), true) => format!("{} ⇢ {t}", entry.name),
-                        (None, _) => entry.name.clone(),
+                        (Some(t), false) => format!("{} → {t}", entry.shown()),
+                        (Some(t), true) => format!("{} ⇢ {t}", entry.shown()),
+                        (None, _) => entry.shown().to_owned(),
                     };
                     // THE WIDTH IS WRITTEN DOWN, because a KEY arrives without
                     // one and "does this name fit?" is asked the moment the
@@ -8047,7 +5973,7 @@ impl View {
                     // `surface.selection` is gated).
                     match (
                         walking,
-                        crate::minibuffer::match_up(&self.filter, &entry.name),
+                        crate::minibuffer::match_up(&self.filter, entry.shown()),
                     ) {
                         (false, Some((_, positions))) if !self.filter.is_empty() => {
                             fields.extend(crate::chrome::lit_letters(&name, &positions, false));
@@ -8220,6 +6146,7 @@ impl View {
             of_type,
             !self.clip.paths.is_empty(),
             self.in_trash(),
+            self.in_archive(),
         );
         // WHO THE MENU IS ABOUT, on its first line.
         //
@@ -8231,7 +6158,7 @@ impl View {
         let target = if self.marks.is_empty() {
             texts.t_with(
                 ronoctua_i18n::key::FILES_MENU_ON,
-                &[("name", entry.name.as_str())],
+                &[("name", entry.shown())],
             )
         } else {
             texts.t_with(
@@ -8349,6 +6276,21 @@ impl View {
                     |p| p.to_string_lossy().into_owned(),
                 ),
             );
+            // AN ENCRYPTED DISK SAYS WHICH IT IS, locked or open, before any
+            // row is pressed.
+            if let Some(seal) = row.seal {
+                fact(
+                    ronoctua_i18n::key::FILES_ENCRYPTED_FACT,
+                    texts.t(match seal {
+                        ronoctua_files::sidebar::Seal::Locked => {
+                            ronoctua_i18n::key::FILES_ENCRYPTED_FACT_LOCKED
+                        }
+                        ronoctua_files::sidebar::Seal::Unlocked => {
+                            ronoctua_i18n::key::FILES_ENCRYPTED_FACT_UNLOCKED
+                        }
+                    }),
+                );
+            }
             // WHY IT CANNOT BE FORMATTED OR UNMOUNTED, said here rather than
             // left to be guessed from rows that are missing. A list that is
             // shorter for an unstated reason is a list nobody trusts.
@@ -8423,6 +6365,7 @@ impl View {
             of_type,
             !self.clip.paths.is_empty(),
             self.in_trash(),
+            self.in_archive(),
         )
         .get(chosen)
         .map(|a| does(a.does))
@@ -8434,10 +6377,9 @@ impl View {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| self.hidden || !e.hidden())
             .filter(|(_, e)| {
                 self.filter.is_empty()
-                    || crate::minibuffer::match_up(&self.filter, &e.name).is_some()
+                    || crate::minibuffer::match_up(&self.filter, e.shown()).is_some()
             })
             .map(|(i, _)| i)
             .collect();
@@ -8609,12 +6551,39 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         // leaves with a write half done — so this unmounts, and powers off only
         // when that came back clean. A refusal on either half is reported as
         // itself.
-        Doing::Eject(id) => {
+        //
+        // AND AN ENCRYPTED DISK IS LOCKED BETWEEN THE TWO: what came out of it
+        // is unmounted, the container locked, and only then the power cut —
+        // `Manager::put_away`, which finds the DRIVE through the volume (the
+        // volume's own path is a block, not a drive).
+        Doing::Eject(id, left) => {
             let sender = sender.clone();
-            raise("ejetar", move || {
+            raise("eject", move || {
+                let result = ronoctua_disks::Manager::fresh()
+                    .map_err(|e| Report::Failed(e.to_string()))
+                    .and_then(|m| {
+                        m.put_away(&id, false).map_err(|e| {
+                            Report::Refused(ronoctua_disks::refusal(&e), e.to_string())
+                        })
+                    });
+                for report in unmounted(result, left) {
+                    let _ = sender.send(report);
+                }
+            });
+            Errand::Done
+        }
+        // LOCKING AGAIN, the power left on: the same walk as ejecting, stopped
+        // before the drive — and SAID when it is done, because a row that
+        // loses its padlock's open half is easy to miss.
+        Doing::Lock { device, name } => {
+            let sender = sender.clone();
+            raise("lock", move || {
                 let report = match ronoctua_disks::Manager::fresh() {
-                    Ok(m) => match m.unmount(&id).and_then(|()| m.power_off(&id)) {
-                        Ok(()) => Report::Done,
+                    Ok(m) => match m.put_away(&device, true) {
+                        Ok(()) => Report::Said(Explanation {
+                            key: ronoctua_i18n::key::FILES_UNLOCK_LOCKED,
+                            args: vec![("name", name)],
+                        }),
                         Err(e) => Report::Refused(ronoctua_disks::refusal(&e), e.to_string()),
                     },
                     Err(e) => Report::Failed(e.to_string()),
@@ -8623,17 +6592,63 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             });
             Errand::Done
         }
+        // UNLOCKING, AND THEN WHAT MOUNTING DOES: the passphrase goes into the
+        // bus call and nowhere else, and what comes out is mounted and gone
+        // into. A passphrase that does not open it comes back by name
+        // (`Refusal::WrongPassphrase`).
+        Doing::Unlock {
+            device,
+            passphrase,
+            name,
+        } => {
+            let sender = sender.clone();
+            let working = name.clone();
+            raise("unlock", move || {
+                let report = match ronoctua_disks::Manager::fresh() {
+                    Ok(m) => match m.unlock(&device, &passphrase) {
+                        // THE TWO HALVES SAY DIFFERENT THINGS. Unlocked and
+                        // not mounted is a MOUNT's refusal, said as mounting
+                        // says it; not unlocked is the passphrase's by name,
+                        // the administrator's by name, and anything else this
+                        // disk's own sentence, with udisks' words after it.
+                        Ok(clear) => match m.mount(&clear) {
+                            Ok(at) => Report::Mounted(std::path::PathBuf::from(at)),
+                            Err(e) => Report::Refused(ronoctua_disks::refusal(&e), e.to_string()),
+                        },
+                        Err(e) => match ronoctua_disks::refusal(&e) {
+                            ronoctua_disks::Refusal::Other => Report::Said(Explanation {
+                                key: ronoctua_i18n::key::FILES_UNLOCK_FAILED,
+                                args: vec![("name", name), ("why", e.to_string())],
+                            }),
+                            which => Report::Refused(which, e.to_string()),
+                        },
+                    },
+                    Err(e) => Report::Failed(e.to_string()),
+                };
+                drop(passphrase);
+                let _ = sender.send(report);
+            });
+            Errand::Say(Explanation {
+                key: ronoctua_i18n::key::FILES_UNLOCK_WORKING,
+                args: vec![("name", working)],
+            })
+        }
         // THE DOOR'S BUSINESS, like the other four that start a process: it
         // opens the formatting buffer with the volume as its argument.
         Doing::Format(_) => Errand::Done,
-        Doing::Unmount(id) => {
+        // AND THE HISTORY: a view in the footer, a window from the window.
+        Doing::History(_) => Errand::Done,
+        // AND THE SECURITY CENTRE'S WINDOW, with the file to check.
+        Doing::VirusTotal(_) => Errand::Done,
+        Doing::Unmount(id, left) => {
             let sender = sender.clone();
             raise("unmount", move || {
-                let report = match ronoctua_disks::Manager::fresh().and_then(|m| m.unmount(&id)) {
-                    Ok(()) => Report::Done,
-                    Err(e) => Report::Refused(ronoctua_disks::refusal(&e), e.to_string()),
-                };
-                let _ = sender.send(report);
+                let result = ronoctua_disks::Manager::fresh()
+                    .and_then(|m| m.unmount(&id))
+                    .map_err(|e| Report::Refused(ronoctua_disks::refusal(&e), e.to_string()));
+                for report in unmounted(result, left) {
+                    let _ = sender.send(report);
+                }
             });
             Errand::Done
         }
@@ -8645,88 +6660,41 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         // changed, with one message about one file — and no way to tell which
         // half. Stopping names the one that refused and leaves the rest as it
         // was, which is a state one can act on.
-        Doing::Mode(paths, mode) => said(
-            paths
-                .iter()
-                .try_for_each(|p| ronoctua_files::act::chmod(p, mode)),
+        //
+        // AND WHAT THE KERNEL REFUSES FOR WANT OF PRIVILEGE — the permissions
+        // of a file somebody else owns, a group one is not in — goes on
+        // through the SUDO DOOR, from the path that was refused.
+        Doing::Mode(paths, mode) => kernel_or_root(
+            paths,
+            |p| ronoctua_files::act::chmod(p, mode),
+            ronoctua_files::act::Verb::Chmod,
+            format!("{mode:o}"),
+            sender,
         ),
-        Doing::Group(paths, gid) => said(
-            paths
-                .iter()
-                .try_for_each(|p| ronoctua_files::act::chgrp(p, gid)),
+        Doing::Group(paths, gid) => kernel_or_root(
+            paths,
+            |p| ronoctua_files::act::chgrp(p, gid),
+            ronoctua_files::act::Verb::Chgrp,
+            gid.to_string(),
+            sender,
         ),
         // THE ONE THAT NEEDS ROOT. Written into a directory this user owns and
         // handed to a unit that VALIDATES before acting — the same shape
         // `ronoctua_rescue::edit` uses for `host.nix`.
-        Doing::Owner(paths, uid) => {
-            // THE WHOLE SET, one staged request at a time.
-            //
-            // The unit installs ONE request — that is what lets its name be
-            // fixed and the polkit rule name it — so the set means starting it
-            // once per path. polkit's `auth_self_keep` is what keeps that from
-            // being one password per file.
-            //
-            // On the thread, because `systemctl start` on a system unit blocks
-            // until the oneshot finishes and polkit may be asking a password in
-            // the middle of it. In the loop that draws, that is a frozen screen
-            // for as long as somebody takes to type.
-            let Some(systemctl) = option_env!("RONOCTUA_SYSTEMCTL") else {
-                return Errand::Say(Explanation {
-                    key: ronoctua_i18n::key::FILES_NO_SYSTEMCTL,
-                    args: Vec::new(),
-                });
-            };
-            // AND THE PLACE THE REQUEST IS WRITTEN HAS TO EXIST — asked HERE,
-            // not discovered in the thread.
-            //
-            // `/run/ronoctua-files/` is a `RuntimeDirectory` of the unit that
-            // `nix/modules/files.nix` installs, so on a machine that is not
-            // running this distro — the nested loop, above all, where most of
-            // the work happens — it is simply not there. What came out of the
-            // thread then was `create /run/ronoctua-files/staged: Permission
-            // denied`, three seconds on the message line, and a report of
-            // "changing the owner did nothing".
-            //
-            // Answering before starting turns that into a sentence that says
-            // WHY, and it says it synchronously, which is the difference
-            // between a message and a message somebody has to catch.
-            if !std::path::Path::new(ronoctua_files::act::STAGING)
-                .parent()
-                .is_some_and(std::path::Path::is_dir)
-            {
-                return Errand::Say(Explanation {
-                    key: ronoctua_i18n::key::FILES_NO_ROOT_HELPER,
-                    args: Vec::new(),
-                });
-            }
-            let systemctl = systemctl.to_owned();
-            in_a_thread(sender, "chown", move || {
-                let staging = std::path::PathBuf::from(ronoctua_files::act::STAGING);
-                for path in paths {
-                    ronoctua_files::act::Staged {
-                        verb: ronoctua_files::act::Verb::Chown,
-                        path,
-                        value: uid.to_string(),
-                    }
-                    .write_into(&staging)?;
-                    let out = std::process::Command::new(&systemctl)
-                        .arg("start")
-                        .arg(ronoctua_files::act::UNIT)
-                        .output()?;
-                    // THE FIRST REFUSAL STOPS THE REST, for the reason the
-                    // syscalls above give: a set half changed with one message
-                    // about one file is a state nobody can act on.
-                    if !out.status.success() {
-                        return Err(anyhow::anyhow!(
-                            "{}",
-                            String::from_utf8_lossy(&out.stderr).trim().to_owned()
-                        ));
-                    }
-                }
-                Ok(())
-            });
-            Errand::Done
-        }
+        Doing::Owner(paths, uid) => as_root(
+            Root {
+                verb: ronoctua_files::act::Verb::Chown,
+                paths,
+                value: uid.to_string(),
+            },
+            ronoctua_security::authority::Proof::Cached,
+            sender,
+        ),
+        Doing::RootProved(change, secret) => as_root(
+            change,
+            ronoctua_security::authority::Proof::Typed(secret),
+            sender,
+        ),
         // UNBOUNDED, EVERY ONE OF THEM — and they no longer go to a thread of
         // this process. They go to the QUEUE.
         //
@@ -8748,8 +6716,51 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         //
         // What comes back is not a `Report` any more — it is the list, through
         // the watching thread, which is the only thing that has to be right.
-        Doing::Trash(root, paths) => queued(Work::Trash { root, paths }),
-        Doing::Restore(root, names) => queued(Work::Restore { root, names }),
+        // A VOLUME'S OWN TRASH SAYS SO: the file goes back ONTO the stick, and
+        // its space is not free until that trash lets it go — the one cost of
+        // a removable drive's trash, said where the person is looking. Said
+        // as WHERE IT IS GOING, because it is said when the job is queued:
+        // whether the move then happened is the queue's list to say (a
+        // read-only stick fails there, by name), and "moved" here would be a
+        // claim about work not yet done.
+        Doing::Trash(root, paths) => {
+            let volume = ronoctua_files::trash::Bin::at(root.clone()).top();
+            match queued(Work::Trash { root, paths }) {
+                Errand::Done => volume.map_or(Errand::Done, |top| {
+                    Errand::Say(Explanation {
+                        key: ronoctua_i18n::key::FILES_TRASH_ON_VOLUME,
+                        args: vec![(
+                            "volume",
+                            top.file_name()
+                                .map_or_else(|| top.to_string_lossy(), |n| n.to_string_lossy())
+                                .into_owned(),
+                        )],
+                    })
+                }),
+                said => said,
+            }
+        }
+        Doing::Restore(bins) => {
+            for (root, names) in bins {
+                if let Errand::Say(e) = queued(Work::Restore { root, names }) {
+                    return Errand::Say(e);
+                }
+            }
+            Errand::Done
+        }
+        // ONE SYSCALL, answered now, like the permission.
+        Doing::Modified(path, secs) => said(ronoctua_files::act::set_modified(&path, secs)),
+        // THE FACTS' WRITERS, each on a thread of its own: the tag program and
+        // exiftool are children, and a remux is a copy's worth of time.
+        Doing::Tag(path, stamp, edits) => amended(sender, move || {
+            crate::inspection_edit::write_tags(&path, stamp, &edits)
+        }),
+        Doing::Meta(path, holder, meta, value) => amended(sender, move || {
+            crate::inspection_edit::write_detail(&path, holder, meta, &value)
+        }),
+        Doing::RemoveLocation(paths, copies) => amended(sender, move || {
+            crate::inspection_edit::remove_locations(&paths, copies)
+        }),
         Doing::Delete(paths) => queued(Work::Delete { paths }),
         Doing::Shred(paths) => queued(Work::Shred { paths }),
         Doing::Paste(into) => queued(Work::Paste {
@@ -8760,35 +6771,10 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         // THE SAME ENGINE, and the paths come from the DROP instead of from
         // the clipboard — see `Doing::Drop`.
         Doing::Drop { paths, into, moves } => queued(Work::Paste { paths, into, moves }),
-        Doing::Compress(paths, extension) => {
-            let Some(first) = paths.first().cloned() else {
-                return Errand::Done;
-            };
-            let Some(directory) = first.parent().map(Path::to_path_buf) else {
-                return Errand::Done;
-            };
-            let names: Vec<String> = paths
-                .iter()
-                .filter_map(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .collect();
-            let stem = first
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "file".to_owned());
-            let archive = directory.join(format!("{stem}.{extension}"));
-            queued(Work::Compress {
-                directory,
-                names,
-                archive,
-            })
-        }
-        Doing::Extract(archive) => {
-            let Some(into) = archive.parent().map(Path::to_path_buf) else {
-                return Errand::Done;
-            };
-            queued(Work::Extract { archive, into })
-        }
+        // AN ARCHIVE'S: a thread for a program, the queue for a job — see
+        // `crate::files_archive`, which writes a password into the job's
+        // `0600` file on the way.
+        Doing::Archive(doing) => crate::files_archive::carry_out(doing, sender),
         // THE WALK. It is in the queue for the same reason as the rest: it is
         // unbounded, and it was the one operation somebody watches the screen
         // during with nothing to watch. The answer comes back in the list —
@@ -8838,6 +6824,39 @@ fn queued(work: Work) -> Errand {
     }
 }
 
+/// A writer of the facts, on a named thread, reporting what it did.
+fn amended(
+    sender: &calloop::channel::Sender<Report>,
+    work: impl FnOnce() -> crate::inspection_edit::Amended + Send + 'static,
+) -> Errand {
+    let sender = sender.clone();
+    raise("amend", move || {
+        let _ = sender.send(Report::Amended(work()));
+    });
+    Errand::Done
+}
+
+/// What an unmount (or an eject) reports once udisks has answered: the
+/// refusal alone, or `Done` — and then, when the volume's own trash still
+/// held files, the sentence that their space stays taken on it.
+///
+/// SAID AFTER THE ANSWER and not beside the request: "STICK left with files
+/// in its trash" in front of "the device is busy" would be a sentence about
+/// a stick that did not leave.
+fn unmounted(result: Result<(), Report>, left: Option<(String, usize)>) -> Vec<Report> {
+    match result {
+        Err(refused) => vec![refused],
+        Ok(()) => std::iter::once(Report::Done)
+            .chain(left.map(|(volume, n)| {
+                Report::Said(Explanation {
+                    key: ronoctua_i18n::key::FILES_TRASH_LEFT_ON_VOLUME,
+                    args: vec![("volume", volume), ("n", n.to_string())],
+                })
+            }))
+            .collect(),
+    }
+}
+
 /// An immediate result, as something to say or nothing at all.
 fn said(outcome: anyhow::Result<()>) -> Errand {
     match outcome {
@@ -8857,255 +6876,142 @@ fn refused(why: &str) -> Explanation {
     }
 }
 
-/// Runs something unbounded on a named thread, and reports back.
-fn in_a_thread(
-    sender: &calloop::channel::Sender<Report>,
-    name: &str,
-    work: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
-) {
-    let sender = sender.clone();
-    raise(name, move || {
-        let report = match work() {
-            Ok(()) => Report::Done,
-            Err(e) => Report::Failed(e.to_string()),
-        };
-        let _ = sender.send(report);
-    });
+/// The question the sudo door's password is typed into when a change only
+/// root may make needs it — asked in the door that pressed, answered back as
+/// [`Doing::RootProved`].
+pub const ROOT_PASSWORD: &str = "files-root-password";
+
+/// A change only root may make, to these paths: the privileged unit's verb
+/// and its value (a uid, a gid, an octal mode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Root {
+    /// What the unit does.
+    pub verb: ronoctua_files::act::Verb,
+    /// To which paths, one request each.
+    pub paths: Vec<PathBuf>,
+    /// The value, as the unit reads it.
+    pub value: String,
 }
 
-/// A NAMED thread, always: an unnamed one in `top` says `ronoctua-shell` and
-/// nothing about what it is doing, on the one screen that exists to answer
-/// that.
-/// Starts the thread that looks INSIDE files.
-///
-/// # Why one long-lived NAMED thread, and not one per ask
-///
-/// Because holding an arrow key down over a folder of videos is sixty asks a
-/// second, and each one is `ffmpeg` seeking a frame. One thread per ask would
-/// spawn sixty processes to throw away fifty-nine of them; this one takes the
-/// NEWEST and drops the rest on the floor, which is the answer somebody
-/// scrolling actually wants. It is the arrangement `apps::painter` already has,
-/// for the same reason and with the same two channels: `mpsc` in, because only
-/// it has a blocking `recv` and the thread should sleep while nobody asks, and
-/// the loop's own `calloop` channel out.
-///
-/// **Nothing here touches the frame.** `ronoctua-inspect` is synchronous and
-/// spawns children; waiting for one inside the loop that draws is the trap this
-/// project paid for once with `systemd-run --scope`.
-#[must_use]
-pub fn inspector(out: calloop::channel::Sender<Report>) -> Option<std::sync::mpsc::Sender<Ask>> {
-    let (queue, asks) = std::sync::mpsc::channel::<Ask>();
-    let born = std::thread::Builder::new()
-        .name("ronoctua-inspect".to_owned())
-        .spawn(move || {
-            while let Ok(first) = asks.recv() {
-                // ONLY THE NEWEST. Everything queued behind it is a file the
-                // cursor has already left, and decoding it would only make the
-                // one being looked at arrive later.
-                let mut ask = first;
-                while let Ok(newer) = asks.try_recv() {
-                    ask = newer;
-                }
-                // THE FACTS FIRST, because their probe is what says whether the
-                // file MOVES — and a file that moves needs no still picture.
-                let told = ronoctua_inspect::facts::facts(&ask.path, ask.mime);
-                // AND WHETHER IT IS A SHAPE, read ONCE.
-                //
-                // The same read answers the facts and the question of whether
-                // there is anything to turn, so it happens here rather than
-                // inside `facts::facts` — that function is a front for the five
-                // external programs and none of them is involved. Reading a
-                // hundred-megabyte file twice to keep the shapes tidy would be
-                // a hundred megabytes read twice.
-                let shape = ronoctua_inspect::pixels::turns(ask.mime)
-                    .then(|| ronoctua_inspect::mesh::read(&ask.path, ask.mime));
-                // AND WHETHER IT MOVES, out of the probe the facts already ran:
-                // one document, two readers, and no second spawn.
-                let moving = ronoctua_inspect::motion::moving(
-                    &ask.path,
-                    ask.mime,
-                    &told.probe,
-                    ask.beside.as_deref(),
+/// One syscall per path, as the person; from the first one the kernel
+/// refuses FOR WANT OF PRIVILEGE, the rest through the sudo door ([`as_root`]).
+/// Any other refusal is said and stops the set.
+fn kernel_or_root(
+    paths: Vec<PathBuf>,
+    change: impl Fn(&Path) -> anyhow::Result<()>,
+    verb: ronoctua_files::act::Verb,
+    value: String,
+    sender: &calloop::channel::Sender<Report>,
+) -> Errand {
+    for (n, path) in paths.iter().enumerate() {
+        match change(path) {
+            Ok(()) => {}
+            Err(e) if needs_root(&e) => {
+                return as_root(
+                    Root {
+                        verb,
+                        paths: paths[n..].to_vec(),
+                        value,
+                    },
+                    ronoctua_security::authority::Proof::Cached,
+                    sender,
                 );
-                // A FILE THAT MOVES GETS NO STILL PICTURE.
-                //
-                // It used to get one, and the owner reported what that looks
-                // like: *"está sendo carregada primeiro a imagem de um só
-                // frame, e na sequência o vídeo, o que acaba fazendo essa
-                // imagem apenas piscar rapidamente na tela"*. The poster is a
-                // whole ffmpeg run — a spawn, a seek and a decode — for a
-                // picture replaced 84 milliseconds later by the player's first
-                // frame. Work paid to produce a flicker.
-                //
-                // What fills the gap is NOTHING: `preview_key` answers `None`
-                // until a frame arrives, so the panel is empty rather than
-                // briefly wrong.
-                //
-                // A MOTION PHOTO IS THE EXCEPTION, and it is the whole point of
-                // one: the photograph is what it IS, and the film is a second
-                // and a half of what was happening around it. Both are wanted,
-                // and the loop alternates between them. The condition is
-                // therefore "is this a film" and not "does this move".
-                //
-                // AND SOUND IS NOT A FILM EITHER, which is what makes this
-                // line say what the paragraph above already claimed. A sound's
-                // picture is DRAWN, and it is drawn only while it plays — and
-                // a sound never starts by itself. Asking `does this move` here
-                // would leave every audio file with an empty panel for ever,
-                // with no sentence, because the frame that was meant to fill
-                // it is waiting for a key nobody has a reason to press.
-                let a_film = moving
-                    .as_ref()
-                    .is_some_and(|m| m.inside.is_none() && m.show == Show::Film);
-                let made = if a_film {
-                    ronoctua_inspect::Made::unasked()
-                } else {
-                    ronoctua_inspect::pixels::preview(&ask.path, ask.mime, ask.target, &ask.wave)
-                };
-                // THE TEXT, ONLY WHEN THERE IS NO PICTURE. A picture wins, and
-                // reading a mebibyte to throw it away is a mebibyte read for
-                // every video walked past. It is also why SVG and EPS need no
-                // exception: the database says both descend from `text/plain`,
-                // and both get a picture first.
-                //
-                // AND A FILM IS NOT TEXT EITHER: without this a video, now
-                // having no still, would be read for a mebibyte to be told it
-                // is not letters.
-                //
-                // NOR IS A SHAPE, and three of them ARE text by the database's
-                // reckoning: `model/obj`, `model/x-off` and `model/step` all
-                // descend from `text/plain`, because they are. Without this
-                // arm the owner's 4.3 MB `.obj` was read for a mebibyte,
-                // highlighted, and then thrown away — `preview_fields` returns
-                // blanks for anything that turns, so not one line of it could
-                // ever reach the screen.
-                // A LIST OF THINGS TO PLAY, which is neither a picture nor
-                // text: `audio/x-mpegurl` descends from `text/plain`, so
-                // without this the panel would show an `.m3u` as source code
-                // with the paths highlighted — true, and not what the file is
-                // FOR.
-                let mut listed = ronoctua_inspect::playlist::of(&ask.path, ask.mime);
-                // AND WHAT THE LIST DID NOT SAY, ASKED — here, on the
-                // inspector's own thread, where every other child process this
-                // manager starts is started.
-                //
-                // The reader itself stays pure and spawns nothing: it answers
-                // WHICH entries to ask about, with its own ceiling, and this
-                // asks. See `playlist::TIMED_CEILING` for what it costs.
-                if let Some(Ok(list)) = listed.as_mut() {
-                    for n in list.untimed() {
-                        let ronoctua_inspect::playlist::Where::Local(path) = &list.entries[n].at
-                        else {
-                            continue;
-                        };
-                        let found = ronoctua_inspect::facts::duration_of(path);
-                        list.entries[n].seconds = found;
-                    }
+            }
+            Err(e) => return Errand::Say(refused(&e.to_string())),
+        }
+    }
+    Errand::Done
+}
+
+/// Whether the kernel refused for want of privilege (`EPERM`, `EACCES`) —
+/// what the root helper can do and the person cannot.
+fn needs_root(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+            || c.downcast_ref::<rustix::io::Errno>()
+                .is_some_and(|n| matches!(*n, rustix::io::Errno::PERM | rustix::io::Errno::ACCESS))
+    })
+}
+
+/// THE ONES THAT NEED ROOT — a change of owner, and a change of group or
+/// permissions the kernel refused the person — through the SUDO DOOR
+/// (`ronoctua_security::authority`, verb `FilesRoot`), which starts the
+/// privileged unit and keeps its hardening. Written into a directory this
+/// user owns and handed to a unit that VALIDATES before acting — the same
+/// shape `ronoctua_rescue::edit` uses for `host.nix`.
+///
+/// # Why the door and not polkit
+///
+/// There is no polkit agent in this session, and there will not be one: the
+/// unit's `auth_self_keep` rule could never ask anybody, so a change of owner
+/// was refused at once on every machine. The door tries `sudo -n` first (a
+/// window open, or sudo's own fresh timestamp) and, when that is refused,
+/// the view asks the password on ITS line ([`Report::Password`]) and comes
+/// back with it.
+///
+/// # One request at a time, and the first refusal stops the rest
+///
+/// The unit installs ONE request — that is what lets its name be fixed — so
+/// the set is one start per path, all with the same proof. Carrying on after
+/// one was refused would leave a set half changed with one message about one
+/// file, which is a state nobody can act on.
+fn as_root(
+    change: Root,
+    proof: ronoctua_security::authority::Proof,
+    sender: &calloop::channel::Sender<Report>,
+) -> Errand {
+    // AND THE PLACE THE REQUEST IS WRITTEN HAS TO EXIST — asked HERE, not
+    // discovered in the thread: `/run/ronoctua-files/` is a `RuntimeDirectory`
+    // of the unit `nix/modules/files.nix` installs, so on a machine that is
+    // not running this distro (the nested loop, above all) it is not there,
+    // and a sentence that says why beats `Permission denied` from a thread.
+    if !std::path::Path::new(ronoctua_files::act::STAGING)
+        .parent()
+        .is_some_and(std::path::Path::is_dir)
+    {
+        return Errand::Say(Explanation {
+            key: ronoctua_i18n::key::FILES_NO_ROOT_HELPER,
+            args: Vec::new(),
+        });
+    }
+    let sender = sender.clone();
+    raise(change.verb.word(), move || {
+        let staging = std::path::PathBuf::from(ronoctua_files::act::STAGING);
+        let mut left = change.clone();
+        for path in change.paths {
+            let staged = ronoctua_files::act::Staged {
+                verb: change.verb,
+                path,
+                value: change.value.clone(),
+            }
+            .write_into(&staging);
+            if let Err(e) = staged {
+                let _ = sender.send(Report::Failed(e.to_string()));
+                return;
+            }
+            match ronoctua_security::authority::run(
+                ronoctua_security::verb::RootVerb::FilesRoot,
+                proof.clone(),
+            ) {
+                Ok(_) => {
+                    left.paths.remove(0);
                 }
-                // A DOCUMENT IS ASKED BEFORE TEXT, and it has to be.
-                //
-                // Every office format that is a zip — `.docx`, `.odt`, `.ods`,
-                // `.xlsx`, `.pptx`, `.epub` — is an `application/zip` by the
-                // database's reckoning, so nothing above claims it and it would
-                // fall through to "no preview". And `.rtf` is worse than that:
-                // `text/rtf` descends from `text/plain`, so the text reader DID
-                // claim it, and the panel drew `{\rtf1\ansi\deff0{\fonttbl…`
-                // — the file rather than the document.
-                //
-                // `document::of` answers `None` for everything it is not, so
-                // this is one question in front of another and not a branch.
-                let said =
-                    (!made.drawable() && moving.is_none() && shape.is_none() && listed.is_none())
-                        .then(|| {
-                            ronoctua_inspect::document::of(&ask.path, ask.mime, ask.tab).or_else(
-                                || ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab),
-                            )
-                        })
-                        .flatten();
-                let rgba = made.rgba.map(|r| ronoctua_render::image::Rgba {
-                    width: r.width,
-                    height: r.height,
-                    pixels: r.pixels,
-                });
-                if let Some(r) = rgba.as_ref() {
-                    tracing::debug!(
-                        width = r.width,
-                        height = r.height,
-                        kind = ask.mime,
-                        "preview decoded"
-                    );
+                // THE PASSWORD, asked in the door that pressed, for what is
+                // LEFT of the set: the paths already changed stay changed.
+                Err(r) if r.why == ronoctua_security::Why::NeedsPassword => {
+                    let _ = sender.send(Report::Password(left));
+                    return;
                 }
-                // WHEN THE FILE IS TEXT, THE TEXT PATH'S ANSWER IS THE ONE
-                // THAT COUNTS. Said once, here, rather than at three sites:
-                // it is what stops a `.md` carrying `Refusal::Nothing`, and
-                // what makes a `chmod 000` `.rs` say it could not be opened
-                // instead of "what came back was not a picture".
-                let (rgba, why, text) = match said {
-                    None => (rgba, made.why, None),
-                    Some(Ok(read)) => (None, None, Some(read)),
-                    Some(Err(why)) => (None, Some(why), None),
-                };
-                // AND THE LIST'S OWN ANSWER, folded the same way: a spelling
-                // this reader does not open is a SENTENCE, and a panel that is
-                // blank and a panel that was refused look the same on screen.
-                let (list, why) = match listed {
-                    None => (None, why),
-                    Some(Ok(read)) => (Some(read), why),
-                    Some(Err(refused)) => (None, Some(refused)),
-                };
-                // AND THE SHEET SAYS THE PICTURE MOVES. Nothing else on it
-                // does: the dimensions, the camera and the date are all about
-                // the photograph, and a person looking at the facts has no
-                // other way to learn there is a film in the file.
-                let mut facts = told.facts;
-                if let Some(row) = moving.as_ref().and_then(ronoctua_inspect::motion::fact_of) {
-                    facts.push(row);
-                }
-                // AND THE SHAPE'S OWN FACTS, out of the read above. A file that
-                // is a shape says so; one that CLAIMS to be and does not parse
-                // carries the refusal instead, so the panel gets a sentence
-                // rather than waiting for a frame nobody is going to draw.
-                let (turns, outlined, why) = match shape {
-                    None => (false, 0, why),
-                    Some(Ok(read)) => {
-                        let outlined = read.census.outlined;
-                        facts.extend(ronoctua_inspect::mesh::facts(&read));
-                        (true, outlined, why)
-                    }
-                    Some(Err(refused)) => (false, 0, Some(refused)),
-                };
-                // WHERE IT SAYS IT WAS MADE, out of the SAME facts the panel
-                // draws — never a second run of exiftool. The row is a phrase
-                // with two named arguments, so the numbers are still numbers
-                // here and nothing is parsed back out of a sentence.
-                let at = ronoctua_inspect::facts::coordinate(&facts);
-                let looked = Looked {
-                    key: ask.key,
-                    path: ask.path,
-                    rgba,
-                    moving,
-                    list,
-                    text,
-                    why,
-                    facts,
-                    mime: ask.mime,
-                    turns,
-                    outlined,
-                    at,
-                };
-                if out.send(Report::Inspected(Box::new(looked))).is_err() {
-                    // A closed channel = the door left.
+                Err(r) => {
+                    let _ = sender.send(Report::Door(r.why));
                     return;
                 }
             }
-        });
-    match born {
-        Ok(_) => Some(queue),
-        Err(e) => {
-            tracing::error!(error = %e, "could not create the inspection thread");
-            None
         }
-    }
+        let _ = sender.send(Report::Done);
+    });
+    Errand::Done
 }
 
 fn raise(name: &str, work: impl FnOnce() + Send + 'static) {
@@ -9159,15 +7065,40 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
             focused: false,
         },
     ];
+    // THE SHEET'S ROWS ARE SETTINGS, a label and its value each: drawn by
+    // `chrome::field_pair` in a setting's tones, the value in the column every
+    // view keeps (archive-luks).
+    let sheet = match &picker.asking {
+        Asking::Sheet(sheet) => Some(sheet.rows(texts)),
+        _ => None,
+    };
     for (n, i) in picker.shown().into_iter().enumerate() {
         let Some(c) = picker.choices.get(i) else {
             continue;
         };
-        rows.push(Row {
-            fields: vec![Field {
+        let focused = n == picker.cursor;
+        let setting = sheet
+            .as_ref()
+            .and_then(|rows| rows.iter().find(|r| r.id == c.id));
+        let fields = match setting {
+            Some(r) => {
+                let mut fields = crate::chrome::field_pair(
+                    2,
+                    width.saturating_sub(2),
+                    &r.label,
+                    r.value.as_deref().unwrap_or(""),
+                    crate::chrome::Kind::Setting,
+                    focused,
+                );
+                for f in &mut fields {
+                    f.hit = Hit::Choice(n);
+                }
+                fields
+            }
+            None => vec![Field {
                 at: 2,
                 text: ronoctua_render::layout::elide_end(&c.label, width.saturating_sub(2)),
-                color: if n == picker.cursor {
+                color: if focused {
                     ronoctua_tokens::color::TEXT_PRIMARY
                 } else {
                     ronoctua_tokens::color::TEXT_SECONDARY
@@ -9176,9 +7107,12 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
                 explain: None,
                 ink: Ink::Grid,
             }],
+        };
+        rows.push(Row {
+            fields,
             marked: false,
             foot: false,
-            focused: n == picker.cursor,
+            focused,
         });
     }
     rows
@@ -9514,11 +7448,11 @@ impl Where {
             // alone would teach `C-w` over an empty panel, which is a key that
             // refuses — and `theatre()` says so, which is the same thing said
             // twice.
-            Self::OnAPreview => v.preview_on && v.focused().is_some(),
-            Self::OnTheFacts => v.info_on,
+            Self::OnAPreview => v.panel.preview_on && v.focused().is_some(),
+            Self::OnTheFacts => v.panel.info_on,
             Self::OnText => v.showing_text().is_some(),
             Self::OnAFilm => v.film_here(),
-            Self::OnSound => v.has_sound(),
+            Self::OnSound => v.panel().has_sound(),
             Self::OnAList => v.showing_list().is_some(),
             Self::OnTheGrid => v.grid_on,
             Self::OnALine => !v.grid_on,
@@ -9610,7 +7544,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // `Ctrl` is the family nothing above us claims: the leader is a sequence,
     // the chords are `Mod+…`, and the emergency binds are `Ctrl+Alt+…`. The
     // check `files-keys-are-not-the-compositors` is what keeps it that way.
-    ("C-h", "files-hidden", Where::Anywhere),
+    // `C-h` IS THE HISTORY — `h` for it — of the repository the folder is
+    // in: the git browser, in the footer's region from the footer and in a
+    // window of its own from the window (`crate::git_browser`). It was the
+    // hidden files' key, and they are always shown now.
+    ("C-h", "files-git", Where::Anywhere),
     ("C-s", "files-sort", Where::Anywhere),
     ("C-S", "files-sort-reverse", Where::Anywhere),
     ("C-SPC", "files-mark", Where::Anywhere),
@@ -9942,6 +7880,25 @@ pub fn of_the_view(t: Key) -> Option<&'static str> {
 }
 
 impl View {
+    /// The clipboard's text, read for [`Step::Paste`]: typed into the
+    /// question's query when one is up, else into the filter — as ONE line
+    /// (`line::one_line`), since a name has none.
+    pub fn pasted(&mut self, text: &str) -> Step {
+        let typed = crate::line::one_line(text);
+        if typed.is_empty() {
+            return Step::Nothing;
+        }
+        if let Some(picker) = self.picking.as_mut() {
+            picker.query.push_str(&typed);
+            picker.cursor = 0;
+            return Step::Changed;
+        }
+        self.filter.push_str(&typed);
+        self.refilter();
+        self.clamp();
+        Step::Changed
+    }
+
     /// One key.
     ///
     /// The menu, when open, takes the key first: it is modal, and a key that
@@ -9952,6 +7909,11 @@ impl View {
         // fell past it would move a cursor nobody can see while a question is
         // being answered.
         if self.picking.is_some() {
+            // A QUESTION'S QUERY PASTES, as every text input does
+            // (`line::pastes`) — a rename above all, whose answer is typed.
+            if crate::line::pastes(t) {
+                return Step::Paste;
+            }
             return self.picker_key(t);
         }
         // THE DETAIL SHEET IS READ, not acted on. Every key closes it, which is
@@ -9993,6 +7955,13 @@ impl View {
                 return Step::Changed;
             }
             return Step::Closed;
+        }
+        // INSIDE THE FILTER, `C-v` PASTES into it (the owner, 2026-09-30):
+        // with something typed, the keys are the query's, and a paste is
+        // typing. With nothing typed `C-v` is still the preview (`OF_THE_VIEW`)
+        // — and `C-y`, Emacs's yank, pastes into the filter always.
+        if crate::line::pastes(t) && (!self.filter.is_empty() || of_the_view(t).is_none()) {
+            return Step::Paste;
         }
         if of_the_view(t).is_none() {
             // TYPING IS NOT A COMMAND, so it has no line in the table — the
@@ -10055,6 +8024,13 @@ impl View {
         // not the id because `<right>` and `TAB` share one, and only the arrow
         // changes meaning: the ring is the ring in both shapes.
         let id = self.grid_meaning(t, id);
+        // THE PANELS' OWN IDS ARE THE PANELS' TO ANSWER — the shape, the
+        // globe, the film, the playlist, the paging and the whole region
+        // (`inspection::Panel::key`). One table still dispatches them: this
+        // one, and the panel answers only for the ids it owns.
+        if let Some(step) = id.and_then(|id| self.panel_mut().key(id)) {
+            return step;
+        }
         match id {
             Some("files-down") => self.step_by(self.step_of(1)),
             Some("files-up") => self.step_by(self.step_of(-1)),
@@ -10063,12 +8039,7 @@ impl View {
                 self.up();
                 Step::Changed
             }
-            Some("files-hidden") => {
-                self.hidden = !self.hidden;
-                self.refilter();
-                self.clamp();
-                Step::Changed
-            }
+            Some("files-git") => self.history(),
             Some("files-sort") => {
                 self.sort.by = self.sort.by.next();
                 self.reread();
@@ -10122,40 +8093,10 @@ impl View {
                 self.open_menu()
             }
             Some("files-measure") => self.measure_focused(),
-            // A SHAPE, TURNED. `spin` answers `false` when there is none, and
-            // then the key does nothing rather than something surprising —
-            // there is nothing else `S-<left>` could sensibly mean here.
-            // THE KEYS SPEAK THE SAME LANGUAGE AS THE HAND. `S-<left>` is
-            // "move it left", which is what dragging left is, so both go
-            // through `spin` and neither knows which way a yaw counts.
-            Some("files-turn-left") => Self::stepped(self.spin(-SPIN_STEP, 0.0)),
-            Some("files-turn-right") => Self::stepped(self.spin(SPIN_STEP, 0.0)),
-            Some("files-turn-up") => Self::stepped(self.spin(0.0, -SPIN_STEP)),
-            Some("files-turn-down") => Self::stepped(self.spin(0.0, SPIN_STEP)),
-            Some("files-zoom-in") => Self::stepped(self.zoom(ZOOM_STEP)),
-            Some("files-zoom-out") => Self::stepped(self.zoom(1.0 / ZOOM_STEP)),
-            Some("files-reframe") => Self::stepped(self.reframe()),
-            // THE GLOBE'S FOUR, in degrees rather than in pixels: a key has no
-            // distance, so it moves by a fixed step of the CURRENT view — a
-            // tenth of the box, which reads the same near and far.
-            Some("globe-north") => Self::stepped(self.pan_globe(0.0, GLOBE_STEP)),
-            Some("globe-south") => Self::stepped(self.pan_globe(0.0, -GLOBE_STEP)),
-            Some("globe-east") => Self::stepped(self.pan_globe(-GLOBE_STEP, 0.0)),
-            Some("globe-west") => Self::stepped(self.pan_globe(GLOBE_STEP, 0.0)),
             Some("files-preview") => self.toggle_panel(Panel::Preview),
             Some("files-facts") => self.toggle_panel(Panel::Info),
-            Some("files-facts-scroll") => self.scroll_facts(),
-            Some("files-preview-scroll") => self.scroll_preview(),
             Some("files-preview-left") => self.slide_preview(-1),
             Some("files-preview-right") => self.slide_preview(1),
-            Some("files-playlist-previous") => self.step_entry(-1),
-            Some("files-playlist-next") => self.step_entry(1),
-            Some("files-play") => self.play_pause(),
-            Some("files-sound") => self.hear(),
-            Some("files-rewind") => self.seek_by(-SEEK_STEP),
-            Some("files-forward") => self.seek_by(SEEK_STEP),
-            Some("files-theatre") => self.theatre(Panel::Preview),
-            Some("files-facts-wide") => self.theatre(Panel::Info),
             Some("files-pane-next") => self.cycle_pane(true),
             Some("files-pane-previous") => self.cycle_pane(false),
             Some("files-columns") => {
@@ -10268,16 +8209,8 @@ impl View {
                     .collect(),
                 false,
             ),
-            Asking::Format(_) => (
-                ronoctua_files::act::FORMATS
-                    .iter()
-                    .map(|(extension, label)| Choice {
-                        id: (*extension).to_owned(),
-                        label: self.texts.t(label),
-                    })
-                    .collect(),
-                false,
-            ),
+            // THE SHEET'S ROWS, each already a sentence with its value.
+            Asking::Sheet(sheet) => (sheet.choices(&self.texts), false),
             Asking::Application(path) => {
                 let of_type = ronoctua_files::mime::of_path(path, Kind::File, true);
                 (
@@ -10296,8 +8229,30 @@ impl View {
                     false,
                 )
             }
-            // The one question whose answer is not on any list.
-            Asking::Name(_) => (Vec::new(), true),
+            // The one question whose answer is not on any list — and the
+            // three the facts ask, which are not either.
+            Asking::Name(_) | Asking::Modified(_) | Asking::Tag(..) | Asking::Meta(..) => {
+                (Vec::new(), true)
+            }
+            // NO FIRST, the cursor on it: taking the place out of the only
+            // copy does not come back, and a stray `RET` must do nothing.
+            Asking::Location(_) => (
+                vec![
+                    Choice {
+                        id: "no".to_owned(),
+                        label: self.texts.t(ronoctua_i18n::key::FILES_NO),
+                    },
+                    Choice {
+                        id: "copy".to_owned(),
+                        label: self.texts.t(ronoctua_i18n::key::FILES_LOCATION_COPY),
+                    },
+                    Choice {
+                        id: "overwrite".to_owned(),
+                        label: self.texts.t(ronoctua_i18n::key::FILES_LOCATION_OVERWRITE),
+                    },
+                ],
+                false,
+            ),
             // YES AND NO, and `no` FIRST.
             //
             // The cursor starts on the first row, so the first row is what a
@@ -10332,6 +8287,24 @@ impl View {
             Asking::Name(path) => path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            // AND THE FACTS' THREE START WITH WHAT IS THERE, for the same
+            // reason: correcting a letter of a title is not retyping it.
+            Asking::Modified(path) => std::fs::symlink_metadata(path)
+                .map(|m| {
+                    use std::os::unix::fs::MetadataExt as _;
+                    ronoctua_files::when::typed(m.mtime(), &self.zone)
+                })
+                .unwrap_or_default(),
+            Asking::Tag(path, _, field) => self
+                .amendable_of(path)
+                .and_then(|a| crate::inspection_edit::tag_now(a, *field))
+                .map(|(value, _)| value)
+                .unwrap_or_default(),
+            Asking::Meta(path, _, meta) => self
+                .amendable_of(path)
+                .and_then(|a| crate::inspection_edit::detail_now(a, *meta))
+                .map(|(value, _)| value)
                 .unwrap_or_default(),
             _ => String::new(),
         };
@@ -10381,6 +8354,14 @@ impl View {
 
     /// What confirming a question produces.
     fn answered(&mut self) -> Step {
+        // THE SHEET STAYS UP while its rows turn: only the row that goes, and
+        // `Esc`, take it down.
+        if matches!(
+            self.picking.as_ref().map(|p| &p.asking),
+            Some(Asking::Sheet(_))
+        ) {
+            return self.sheet_answered();
+        }
         let Some(picker) = self.picking.take() else {
             return Step::Nothing;
         };
@@ -10411,13 +8392,35 @@ impl View {
                     Step::Changed
                 }
             }
-            Asking::Format(paths) => ronoctua_files::act::FORMATS
-                .iter()
-                .find(|(extension, _)| *extension == chosen)
-                .map_or(Step::Changed, |(extension, _)| {
-                    Step::Do(Doing::Compress(paths, extension))
-                }),
+            // Handled above, with the picker kept.
+            Asking::Sheet(_) => Step::Changed,
             Asking::Application(path) => Step::Do(Doing::OpenWith(path, chosen)),
+            // A DATE THIS CANNOT READ IS REFUSED, and the sentence shows the
+            // shape it can.
+            Asking::Modified(path) => match ronoctua_files::when::instant_of(&chosen, &self.zone) {
+                Some(secs) => Step::Do(Doing::Modified(path, secs)),
+                None => Step::Say(does(ronoctua_i18n::key::FILES_MODIFIED_BAD)),
+            },
+            // CHECKED BEFORE ANYTHING IS WRITTEN, by the field's own rule — a
+            // date that is not one is refused here, under the cursor.
+            Asking::Tag(path, stamp, field) => {
+                match crate::inspection_edit::tag_answer(field, &chosen, &self.texts) {
+                    Ok(edit) => Step::Do(Doing::Tag(path, stamp, vec![edit])),
+                    Err(why) => Step::Say(refused(&why)),
+                }
+            }
+            Asking::Meta(path, holder, meta) => match meta.written(holder, &chosen) {
+                Ok(value) => Step::Do(Doing::Meta(path, holder, meta, value)),
+                Err(why) => Step::Say(refused(&crate::inspection_edit::refused_said(
+                    &why,
+                    &self.texts,
+                ))),
+            },
+            Asking::Location(paths) => match chosen.as_str() {
+                "copy" => Step::Do(Doing::RemoveLocation(paths, true)),
+                "overwrite" => Step::Do(Doing::RemoveLocation(paths, false)),
+                _ => Step::Changed,
+            },
             // A rename is one syscall and answers now: the listing has to show
             // the new name before the hand leaves the key.
             Asking::Name(path) => {
@@ -10558,7 +8561,7 @@ impl View {
             //
             // Over `shown` and never over `entries`: `Hit::Name` carries a
             // place in the drawn list, and a range built over the entries
-            // would mark what the filter and `C-h` are hiding.
+            // would mark what the filter is hiding.
             if mods.shift {
                 let (from, to) = if self.cursor <= *n {
                     (self.cursor, *n)
@@ -10576,12 +8579,19 @@ impl View {
         }
         match hit {
             Hit::Nothing => Step::Nothing,
-            // THE TRANSPORT'S TWO, AND THROUGH THE KEYS' OWN CODE. The rule
+            // THE GIT LINE, through `C-h`'s own code.
+            Hit::Git => self.history(),
+            // THE PANELS' OWN TARGETS — the transport's two, the whole-region
+            // button, the globe and its dot, an entry of a playlist — AND
+            // THROUGH THE KEYS' OWN CODE (`inspection::Panel::click`). The rule
             // this whole function keeps: the mouse never reaches anything the
             // keyboard cannot, and never by a second path.
-            Hit::Play => self.play_pause(),
-            Hit::Sound => self.hear(),
-            Hit::Theatre(which) => self.theatre(*which),
+            Hit::Play
+            | Hit::Sound
+            | Hit::Theatre(_)
+            | Hit::Globe
+            | Hit::GlobeDot
+            | Hit::Track(_) => self.panel_mut().click(hit).unwrap_or(Step::Nothing),
             // THE SAME CALL THE KEY MAKES, which is what keeps the glyph and
             // `C-g` one gesture with two affordances rather than two states.
             Hit::Layout => {
@@ -10593,13 +8603,6 @@ impl View {
                 let _ = row;
                 self.ring_the_size()
             }
-            // THE GLOBE'S PICTURE ANSWERS NOTHING TO A CLICK, because a press
-            // on it is the start of a DRAG — resolved before the row, exactly
-            // as a press on a shape in the preview is. A click that also acted
-            // would act every time somebody let go after turning it.
-            Hit::Globe => Step::Nothing,
-            // AND THE DOT FRAMES ON ITSELF, through the key's own code.
-            Hit::GlobeDot => Self::stepped(self.globe.borrow_mut().frame_on_the_dot()),
             // AND THE ADDRESS OPENS THE MAP — through the MENU's own row, so
             // the mouse reaches nothing the keyboard cannot (`open-map`, which
             // is `RET` on a row of the file's menu). The owner asked for this
@@ -10630,8 +8633,6 @@ impl View {
                 self.side_cursor = *n;
                 self.eject_focused()
             }
-            // ONE ENTRY OF A PLAYLIST, and through the same code the keys use.
-            Hit::Track(n) => self.play_entry(*n),
             Hit::Choice(n) => {
                 if let Some(p) = self.picking.as_mut() {
                     p.cursor = *n;
@@ -10702,6 +8703,11 @@ impl View {
             Hit::Measure(n) => {
                 self.cursor = *n;
                 self.measure_focused()
+            }
+            // A FACT THAT CHANGES THE FILE, through `RET`'s own code.
+            Hit::Amend(n, doable) => {
+                self.cursor = *n;
+                self.amend(*doable)
             }
             Hit::Owner(n) => {
                 self.cursor = *n;
@@ -10882,7 +8888,7 @@ impl View {
             Pane::Preview => self
                 .showing_list()
                 .is_some()
-                .then_some((Pane::Preview, self.preview_cursor)),
+                .then_some((Pane::Preview, self.panel.preview_cursor)),
             // AND THE FACTS ARE ROWS, several of which DO something — the mode
             // bits, the owner, the size that has to be walked for. Until the
             // ring reached this panel they were the mouse's alone.
@@ -10895,7 +8901,12 @@ impl View {
                 // facts in columns those are not the same number: what is lit
                 // is the ROW the fact sits in. In one column they are equal,
                 // which is every panel beside the listing.
-                (facts > 0).then(|| (Pane::Info, self.info_cursor % self.grid_of(facts).2.max(1)))
+                (facts > 0).then(|| {
+                    (
+                        Pane::Info,
+                        self.panel.info_cursor % self.panel().grid_of(facts).2.max(1),
+                    )
+                })
             }
             // THE CONTROL HAS NO ROW: it is one glyph, and what says it has
             // the keyboard is its own colour.
@@ -11006,6 +9017,8 @@ impl View {
             foot: false,
             focused: false,
         }];
+        // AND THE GIT LINE under the path, when the folder is in a repository.
+        rows.extend(self.git_row(width, texts));
         // AND THE COLUMNS' NAMES ONLY WHEN THEY ARE ASKED FOR. See
         // `View::header_shown`.
         // AND NOTHING NAMES THE COLUMNS WHEN THERE ARE NONE. Side by side
@@ -11067,7 +9080,7 @@ impl View {
     ) -> Vec<Section> {
         let panes = self.panes(width);
         let mut out = Vec::with_capacity(4);
-        let side = self.side.shown(self.hidden);
+        let side = self.side.shown();
 
         // A MODAL IS A SECTION, and it is the LISTING's.
         //
@@ -11181,7 +9194,7 @@ impl View {
             .max(if panes.right == 0 {
                 0
             } else {
-                self.panel_lines()
+                self.panels_want()
             })
             .max(chrome_lines)
             .max(1);
@@ -11382,233 +9395,28 @@ impl View {
             } else {
                 take
             };
+            // THE BOX IS THE LAYOUT'S AND EVERYTHING INSIDE IT IS THE PANEL'S
+            // (`inspection::Panel::section`). The box is written down for both
+            // panels before either is asked for — the keys that page a panel
+            // and the height a refusal wraps to are measured against it, drawn
+            // this frame or not.
+            let panel = self.panel();
             for (which, at, room) in boxes.iter().copied() {
                 let pane = match which {
                     Panel::Preview => Pane::Preview,
                     Panel::Info => Pane::Info,
                 };
-                // HOW MANY LINES A PANEL WAS GIVEN, remembered for the keys
-                // that page them (`C-.` and `C-,`). It used to be `facts_bar`
-                // that recorded it, and that function is gone: the bar is the
-                // SECTION's rectangle now.
-                //
-                // AND IT IS RECORDED FOR BOTH PANELS, not only the facts.
-                // `lines` is computed once above for the pair, so it was
-                // already the preview's height too — but inside the `Info`
-                // branch it never updated with `C-i` off, and the preview's
-                // page key would have worked against a stale number.
-                self.drawn_lines
-                    .set(u16::try_from(lines).unwrap_or(u16::MAX));
-                // THE PANEL'S OWN WIDTH, and not the content's.
-                //
-                // `content_room` is a cell narrower when there is a bar, and
-                // whether there is a bar is what `total` — two lines below — is
-                // being asked. Measuring the refusal against the narrower one
-                // would be asking the answer to decide the question.
-                if matches!(pane, Pane::Preview) {
-                    self.drawn_panel.set(room);
-                } else {
-                    // AND THE FACTS' OWN, which is a different number whenever
-                    // only one of the two panels is on. `View::grid_of` is what
-                    // reads it, and a grid measured against the other panel's
-                    // width is a grid the painter and the scrollbar disagree
-                    // about.
-                    self.drawn_info.set(room);
-                }
+                panel.laid_out(which, room, lines);
                 if !wanted(pane) {
                     continue;
                 }
-                let total = if matches!(pane, Pane::Info) {
-                    // THE GLOBE'S ROWS AND THE GRID'S, which together are what
-                    // there is to scroll: a row of the grid carries one fact
-                    // out of every column, so the sheet is shorter down the
-                    // page than it is long. `View::info_total` is the one place
-                    // it is added up, and the bar, the wheel, the paging key
-                    // and the drag all ask it.
-                    self.globe_rows()
-                        .saturating_add(self.grid_of(sheet.len()).2)
-                } else {
-                    self.preview_total()
-                };
-                // THE BAR'S CELL IS NOT THE CONTENT'S.
-                //
-                // A scrollbar sits in the LAST cell of its section's span, and
-                // the fields were being given that cell too — so a line long
-                // enough ran under the thumb and lost its last letters behind
-                // it. The owner photographed it. A bar drawn over the content
-                // hides the thing it exists to help you reach.
-                //
-                // The listing and the sidebar never had it, and that is not
-                // luck: both inset their columns by `EDGE_RIGHT`, so their bar
-                // lands in air. The panels had no such reserve, so they take
-                // one here — and only when there IS a bar, because `cut` does
-                // not change as one scrolls and a short file must not pay a
-                // column for a bar it will never grow.
-                let content_room = if total > lines {
-                    room.saturating_sub(BAR)
-                } else {
-                    room
-                };
-                // AND THE PREVIEW READS SIDEWAYS TOO.
-                //
-                // The owner chose scrolling over a silent cut, and a view this
-                // system offers only to the keyboard is half a view: he
-                // reported the missing bar as soon as the keys worked. The
-                // track is the panel's own cells, so this is the same `Scroll`
-                // with the axes swapped — `total` is the widest line and
-                // `lines` is what fits.
-                let across = if matches!(pane, Pane::Preview) {
-                    let widest = self.preview_widest();
-                    (widest > usize::from(content_room)).then(|| ronoctua_design::Scroll {
-                        total: widest,
-                        lines: usize::from(content_room),
-                        offset: self.preview_column,
-                        top: 0,
-                    })
-                } else {
-                    None
-                };
-                // AND THE FILM'S TIMELINE IS THE THIRD AXIS, on the same
-                // `Scroll`: tenths of a second, from nought to the length of
-                // the film. `None` for a GIF, which has no duration and whose
-                // frames could not be sought into anyway.
-                let time = matches!(pane, Pane::Preview)
-                    .then(|| self.timeline())
-                    .flatten();
-                // AND ITS LINE IS NOT THE CONTENT'S EITHER, which is the
-                // same rule the cell follows, turned ninety degrees: a
-                // sideways bar sits on the band's LAST line, so the rows stop
-                // one short of it.
-                //
-                // THE TRANSPORT TAKES ONE THE SAME WAY, and the picture gives
-                // it: nothing in this manager draws over its own content, which
-                // is the rule the owner set when he photographed a scrollbar
-                // sitting on a line of code.
-                let transport = matches!(pane, Pane::Preview) && self.plays_here();
-                // HOW WIDE THE CLOCK IS, measured once and carried, because the
-                // track's length is what depends on it — and the cursor's
-                // rectangle and both doors' drags all have to agree about that.
-                let clock = time.as_ref().map_or(0, |t| width_of(&clock_text(t)));
-                let content_lines = lines
-                    .saturating_sub(usize::from(across.is_some()))
-                    .saturating_sub(usize::from(transport));
-                // THE GLOBE TAKES LINES OFF THE TOP, the way `across` and
-                // `transport` take them off the bottom — the same arithmetic
-                // turned the other way up. The rows it takes are REAL rows with
-                // real fields, so `hit`, `band_row`, a click and a key all keep
-                // going through the machine that already exists rather than
-                // through a fourth opinion about where the panel is.
-                // THE GLOBE'S ROWS ARE THE FACTS' OWN, built by the same
-                // builder as every other line of the panel. They used to be a
-                // band chained in FRONT of the content and marked `above`, and
-                // that is the pinning `View::globe_rows` records the two
-                // defects of.
-                let mut content: Vec<Row> = Vec::with_capacity(content_lines);
-                content.extend((0..content_lines).map(|k| Row {
-                    fields: match which {
-                        Panel::Preview => {
-                            self.preview_fields(k, content_lines, at, content_room, texts)
-                        }
-                        Panel::Info => self.info_fields(k, content_lines, at, content_room, &sheet),
-                    },
-                    marked: false,
-                    foot: false,
-                    focused: false,
-                }));
-                if transport {
-                    // A ROW AND NOT A RECTANGLE, unlike the two bars: two of
-                    // its cells are clickable, so `Section::line_of` and
-                    // `View::hit` resolve them with the arithmetic they already
-                    // have rather than with a fourth opinion about where the
-                    // panel is.
-                    content.push(Row {
-                        fields: self.transport_fields(at, content_room, time.as_ref()),
-                        marked: false,
-                        // AND ANCHORED TO THE FOOT — the one row in this
-                        // manager that is. See `Row::foot`.
-                        foot: true,
-                        focused: false,
-                    });
+                let mut section = panel.section(which, (at, room), (top, lines), &sheet, texts);
+                // INSIDE AN ARCHIVE THE PREVIEW SAYS WHY IT IS EMPTY: nothing
+                // there is on the disk to read (archive-luks).
+                if matches!(which, Panel::Preview) && self.in_archive() {
+                    self.member_preview(&mut section, at, room, texts);
                 }
-                // AND THE EXPAND BUTTON, ON THE PANEL'S LAST LINE — the one
-                // the eye calls the bottom-right corner.
-                //
-                // IT USED TO BE PUSHED BY THE ROW BUILDER, at `content_lines -
-                // 1`, and `content_lines` is the panel MINUS the rows added
-                // after it: the film's transport, and the bar that scrolls a
-                // long value sideways. So on any panel that had one the button
-                // sat a line or two ABOVE the floor while the column's rule ran
-                // past it — the owner photographed both corners floating and
-                // said so twice. The builders' own comment already promised
-                // this line, *"over whatever that line holds"*; what it could
-                // not see from inside a per-row loop was which line that was.
-                //
-                // Pushed LAST for the reason it always was: `lit_field` is an
-                // `rposition`, so the cell goes to the button rather than to
-                // whatever is underneath it, and what the eye sees lit is by
-                // construction what the click takes.
-                //
-                // NOT WITH A PLAYER: there it rides the transport's row beside
-                // the clock, which is where the owner put it.
-                let corner = match which {
-                    Panel::Preview => {
-                        !self.plays_here()
-                            && (!self.theatre_covers(content_lines) || self.pointing_at_preview())
-                    }
-                    Panel::Info => self.pointing_at_info(),
-                };
-                if corner
-                    && content_room > 0
-                    && self.focused().is_some()
-                    && let Some(last) = content.last_mut()
-                {
-                    last.fields.push(
-                        self.theatre_field(
-                            at.saturating_add(content_room).saturating_sub(1),
-                            which,
-                        ),
-                    );
-                }
-                out.push(Section {
-                    pane,
-                    across,
-                    time,
-                    // WHICH ROW OF `content` THE TRANSPORT IS, counted after
-                    // the title has been pushed — the title is a row like any
-                    // other as far as this index is concerned, and computing
-                    // it from `content_lines` instead put the film's controls
-                    // one line above themselves.
-                    transport: transport.then(|| content.len().saturating_sub(1)),
-                    clock,
-                    // THE SECTION KEEPS ITS WHOLE SPAN. Shrinking `to` was the
-                    // first attempt and it moved the bar instead of the text:
-                    // the bar is drawn at `to - 1`, so the gap simply reopened
-                    // one cell to the left. What shrinks is the room the
-                    // FIELDS are given, below.
-                    from: at,
-                    to: at.saturating_add(room),
-                    top,
-                    lines,
-                    offset: if matches!(pane, Pane::Info) {
-                        // KEPT INSIDE WHAT THERE IS TO SCROLL. See
-                        // `View::facts_offset`: the GRID changes under a stored
-                        // offset, and nothing writes when it does.
-                        self.facts_offset(total)
-                    } else {
-                        self.preview_offset
-                    },
-                    total,
-                    // AND A PANEL HAS NO CHROME LINES AT ALL.
-                    //
-                    // The globe's were the one exception and they are gone: a
-                    // pinned band makes `Section::visible` shorter than the
-                    // panel while `Room::panel` — what the DRAG divides by — is
-                    // the panel, and the owner felt the two disagree under his
-                    // hand. See `View::globe_rows`.
-                    above: 0,
-                    grid: None,
-                    content,
-                });
+                out.push(section);
             }
         }
         out
@@ -11730,8 +9538,55 @@ impl View {
                 explain: None,
             });
         }
-        let f = sec.content.get(inside)?.field_at(cell)?;
+        let f = sec.content.get(inside)?.field_at(cell);
         let row = row_of_line(sec, inside, chrome.len()).unwrap_or(usize::MAX);
+        // A LISTING ROW IS PRESSED WHEREVER IT IS PRESSED.
+        //
+        // The size, the date, the owner's name, the gap between two columns
+        // and the air after the name are all the same ROW, and a click there
+        // did nothing — the owner's report was a person clicking a file's
+        // date and nothing happening. What the row means as a whole is its
+        // name: select, and on the second press open (`Hit::Name`), through
+        // the name's own code. A field that DOES something (a permission bit,
+        // the mark) keeps its own target, and the sentence the field carries
+        // still explains it. Only the listing's own rows, and only in the
+        // plain view — a modal's rows sit in this section too, and each of
+        // them already answers for itself.
+        if matches!(sec.pane, Pane::Listing)
+            && self.plain()
+            && inside >= chrome.len()
+            && row != usize::MAX
+            && f.is_none_or(|f| f.hit == Hit::Nothing)
+        {
+            return Some(Target {
+                pane: sec.pane,
+                row,
+                hit: Hit::Name(row),
+                explain: f.and_then(|f| f.explain.clone()),
+            });
+        }
+        // AND A FACT THAT CHANGES THE FILE IS PRESSED ACROSS ITS ROW: the air
+        // between its label and its value, and after the value, belong to the
+        // fact on their left — the row's own question (`Hit::Amend`), which
+        // both halves already carry. Only such a fact: the air beside one that
+        // is read and not changed answers nothing, as it always has.
+        if matches!(sec.pane, Pane::Info) && f.is_none_or(|f| f.hit == Hit::Nothing) {
+            let left = sec.content.get(inside).and_then(|r| {
+                r.fields
+                    .iter()
+                    .filter(|f| f.at <= cell)
+                    .max_by_key(|f| f.at)
+            });
+            if let Some(left) = left.filter(|l| matches!(l.hit, Hit::Amend(..))) {
+                return Some(Target {
+                    pane: sec.pane,
+                    row,
+                    hit: left.hit.clone(),
+                    explain: left.explain.clone(),
+                });
+            }
+        }
+        let f = f?;
         Some(Target {
             pane: sec.pane,
             row,
@@ -11856,7 +9711,7 @@ impl View {
     ///
     /// Which is the lesson `files::globe_texture` was written for and whose
     /// absence the owner photographed twice: `picture_in` gives up
-    /// `space.files.pictureAir` on all four sides and `Area::centre` then
+    /// `files::picture_air` on all four sides and `Area::centre` then
     /// SHRINKS whatever it is handed to fit what is left. A picture decoded at
     /// the box's size is therefore always drawn a little smaller than it was
     /// decoded — invisible until the box moves, and then a picture that changes
@@ -12080,9 +9935,10 @@ impl View {
     /// this rather than spelling the number — which is what lets the row of
     /// column names come and go without any of them learning about it.
     #[must_use]
-    pub const fn chrome_lines(&self) -> usize {
+    pub fn chrome_lines(&self) -> usize {
         if self.plain() {
             CHROME
+                + usize::from(self.git_here().is_some())
                 + if self.header_on && !self.grid_on {
                     1
                 } else {
@@ -12090,6 +9946,48 @@ impl View {
                 }
         } else {
             0
+        }
+    }
+
+    /// THE GIT LINE'S READING, when the folder on screen is inside the
+    /// repository it read — `None` in a folder of no repository, and for a
+    /// reading of another one (the folder moved on while it was read).
+    #[must_use]
+    pub fn git_here(&self) -> Option<&crate::git_line::Line> {
+        self.git
+            .as_ref()
+            .filter(|l| self.where_.starts_with(&l.root))
+    }
+
+    /// A reading of the git line arrived: `true` when what is drawn changed.
+    pub fn git_heard(&mut self, line: crate::git_line::Line) -> bool {
+        if self.git.as_ref() == Some(&line) {
+            return false;
+        }
+        self.git = Some(line);
+        true
+    }
+
+    /// The git line's row, under the path — the path's own box.
+    fn git_row(&self, width: u16, texts: &ronoctua_i18n::Texts) -> Option<Row> {
+        let line = self.git_here()?;
+        let (from, room) = self.crumb_box(width);
+        let keys = key_that_runs("files-git")
+            .map(|k| crate::chrome::key_text(&k))
+            .unwrap_or_default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        Some(crate::git_line::row(line, from, room, now, &keys, texts))
+    }
+
+    /// `C-h`, and a click on the git line: the history of the repository the
+    /// folder is in — found by walking up for `.git`, which is what decides
+    /// whether there is one, whether or not its line has been read yet.
+    fn history(&self) -> Step {
+        match ronoctua_git::Repo::discover(&self.where_) {
+            Some(repo) => Step::Do(Doing::History(repo.root)),
+            None => Step::Say(does(ronoctua_i18n::key::FILES_GIT_WHY_NOT_A_REPO)),
         }
     }
 
@@ -12189,37 +10087,14 @@ impl View {
         // timeline is not holding either of the panel's bars — and because a
         // seek is not a scroll: it kills a child and starts another.
         if matches!(axis, Axis::Time) {
-            let Some(total) = self.playing_seconds() else {
-                return false;
-            };
-            let Some(bar) = self.timeline() else {
-                return false;
-            };
-            #[allow(clippy::cast_possible_truncation)]
-            let at = fraction.clamp(0.0, 1.0) as f32;
-            // THROUGH `offset_at`, which is `thumb`'s own inverse — the same
-            // call the other two axes make. Tenths of a second in, tenths of a
-            // second out.
-            #[allow(clippy::cast_precision_loss)]
-            let to = bar.offset_at(at, 1.0, 0.0) as f64 / 10.0;
-            self.seek_to(to.clamp(0.0, (total - 0.1).max(0.0)));
-            return true;
+            return self.panel_mut().drag_time(fraction);
         }
         if matches!(axis, Axis::Across) {
+            // THE PREVIEW'S BOX IS THE LAYOUT'S, and so is how wide it is.
             let Some((_, cells)) = self.panes(width).preview_box(width) else {
                 return false;
             };
-            let widest = self.preview_widest();
-            let bar = ronoctua_design::Scroll {
-                total: widest,
-                lines: usize::from(cells),
-                offset: 0,
-                top: 0,
-            };
-            #[allow(clippy::cast_possible_truncation)]
-            let at = fraction.clamp(0.0, 1.0) as f32;
-            self.preview_column = bar.offset_at(at, 1.0, 0.0);
-            return true;
+            return self.panel_mut().drag_across(fraction, cells);
         }
         // EACH SECTION SCROLLS INSIDE ITS OWN HEIGHT — see [`Room`].
         let room = match pane {
@@ -12230,13 +10105,18 @@ impl View {
             // rather than left out because the `match` is what stops a pane
             // being forgotten — see `Pane::Fold`.
             Pane::Fold => return false,
-            // MINUS THE TITLE, which is a row of the panel that does not
-            // scroll. `Room` is what the DOOR measured — a number of lines —
-            // and the door has no reason to know that one of them is the
-            // panel's name. Left in, the drag reaches one row short of the end
-            // and the thumb stops a line above the bottom, which is the shape
-            // of defect the owner photographed under this very bar.
-            Pane::Info | Pane::Preview => room.panel,
+            // THE PANELS' BARS ARE THE PANELS', and they scroll inside the
+            // panel's own height (`inspection::Panel::drag_down`).
+            Pane::Info => {
+                return self
+                    .panel_mut()
+                    .drag_down(Panel::Info, fraction, room.panel);
+            }
+            Pane::Preview => {
+                return self
+                    .panel_mut()
+                    .drag_down(Panel::Preview, fraction, room.panel);
+            }
             // AND THE LISTING'S CHROME IS NOT A ROW THE LISTING SCROLLS.
             //
             // The doors hand over the REGION's height — the sidebar shares it
@@ -12252,22 +10132,12 @@ impl View {
             Pane::Sidebar => room.list,
         };
         let total = match pane {
-            Pane::Fold => return false,
-            Pane::Sidebar => self.side.shown(self.hidden).len(),
-            // THE GRID'S ROWS, which is what the BAR was drawn from: with the
-            // facts in columns a row holds one fact out of each, and the blank
-            // row at the end is one of them. A drag measured against the count
-            // of facts and a thumb drawn against the count of rows are two
-            // answers, and the owner has photographed that pair of them
-            // stopping short of the bottom once already.
-            Pane::Info => self.info_total(),
+            // ANSWERED ABOVE, all three.
+            Pane::Fold | Pane::Info | Pane::Preview => return false,
+            Pane::Sidebar => self.side.shown().len(),
             // THE COLUMN'S OWN TOTAL — the modal's when one is up, the same
             // number its bar was drawn from. See `View::listing_total`.
             Pane::Listing => self.listing_total(),
-            // A PICTURE STILL DOES NOT SCROLL, and there is no branch for it:
-            // `preview_total` is 1, so `last` is nought and the drag lands
-            // where it started. The rule survives as arithmetic.
-            Pane::Preview => self.preview_total(),
         };
         let _ = width;
         // THROUGH `Scroll::offset_at`, which is `thumb`'s own inverse.
@@ -12291,11 +10161,9 @@ impl View {
         let at = fraction.clamp(0.0, 1.0) as f32;
         let to = bar.offset_at(at, 1.0, 0.0);
         match pane {
-            Pane::Fold => return false,
+            Pane::Fold | Pane::Info | Pane::Preview => return false,
             Pane::Sidebar => self.side_offset = to,
             Pane::Listing => self.scroll_listing_to(to),
-            Pane::Preview => self.preview_offset = to,
-            Pane::Info => self.info_offset = to,
         }
         true
     }
@@ -12310,6 +10178,7 @@ impl View {
             of_type,
             !self.clip.paths.is_empty(),
             self.in_trash(),
+            self.in_archive(),
         )
     }
 
@@ -12356,10 +10225,132 @@ impl View {
     /// By PATH and not by a flag, so navigating into the trash — which is how
     /// one finds something to put back — offers `restore` without any state
     /// having been set.
+    /// What a fact of the panel offers, ASKED: the question each editable row
+    /// asks, in the manager's own picker — the same one the menu's rename,
+    /// permission and owner rows open. One function for the click and for
+    /// `RET` on the row, so the two cannot come to ask different things.
+    pub(crate) fn amend(&mut self, does: crate::inspection_sheet::Doable) -> Step {
+        use crate::inspection_sheet::Doable;
+        let Some(path) = self.focused_path() else {
+            return Step::Nothing;
+        };
+        match does {
+            Doable::Nothing => Step::Nothing,
+            Doable::Measure => self.measure_focused(),
+            Doable::Rename => self.ask(Asking::Name(path)),
+            Doable::Mode => {
+                let current = self.focused().map_or(0o644, |e| e.mode);
+                self.ask(Asking::Mode(vec![path], current))
+            }
+            Doable::Ownership => self.ask(Asking::Owner(vec![path])),
+            Doable::Modified => self.ask(Asking::Modified(path)),
+            Doable::Tag(field) => match self
+                .amendable_of(&path)
+                .and_then(|a| crate::inspection_edit::tag_now(a, field))
+            {
+                Some((_, stamp)) => self.ask(Asking::Tag(path, stamp, field)),
+                // THE SHEET IS NOT THIS FILE'S (yet): a question naming a stamp
+                // nobody read would be refused by the writer anyway.
+                None => Step::Nothing,
+            },
+            Doable::Meta(meta) => match self
+                .amendable_of(&path)
+                .and_then(|a| crate::inspection_edit::detail_now(a, meta))
+            {
+                Some((_, holder)) => self.ask(Asking::Meta(path, holder, meta)),
+                None => Step::Nothing,
+            },
+            Doable::RemoveLocation => self.ask(Asking::Location(vec![path])),
+        }
+    }
+
+    /// What the panel read about `path` that can be changed — only when the
+    /// panel's answer IS about that file.
+    fn amendable_of(&self, path: &Path) -> Option<&crate::inspection_edit::Amendable> {
+        self.panel
+            .looked
+            .as_ref()
+            .filter(|l| l.path == path)
+            .map(|l| &l.amendable)
+    }
+
     fn in_trash(&self) -> bool {
         self.bin
             .as_ref()
             .is_some_and(|bin| self.where_ == bin.files())
+    }
+
+    /// Where every mounted volume the sidebar knows is mounted — what a
+    /// path's own trash is chosen among (`trash::topdir_of`), what the
+    /// trash's listing gathers, and what an unmount counts.
+    ///
+    /// NOT THE ONES THE RUNNING SYSTEM NEEDS (`Row::needed`: `/`, `/home`,
+    /// `/nix`, what fstab mounts). The root filesystem is a sidebar row
+    /// mounted at `/`, so with it here every path outside the home's
+    /// filesystem — `/tmp`, `/persist`, a subvolume under the home such as
+    /// `~/.cache` — had `/` as its volume and was sent to `/.Trash-<uid>`,
+    /// which nobody can write. Those go to the home's trash instead, whose own
+    /// check refuses them BY NAME.
+    fn mounts(&self) -> Vec<PathBuf> {
+        use ronoctua_files::sidebar::Target;
+        self.side
+            .rows()
+            .iter()
+            .filter(|r| matches!(r.target, Target::Device(_)) && r.mounted == Some(true))
+            .filter(|r| r.needed.is_none())
+            .filter_map(|r| r.at.clone())
+            .collect()
+    }
+
+    /// The trash `paths` go to: the home's when they are on its filesystem,
+    /// and otherwise THE VOLUME'S OWN (`$topdir/.Trash-$uid`) — never a copy
+    /// across filesystems, which is what "to the trash" would silently turn
+    /// into. A path under no mount the sidebar knows (a `tmpfs`, a bind the
+    /// disk border does not list) is handed to the home's, whose own check
+    /// refuses it BY NAME ("on a different filesystem from the trash") — a
+    /// truer sentence than "no trash". `None` only with no trash at all.
+    ///
+    /// ONE bin for the whole set, because a listing is one directory and one
+    /// directory is on one filesystem.
+    fn bin_for(&self, paths: &[PathBuf]) -> Option<ronoctua_files::trash::Bin> {
+        use std::os::unix::fs::MetadataExt as _;
+        let home = self.bin.as_ref()?;
+        let Some(first) = paths.first() else {
+            return Some(home.clone());
+        };
+        let here = std::fs::symlink_metadata(first).ok().map(|m| m.dev());
+        if here.is_none() || home.device() == here {
+            return Some(home.clone());
+        }
+        let mounts = self.mounts();
+        Some(
+            ronoctua_files::trash::topdir_of(first, &mounts).map_or_else(
+                || home.clone(),
+                |top| {
+                    ronoctua_files::trash::Bin::of_volume(top, rustix::process::getuid().as_raw())
+                },
+            ),
+        )
+    }
+
+    /// Every mounted volume's own trash, for the listing of the trash —
+    /// which gathers them beside the home's, so a file thrown away on a stick
+    /// is found where every other thrown-away file is.
+    fn volume_bins(&self) -> Vec<ronoctua_files::trash::Bin> {
+        let uid = rustix::process::getuid().as_raw();
+        self.mounts()
+            .iter()
+            .map(|top| ronoctua_files::trash::Bin::of_volume(top, uid))
+            .collect()
+    }
+
+    /// What a volume's own trash still holds as it is unmounted — its name
+    /// and the count — or `None` when it holds nothing.
+    fn trash_left(&self, row: &ronoctua_files::sidebar::Row) -> Option<(String, usize)> {
+        let top = row.at.as_ref()?;
+        let n =
+            ronoctua_files::trash::Bin::of_volume(top, rustix::process::getuid().as_raw()).count();
+        (n > 0).then(|| (self.name_of_side(row), n))
     }
 
     /// Carries out one menu row.
@@ -12396,12 +10387,33 @@ impl View {
             // one camera differ. Drawn and refusing is the formatter's XFS
             // line, and it is better than a row that is missing — from the
             // outside, a missing row and a key that does nothing look the same.
-            "open-map" => self.looked.as_ref().and_then(|l| l.at).map_or_else(
+            "open-map" => self.panel.looked.as_ref().and_then(|l| l.at).map_or_else(
                 || Step::Say(does(ronoctua_i18n::key::FILES_DOES_OPEN_MAP_NOWHERE)),
                 |(lat, lon)| Step::Do(Doing::Web(map_url(lat, lon))),
             ),
             "open-with" => self.ask(Asking::Application(focused)),
+            // THE PLACE, OUT — after a question whose first answer is `no`. On
+            // one file the panel has read and found no place in, it says so
+            // instead of asking about nothing; on a set it asks, and a file
+            // with no place in it comes out of exiftool unchanged.
+            "remove-location" => {
+                let read_nowhere = paths.len() == 1
+                    && self
+                        .panel
+                        .looked
+                        .as_ref()
+                        .is_some_and(|l| l.path == focused && l.at.is_none());
+                if read_nowhere {
+                    Step::Say(does(ronoctua_i18n::key::FILES_DOES_OPEN_MAP_NOWHERE))
+                } else {
+                    self.ask(Asking::Location(paths))
+                }
+            }
             "pin" => self.pin(&paths),
+            // KEPT IN THE BELONGINGS, or no longer: `belongings.json` changed
+            // by the view's own arithmetic (`belongings::keep_from_the_files`),
+            // and the sentence it came to.
+            "belongings" => Step::Say(crate::belongings::keep_from_the_files(&paths)),
             "unhide" => self.ask_hidden(),
             // "HERE" IS THE FOCUSED DIRECTORY when one is focused, and the
             // current one otherwise — which is what every file manager does and
@@ -12431,6 +10443,7 @@ impl View {
             "paste" => Step::Do(Doing::Paste(here)),
             "rename" => self.ask(Asking::Name(focused)),
             "info" => self.inspect(),
+            "virustotal" => Step::Do(Doing::VirusTotal(focused)),
             "mode" => {
                 // The focused entry's mode is what the presets are compared
                 // against; the change lands on everything chosen. With one
@@ -12441,10 +10454,21 @@ impl View {
             }
             "owner" => self.ask(Asking::Owner(paths)),
             "group" => self.ask(Asking::Group(paths)),
-            "compress" => self.ask(Asking::Format(paths)),
-            "extract" | "extract-tar" => Step::Do(Doing::Extract(focused)),
-            "trash" => match &self.bin {
-                Some(bin) => Step::Do(Doing::Trash(bin.root.clone(), paths)),
+            // THE ARCHIVES' ROWS — `crate::files_archive` — outside one and
+            // inside one.
+            "compress" => self.ask(Asking::Sheet(Box::new(
+                crate::files_archive::Sheet::compress(paths),
+            ))),
+            "extract" => self.extract_archive(focused),
+            "archive-test" => self.test_archive(focused),
+            "archive-convert" => self.ask(Asking::Sheet(Box::new(
+                crate::files_archive::Sheet::convert(focused, None),
+            ))),
+            "archive-add" => self.add_to_archive(focused),
+            "archive-extract" => self.extract_members(),
+            "archive-remove" => self.remove_members(),
+            "trash" => match self.bin_for(&paths) {
+                Some(bin) => Step::Do(Doing::Trash(bin.root, paths)),
                 // NO BIN, NO TRASH — and it says so rather than falling back to
                 // deleting, which is the fallback that would cost somebody a
                 // file they thought was recoverable.
@@ -12453,17 +10477,29 @@ impl View {
                     args: Vec::new(),
                 }),
             },
-            "restore" => match &self.bin {
-                Some(bin) => Step::Do(Doing::Restore(
-                    bin.root.clone(),
-                    paths
-                        .iter()
-                        .filter_map(|p| p.file_name())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .collect(),
-                )),
-                None => Step::Changed,
-            },
+            // EACH BACK THROUGH ITS OWN BIN. The trash's listing gathers the
+            // home's and every mounted volume's, so a set chosen there may
+            // span several; the bin a file is in is its folder's parent.
+            "restore" => {
+                let mut by_bin: Vec<(PathBuf, Vec<String>)> = Vec::new();
+                for p in &paths {
+                    let (Some(root), Some(name)) = (
+                        p.parent().and_then(Path::parent).map(Path::to_path_buf),
+                        p.file_name().map(|n| n.to_string_lossy().into_owned()),
+                    ) else {
+                        continue;
+                    };
+                    match by_bin.iter_mut().find(|(r, _)| *r == root) {
+                        Some((_, names)) => names.push(name),
+                        None => by_bin.push((root, vec![name])),
+                    }
+                }
+                if by_bin.is_empty() {
+                    Step::Changed
+                } else {
+                    Step::Do(Doing::Restore(by_bin))
+                }
+            }
             "delete" => Step::Do(Doing::Delete(paths)),
             "shred" => Step::Do(Doing::Shred(paths)),
             // A row in the table with no arm here would be a menu line that
@@ -12553,15 +10589,6 @@ impl View {
         }
     }
 
-    /// Whether there is a film in the preview right now.
-    ///
-    /// Beside `shape_here` and asking the same way: the player's own answer,
-    /// and only while the preview is the file the cursor is on.
-    #[must_use]
-    pub fn film_here(&self) -> bool {
-        self.showing_now().is_some() && self.looked.as_ref().is_some_and(|l| l.moving.is_some())
-    }
-
     fn step_by(&mut self, by: i32) -> Step {
         match self.pane {
             // THE ARROWS WALK THE OPENED LINE while the keyboard is on its
@@ -12596,84 +10623,20 @@ impl View {
             // the cursor is on, which is what makes choosing worth anything.
             Pane::Preview if self.showing_list().is_some() => {
                 let total = self.showing_list().map_or(0, |l| l.entries.len());
-                self.walk_panel(by, total, true)
+                self.panel_mut().walk_panel(by, total, true)
             }
             Pane::Preview => {
-                if self.preview_total() > usize::from(self.drawn_lines.get()) {
-                    self.step_preview(by)
+                if self.preview_total() > usize::from(self.panel.drawn_lines.get()) {
+                    self.panel_mut().step_preview(by)
                 } else {
                     self.move_by(by)
                 }
             }
             Pane::Info => {
                 let total = self.sheet().len();
-                self.walk_panel(by, total, false)
+                self.panel_mut().walk_panel(by, total, false)
             }
         }
-    }
-
-    /// Moves a panel's cursor, and scrolls the panel to keep it in sight.
-    ///
-    /// # Why the view follows the cursor and not the other way round
-    ///
-    /// Because that is what every other list in this system does — the
-    /// sidebar, the listing, the locator — and a panel that scrolled while the
-    /// cursor stayed put would be the one place where the arrows moved the
-    /// paper instead of the hand. The paging keys (`C-,` and `C-.`) are still
-    /// there for moving the paper, and they come back round; this stops at the
-    /// ends, as a cursor should.
-    fn walk_panel(&mut self, by: i32, total: usize, preview: bool) -> Step {
-        if total == 0 {
-            return Step::Say(does(if preview {
-                PREVIEW_ALL_SHOWN
-            } else {
-                FACTS_ALL_SHOWN
-            }));
-        }
-        let last = total - 1;
-        let from = if preview {
-            self.preview_cursor
-        } else {
-            self.info_cursor
-        };
-        let to = if by < 0 {
-            from.saturating_sub(by.unsigned_abs() as usize)
-        } else {
-            from.saturating_add(by.unsigned_abs() as usize).min(last)
-        }
-        .min(last);
-        // AND THE PANEL SCROLLS UNDER IT. `drawn_lines` is what the last frame
-        // gave this panel — the title already taken off — so this is the same
-        // number the bar and the paging keys use.
-        //
-        // THE FACTS' OWN ROOM, which is not the panel's lines: the globe takes
-        // lines off the top of the info panel and they do not scroll, so a
-        // cursor walked to the bottom would go looking for a fact that is not
-        // drawn.
-        let room = if preview {
-            usize::from(self.drawn_lines.get()).max(1)
-        } else {
-            self.info_room().max(1)
-        };
-        let offset = if preview {
-            &mut self.preview_offset
-        } else {
-            &mut self.info_offset
-        };
-        if to < *offset {
-            *offset = to;
-        } else if to >= offset.saturating_add(room) {
-            *offset = to.saturating_sub(room - 1);
-        }
-        if preview {
-            self.preview_cursor = to;
-        } else {
-            self.info_cursor = to;
-        }
-        if to == from {
-            return Step::Nothing;
-        }
-        Step::Changed
     }
 
     /// Opens whatever the cursor is on, in whichever pane has it.
@@ -12691,8 +10654,19 @@ impl View {
             // choose from is a list one walks by accident. It is also the same
             // thing a click on that row already does.
             Pane::Preview if self.showing_list().is_some() => {
-                let at = self.preview_cursor;
-                self.play_entry(at)
+                let at = self.panel.preview_cursor;
+                self.panel_mut().play_entry(at)
+            }
+            // A FACT THAT CHANGES THE FILE asks its question, as pressing it
+            // does: the keyboard reaches every row the pointer reaches.
+            Pane::Info
+                if self
+                    .sheet()
+                    .get(self.panel.info_cursor)
+                    .is_some_and(|f| f.does != crate::inspection_sheet::Doable::Nothing) =>
+            {
+                let does = self.sheet()[self.panel.info_cursor].does;
+                self.amend(does)
             }
             // BOTH PANELS ARE ABOUT THE FOCUSED ENTRY, so `Enter` in either of
             // them opens it — the same thing clicking the picture already does,
@@ -12807,39 +10781,6 @@ impl View {
         Step::Changed
     }
 
-    /// Walks the text preview by a line, and stops at the ends.
-    ///
-    /// `step_facts`'s twin, one arm above in `step_by`, and deliberately the
-    /// same shape: it STOPS rather than wraps, because an arrow held down
-    /// should come to rest at the end of a file rather than start again at the
-    /// top. The key that wraps is `C-,`, which is the one pressed without
-    /// looking.
-    ///
-    /// It needs no "all shown" sentence: `step_by` only reaches it when there
-    /// is more than fits, and falls through to `move_by` otherwise — which
-    /// always does something.
-    fn step_preview(&mut self, by: i32) -> Step {
-        let room = usize::from(self.drawn_lines.get());
-        let total = self.preview_total();
-        if room == 0 || total <= room {
-            return Step::Nothing;
-        }
-        let last = total - room;
-        let to = if by < 0 {
-            self.preview_offset
-                .saturating_sub(by.unsigned_abs() as usize)
-        } else {
-            self.preview_offset
-                .saturating_add(by.unsigned_abs() as usize)
-                .min(last)
-        };
-        if to == self.preview_offset {
-            return Step::Nothing;
-        }
-        self.preview_offset = to;
-        Step::Changed
-    }
-
     /// Moves the text preview sideways, and stops at the ends.
     ///
     /// # Why sideways at all
@@ -12869,17 +10810,19 @@ impl View {
         let widest = self.preview_widest();
         let last = widest.saturating_sub(room.max(1));
         let to = if by < 0 {
-            self.preview_column
+            self.panel
+                .preview_column
                 .saturating_sub(by.unsigned_abs() as usize)
         } else {
-            self.preview_column
+            self.panel
+                .preview_column
                 .saturating_add(by.unsigned_abs() as usize)
                 .min(last)
         };
-        if to == self.preview_column {
+        if to == self.panel.preview_column {
             return Step::Say(does(PREVIEW_ALL_SHOWN));
         }
-        self.preview_column = to;
+        self.panel.preview_column = to;
         Step::Changed
     }
 
@@ -12948,61 +10891,23 @@ impl View {
                 self.scroll_listing_to(slide(self.list_offset(), by, total, room));
                 true
             }
-            // AND THE PREVIEW SCROLLS, now that there is something in it to
-            // scroll. A PICTURE STILL SWALLOWS THE GESTURE and there is no
-            // branch for that either: `preview_total` is 1, `slide` computes
-            // `last = 1 - room` as nought, the offset does not move, and it
-            // still answers `true` — so a hand resting over a photograph does
-            // not move a list somewhere else on the screen.
-            Pane::Preview => {
-                // A SHAPE TAKES THE WHEEL AND ZOOMS WITH IT. The figure already
-                // swallows the gesture — `preview_total` is 1 for a picture, so
-                // `slide` computes nothing and returns `true` anyway — and this
-                // is the one figure that has somewhere to put it. Up is nearer,
-                // which is what every map and every photograph does.
-                if self.zoom(WHEEL_ZOOM.powi(-i32::try_from(by).unwrap_or(0))) {
-                    return true;
-                }
-                let total = self.preview_total();
-                self.preview_offset = slide(self.preview_offset, by, total, room);
-                true
-            }
+            // THE PREVIEW SCROLLS ITSELF — and a picture swallows the gesture,
+            // so a hand resting over a photograph does not move a list
+            // somewhere else on the screen (`inspection::Panel::wheel`).
+            Pane::Preview => self.panel_mut().wheel(Panel::Preview, by, room),
             Pane::Sidebar => {
-                let total = self.side.shown(self.hidden).len();
+                let total = self.side.shown().len();
                 self.side_offset = slide(self.side_offset, by, total, room);
                 true
             }
+            // AND THE FACTS SCROLL THEMSELVES, when they are on screen — the
+            // globe among them takes the gesture where the hand is on it
+            // (`inspection::Panel::wheel`). The width is written down on the
+            // way, as every question about where the panes are writes it
+            // (`View::panes`).
             Pane::Info => {
-                if !self.panes(width).info {
-                    return false;
-                }
-                // A FIGURE SWALLOWS THE GESTURE, and this is the one figure in
-                // this panel with somewhere to put it. The preview's arm makes
-                // the same move for a shape; without it the wheel over the
-                // globe would scroll the facts underneath, which is the defect
-                // `Panes::section_at` exists to end, one section in.
-                // AND IT IS THE POINTER THAT DECIDES, not the focus.
-                //
-                // `View::zoom` asks which pane has the KEYBOARD — right for
-                // `C-k`, because the shape and the globe share that notation
-                // and the focused pane is what tells them apart. A wheel has no
-                // such ambiguity and no such question: it acts where the hand
-                // is. Going through `zoom` meant the gesture only worked with
-                // the info panel focused, which is not the state anybody scrolls
-                // in — the listing has the focus while one reads a photograph.
-                if self.pointing_at_the_globe.get()
-                    && self.globe_here()
-                    && self
-                        .globe
-                        .borrow_mut()
-                        .zoom(WHEEL_ZOOM.powi(-i32::try_from(by).unwrap_or(0)))
-                {
-                    return true;
-                }
-                let total = self.info_total();
-                self.info_offset =
-                    slide(self.facts_offset(total), by, total, self.info_room().max(1));
-                true
+                self.drawn_at.set(width);
+                self.panel_mut().wheel(Panel::Info, by, room)
             }
         }
     }
@@ -13015,7 +10920,7 @@ impl View {
     /// arrow press that appears to do nothing, which is the same complaint as a
     /// key that never arrived.
     fn side_by(&mut self, by: i32) -> Step {
-        let lines = self.side.shown(self.hidden);
+        let lines = self.side.shown();
         if lines.iter().all(Option::is_none) {
             return Step::Nothing;
         }
@@ -13043,10 +10948,10 @@ impl View {
 
     /// Keeps the sidebar's cursor inside the sidebar.
     ///
-    /// A device unplugged, a row hidden, `C-h` pressed — any of them shortens
-    /// the list under a cursor that was already past the new end.
+    /// A device unplugged or a row hidden — either shortens the list under a
+    /// cursor that was already past the new end.
     fn clamp_side(&mut self) {
-        let lines = self.side.shown(self.hidden);
+        let lines = self.side.shown();
         self.side_cursor = self.side_cursor.min(lines.len().saturating_sub(1));
         // AND OFF A GAP. Shortening the list can leave the cursor on a blank
         // line, where every key would answer "nothing" for a reason nobody can
@@ -13081,7 +10986,7 @@ impl View {
         // THE FACTS GO BACK TO THE TOP. They are about the entry the cursor is
         // on, and a scroll position kept across two different files opens the
         // next one half way down a list it does not have.
-        self.info_offset = 0;
+        self.panel.info_offset = 0;
         // AND THE NAME STARTS WALKING FROM ITS OWN BEGINNING.
         self.restart_the_walk();
         // AND A NAME THAT DOES NOT FIT IS SAID, briefly.
@@ -13257,6 +11162,13 @@ impl View {
     /// drag with whatever comes back. Once, because `start_drag` may be called
     /// once per gesture and the second call is a protocol error.
     pub fn begun_carrying(&mut self) -> Option<(Vec<PathBuf>, bool)> {
+        // A MEMBER OF AN ARCHIVE IS NOT A FILE ON THE DISK, and dragging one
+        // out would hand another program a path that does not exist: taking
+        // it out is `archive-extract`.
+        if self.in_archive() {
+            self.carry = None;
+            return None;
+        }
         let carry = self.carry.as_mut()?;
         if carry.told {
             return None;
@@ -13429,12 +11341,7 @@ impl View {
                 let into = match &at.hit {
                     Hit::Air => self.where_.clone(),
                     Hit::Sidebar(n) | Hit::Eject(n) => {
-                        let row = self
-                            .side
-                            .shown(self.hidden)
-                            .get(*n)
-                            .and_then(|r| *r)?
-                            .clone();
+                        let row = self.side.shown().get(*n).and_then(|r| *r)?.clone();
                         match row.target {
                             ronoctua_files::sidebar::Target::Place(p) => p,
                             _ => return None,
@@ -13471,6 +11378,11 @@ impl View {
         };
         if paths.is_empty() {
             return Step::Nothing;
+        }
+        // DROPPED INTO AN ARCHIVE the view stands in: added to it, by the
+        // queue — never copied into a path that is not on the disk.
+        if let Some(step) = self.dropped_into_archive(&into, &paths) {
+            return step;
         }
         // NOT THROUGH `Doing::Paste`, which spends the CLIPBOARD: a drop that
         // emptied what somebody had copied would be a gesture with a side
@@ -13896,7 +11808,7 @@ impl View {
     /// a blank line is still a line the pointer can land on.
     fn focused_side(&self) -> Option<ronoctua_files::sidebar::Row> {
         self.side
-            .shown(self.hidden)
+            .shown()
             .get(self.side_cursor)
             .and_then(|r| r.map(Clone::clone))
     }
@@ -13919,7 +11831,23 @@ impl View {
                 // come back refused. It names what it needs and offers the root
                 // terminal instead.
                 Target::Device(_) if row.system => Step::Say(self.needs_admin(&row)),
+                // LOCKED: THE PASSPHRASE FIRST, on the door's own line and
+                // masked — then unlocked, mounted and gone into.
+                Target::Device(id) if row.seal == Some(ronoctua_files::sidebar::Seal::Locked) => {
+                    self.wanting = Some(crate::files_archive::Wanting::Unlock {
+                        device: id.clone(),
+                        name: self.name_of_side(&row),
+                    });
+                    Step::Secret(crate::files_archive::UNLOCK)
+                }
                 Target::Device(id) => Step::Do(Doing::Mount(id.clone())),
+                _ => Step::Nothing,
+            },
+            "lock" => match &row.target {
+                Target::Device(id) => Step::Do(Doing::Lock {
+                    device: id.clone(),
+                    name: self.name_of_side(&row),
+                }),
                 _ => Step::Nothing,
             },
             "unmount" => self.eject_focused(),
@@ -13928,7 +11856,7 @@ impl View {
                 // without unmounting first is how a stick leaves with a write
                 // still in flight, so this asks for both in order and the host
                 // does the second only when the first came back.
-                Target::Device(id) => Step::Do(Doing::Eject(id.clone())),
+                Target::Device(id) => Step::Do(Doing::Eject(id.clone(), self.trash_left(&row))),
                 _ => Step::Nothing,
             },
             // ALREADY ON SCREEN. The facts are the top of this very menu, so
@@ -14019,7 +11947,9 @@ impl View {
             });
         }
         match (&row.target, row.mounted) {
-            (Target::Device(id), Some(true)) => Step::Do(Doing::Unmount(id.clone())),
+            (Target::Device(id), Some(true)) => {
+                Step::Do(Doing::Unmount(id.clone(), self.trash_left(&row)))
+            }
             // A row one cannot unmount: an unmounted device, a folder, the
             // trash. It says WHAT the row is rather than what the key wants.
             _ => Step::Say(self.side_explanation(&row, &self.texts)),
@@ -14165,6 +12095,10 @@ impl View {
                 key: ronoctua_i18n::key::FILES_UNMOUNT_BUSY,
                 args: vec![("name", name)],
             },
+            Refusal::WrongPassphrase => mode::Explanation {
+                key: ronoctua_i18n::key::FILES_UNLOCK_WRONG,
+                args: vec![("name", name)],
+            },
             // ALREADY MOUNTED IS NOT A REFUSAL TO A PERSON: something else
             // mounted it between the reading and the press, and where they
             // wanted to go is exactly where it now is. The host re-reads.
@@ -14187,16 +12121,21 @@ impl View {
     /// cursor is clamped: a stick unplugged while the cursor was on it would
     /// otherwise leave the cursor past the end of a list that just got shorter.
     pub fn racked(&mut self, rack: &ronoctua_disks::Rack) {
-        // EVERY volume that is a row, quiet ones included: whether a quiet row
-        // is DRAWN is `C-h`'s answer and it is asked at drawing time, so
-        // filtering here would make the key stop working on devices while it
-        // went on working on dotfiles.
+        // EVERY volume that is a row, quiet ones included: a quiet row is
+        // listed too — last in its block, in the quiet register — because
+        // there is no key that hides it and nothing here filters it out.
         let uid = ronoctua_files::who::my_uid();
         let listed = ronoctua_disks::listed(&rack.volumes, uid, true);
         let rows = listed
             .iter()
             .map(|v| {
                 let mounted = v.mounted();
+                // AN ENCRYPTED DISK: its container while it is locked, what
+                // came out of it while it is open (`ronoctua_disks::seal_of`).
+                let seal = ronoctua_disks::seal_of(v, &rack.volumes).map(|s| match s {
+                    ronoctua_disks::Encrypted::Locked => ronoctua_files::sidebar::Seal::Locked,
+                    ronoctua_disks::Encrypted::Unlocked => ronoctua_files::sidebar::Seal::Unlocked,
+                });
                 ronoctua_files::sidebar::Row {
                     id: format!("device:{}", v.node),
                     target: ronoctua_files::sidebar::Target::Device(v.at.clone()),
@@ -14207,7 +12146,11 @@ impl View {
                     mounted: Some(mounted),
                     at: v.place().map(PathBuf::from),
                     quiet: v.quiet,
-                    system: v.system,
+                    // WHAT CAME OUT OF A DISK THIS SYSTEM OPENS IS NOT THE
+                    // SYSTEM'S, whatever hint udisks copied onto it: udisks
+                    // lets whoever unlocked it mount it, and the guard below
+                    // would otherwise send them to the root terminal.
+                    system: v.system && seal != Some(ronoctua_files::sidebar::Seal::Unlocked),
                     // RESOLVED HERE, where the volume is. The sidebar carries
                     // the answer and not the volume, because it does not know
                     // what a volume is — and the guard has to hold even if
@@ -14226,11 +12169,27 @@ impl View {
                         .and_then(|at| rack.drives.iter().find(|d| d.at == at))
                         .is_some_and(|d| d.removable),
                     built_in: true,
+                    seal,
                 }
             })
             .collect();
+        self.devices_are(rows);
+    }
+
+    /// The sidebar's device rows, as the disk border read them.
+    ///
+    /// THE TRASH'S LISTING GATHERS EVERY MOUNTED DRIVE'S OWN, so a drive
+    /// mounted or unmounted anywhere — the sidebar, a terminal, pulled out —
+    /// changes what the trash holds. It is read again only then, and only
+    /// while the trash is on screen: a stick that left must not stay listed
+    /// with entries nobody can press, and one that arrived must show up.
+    fn devices_are(&mut self, rows: Vec<ronoctua_files::sidebar::Row>) {
+        let before = self.mounts();
         self.side.devices_are(rows);
         self.clamp_side();
+        if self.in_trash() && self.mounts() != before {
+            self.reread();
+        }
     }
 
     fn open_focused(&mut self) -> Step {
@@ -14247,12 +12206,22 @@ impl View {
             self.up();
             return Step::Changed;
         }
+        // A MEMBER OF THE ARCHIVE the view has walked into: a folder is
+        // walked into too, a file is taken out into the cache and opened.
+        if self.in_archive() {
+            return self.open_member(&entry);
+        }
         let path = self.where_.join(&entry.name);
         // Opening FOLLOWS a link — that is what a link is for. Everything else
         // in this module acts on the link itself.
         if matches!(entry.opens_as(), Kind::Directory) {
             self.enter(&path);
             return Step::Changed;
+        }
+        // AN ARCHIVE IS WALKED INTO LIKE A FOLDER: listed off the loop, or at
+        // once when this process kept its listing.
+        if ronoctua_files::archive::enters(&entry.name) {
+            return self.walk_into_archive(&path, None);
         }
         Step::Do(Doing::Open(path))
     }
@@ -14362,241 +12331,6 @@ impl View {
             .collect()
     }
 
-    /// Everything known about the entry the cursor is on.
-    fn sheet(&self) -> Vec<Fact> {
-        let Some(entry) = self.focused() else {
-            return Vec::new();
-        };
-        // REMEMBERED, and it is not an optimisation to be weighed: this runs on
-        // every painted frame and formats one Fluent message per row. See
-        // `View::remembered` for what the key is made of and why.
-        let wanted = SheetFor {
-            name: entry.name.clone(),
-            modified: entry.modified,
-            measured: self
-                .measured
-                .as_ref()
-                .filter(|(n, _)| *n == entry.name)
-                .map(|(_, b)| *b),
-            looked: self.looked.as_ref().map(|l| l.key.clone()),
-            said: std::rc::Rc::as_ptr(&self.texts) as usize,
-        };
-        if let Some((was, sheet)) = self.remembered.borrow().as_ref()
-            && *was == wanted
-        {
-            return sheet.clone();
-        }
-        let built = self.sheet_of(&entry.name);
-        *self.remembered.borrow_mut() = Some((wanted, built.clone()));
-        built
-    }
-
-    /// Everything known about one entry, as [`Fact`]s already in words.
-    ///
-    /// # Why ONE builder for THREE homes
-    ///
-    /// Because the right-hand column, the bottom strip and the modal sheet the
-    /// menu's *information* row opens are three places showing the same list,
-    /// and a second builder is a second answer to "what does this file say".
-    /// It is the same argument that keeps the two doors on one `View`.
-    ///
-    /// What the FILESYSTEM knows comes first — the path, the type, the mode,
-    /// the owner, the size, the date — and what the CONTENT says follows, from
-    /// `ronoctua_inspect::facts`. The order is the reading order: one answers
-    /// "which file is this", the other "what is inside it".
-    ///
-    /// **A fact with no answer is ABSENT.** Never a row saying "unknown": a
-    /// panel of unknowns is a panel nobody reads twice, and the crate that
-    /// produces them already refuses to emit one.
-    fn sheet_of(&self, name: &str) -> Vec<Fact> {
-        let texts = std::rc::Rc::clone(&self.texts);
-        let Some(entry) = self.entries.iter().find(|e| e.name == name) else {
-            return Vec::new();
-        };
-        // THROUGH THE PARENT AND NOT THROUGH A `..`, for the reason
-        // `focused_path` gives: a path with `..` in it is a path shown on
-        // screen and handed to other processes.
-        let path = if entry.is_parent() {
-            self.where_
-                .parent()
-                .map_or_else(|| self.where_.clone(), Path::to_path_buf)
-        } else {
-            self.where_.join(&entry.name)
-        };
-        let (named, sniffed) = ronoctua_files::mime::examined(&path, entry.kind);
-        let owner = self
-            .roster
-            .person(entry.uid)
-            .map_or_else(|| entry.uid.to_string(), ToOwned::to_owned);
-        let group = self
-            .roster
-            .group(entry.gid)
-            .map_or_else(|| entry.gid.to_string(), ToOwned::to_owned);
-        let measured = self
-            .measured
-            .as_ref()
-            .filter(|(n, _)| n == name)
-            .map(|(_, b)| size_text(*b, texts.decimal_mark()));
-
-        // WHAT EACH ROW OFFERS IS DECIDED HERE, once, beside the value it is
-        // about — and not in the drawing, which would have to work out what
-        // kind of fact it was holding from the text of it.
-        let mut lines: Vec<(&'static str, String, Doable, Option<Explanation>)> = vec![
-            (
-                ronoctua_i18n::key::FILES_DETAIL_PATH,
-                path.to_string_lossy().into_owned(),
-                Doable::Nothing,
-                None,
-            ),
-            (
-                ronoctua_i18n::key::FILES_DETAIL_TYPE,
-                match sniffed {
-                    Some(found) if found != named => format!("{named} / {found}"),
-                    _ => named.to_owned(),
-                },
-                Doable::Nothing,
-                None,
-            ),
-            (
-                ronoctua_i18n::key::FILES_DETAIL_MODE,
-                format!(
-                    "{} ({})",
-                    ronoctua_files::mode::shown(entry.mode),
-                    ronoctua_files::mode::octal(entry.mode)
-                ),
-                Doable::Mode,
-                None,
-            ),
-            (
-                ronoctua_i18n::key::FILES_DETAIL_OWNER,
-                format!("{owner}:{group}"),
-                Doable::Ownership,
-                None,
-            ),
-            (
-                ronoctua_i18n::key::FILES_DETAIL_SIZE,
-                measured.unwrap_or_else(|| size_text(entry.bytes, texts.decimal_mark())),
-                // A DIRECTORY'S SIZE IS A WALK and a file's is already known:
-                // one of the two is a thing to ask for and the other is a
-                // thing to read. See `measure_field`.
-                if matches!(entry.kind, Kind::Directory) {
-                    Doable::Measure
-                } else {
-                    Doable::Nothing
-                },
-                None,
-            ),
-            (
-                ronoctua_i18n::key::FILES_DETAIL_MODIFIED,
-                crate::chrome::when_text(entry.modified, &self.zone, false, &texts),
-                Doable::Nothing,
-                // THE SAME TWO KEYS THE LISTING'S COLUMN USES, so the column
-                // and the panel cannot come to disagree about a date — which
-                // is the argument `chrome::when_text` opens with, one panel
-                // along.
-                Some(Explanation {
-                    key: if self.zone.is_utc() {
-                        ronoctua_i18n::key::FILES_EXPLAIN_WHEN_UTC
-                    } else {
-                        ronoctua_i18n::key::FILES_EXPLAIN_WHEN
-                    },
-                    args: vec![(
-                        "when",
-                        crate::chrome::when_long(entry.modified, &self.zone, &texts),
-                    )],
-                }),
-            ),
-            (
-                ronoctua_i18n::key::FILES_DETAIL_LINKS,
-                entry.links.to_string(),
-                Doable::Nothing,
-                None,
-            ),
-        ];
-        // A LINK SAYS WHERE IT GOES, and whether it goes anywhere at all.
-        if let Some(target) = &entry.target {
-            lines.push((
-                if entry.broken() {
-                    ronoctua_i18n::key::FILES_DETAIL_BROKEN
-                } else {
-                    ronoctua_i18n::key::FILES_DETAIL_TARGET
-                },
-                target.clone(),
-                Doable::Nothing,
-                None,
-            ));
-        }
-        let mut out: Vec<Fact> = lines
-            .into_iter()
-            .map(|(k, value, does, says)| Fact {
-                label: texts.t(k),
-                value,
-                does,
-                says,
-            })
-            .collect();
-        // AND WHAT THE TOOLS SAID, when they have been asked about THIS file.
-        //
-        // The path is compared and not only the name: the cursor moves while a
-        // child process runs, and facts about the previous file under the
-        // current file's name is the one failure this panel must not have.
-        //
-        // NONE OF THEM IS A TARGET, and that is not an oversight: a
-        // photograph's ISO and a video's frame rate are what the file IS, and
-        // nothing this manager does could change one.
-        if let Some(l) = self.looked.as_ref().filter(|l| l.path == path) {
-            out.extend(l.facts.iter().map(|f| Fact {
-                // A KEY IS TRANSLATED AND A NAME IS NOT, which is the whole
-                // of `Label`: a row this system decided to show has a sentence
-                // in both languages, and a tag the FILE chose to write has the
-                // name the file wrote.
-                label: match &f.label {
-                    ronoctua_inspect::facts::Label::Key(k) => texts.t(k),
-                    ronoctua_inspect::facts::Label::Named(name) => name.clone(),
-                },
-                value: fact_said(&f.value, &texts),
-                does: Doable::Nothing,
-                // THE GENERIC SENTENCE, which carries both halves un-elided.
-                // A tool's fact is a label and a value and nothing more; the
-                // one row that needs its own sentence is a date, and the dates
-                // this panel shows are assembled above.
-                says: None,
-            }));
-
-            // AND WHERE THAT COORDINATE IS, in words.
-            //
-            // A row of its own and not a longer coordinate: the numbers say
-            // where on the Earth, and this says where among PEOPLE — which is
-            // the question anybody actually has when they look at a
-            // photograph. It is offline arithmetic over a table this machine
-            // carries; the glance's refusal of a geocoder was about the
-            // NETWORK, and this one opens no socket.
-            //
-            // Absent on a machine with no world data, WITH A SENTENCE: the
-            // installer and the rescue console have none, and a row that
-            // simply vanished would read as a file that carries no place.
-            if let Some(at) = l.at {
-                let value = crate::globe::address_of(at, &texts).map_or_else(
-                    || {
-                        if crate::globe::present() {
-                            texts.t(ronoctua_i18n::key::GLOBE_ADDRESS_NOWHERE)
-                        } else {
-                            texts.t(ronoctua_i18n::key::ATLAS_ABSENT)
-                        }
-                    },
-                    |found| crate::globe::said(&found, &texts),
-                );
-                out.push(Fact {
-                    label: texts.t(ronoctua_i18n::key::FILES_FACT_WHERE),
-                    value,
-                    does: Doable::Nothing,
-                    says: None,
-                });
-            }
-        }
-        out
-    }
-
     /// Turns a panel on, or off.
     ///
     /// **They TOGGLE; they do not take focus.** There is no third [`Pane`], and
@@ -14613,13 +12347,13 @@ impl View {
     /// and a dead key look the same.
     fn toggle_panel(&mut self, which: Panel) -> Step {
         match which {
-            Panel::Preview => self.preview_on = !self.preview_on,
+            Panel::Preview => self.panel.preview_on = !self.panel.preview_on,
             Panel::Info => {
-                self.info_on = !self.info_on;
+                self.panel.info_on = !self.panel.info_on;
                 // TURNED OFF AND ON AGAIN IS A FRESH LOOK. Coming back to a
                 // panel scrolled to where it was three files ago is the same
                 // defect `move_by` clears, one gesture up.
-                self.info_offset = 0;
+                self.panel.info_offset = 0;
             }
         }
         // ASKING AGAIN COSTS NOTHING AND ANSWERS EVERYTHING: the width is the
@@ -14634,1231 +12368,6 @@ impl View {
             });
         }
         Step::Changed
-    }
-
-    /// Turns the info panel to its next page of facts, and round to the start.
-    ///
-    /// # Why it pages, and why it wraps
-    ///
-    /// A page because the panel is a block one reads, not a line one steps
-    /// through: a fact list of a dozen rows in four lines is three presses,
-    /// and three presses of one key is less to learn than two keys. It wraps
-    /// for the reason `files-sort` cycles — a key one can press again without
-    /// having to know where the end is — and [`View::facts_bar`] is what says
-    /// where one has got to, so the wrap is never a surprise.
-    ///
-    /// **With everything already on screen it SAYS so.** From the outside a
-    /// key that refuses and a key that is dead look the same, and that is the
-    /// one outcome this project treats as a defect.
-    fn scroll_facts(&mut self) -> Step {
-        // THE WIDTH AND THE HEIGHT ARE BOTH THE LAST ONES DRAWN, which are
-        // the only ones true of what is on screen. A key arrives with neither
-        // — see `View::drawn_at` and `View::drawn_lines`.
-        let width = self.drawn_at.get();
-        // THE PANEL'S ROWS AND NOT ITS LINES. The globe takes lines off the
-        // top and they do not scroll (`Section::above`), so paging by the
-        // region's height would step past facts nobody has seen.
-        let room = self.info_room();
-        // THE GRID'S ROWS, which is what one pages through: with the facts in
-        // columns the sheet is shorter down the page than it is long.
-        let total = self.info_total();
-        if !self.panes(width).info || room == 0 || total <= room {
-            return Step::Say(does(FACTS_ALL_SHOWN));
-        }
-        self.info_offset = self.facts_offset(total).saturating_add(room);
-        if self.info_offset >= total {
-            self.info_offset = 0;
-        }
-        Step::Changed
-    }
-
-    /// Pages the text preview, and comes back round.
-    ///
-    /// `scroll_facts`'s twin, and the same shape for the same reason written
-    /// there: a list one can hold a key on without having to know where the
-    /// end is. The bar says where one got to.
-    fn scroll_preview(&mut self) -> Step {
-        let width = self.drawn_at.get();
-        let room = usize::from(self.drawn_lines.get());
-        let total = self.preview_total();
-        if !self.panes(width).preview || room == 0 || total <= room {
-            return Step::Say(does(PREVIEW_ALL_SHOWN));
-        }
-        self.preview_offset = self.preview_offset.saturating_add(room);
-        if self.preview_offset >= total {
-            self.preview_offset = 0;
-        }
-        Step::Changed
-    }
-
-    /// Starts one entry of the playlist under the cursor.
-    ///
-    /// One place, because three things reach it — the two keys and the click —
-    /// which is the rule `seek_to` already keeps for the transport.
-    fn play_entry(&mut self, to: usize) -> Step {
-        let Some(list) = self.showing_list() else {
-            return Step::Say(does(NOTHING_PLAYING));
-        };
-        // AN ENTRY THAT CANNOT BE PLAYED IS NOT SKIPPED SILENTLY. A remote one
-        // is on screen with the address it names, and pressing it should say
-        // why nothing happened rather than jumping to the next.
-        let Some(entry) = list.entries.get(to) else {
-            return Step::Nothing;
-        };
-        if !matches!(entry.at, ronoctua_inspect::playlist::Where::Local(_)) {
-            // AND IT SAYS WHICH ONE. "This entry is somewhere else" about a
-            // list of nine is a sentence one still has to go and check.
-            return Step::Say(Explanation {
-                key: ENTRY_NOT_HERE,
-                args: vec![("path", entry.written.clone())],
-            });
-        }
-        self.playing = to;
-        // FROM THE TOP OF THE NEW ONE, and audible: an entry chosen by hand is
-        // an entry somebody wants to hear.
-        self.transport = Transport {
-            on: true,
-            paused: false,
-            from: 0.0,
-            at: 0.0,
-            sound: true,
-        };
-        Step::Changed
-    }
-
-    /// Walks to the next entry that can be played, or the one before it.
-    ///
-    /// `C-{` and `C-}`. The braces and not the brackets: `C-[` and `C-]` slide
-    /// a long line sideways and belong to the panel, and this pair belongs to
-    /// the LIST — the family reads as "brackets move the line, braces move the
-    /// entry".
-    fn step_entry(&mut self, by: isize) -> Step {
-        let Some(list) = self.showing_list() else {
-            return Step::Say(does(NOTHING_PLAYING));
-        };
-        let playable: Vec<usize> = list.playable().collect();
-        if playable.is_empty() {
-            return Step::Say(does(NOTHING_TO_PLAY));
-        }
-        // WHERE THE QUEUE IS AMONG THE PLAYABLE ONES, and not among the drawn
-        // rows: stepping past a remote entry must not stop on it.
-        let now = playable
-            .iter()
-            .position(|n| *n >= self.playing)
-            .unwrap_or(playable.len() - 1);
-        let next = if by < 0 {
-            now.checked_sub(1)
-        } else {
-            (now + 1 < playable.len()).then_some(now + 1)
-        };
-        let Some(next) = next else {
-            return Step::Say(does(if by < 0 { LIST_AT_START } else { LIST_AT_END }));
-        };
-        self.play_entry(playable[next])
-    }
-
-    /// How much of the preview's foot the controls cover, in hundredths.
-    ///
-    /// # Derived, and not a token
-    ///
-    /// The controls are ONE line, and how much of the panel one line is depends
-    /// on how many lines the panel got — four in the strip, a screenful with
-    /// the region given over. A token would have to be one number for both.
-    ///
-    /// The two the view already records are enough: `drawn_lines` is how many
-    /// lines the panel was laid out in, and one of them is the transport's. No
-    /// font size crosses this line — which matters, because the two doors do
-    /// not use the same one.
-    fn controls_foot(&self) -> u16 {
-        let lines = self.drawn_lines.get().max(1);
-        (100 / lines).min(100)
-    }
-
-    /// How long what is under the cursor runs, in seconds.
-    ///
-    /// # One source, because four things ask it
-    ///
-    /// The timeline draws from it, the two seek keys clamp against it and the
-    /// drag maps a fraction onto it. Written out at each, a playlist answered
-    /// three of the four — the drawing knew its entry's length and the two
-    /// keys and the drag went on asking `moving`, which a playlist has not
-    /// got. The controls appeared and did nothing, which is exactly what the
-    /// owner reported: *"nenhum botão de pause e de linha de tempo está
-    /// funcionando nos arquivos de playlist"*.
-    ///
-    /// A PLAYLIST'S IS ITS OWN WORD. Nothing here has opened the entry, so the
-    /// only length available is the one the list declares — and a list that
-    /// declares none gets no timeline, which is the answer a GIF gets and for
-    /// the same reason.
-    fn playing_seconds(&self) -> Option<f64> {
-        if let Some(list) = self.showing_list() {
-            return list.entries.get(self.playing)?.seconds;
-        }
-        self.looked.as_ref()?.moving.as_ref()?.shape.seconds
-    }
-
-    /// The next entry that could be played, when there is one.
-    ///
-    /// `None` at the end of the list, and that is what stops it: a preview
-    /// that never stops is a child process that never stops. Pressing play on
-    /// a finished list starts it again from the first entry, which is
-    /// `play_pause`'s third state doing what it already does.
-    fn after_the_one_playing(&self) -> Option<usize> {
-        let list = self.showing_list()?;
-        list.playable().find(|n| *n > self.playing)
-    }
-
-    /// Holds the film, or lets it go on. `C-;`, and the play glyph.
-    ///
-    /// # Three states, one key
-    ///
-    /// Playing, held, and ENDED — and the third is why this is not a `not`. A
-    /// film that ran out has no child to resume, so pressing play there starts
-    /// it again from the beginning, which is what everybody expects a play
-    /// button at the end of a film to do.
-    fn play_pause(&mut self) -> Step {
-        if !self.plays_here() {
-            return Step::Say(does(NOTHING_PLAYING));
-        }
-        if self.transport.on {
-            self.transport.paused = !self.transport.paused;
-        } else {
-            // FROM THE TOP. The child is gone, so this is a spawn either way,
-            // and starting where the film ended would show its last frame and
-            // stop.
-            //
-            // AND A LIST THAT RAN OUT STARTS AGAIN AT THE TOP, which is the
-            // same sentence one register up: the child is gone, so this is a
-            // spawn either way, and resuming on the last entry would play its
-            // final second and stop.
-            if let Some(first) = self.showing_list().and_then(|l| l.playable().next())
-                && self.after_the_one_playing().is_none()
-            {
-                self.playing = first;
-            }
-            // AND THE SOUND CHOICE SURVIVES. `Transport::default` is silent,
-            // and a sound arrives with its audio on — so rebuilding wholesale
-            // would answer a key about PLAYING by muting the file, once, at
-            // the end, with nothing saying why.
-            self.transport = Transport {
-                on: true,
-                paused: false,
-                from: 0.0,
-                at: 0.0,
-                sound: self.transport.sound,
-            };
-        }
-        Step::Changed
-    }
-
-    /// Lets the film be heard, or not. `C-'`, and the sound glyph.
-    ///
-    /// A film with no audio stream REFUSES rather than pretending: measured
-    /// against the real binary, asking ffmpeg for a sound output it cannot fill
-    /// makes it refuse the whole command — so the picture would stop, in answer
-    /// to a key about the sound.
-    fn hear(&mut self) -> Step {
-        let has = self
-            .looked
-            .as_ref()
-            .and_then(|l| l.moving.as_ref())
-            .is_some_and(|m| m.shape.sound);
-        if !self.plays_here() {
-            return Step::Say(does(NOTHING_PLAYING));
-        }
-        if !has {
-            return Step::Say(does(NO_SOUND_IN_IT));
-        }
-        self.transport.sound = !self.transport.sound;
-        // AND IT IS A RESPAWN, FROM WHERE THE PICTURE IS. The sound comes out
-        // of the same child, so there is no way to add it to one already
-        // running — and starting again from nought would be a key about the
-        // sound that moved the picture.
-        self.transport.from = self.transport.at;
-        Step::Changed
-    }
-
-    /// Moves along the film, and says where it got to. `C--` and `C-=`.
-    ///
-    /// A GIF refuses, and it is the length that refuses it: its frames are
-    /// inter-dependent, so reaching frame five hundred means composing five
-    /// hundred — 707 ms on the owner's own forty-four-frame sample. No
-    /// duration is what draws that line, with no branch of its own.
-    fn seek_by(&mut self, by: f64) -> Step {
-        let Some(total) = self.playing_seconds() else {
-            return Step::Say(does(NOTHING_PLAYING));
-        };
-        if !self.plays_here() {
-            return Step::Say(does(NOTHING_PLAYING));
-        }
-        self.seek_to((self.transport.at + by).clamp(0.0, (total - 0.1).max(0.0)));
-        Step::Say(Explanation {
-            key: ronoctua_i18n::key::FILES_FILM_SEEK,
-            args: vec![
-                ("at", clock_of(self.transport.from)),
-                ("total", clock_of(total)),
-            ],
-        })
-    }
-
-    /// Puts the film at a point, in seconds.
-    ///
-    /// One place, because three things reach it — the two keys and the drag —
-    /// and a seek written three times is three chances for the picture and the
-    /// cursor to disagree about where the film is.
-    pub fn seek_to(&mut self, to: f64) {
-        self.transport.on = true;
-        self.transport.paused = false;
-        self.transport.from = to.max(0.0);
-        self.transport.at = self.transport.from;
-        // AND THE PICTURE ON SCREEN STAYS until the new one arrives.
-        //
-        // Clearing it was the first shape of this and it was worse: a seek is a
-        // kill and a respawn, 108 to 242 milliseconds, and blanking the panel
-        // for each of them turns a drag along the timeline into a strobe. The
-        // texture is reused under the same key, so the new frame simply
-        // overwrites the old one when it lands.
-    }
-
-    /// Gives a panel the whole region, or gives it back. `C-w` and `C-W`.
-    ///
-    /// It REFUSES when there is nothing under the cursor, and the refusal is
-    /// the point: a manager whose listing vanished because a key was pressed
-    /// over an empty directory is a manager that lost its listing.
-    ///
-    /// **And it refuses for a panel that is HIDDEN**, which is not the same
-    /// refusal and does not deserve the same sentence. `C-v` and `C-i` take a
-    /// panel off the screen; handing the region to one of those was a key that
-    /// said "the panel has the whole region" and changed nothing at all — the
-    /// one outcome this project treats as a defect, because from the outside a
-    /// key that lies and a key that is dead look the same.
-    fn theatre(&mut self, which: Panel) -> Step {
-        if self.focused().is_none() {
-            return Step::Say(does(THEATRE_NOTHING));
-        }
-        if !self.panel_on(which) {
-            return Step::Say(does(WIDE_HIDDEN));
-        }
-        // THE OTHER KEY TAKES IT OVER rather than adding a second wide panel:
-        // the region is ONE, so the two keys are the two ends of one wish.
-        self.theatre = if self.theatre == Some(which) {
-            None
-        } else {
-            Some(which)
-        };
-        let wide = self.theatre == Some(which);
-        Step::Say(does(match (which, wide) {
-            (Panel::Preview, true) => THEATRE_ON,
-            (Panel::Preview, false) => THEATRE_OFF,
-            (Panel::Info, true) => FACTS_WIDE_ON,
-            (Panel::Info, false) => FACTS_WIDE_OFF,
-        }))
-    }
-
-    /// What the inspector should be asked for, or `None` when nothing is due.
-    ///
-    /// # Why the ASK is remembered and not only the answer
-    ///
-    /// Because `None` is an ANSWER — "this file has no picture" — and without
-    /// somewhere to write "I have asked, and that was the reply" the host asks
-    /// again on every frame, which is a child process per frame. It is the rule
-    /// `surface`'s `icons` map already learned, and the reason
-    /// `ronoctua_inspect::Made` carries the refusal alongside the pixels.
-    ///
-    /// `target` is `space.files.panelPixels`; the crate quantises it, so
-    /// dragging a window's edge re-decodes at most twice.
-    pub fn wants_look(&mut self, target: u32) -> Option<Ask> {
-        if !self.preview_on && !self.info_on {
-            return None;
-        }
-        // COPIED OUT BEFORE ANYTHING IS WRITTEN. `focused()` borrows the whole
-        // view and the line that records the ask writes to it; taking the five
-        // facts first is what lets the two coexist without cloning the entry.
-        let (kind, name, bytes, modified, broken) = {
-            let entry = self.focused()?;
-            (
-                // WHAT IT OPENS AS, and never `kind`. A symlink to a
-                // photograph is a photograph when you look at it — following
-                // the link is the one operation that should — and `kind` would
-                // have refused every one of them with nothing on screen saying
-                // why. Found by pointing the panels at a directory of symlinks.
-                entry.opens_as(),
-                entry.name.clone(),
-                entry.bytes,
-                entry.modified,
-                entry.broken(),
-            )
-        };
-        // A DIRECTORY HAS NO CONTENT TO LOOK INTO. Neither has a broken link,
-        // and asking about one would spawn a child to be told what `lstat`
-        // already said.
-        if !matches!(kind, Kind::File) || broken {
-            return None;
-        }
-        let path = self.where_.join(&name);
-        // THE SECONDS AS THE ENTRY CARRIES THEM. `Entry::modified` is already an
-        // `i64` of seconds since the epoch — the listing formats it with
-        // `when::civil` — so there is no `SystemTime` in the middle to convert
-        // and get wrong.
-        let stamp = ronoctua_inspect::Stamp::new(path.clone(), modified, bytes, target);
-        // THE THEME IS PART OF THE KEY. The inspector paints the waveform in a
-        // token's VALUE (`wave` below), and the door uploads a still only when
-        // its key is missing from the GPU cache; a key that ignored the theme
-        // would keep the old ink on screen after a switch, and the re-ask a
-        // theme change makes would be paid for a picture nobody sees.
-        let key = format!("{}:{}", stamp.key(), ronoctua_tokens::theme::palette());
-        if self.asked.as_deref() == Some(key.as_str()) {
-            return None;
-        }
-        self.asked = Some(key.clone());
-        // THE NAME MAY BE FINER THAN THE SNIFF, and `settled` is where that is
-        // decided: a `.dng` sniffs as `image/tiff` because it IS one, and the
-        // TIFF decoder reads the RAW planes and refuses.
-        let (named, sniffed) = mime::examined(&path, kind);
-        let mime = ronoctua_inspect::settled(named, sniffed);
-        Some(Ask {
-            // A FILM THAT MIGHT BELONG TO THIS PICTURE, out of the listing that
-            // is already in memory — see `Ask::beside`. It is a CANDIDATE:
-            // whether the two are one Live Photo is settled by what is inside
-            // them, which is the inspector's question and not this one.
-            beside: self.film_beside(&path),
-            path,
-            mime,
-            target,
-            key,
-            tab: usize::from(ronoctua_tokens::space::FILES_TABWIDTH),
-            wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
-        })
-    }
-
-    /// What the inspector came back with.
-    ///
-    /// A stale answer is DROPPED, not drawn: the cursor moves while a child
-    /// process runs, and one file's picture under another file's name is the
-    /// one failure a preview must not have.
-    pub fn looked(&mut self, l: Looked) {
-        if self.asked.as_deref() != Some(l.key.as_str()) {
-            return;
-        }
-        // A NEW SUBJECT STARTS AT THE TOP, and a re-decode of the SAME file
-        // does not: dragging a window's edge asks again at a new `target`, and
-        // jumping back to line one while somebody is reading is worse than the
-        // drag.
-        //
-        // AND IT IS THE ONE PLACE. `self.cursor` is written at sixteen sites in
-        // this file and only `move_by` used to reset `info_offset`, so CLICKING
-        // another file kept the facts scrolled where the previous one left
-        // them. Resetting here instead is causal — the subject changed — and it
-        // covers all sixteen, every directory change, and the preview's two
-        // offsets, in three lines.
-        if self.looked.as_ref().is_none_or(|old| old.path != l.path) {
-            self.preview_offset = 0;
-            self.preview_column = 0;
-            self.info_offset = 0;
-            // AND SO DO THE TWO CURSORS, for the same causal reason: a cursor
-            // on the seventh fact of one file has nothing to point at in
-            // another file's sheet.
-            self.preview_cursor = 0;
-            self.info_cursor = 0;
-            // AND THE QUEUE GOES BACK TO THE TOP, by the same causal rule one
-            // line down: the subject changed. Without it, walking from one
-            // playlist to another would start the second one at whichever
-            // entry the first was on.
-            self.playing = 0;
-            // AND THE FILM STARTS AGAIN, which is the same causal argument one
-            // line up: the subject changed. Without it, leaving a film paused,
-            // walking two files away and coming back would show another film
-            // held at somebody else's pause, muted or not according to a
-            // decision made about a different file.
-            //
-            // A SOUND ARRIVES STOPPED, which is the one thing that differs and
-            // the reason this asks the answer what it is. See
-            // [`Transport::arriving`].
-            self.transport =
-                Transport::arriving(l.moving.as_ref().map(|m| m.show), l.list.is_some());
-            // AND THE WIDE MODE STAYS. It used to go with the file, and that is
-            // the opposite of what the owner asked for: *"sendo inclusive
-            // possível navegar para os próximos arquivos a partir do próprio
-            // preview largo"*. It is a way of LOOKING, not a property of what
-            // is being looked at — and `whole` still gives the region back by
-            // itself when there is nothing under the cursor.
-            self.trouble = None;
-            self.frame = None;
-            // AND THE SHAPE IS SHOWN FROM THE FRONT AGAIN. Same argument: the
-            // subject changed. Leaving one piece turned upside down and
-            // walking to the next would otherwise hand over an angle chosen
-            // for something else.
-            self.pose = ronoctua_inspect::solid::Pose::default();
-            self.turned = None;
-            self.shape_trouble = None;
-        }
-        self.looked = Some(l);
-    }
-
-    /// What went wrong with the film, when something did.
-    ///
-    /// **Refusal is a value, not an absence** — a panel that is blank and a
-    /// panel that was refused look the same on screen, and only one of them has
-    /// a sentence. The doors put it on the message line.
-    #[must_use]
-    pub fn film_trouble(&self) -> Option<Explanation> {
-        let what = self.trouble?;
-        // THE CURSOR IS STILL ON A FILM, and that is the whole condition. It is
-        // NOT "there is a frame": a starved film has none, and that is exactly
-        // when the sentence matters most — the panel is empty and nothing else
-        // says why.
-        self.showing_now()?;
-        self.looked.as_ref()?.moving.as_ref()?;
-        Some(match what {
-            crate::motion::Trouble::NoSound => Explanation {
-                key: ronoctua_i18n::key::FILES_NO_SOUND,
-                args: Vec::new(),
-            },
-            crate::motion::Trouble::Starved => Explanation {
-                key: ronoctua_i18n::key::FILES_FILM_STUCK,
-                args: vec![(
-                    "seconds",
-                    ronoctua_inspect::motion::STARVED.as_secs().to_string(),
-                )],
-            },
-        })
-    }
-
-    /// The texture key of the picture the preview is showing, if there is one.
-    ///
-    /// The door asks `Images::missing` with it BEFORE uploading — a preview is
-    /// up to a mebibyte of RGBA, and putting that on the bus every frame is the
-    /// transfer the key exists to avoid.
-    ///
-    /// # A FRAME counts, and that was a defect
-    ///
-    /// It used to answer only when there was a still picture, and a film whose
-    /// poster failed to decode then drew NOTHING for ever: the player ran, the
-    /// frames arrived, the view stored them, and no door ever asked for a
-    /// rectangle to put them in. A moving file has a picture whether or not it
-    /// has a poster.
-    #[must_use]
-    pub fn preview_key(&self) -> Option<String> {
-        self.showing_now()?;
-        let l = self.looked.as_ref()?;
-        // A LIST IS DRAWN AS A LIST, and its player's frames are never drawn.
-        //
-        // They are still MADE, and that is not waste with a name: the frames
-        // are the clock — the position, the end of a track and the pause all
-        // come out of them, and a door with no frames would need a timer, a
-        // second way to pause and a message for the end. What is dropped is
-        // only the picture, so the rows underneath stay legible; the frame is
-        // asked for at the smallest size there is, so what is thrown away is
-        // sixteen bytes a frame. See `View::wish`.
-        if l.list.is_some() {
-            return None;
-        }
-        // A FRAME AND A PHOTOGRAPH ARE TWO TEXTURES, and that is a defect
-        // avoided rather than found.
-        //
-        // A door uploads the still only `if im.missing(&key)` — a preview is up
-        // to a mebibyte — while every frame is written under the key it is
-        // given. Sharing one key, the film's frames overwrite the photograph,
-        // and on a MOTION PHOTO the loop's return to the photograph would find
-        // the key present and upload nothing: the panel would hold the film's
-        // last frame for ever, and the feature would work once.
-        //
-        // Two keys, two slots of the renderer's ceiling. Not a key per frame, which is
-        // what would fill the cache with one file's film.
-        if self.frame.as_ref().is_some_and(|f| f.key == l.key)
-            || self.turned.as_ref().is_some_and(|f| f.key == l.key)
-        {
-            // A TURNED SHAPE IS A FRAME LIKE ANY OTHER. It shares the mark and
-            // therefore the slot, which is right: the two can never both be in
-            // hand, because a file is either a film or a shape.
-            return Some(format!("{}{FRAME_MARK}", l.key));
-        }
-        l.rgba.as_ref().map(|_| l.key.clone())
-    }
-
-    /// The pixels behind that key, for the door that has to upload them.
-    #[must_use]
-    pub fn preview_pixels(&self) -> Option<&ronoctua_render::image::Rgba> {
-        self.showing_now()?;
-        self.looked.as_ref()?.rgba.as_ref()
-    }
-
-    /// What a shape is drawn with, out of the tokens.
-    ///
-    /// A function and not a constant because a `Color` cannot be taken apart at
-    /// compile time, and a second spelling of the same colour is exactly what
-    /// invariant 9 exists to prevent. The light's two angles are integers of
-    /// DEGREES for the reason `space.nix` gives — this file is where they become a
-    /// direction.
-    fn paint_of() -> ronoctua_inspect::solid::Paint {
-        let azimuth = f32::from(ronoctua_tokens::space::FILES_MESHLIGHTAZIMUTH).to_radians();
-        let elevation = f32::from(ronoctua_tokens::space::FILES_MESHLIGHTELEVATION).to_radians();
-        ronoctua_inspect::solid::Paint {
-            // sRGB BYTES and not `to_linear`: what comes out of the rasteriser is
-            // a texture, and the pipeline does the curve on write. Handing it
-            // linear values here would lighten the piece by exactly the amount
-            // nobody can trace back to a token.
-            solid: ronoctua_tokens::color::SURFACE_MESH.to_rgba8(),
-            // Camera space: x to the right, y up, z towards whoever is looking.
-            light: [
-                elevation.cos() * azimuth.cos(),
-                elevation.cos() * azimuth.sin(),
-                elevation.sin(),
-            ],
-            ambient: f32::from(ronoctua_tokens::space::FILES_MESHSHADOW) / 100.0,
-            // THE TWO A CAGE USES. A STEP or an IGES holds no surface, so it
-            // is drawn as lines; see `ronoctua_inspect::mesh::Wires`. Tenths
-            // of a pixel, because a whole one is too coarse next to the
-            // rasteriser's two samples per side.
-            wire: f32::from(ronoctua_tokens::space::FILES_MESHWIREWIDTH) / 10.0,
-            fade: f32::from(ronoctua_tokens::space::FILES_MESHWIREFADE) / 100.0,
-        }
-    }
-
-    /// `Changed` when a gesture moved something, `Nothing` when it did not.
-    ///
-    /// The four turn keys and the three zoom keys all answer the same way, and
-    /// writing it out seven times is seven chances to answer `Changed` for a
-    /// gesture that did nothing — which is a repaint per keypress on every file
-    /// that is not a shape.
-    const fn stepped(moved: bool) -> Step {
-        if moved { Step::Changed } else { Step::Nothing }
-    }
-
-    /// The picture the preview's box should be sized from.
-    ///
-    /// # The frame first, and it is the defect the owner photographed
-    ///
-    /// Both doors used to measure the box from [`View::preview_pixels`] — the
-    /// STILL frame — and then draw whatever the player had sent into it. The
-    /// two are different shapes, so every film was stretched to the poster's
-    /// proportions. Under the old height guess that was a ninefold vertical
-    /// stretch, which is what *"the frames look rotated"* was.
-    ///
-    /// One answer, asked by both doors, and the picture that is DRAWN is the
-    /// picture that is measured.
-    #[must_use]
-    pub fn preview_now(&self) -> Option<&ronoctua_render::image::Rgba> {
-        self.live_frame().or_else(|| self.preview_pixels())
-    }
-
-    /// The picture that is REDRAWN, whatever is redrawing it.
-    ///
-    /// # Why the doors ask this and not the two behind it
-    ///
-    /// Because they do not upload it the way they upload a still. A still goes
-    /// up only `if im.missing(&key)` — it is up to a mebibyte — while a picture
-    /// that changes must be written under the same key every time, or the
-    /// second one never reaches the screen.
-    ///
-    /// A film was the only thing that did that, so the doors asked
-    /// `moving_frame` by name. A turned shape does it too, and the shape of the
-    /// defect was exactly what one would expect: the stage drew every frame,
-    /// the log said so, and the panel stayed empty because nothing uploaded
-    /// them. One question, asked in both doors, and the next thing that redraws
-    /// itself needs no third site.
-    #[must_use]
-    pub fn live_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
-        self.moving_frame().or_else(|| self.turned_frame())
-    }
-
-    /// The drawn shape, when there is one and it is about this file.
-    #[must_use]
-    pub fn turned_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
-        self.showing_now()?;
-        let l = self.looked.as_ref()?;
-        let f = self.turned.as_ref()?;
-        (f.key == l.key).then_some(&f.rgba)
-    }
-
-    /// Whether the cursor is on a shape the manager turns.
-    #[must_use]
-    pub fn shape_here(&self) -> bool {
-        self.showing_now().is_some() && self.looked.as_ref().is_some_and(|l| l.turns)
-    }
-
-    /// The player had something to say.
-    ///
-    /// Dropped when it is not about the file the cursor is on — the same rule
-    /// [`View::looked`] keeps, and for the same reason: one file's picture
-    /// under another file's name is the one failure a preview must not have.
-    pub fn played(&mut self, beat: crate::motion::Beat) {
-        let key = match &beat {
-            crate::motion::Beat::Frame(f) => &f.key,
-            crate::motion::Beat::Ended { key }
-            | crate::motion::Beat::Still { key }
-            | crate::motion::Beat::Trouble { key, .. } => key,
-        };
-        if self.asked.as_deref() != Some(key.as_str()) {
-            return;
-        }
-        match beat {
-            crate::motion::Beat::Frame(f) => {
-                self.transport.at = f.at;
-                self.frame = Some(f);
-            }
-            // THE FILM RAN OUT, and it has to SAY so. Before this the frames
-            // simply stopped arriving, the last one stayed up for ever and the
-            // play glyph never came back — the absence of a wake-up is not an
-            // event and cannot be drawn.
-            crate::motion::Beat::Ended { .. } => {
-                // A LIST GOES ON TO THE NEXT ONE, and it costs no new message
-                // and no new state machine: `wish` builds the reel from the
-                // entry, `Reel` is compared by value, and a changed path is
-                // therefore already a respawn.
-                if let Some(next) = self.after_the_one_playing() {
-                    self.playing = next;
-                    self.transport.from = 0.0;
-                    self.transport.at = 0.0;
-                    self.transport.paused = false;
-                    return;
-                }
-                self.transport.on = false;
-                self.transport.paused = false;
-            }
-            // A MOTION PHOTO'S OTHER HALF. Letting the frame go is what puts
-            // the photograph back on screen: the panel draws the still whenever
-            // there is no frame in hand.
-            crate::motion::Beat::Still { .. } => {
-                self.frame = None;
-                self.transport.at = 0.0;
-            }
-            crate::motion::Beat::Trouble { what, .. } => match what {
-                // THE MACHINE HAS NO SOUND. The picture goes on without it and
-                // the wish is corrected, so nothing asks again every frame.
-                crate::motion::Trouble::NoSound => {
-                    self.transport.sound = false;
-                    self.trouble = Some(crate::motion::Trouble::NoSound);
-                }
-                crate::motion::Trouble::Starved => {
-                    self.transport.on = false;
-                    self.frame = None;
-                    self.trouble = Some(crate::motion::Trouble::Starved);
-                }
-            },
-        }
-    }
-
-    /// What SHOULD be running, as a value.
-    ///
-    /// `None` is "nothing at all": no film under the cursor, the preview hidden,
-    /// or a film that has ended or been stopped.
-    fn wish(&self) -> Option<crate::motion::Reel> {
-        let l = self.looked.as_ref()?;
-        self.showing_now()?;
-        if !self.transport.on {
-            return None;
-        }
-        let fit = self.preview_fit()?;
-        // A PLAYLIST PLAYS A FILE IT HAS NOT LOOKED INSIDE, and that is a
-        // limit worth writing down rather than working around.
-        //
-        // Everything else the player is asked for comes out of a probe the
-        // inspector already ran for the facts. An entry has had no such probe:
-        // it is another file, named by this one, and probing it here would be
-        // an ffprobe on the door's event loop with the five-second patience
-        // `tools::run` gives every child — which is the footer frozen.
-        //
-        // So an entry plays with what is safe to assume: the waveform, which
-        // needs no picture in the file, and `cover: false`, which is the SAFE
-        // half of that flag — claiming a cover a file has not got makes ffmpeg
-        // refuse the whole command, while missing one that is there only costs
-        // the artwork. The length is the playlist's own word, which is what a
-        // playlist is FOR.
-        if let Some(list) = self.showing_list() {
-            let entry = list.entries.get(self.playing)?;
-            let ronoctua_inspect::playlist::Where::Local(path) = &entry.at else {
-                return None;
-            };
-            return Some(crate::motion::Reel {
-                path: path.clone(),
-                // A FRAME NOBODY DRAWS, AND STILL BIG ENOUGH TO STOP ITS OWN
-                // CHILD. The panel shows the list, so the picture is thrown
-                // away — but the frames are the clock and the pause, and a
-                // frame smaller than a pipe pauses nothing at all. See
-                // `motion::PIPE_BYTES` and `View::preview_key`.
-                // THE PLAYLIST'S KEY, not the entry's: `View::played` drops a
-                // beat whose key is not the one that was asked for, and what
-                // was asked for is the file in front. Frames from a child that
-                // has been replaced are dropped by the ERA, in the thread,
-                // which is what that mechanism is for.
-                key: l.key.clone(),
-                how: ronoctua_inspect::motion::Source::Ffmpeg,
-                show: ronoctua_inspect::motion::Show::Sound { cover: false },
-                fit: ronoctua_inspect::motion::Fit::UNSEEN,
-                fps: ronoctua_inspect::facts::WAVES_FPS,
-                from: self.transport.from,
-                sound: self.transport.sound,
-                background: letterbox(),
-                wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
-                wave_height: ronoctua_tokens::space::FILES_WAVEHEIGHT,
-                wave_foot: self.controls_foot(),
-                inside: None,
-            });
-        }
-        let moving = l.moving.as_ref()?;
-        Some(crate::motion::Reel {
-            path: l.path.clone(),
-            key: l.key.clone(),
-            how: moving.how,
-            show: moving.show,
-            fit,
-            fps: moving.shape.fps,
-            from: self.transport.from,
-            // AND SOUND IS REFUSED WHERE THERE IS NONE TO HEAR. Measured
-            // against the real binary: ffmpeg refuses the WHOLE command when
-            // the audio output cannot be filled, so asking for sound on a
-            // silent film would stop the picture.
-            sound: self.transport.sound && moving.shape.sound,
-            background: letterbox(),
-            wave: ink(ronoctua_tokens::color::SURFACE_WAVE),
-            wave_height: ronoctua_tokens::space::FILES_WAVEHEIGHT,
-            wave_foot: self.controls_foot(),
-            // WHERE THE FILM IS, when the picture is a photograph with one in
-            // it. `None` for an ordinary film, which IS the file.
-            inside: moving.inside.clone(),
-        })
-    }
-
-    /// What the player should be told, given everything that has changed.
-    ///
-    /// `None` is "nothing has changed". One question, one place, one
-    /// comparison: the door asks once a frame and passes the answer straight
-    /// on. Enumerating the ways a film can need restarting — the cursor moved,
-    /// the panel was hidden, the window was resized, the sound was asked for,
-    /// somebody scrubbed — is how a case gets missed, and every one of them is
-    /// a field of [`crate::motion::Reel`].
-    pub fn wants_motion(&mut self) -> Option<crate::motion::Ask> {
-        let now = self.wish();
-        let ask = match (&self.told, &now) {
-            (None, None) => None,
-            (Some(_), None) => {
-                // AND THE FRAME GOES WITH IT ONLY WHEN THE FILM WENT.
-                //
-                // A film that ENDED keeps its last picture and its play glyph,
-                // because pressing play is how one watches it again. A cursor
-                // that MOVED must not: one file's picture under another file's
-                // name is the one failure a preview must not have.
-                if !self.plays_here() {
-                    self.frame = None;
-                }
-                Some(crate::motion::Ask::Stop)
-            }
-            (None, Some(w)) => Some(crate::motion::Ask::Play(w.clone(), self.transport.paused)),
-            (Some(was), Some(w)) if was == w => None,
-            // A RESPAWN OF THE SAME FILM PICKS UP WHERE THE PICTURE IS.
-            //
-            // `from` is where the last child was TOLD to start, and it only
-            // moves when somebody seeks — which is right, or the wish would
-            // change thirty times a second. But a respawn for another reason —
-            // the panel resized, `C-w` given or taken back, the sound switched
-            // — would then start the film at that old mark again. The owner
-            // photographed it: *"ao trocar para o modo largo, ou retornar dele,
-            // o vídeo retrocede em vez de continuar no exato último tempo"*.
-            (Some(was), Some(w)) if was.path == w.path && was.key == w.key => {
-                self.transport.from = self.transport.at;
-                // AND THE WISH IS REBUILT AT THE NEW MARK, so what is recorded
-                // as told is what was actually asked for.
-                let w = self.wish()?;
-                Some(crate::motion::Ask::Play(w, self.transport.paused))
-            }
-            (Some(_), Some(w)) => Some(crate::motion::Ask::Play(w.clone(), self.transport.paused)),
-        };
-        // AND PAUSING IS NOT A RESPAWN. It is not part of the wish at all: the
-        // child stays alive, blocked on a pipe nobody is draining, at no cost —
-        // against the 108 to 242 milliseconds a seek costs, measured.
-        if ask.is_none() && now.is_some() {
-            if self.transport.paused != self.holding {
-                self.holding = self.transport.paused;
-                return Some(if self.holding {
-                    crate::motion::Ask::Pause
-                } else {
-                    crate::motion::Ask::Resume
-                });
-            }
-            return None;
-        }
-        if let Some(crate::motion::Ask::Play(w, held)) = &ask {
-            // AND THE PLAYER WAS TOLD THE HOLD, so `wants_motion` must not go
-            // on believing it is running — or it would send a Resume nobody
-            // asked for on the very next frame.
-            self.holding = *held;
-            // WHAT WAS ACTUALLY ASKED FOR, and not what was wished a moment
-            // earlier: the branch above may have moved the mark.
-            self.told = Some(w.clone());
-        } else if ask.is_some() {
-            self.holding = false;
-            self.told = None;
-        }
-        ask
-    }
-
-    /// What SHOULD be drawn of a shape, as a value.
-    ///
-    /// `None` is "nothing at all": no shape under the cursor, the preview
-    /// hidden, or a panel not measured yet.
-    fn wish_turn(&self) -> Option<crate::stage::Turn> {
-        let l = self.looked.as_ref()?;
-        self.showing_now()?;
-        if !l.turns {
-            return None;
-        }
-        // THE SAME QUANTISED BOX THE FILM ASKS FOR, and for the same reason:
-        // dragging a window's edge changes the panel sixty times a second, and
-        // a size that followed it exactly would redraw the piece on every one.
-        let fit = self.preview_fit()?;
-        Some(crate::stage::Turn {
-            path: l.path.clone(),
-            mime: l.mime,
-            key: l.key.clone(),
-            width: fit.width,
-            height: fit.height,
-            pose: self.pose,
-            paint: Self::paint_of(),
-        })
-    }
-
-    /// Points the globe at whatever the cursor is on, in the box it was given.
-    ///
-    /// The DOOR measures the box and calls this, exactly as `measured_preview`
-    /// already works: the picture that is drawn is the picture that was
-    /// measured, and a second opinion about the size is a texture the GPU has
-    /// at one size and the layout at another.
-    /// `from` is how many pixels of the picture's TOP have scrolled away — the
-    /// band's rows are content and they move, and the picture keeps its SIZE
-    /// while they do. See [`crate::globe::paint`].
-    pub fn measured_globe(&self, size: (u32, u32), from: u32, theme: usize) {
-        let at = self.looked.as_ref().and_then(|l| l.at);
-        let key = self
-            .looked
-            .as_ref()
-            .map_or(String::new(), |l| l.key.clone());
-        let portuguese = crate::globe::tongue(&self.texts) == ronoctua_atlas::Tongue::Portuguese;
-        self.globe
-            .borrow_mut()
-            .looking_at(at, &key, size, from, theme, portuguese);
-    }
-
-    /// What the globe wants drawn, when it is not what was last asked for.
-    pub fn wants_globe(&mut self) -> Option<crate::globe::Ask> {
-        self.globe.borrow_mut().wants()
-    }
-
-    /// A picture or an address coming back.
-    pub fn saw_globe(&mut self, beat: &crate::globe::Beat) -> bool {
-        // THE SHEET IS REMEMBERED and the address is part of it, so an answer
-        // arriving has to forget what was built before it.
-        if self.globe.borrow_mut().saw(beat) {
-            *self.remembered.borrow_mut() = None;
-            return true;
-        }
-        false
-    }
-
-    /// The globe's picture, when there is one for what is being shown.
-    #[must_use]
-    pub fn globe_frame(&self) -> Option<ronoctua_render::image::Rgba> {
-        self.globe.borrow().frame().cloned()
-    }
-
-    /// Its texture's name.
-    #[must_use]
-    pub fn globe_key(&self) -> Option<String> {
-        self.globe.borrow().key()
-    }
-
-    /// Whether there is a globe on screen at all — as a band, or as the
-    /// expanded sheet's first column.
-    ///
-    /// BOTH SHAPES, because the keys that turn and frame it mean the same thing
-    /// in either: asking only about the band killed `C-k`, `C-j` and `C-r` in
-    /// the one place the picture is biggest.
-    #[must_use]
-    pub fn globe_here(&self) -> bool {
-        self.globe_rows() > 0 || self.globe_columns() > 0
-    }
-
-    /// Whether the pointer is resting on the globe, told by the door.
-    ///
-    /// The door has already resolved a target to draw the band; this is that
-    /// answer remembered where it was found, so the wheel does not have to ask
-    /// a second time with less to go on.
-    pub fn pointing_globe(&self, on: bool) {
-        self.pointing_at_the_globe.set(on);
-    }
-
-    /// Turns the globe by a drag, in pixels.
-    pub fn pan_globe(&mut self, right: f32, down: f32) -> bool {
-        self.globe.borrow_mut().pan(right, down)
-    }
-
-    /// The difference between what is drawn and what should be.
-    ///
-    /// One comparison in one place, the arrangement [`View::wants_motion`]
-    /// already argues for: enumerating the ways a picture can need redrawing —
-    /// the file changed, the panel resized, the piece was turned, zoomed,
-    /// reframed — is how one of them gets missed.
-    pub fn wants_turn(&mut self) -> Option<crate::stage::Ask> {
-        let now = self.wish_turn();
-        let ask = match (&self.told_turn, &now) {
-            (None, None) => None,
-            (Some(_), None) => Some(crate::stage::Ask::Stop),
-            (Some(was), Some(w)) if was == w => None,
-            (_, Some(w)) => Some(crate::stage::Ask::Show(Box::new(w.clone()))),
-        };
-        if ask.is_some() {
-            self.told_turn = now;
-        }
-        ask
-    }
-
-    /// The stage had something to say.
-    ///
-    /// Dropped when it is not about the file the cursor is on — the same rule
-    /// [`View::played`] keeps, and for the same reason.
-    pub fn drew(&mut self, beat: crate::stage::Beat) {
-        let about = match &beat {
-            crate::stage::Beat::Drawn(f) => f.key.clone(),
-            crate::stage::Beat::Trouble { key, .. } => key.clone(),
-        };
-        if self.asked.as_deref() != Some(about.as_str()) {
-            return;
-        }
-        match beat {
-            crate::stage::Beat::Drawn(f) => {
-                self.shape_trouble = None;
-                self.turned = Some(*f);
-            }
-            crate::stage::Beat::Trouble { why, .. } => {
-                self.turned = None;
-                self.shape_trouble = Some(why);
-            }
-        }
-    }
-
-    /// What went wrong with the shape, when something did.
-    ///
-    /// **Refusal is a value, not an absence** — the rule the rest of the panel
-    /// keeps. A `.stl` that will not parse says so instead of leaving a blank
-    /// panel waiting for a frame that is never coming.
-    #[must_use]
-    pub fn shape_said(&self) -> Option<Explanation> {
-        let why = self.shape_trouble.as_ref()?;
-        self.showing_now()?;
-        Some(Explanation {
-            key: why.key(),
-            args: why.args(),
-        })
-    }
-
-    /// Turns the shape as a hand moving ACROSS THE SCREEN would, in radians.
-    ///
-    /// `right` and `down` are the directions the hand went, not angles about
-    /// an axis — which is the whole reason this function exists rather than the
-    /// doors reaching for `Pose::turned` themselves.
-    ///
-    /// # Why `right` is negated
-    ///
-    /// Because `solid::axes` puts the CAMERA at `yaw`, so a larger yaw walks
-    /// the camera anticlockwise and everything on screen slides LEFT — which is
-    /// why `files-turn-left` adds. A drag is the opposite gesture: the hand
-    /// takes the piece WITH it, so pulling left must turn it left, and that is
-    /// a SMALLER yaw. The doors had the sign the other way round and the owner
-    /// reported it from the screen — *"ao arrastar para a esquerda, o objeto
-    /// está girando para a direita"* — which is exactly what a convention
-    /// spelled out at two call sites and nowhere testable produces.
-    ///
-    /// `down` is NOT negated, and it is the same rule: pulling down tips the
-    /// top of the piece towards the viewer, which is more of it seen from
-    /// above, which is a HIGHER elevation.
-    ///
-    /// `false` when there is no shape to turn, so the caller can let the
-    /// gesture mean whatever it means elsewhere.
-    pub fn spin(&mut self, right: f32, down: f32) -> bool {
-        if !self.shape_here() {
-            return false;
-        }
-        self.pose = self.pose.turned(-right, down);
-        true
-    }
-
-    /// Moves the shape — or the globe — nearer or further.
-    ///
-    /// ONE NOTATION, ONE ID, and the FOCUSED PANE decides which subject: a
-    /// shape is in the preview panel and a globe is in the info panel, so the
-    /// two contexts are disjoint by construction and no key is ambiguous.
-    pub fn zoom(&mut self, by: f32) -> bool {
-        if matches!(self.pane, Pane::Info) && self.globe_here() {
-            return self.globe.borrow_mut().zoom(by);
-        }
-        if !self.shape_here() {
-            return false;
-        }
-        self.pose = self.pose.scaled(by);
-        true
-    }
-
-    /// Puts the shape — or the globe — back the way it is first shown.
-    pub fn reframe(&mut self) -> bool {
-        if matches!(self.pane, Pane::Info) && self.globe_here() {
-            return self.globe.borrow_mut().reframe();
-        }
-        if !self.shape_here() {
-            return false;
-        }
-        self.pose = ronoctua_inspect::solid::Pose::default();
-        true
-    }
-
-    /// The frame a moving file is showing, if one is.
-    #[must_use]
-    pub fn moving_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
-        self.showing_now()?;
-        let l = self.looked.as_ref()?;
-        let f = self.frame.as_ref()?;
-        (f.key == l.key).then_some(&f.rgba)
-    }
-
-    /// How large a frame the preview wants, in pixels.
-    ///
-    /// From the panel's OWN box, quantised — see [`ronoctua_inspect::motion::Fit`].
-    /// The player used to decode at a fixed 512 whatever the panel was, which
-    /// is 576 KiB a frame against 83 for a four-line strip: seven times the
-    /// traffic to the graphics card for a picture nobody could see the
-    /// difference in.
-    fn preview_fit(&self) -> Option<ronoctua_inspect::motion::Fit> {
-        let (wide, tall) = self.drawn_preview.get();
-        ronoctua_inspect::motion::Fit::of(wide, tall)
-    }
-
-    /// The box the door is actually drawing the picture into, in pixels.
-    ///
-    /// # It has to be the DOOR's number and not an estimate from cells
-    ///
-    /// The frame is decoded at the box's own shape, so ffmpeg's letterbox is
-    /// the panel's own air and the picture is framed once. Estimating the box
-    /// as `cells × cell_width` gets the shape WRONG — the door then takes
-    /// `pictureAir` off each side, and a box six pixels narrower on each axis
-    /// is a different aspect. The owner photographed the result: *"a imagem do
-    /// GIF está distorcida"*.
-    ///
-    /// A `Cell`, for the reason `drawn_lines` is one: the painter holds the
-    /// view immutably, and this is written where the box is decided.
-    pub fn measured_preview(&self, wide: f32, tall: f32) {
-        if wide > 1.0 && tall > 1.0 {
-            self.drawn_preview.set((wide, tall));
-        }
-    }
-
-    /// The film's timeline, when there is a film with a length.
-    fn timeline(&self) -> Option<ronoctua_design::Scroll> {
-        self.looked.as_ref()?;
-        self.showing_now()?;
-        let seconds = self.playing_seconds()?;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let total = (seconds * 10.0).round().max(1.0) as usize;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let offset = (self.transport.at.max(0.0) * 10.0).round() as usize;
-        Some(ronoctua_design::Scroll {
-            total,
-            // ONE TENTH OF A SECOND WIDE, which is what makes the cursor a MARK
-            // and not a page: `Scroll::thumb` never draws one shorter than a
-            // cell, so the shortest film and the longest get the same handle.
-            lines: 1,
-            offset: offset.min(total.saturating_sub(1)),
-            top: 0,
-        })
-    }
-
-    /// Whether the preview has been given the whole region.
-    ///
-    /// # It is DERIVED, and that is what makes it undo itself
-    ///
-    /// Not a mode that is stored and switched off: the film ending, the cursor
-    /// moving, `C-v` hiding the preview — each of them would be a case somebody
-    /// has to remember to undo, and the one that gets forgotten leaves the
-    /// manager showing a blank region. Asking the question every frame has no
-    /// such case.
-    #[must_use]
-    pub fn whole(&self) -> bool {
-        self.wide().is_some()
-    }
-
-    /// WHICH panel has the whole region, and `None` when neither has.
-    ///
-    /// # It is DERIVED, and that is what makes it undo itself
-    ///
-    /// Not a mode that is stored and switched off: the film ending, the cursor
-    /// moving, `C-v` hiding the preview — each of them would be a case somebody
-    /// has to remember to undo, and the one that gets forgotten leaves the
-    /// manager showing a blank region. Asking the question every frame has no
-    /// such case.
-    ///
-    /// ANY PREVIEW, and not only a film. The owner asked for it: *"fazer o
-    /// modo largo funcionar em todos os preview, de todos os arquivos"* — a
-    /// photograph is exactly as worth a whole region as a film, and so is a
-    /// page of code. And the FACTS are worth one too, which is what he asked
-    /// for next: expanded, they stop being a column twenty-four cells wide and
-    /// become as many columns as the screen can hold.
-    ///
-    /// What it still needs is something to BE about: with no file under the
-    /// cursor the region would be given to an empty panel, and the key would
-    /// have lost the listing for nothing. And the panel has to be ASKED for —
-    /// `C-v` and `C-i` hide them, and a hidden panel handed the region would be
-    /// a blank screen.
-    #[must_use]
-    pub fn wide(&self) -> Option<Panel> {
-        let which = self.theatre?;
-        (self.panel_on(which) && self.focused().is_some()).then_some(which)
-    }
-
-    /// Whether a panel was asked for at all — `C-v` and `C-i`.
-    #[must_use]
-    pub const fn panel_on(&self, which: Panel) -> bool {
-        match which {
-            Panel::Preview => self.preview_on,
-            Panel::Info => self.info_on,
-        }
-    }
-
-    /// Whether the cursor is on a film the preview is showing.
-    ///
-    /// # It is not "is there a frame"
-    ///
-    /// A film that has ENDED keeps its last frame and its controls, so one can
-    /// press play and watch it again — so a frame is not the question. A film
-    /// that STARVED has neither, and it is the one case where there is nothing
-    /// left to transport.
-    ///
-    /// The five keys and the whole-region wish all ask this, which is what
-    /// makes them refuse together: five conditions written five times is five
-    /// chances for one of them to say yes where the others say no.
-    ///
-    /// It answers for a SOUND as well, which is why it is no longer called
-    /// `film_here`: a sound plays, has a timeline, is sought and is paused by
-    /// the same five keys, and the only thing that differs is where its
-    /// picture comes from.
-    fn plays_here(&self) -> bool {
-        self.showing_now().is_some()
-            && self
-                .looked
-                .as_ref()
-                // A PLAYLIST PLAYS TOO, and through the same five keys: what
-                // it names is what is heard, and the transport is about the
-                // entry rather than about the file naming it.
-                .is_some_and(|l| l.moving.is_some() || l.list.is_some())
-            && !matches!(self.trouble, Some(crate::motion::Trouble::Starved))
-    }
-
-    /// Which section the pointer is resting in.
-    ///
-    /// The doors say so where they already resolve a [`Target`]; it decides
-    /// whether the transport's two buttons are drawn. The timeline is NOT
-    /// hidden with them — the owner's choice, and the right one: a track that
-    /// appeared under the pointer would move the cursor out from under it in
-    /// the instant of the click.
-    pub fn pointing(&self, pane: Option<Pane>) {
-        self.pointing.set(pane);
     }
 
     /// Which ROW of the listing the pointer is on, told by the door.
@@ -15897,9 +12406,9 @@ impl View {
         }
         let entry = self.focused()?;
         let shown = match (&entry.target, entry.broken()) {
-            (Some(t), false) => format!("{} → {t}", entry.name),
-            (Some(t), true) => format!("{} ⇢ {t}", entry.name),
-            (None, _) => entry.name.clone(),
+            (Some(t), false) => format!("{} → {t}", entry.shown()),
+            (Some(t), true) => format!("{} ⇢ {t}", entry.shown()),
+            (None, _) => entry.shown().to_owned(),
         };
         (ronoctua_render::layout::width(&shown) > room).then_some(shown)
     }
@@ -15943,228 +12452,6 @@ impl View {
         crate::slide::offset_at(was, over) != crate::slide::offset_at(is, over)
     }
 
-    /// The letters behind the cursor, when the file has any and no picture.
-    ///
-    /// It answers `None` the moment the cursor leaves the file, exactly as the
-    /// picture does — the panel is about the focused entry, and a panel still
-    /// showing the last one is the failure a preview must not have.
-    #[must_use]
-    pub fn showing_text(&self) -> Option<&ronoctua_inspect::text::Read> {
-        self.showing_now()?;
-        self.looked.as_ref()?.text.as_ref()
-    }
-
-    /// One row of a playlist: the mark, the name, and how long it says it runs.
-    ///
-    /// # The mark's cell is always there
-    ///
-    /// Reserved whether or not this is the entry being played, so the rows do
-    /// not shift sideways as the queue advances — the argument `info_fields`
-    /// already makes about the scrollbar's cell, one panel over.
-    ///
-    /// Hierarchy is colour, never size and never a rule: the entry being
-    /// played is `TEXT_PRIMARY` against `TEXT_SECONDARY` for the rest, and one
-    /// that cannot be played from here is `TEXT_DIM` with the reason on the
-    /// message line.
-    fn entry_fields(
-        &self,
-        entry: &ronoctua_inspect::playlist::Entry,
-        row: usize,
-        at: u16,
-        room: u16,
-    ) -> Vec<Field> {
-        use ronoctua_inspect::playlist::Where;
-        const MARK: u16 = 2;
-        let here = matches!(entry.at, Where::Local(_));
-        let colour = if row == self.playing && here {
-            ronoctua_tokens::color::TEXT_PRIMARY
-        } else if here {
-            ronoctua_tokens::color::TEXT_SECONDARY
-        } else {
-            ronoctua_tokens::color::TEXT_DIM
-        };
-        // WHAT THE PLAYLIST WROTE, and not what it resolved to: somebody who
-        // wrote `../Album/01.flac` should see that. The resolved path goes on
-        // the message line, which is the register `files-fact-says` uses.
-        let said = entry.title.clone().unwrap_or_else(|| entry.written.clone());
-        let clock = entry.seconds.map(clock_of).unwrap_or_default();
-        let tail = width_of(&clock);
-        let for_name = room.saturating_sub(MARK).saturating_sub(tail);
-        // AND A BACKING FIELD ACROSS THE WHOLE ROW, so `View::hit` answers for
-        // the air as well as for the letters — a row one can only click on its
-        // text is a row that misses the click that was aimed at it.
-        let mut out = vec![Field {
-            at,
-            text: " ".repeat(usize::from(room)),
-            color: colour,
-            hit: Hit::Track(row),
-            explain: None,
-            ink: Ink::Grid,
-        }];
-        if row == self.playing && here {
-            out.push(Field {
-                at,
-                text: ronoctua_tokens::icon::PLAY.to_string(),
-                color: colour,
-                hit: Hit::Track(row),
-                explain: None,
-                ink: Ink::Grid,
-            });
-        }
-        out.push(Field {
-            at: at.saturating_add(MARK),
-            text: ronoctua_render::layout::elide_end(&said, for_name),
-            color: colour,
-            hit: Hit::Track(row),
-            // WHERE IT ACTUALLY POINTS, on the message line. The row shows
-            // what the playlist WROTE; this is what that resolved to, which is
-            // the half somebody needs when a name does not find a file.
-            // THE WHOLE NAME AND WHERE IT POINTS, un-elided.
-            //
-            // The row cuts what does not fit; this is where the rest of it is,
-            // which is the register `files-fact-says` already keeps for the
-            // same reason one panel over. It is also why a playlist needs no
-            // sideways bar — see `View::preview_widest`.
-            explain: Some(Explanation {
-                key: match (&entry.at, entry.title.is_some()) {
-                    (Where::Remote(_), _) => ronoctua_i18n::key::FILES_ENTRY_NOT_HERE,
-                    (Where::Refused, _) => ronoctua_i18n::key::FILES_ENTRY_REFUSED,
-                    (Where::Local(_), true) => ronoctua_i18n::key::FILES_ENTRY_TITLED,
-                    (Where::Local(_), false) => ronoctua_i18n::key::FILES_ENTRY_AT,
-                },
-                args: {
-                    let path = match &entry.at {
-                        Where::Local(p) => p.display().to_string(),
-                        Where::Remote(url) => url.clone(),
-                        Where::Refused => entry.written.clone(),
-                    };
-                    match &entry.title {
-                        Some(name) if matches!(entry.at, Where::Local(_)) => {
-                            vec![("name", name.clone()), ("path", path)]
-                        }
-                        _ => vec![("path", path)],
-                    }
-                },
-            }),
-            ink: Ink::Grid,
-        });
-        if tail > 0 {
-            out.push(Field {
-                at: at.saturating_add(room).saturating_sub(tail),
-                text: clock,
-                color: ronoctua_tokens::color::TEXT_DIM,
-                hit: Hit::Track(row),
-                explain: None,
-                ink: Ink::Grid,
-            });
-        }
-        out
-    }
-
-    /// The list of things to play under the cursor, if the panel is showing one.
-    ///
-    /// `showing_now` first, for the reason its twin has: an answer that arrived
-    /// for a file the cursor has already left is not about what is on screen.
-    #[must_use]
-    pub fn showing_list(&self) -> Option<&ronoctua_inspect::playlist::List> {
-        self.showing_now()?;
-        self.looked.as_ref()?.list.as_ref()
-    }
-
-    /// How many ROWS the preview has.
-    ///
-    /// A picture is one and a sentence is one; text is its lines, plus the row
-    /// that says the file goes on. That `1` is what keeps a picture from
-    /// scrolling with no branch anywhere: `slide` computes `last = 1 - room`,
-    /// which is zero, so the gesture is swallowed by arithmetic instead of by
-    /// a special case.
-    #[must_use]
-    pub fn preview_total(&self) -> usize {
-        if let Some(l) = self.showing_list() {
-            return l.entries.len() + usize::from(l.cut);
-        }
-        if let Some(t) = self.showing_text() {
-            return t.lines.len() + usize::from(t.cut);
-        }
-        // AND A REFUSAL IS AS TALL AS IT READS. It answered `1` while the
-        // sentence was cut at the panel's width; now that it wraps, the bar
-        // has to know — a panel four rows tall with a five-row sentence is
-        // exactly what a scrollbar is for.
-        self.refusal_lines()
-    }
-
-    /// How many rows the refusal's sentence takes at the panel's width.
-    ///
-    /// `0` when there is no sentence to draw, which is what a picture, a film
-    /// and a shape answer: their rows are the panel's own.
-    fn refusal_lines(&self) -> usize {
-        let room = self.drawn_panel.get();
-        if room == 0 {
-            // NOT DRAWN YET is one row, which is what it was before any of
-            // this: a number nobody has measured must not claim a scrollbar.
-            return 1;
-        }
-        let said = match self.looked.as_ref().and_then(|l| l.why.as_ref()) {
-            Some(why) => {
-                let args: Vec<(&str, String)> = why.args();
-                let borrowed: Vec<(&str, &str)> =
-                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                self.texts.t_with(why.key(), &borrowed)
-            }
-            None => self.texts.t(NO_PREVIEW),
-        };
-        ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING)
-            .len()
-            .max(1)
-    }
-
-    /// The widest line the preview holds, in cells.
-    ///
-    /// What sideways scrolling stops at. Measured in CLUSTERS, because that is
-    /// the ruler `Field::covers`, `elide_end` and both painters use — counting
-    /// bytes would let an accented line claim columns it does not fill.
-    #[must_use]
-    pub fn preview_widest(&self) -> usize {
-        // A LIST NEVER READS SIDEWAYS, and that is the listing's own rule
-        // rather than a shortcut.
-        //
-        // A row of a playlist is a RECORD — a mark, a name and a length, with
-        // the length against the right edge — and not a line of text. Sliding
-        // a record sideways moves two of its three parts out from under the
-        // third. The owner met the half-built version of that: *"há playlists
-        // que aparecem com scrollbar horizontal, e ainda mais inúteis, pois ao
-        // deslizar tudo para o lado oposto, nada ocorre na tela"* — the bar was
-        // offered and the rows never moved, because they never could.
-        //
-        // What a long name costs is an ellipsis, and what it does not cost is
-        // the name: the whole of it is on the message line, where the manager
-        // already puts what a row had to cut. See `View::entry_fields`.
-        if self.showing_list().is_some() {
-            return 0;
-        }
-        self.showing_text().map_or(0, |t| {
-            t.lines
-                .iter()
-                .map(|l| usize::from(ronoctua_render::layout::width(&l.text)))
-                .max()
-                .unwrap_or(0)
-        })
-    }
-
-    /// Whether an answer about the focused file is still on its way.
-    ///
-    /// `asked` names a file and `looked` does not answer for it yet. It is the
-    /// difference between "there is nothing to show" and "nothing has arrived",
-    /// and the panel draws them differently — the second one draws nothing at
-    /// all, because a sentence that is replaced by a picture a fraction of a
-    /// second later is a flicker with a message in it.
-    fn looking_still(&self) -> bool {
-        let Some(asked) = self.asked.as_deref() else {
-            return false;
-        };
-        self.looked.as_ref().is_none_or(|l| l.key != asked)
-    }
-
     /// A film in this folder that shares a picture's name.
     ///
     /// # The name is the CANDIDATE and never the answer
@@ -16194,15 +12481,6 @@ impl View {
         })
     }
 
-    /// `Some` when what was looked at is still what the cursor is on.
-    fn showing_now(&self) -> Option<()> {
-        if !self.preview_on {
-            return None;
-        }
-        let path = self.focused_path()?;
-        (self.looked.as_ref()?.path == path).then_some(())
-    }
-
     /// What a measurement came back with.
     pub fn measured(&mut self, name: &str, bytes: u64) {
         self.measured = Some((name.to_owned(), bytes));
@@ -16220,6 +12498,1068 @@ impl View {
         if self.clip.moves {
             self.clip = Clip::default();
         }
+    }
+}
+
+/// THE PANELS, ASKED THROUGH THE VIEW.
+///
+/// The doors ask the view about the panels — what to upload, what the film
+/// wants, where the globe goes — and every question is answered by
+/// `crate::inspection::Panel`, told first what the view is looking at
+/// ([`View::panel`]). A door that asked the panel itself would have to know
+/// what the cursor is on, which is the view's to know.
+impl View {
+    /// THE PANELS, told first what they are about.
+    ///
+    /// # Why every question goes through here
+    ///
+    /// The listing's cursor is written in a dozen places and the directory is
+    /// read again under it by a watch, so the view does not keep the panels'
+    /// subject up to date — it TELLS them, before every question, what is
+    /// under the cursor and what its layout says (`Panel::follow`), and they
+    /// build a subject only when that changed. A question put to `self.panel`
+    /// directly would be answered about whatever was under the cursor the last
+    /// time somebody asked this way; only the fields are read directly.
+    pub(crate) fn panel(&self) -> &crate::inspection::Panel {
+        // INSIDE AN ARCHIVE the panels have nothing on the disk to read: a
+        // member is looked at by opening it, which takes it out first.
+        let seen =
+            self.focused()
+                .filter(|_| !self.in_archive())
+                .map(|entry| crate::inspection::Seen {
+                    folder: &self.where_,
+                    entry,
+                    roster: &self.roster,
+                    measured: self
+                        .measured
+                        .as_ref()
+                        .filter(|(n, _)| *n == entry.name)
+                        .map(|(_, b)| *b),
+                    row: self.cursor,
+                });
+        self.panel.follow(
+            seen,
+            crate::inspection::Around {
+                covered: !self.plain(),
+                keyboard: self.pane,
+            },
+        );
+        &self.panel
+    }
+
+    /// The same, to change them.
+    pub(crate) fn panel_mut(&mut self) -> &mut crate::inspection::Panel {
+        let _ = self.panel();
+        &mut self.panel
+    }
+
+    /// Everything known about the entry the cursor is on — inside an
+    /// archive, what its listing says about the member.
+    fn sheet(&self) -> Vec<Fact> {
+        if self.in_archive() {
+            return self.member_sheet();
+        }
+        self.panel().sheet()
+    }
+
+    /// Everything known about one entry of this listing, by name — what the
+    /// modal sheet the menu's *information* row opens is made of.
+    ///
+    /// The same builder the panels read (`inspection_sheet::sheet_of`), for
+    /// the reason it has one: three homes, one answer to "what is known about
+    /// this file".
+    fn sheet_of(&self, name: &str) -> Vec<Fact> {
+        let Some(entry) = self.entries.iter().find(|e| e.name == name) else {
+            return Vec::new();
+        };
+        let measured = self
+            .measured
+            .as_ref()
+            .filter(|(n, _)| n == name)
+            .map(|(_, b)| *b);
+        let subject = crate::inspection::Subject::of_entry(
+            &self.where_,
+            entry,
+            &self.roster,
+            measured,
+            self.cursor,
+        );
+        crate::inspection_sheet::sheet_of(
+            &subject,
+            self.panel.looked.as_ref(),
+            &self.zone,
+            &self.texts,
+        )
+    }
+
+    /// [`crate::inspection::Panel::heard`]: what a thread of the panels came
+    /// back with. `true` when it was the inspector's answer.
+    pub fn heard(&mut self, heard: crate::inspection::Heard) -> bool {
+        self.panel_mut().heard(heard)
+    }
+
+    /// What the inspector should be asked for, or `None` when nothing is due
+    /// — [`crate::inspection::Panel::wants_look`], with the film that might
+    /// belong to the picture found out of the listing.
+    pub fn wants_look(&mut self, target: u32) -> Option<Ask> {
+        let mut ask = self.panel_mut().wants_look(target)?;
+        // A FILM THAT MIGHT BELONG TO THIS PICTURE, out of the listing that is
+        // already in memory — see `Ask::beside`. It is a CANDIDATE: whether
+        // the two are one Live Photo is settled by what is inside them, which
+        // is the inspector's question and not this one.
+        ask.beside = self.film_beside(&ask.path);
+        Some(ask)
+    }
+
+    /// [`crate::inspection::Panel::globe_lines`], about what is under the cursor.
+    #[cfg(test)]
+    pub fn globe_lines(&self) -> usize {
+        self.panel().globe_lines()
+    }
+
+    /// [`crate::inspection::Panel::globe_rows`], about what is under the cursor.
+    #[cfg(test)]
+    #[must_use]
+    pub fn globe_rows(&self) -> usize {
+        self.panel().globe_rows()
+    }
+
+    /// [`crate::inspection::Panel::wants_a_globe`], about what is under the cursor.
+    #[must_use]
+    pub fn wants_a_globe(&self) -> bool {
+        self.panel().wants_a_globe()
+    }
+
+    /// [`crate::inspection::Panel::info_room`], about what is under the cursor.
+    #[cfg(test)]
+    pub fn info_room(&self) -> usize {
+        self.panel().info_room()
+    }
+
+    /// [`crate::inspection::Panel::info_grid`], about what is under the cursor.
+    #[cfg(test)]
+    #[must_use]
+    pub fn info_grid(&self) -> (usize, usize, usize) {
+        self.panel().info_grid()
+    }
+
+    /// [`crate::inspection::Panel::info_total`], about what is under the cursor.
+    #[cfg(test)]
+    #[must_use]
+    pub fn info_total(&self) -> usize {
+        self.panel().info_total()
+    }
+
+    /// [`crate::inspection::Panel::globe_place`], about what is under the cursor.
+    #[must_use]
+    pub fn globe_place(&self) -> Option<(usize, u16, usize)> {
+        self.panel().globe_place()
+    }
+
+    /// [`crate::inspection::Panel::transport_showing`], about what is under the cursor.
+    #[must_use]
+    pub fn transport_showing(&self) -> bool {
+        self.panel().transport_showing()
+    }
+
+    /// [`crate::inspection::Panel::film_here`], about what is under the cursor.
+    #[must_use]
+    pub fn film_here(&self) -> bool {
+        self.panel().film_here()
+    }
+
+    /// [`crate::inspection::Panel::seek_to`], about what is under the cursor.
+    #[cfg(test)]
+    pub fn seek_to(&mut self, to: f64) {
+        self.panel_mut().seek_to(to)
+    }
+
+    /// [`crate::inspection::Panel::looked`], about what is under the cursor.
+    #[cfg(test)]
+    pub fn looked(&mut self, l: crate::inspection::Looked) {
+        self.panel_mut().looked(l)
+    }
+
+    /// [`crate::inspection::Panel::film_trouble`], about what is under the cursor.
+    #[must_use]
+    pub fn film_trouble(&self) -> Option<Explanation> {
+        self.panel().film_trouble()
+    }
+
+    /// [`crate::inspection::Panel::preview_key`], about what is under the cursor.
+    #[must_use]
+    pub fn preview_key(&self) -> Option<String> {
+        self.panel().preview_key()
+    }
+
+    /// [`crate::inspection::Panel::preview_pixels`], about what is under the cursor.
+    #[must_use]
+    pub fn preview_pixels(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.panel().preview_pixels()
+    }
+
+    /// [`crate::inspection::Panel::preview_now`], about what is under the cursor.
+    #[must_use]
+    pub fn preview_now(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.panel().preview_now()
+    }
+
+    /// [`crate::inspection::Panel::live_frame`], about what is under the cursor.
+    #[must_use]
+    pub fn live_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.panel().live_frame()
+    }
+
+    /// [`crate::inspection::Panel::shape_here`], about what is under the cursor.
+    #[must_use]
+    pub fn shape_here(&self) -> bool {
+        self.panel().shape_here()
+    }
+
+    /// [`crate::inspection::Panel::played`], about what is under the cursor.
+    #[cfg(test)]
+    pub fn played(&mut self, beat: crate::motion::Beat) {
+        self.panel_mut().played(beat)
+    }
+
+    /// [`crate::inspection::Panel::wants_motion`], about what is under the cursor.
+    pub fn wants_motion(&mut self) -> Option<crate::motion::Ask> {
+        self.panel_mut().wants_motion()
+    }
+
+    /// [`crate::inspection::Panel::measured_globe`], about what is under the cursor.
+    pub fn measured_globe(&self, size: (u32, u32), from: u32, theme: usize) {
+        self.panel().measured_globe(size, from, theme)
+    }
+
+    /// [`crate::inspection::Panel::wants_globe`], about what is under the cursor.
+    pub fn wants_globe(&mut self) -> Option<crate::globe::Ask> {
+        self.panel_mut().wants_globe()
+    }
+
+    /// [`crate::inspection::Panel::saw_globe`], about what is under the cursor.
+    pub fn saw_globe(&mut self, beat: &crate::globe::Beat) -> bool {
+        self.panel_mut().saw_globe(beat)
+    }
+
+    /// [`crate::inspection::Panel::globe_frame`], about what is under the cursor.
+    #[must_use]
+    pub fn globe_frame(&self) -> Option<ronoctua_render::image::Rgba> {
+        self.panel().globe_frame()
+    }
+
+    /// [`crate::inspection::Panel::globe_key`], about what is under the cursor.
+    #[must_use]
+    pub fn globe_key(&self) -> Option<String> {
+        self.panel().globe_key()
+    }
+
+    /// [`crate::inspection::Panel::globe_here`], about what is under the cursor.
+    #[must_use]
+    pub fn globe_here(&self) -> bool {
+        self.panel().globe_here()
+    }
+
+    /// [`crate::inspection::Panel::pointing_globe`], about what is under the cursor.
+    pub fn pointing_globe(&self, on: bool) {
+        self.panel().pointing_globe(on)
+    }
+
+    /// [`crate::inspection::Panel::pan_globe`], about what is under the cursor.
+    pub fn pan_globe(&mut self, right: f32, down: f32) -> bool {
+        self.panel_mut().pan_globe(right, down)
+    }
+
+    /// [`crate::inspection::Panel::wants_turn`], about what is under the cursor.
+    pub fn wants_turn(&mut self) -> Option<crate::stage::Ask> {
+        self.panel_mut().wants_turn()
+    }
+
+    /// [`crate::inspection::Panel::shape_said`], about what is under the cursor.
+    #[must_use]
+    pub fn shape_said(&self) -> Option<Explanation> {
+        self.panel().shape_said()
+    }
+
+    /// [`crate::inspection::Panel::spin`], about what is under the cursor.
+    pub fn spin(&mut self, right: f32, down: f32) -> bool {
+        self.panel_mut().spin(right, down)
+    }
+
+    /// [`crate::inspection::Panel::moving_frame`], about what is under the cursor.
+    #[cfg(test)]
+    #[must_use]
+    pub fn moving_frame(&self) -> Option<&ronoctua_render::image::Rgba> {
+        self.panel().moving_frame()
+    }
+
+    /// The language changed: the listing and its panels speak it now — the
+    /// facts panel above all, whose sheet is remembered by its subject and
+    /// would otherwise go on in the language it was first read in.
+    pub fn speak(&mut self, texts: std::rc::Rc<ronoctua_i18n::Texts>) {
+        self.texts = std::rc::Rc::clone(&texts);
+        self.panel.speak(texts);
+    }
+
+    /// [`crate::inspection::Panel::measured_preview`], about what is under the cursor.
+    pub fn measured_preview(&self, wide: f32, tall: f32) {
+        self.panel().measured_preview(wide, tall)
+    }
+
+    /// [`crate::inspection::Panel::preview_at_scale`], about what is under the cursor.
+    pub fn preview_at_scale(&self, scale: i32) {
+        self.panel().preview_at_scale(scale)
+    }
+
+    /// [`crate::inspection::Panel::preview_scale_now`], about what is under the cursor.
+    #[must_use]
+    pub fn preview_scale_now(&self) -> i32 {
+        self.panel().preview_scale_now()
+    }
+
+    /// [`crate::inspection::Panel::whole`], about what is under the cursor.
+    #[must_use]
+    pub fn whole(&self) -> bool {
+        self.panel().whole()
+    }
+
+    /// [`crate::inspection::Panel::wide`], about what is under the cursor.
+    #[must_use]
+    pub fn wide(&self) -> Option<Panel> {
+        self.panel().wide()
+    }
+
+    /// [`crate::inspection::Panel::pointing`], about what is under the cursor.
+    pub fn pointing(&self, pane: Option<Pane>) {
+        self.panel().pointing(pane)
+    }
+
+    /// [`crate::inspection::Panel::showing_text`], about what is under the cursor.
+    #[must_use]
+    pub fn showing_text(&self) -> Option<&ronoctua_inspect::text::Read> {
+        self.panel().showing_text()
+    }
+
+    /// [`crate::inspection::Panel::showing_list`], about what is under the cursor.
+    #[must_use]
+    pub fn showing_list(&self) -> Option<&ronoctua_inspect::playlist::List> {
+        self.panel().showing_list()
+    }
+
+    /// [`crate::inspection::Panel::preview_total`], about what is under the cursor.
+    #[must_use]
+    pub fn preview_total(&self) -> usize {
+        self.panel().preview_total()
+    }
+
+    /// [`crate::inspection::Panel::preview_widest`], about what is under the cursor.
+    #[must_use]
+    pub fn preview_widest(&self) -> usize {
+        self.panel().preview_widest()
+    }
+}
+
+/// How many lines the preview's sentence inside an archive may wrap to.
+const MEMBER_PREVIEW_LINES: usize = 3;
+
+// ── archive-luks: WALKING INTO ARCHIVES, THEIR PASSWORDS, AND ENCRYPTED DISKS ──
+//
+// Every method the file manager's archives and LUKS disks need from the view,
+// in one place: the rows of a folder inside an archive, the rows of the menu
+// about members, the sheet, the answers to the door's secret questions, and
+// what the threads and the queue came back with (`crate::files_archive`).
+impl View {
+    /// Whether the view stands inside an archive it walked into.
+    #[must_use]
+    pub fn in_archive(&self) -> bool {
+        self.inside
+            .as_ref()
+            .is_some_and(|i| self.where_.starts_with(&i.archive))
+    }
+
+    /// What the panels ask the region for: the panels' own answer, or —
+    /// inside an archive, where they have no subject on the disk — the
+    /// member's facts and the preview's sentence.
+    fn panels_want(&self) -> usize {
+        if !self.in_archive() {
+            return self.panel().panel_lines();
+        }
+        let facts = if self.panel.info_on {
+            self.member_sheet().len() + crate::inspection::BLANK
+        } else {
+            0
+        };
+        let said = if self.panel.preview_on {
+            MEMBER_PREVIEW_LINES
+        } else {
+            0
+        };
+        facts.max(said)
+    }
+
+    /// What the listing says about the member under the cursor, as the info
+    /// panel's facts: where it is, how big it is and packed, whether it is
+    /// encrypted, and when it was written. Nothing is read from the disk — a
+    /// member is not on it until it is opened.
+    fn member_sheet(&self) -> Vec<Fact> {
+        use ronoctua_i18n::key;
+        let (Some(entry), Some(inside)) = (
+            self.focused().filter(|e| !e.is_parent()),
+            self.inside.as_ref(),
+        ) else {
+            return Vec::new();
+        };
+        let member = self
+            .member_path(&entry.name)
+            .and_then(|path| inside.listing.member(&path).cloned());
+        let texts = &self.texts;
+        let fact = |label: &str, value: String, says: Option<Explanation>| Fact {
+            label: texts.t(label),
+            value,
+            does: crate::inspection_sheet::Doable::Nothing,
+            says,
+        };
+        let mut out = vec![fact(
+            key::FILES_DETAIL_PATH,
+            self.where_.join(&entry.name).to_string_lossy().into_owned(),
+            None,
+        )];
+        let file = !matches!(entry.kind, Kind::Directory);
+        if file {
+            out.push(fact(
+                key::FILES_DETAIL_SIZE,
+                size_text(entry.bytes, texts.decimal_mark()),
+                None,
+            ));
+            if let Some(packed) = member.as_ref().and_then(|m| m.packed_bytes) {
+                out.push(fact(
+                    key::FILES_ARCHIVE_FACT_PACKED,
+                    size_text(packed, texts.decimal_mark()),
+                    None,
+                ));
+            }
+            if let Some(m) = &member {
+                out.push(fact(
+                    key::FILES_ARCHIVE_FACT_ENCRYPTED,
+                    texts.t(if m.encrypted {
+                        key::FILES_SHEET_YES
+                    } else {
+                        key::FILES_SHEET_NO
+                    }),
+                    None,
+                ));
+            }
+        }
+        if member.as_ref().and_then(|m| m.modified_s).is_some() {
+            out.push(fact(
+                key::FILES_DETAIL_MODIFIED,
+                crate::chrome::when_text(entry.modified, &self.zone, false, texts),
+                Some(Explanation {
+                    key: if self.zone.is_utc() {
+                        key::FILES_EXPLAIN_WHEN_UTC
+                    } else {
+                        key::FILES_EXPLAIN_WHEN
+                    },
+                    args: vec![(
+                        "when",
+                        crate::chrome::when_long(entry.modified, &self.zone, texts),
+                    )],
+                }),
+            ));
+        }
+        out
+    }
+
+    /// The preview's sentence inside an archive, on the panel's first lines:
+    /// a member is shown once it is opened, which takes it out first. Read,
+    /// so left-aligned and wrapped — never cut.
+    fn member_preview(
+        &self,
+        section: &mut Section,
+        at: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        if self.focused().is_none_or(Entry::is_parent) {
+            return;
+        }
+        let said = texts.t(ronoctua_i18n::key::FILES_ARCHIVE_PREVIEW);
+        let lines = ronoctua_render::layout::wrap(&said, room, MEMBER_PREVIEW_LINES);
+        for (row, line) in section.content.iter_mut().zip(lines) {
+            row.fields.push(Field {
+                at,
+                text: line,
+                color: ronoctua_tokens::color::TEXT_DIM,
+                hit: Hit::Nothing,
+                explain: None,
+                ink: Ink::Grid,
+            });
+        }
+    }
+
+    /// Where the view stands: a folder on the disk, or one inside an archive.
+    #[must_use]
+    pub fn place(&self) -> ronoctua_files::archive::Place {
+        ronoctua_files::archive::Place::of(
+            &self.where_,
+            self.inside.as_ref().map(|i| i.archive.as_path()),
+        )
+    }
+
+    /// The folder a watch can look at: the archive's own, while the view is
+    /// inside one — a path inside an archive is not on the disk.
+    #[must_use]
+    pub fn watched(&self) -> &Path {
+        match &self.inside {
+            Some(i) if self.where_.starts_with(&i.archive) => {
+                i.archive.parent().unwrap_or(&self.where_)
+            }
+            _ => self.where_(),
+        }
+    }
+
+    /// The rows of the folder inside the archive the view stands in, sorted
+    /// like a directory's and the way out first — or `None` outside one.
+    fn archive_rows(&mut self) -> Option<Vec<Entry>> {
+        use std::os::unix::fs::MetadataExt as _;
+        let ronoctua_files::archive::Place::Archive { archive, mut inner } = self.place() else {
+            return None;
+        };
+        let listing = std::sync::Arc::clone(&self.inside.as_ref()?.listing);
+        // A PATH THE LISTING HAS NO FOLDER AT — a crumb, an old place — is the
+        // archive's top.
+        if !listing.is_dir(&inner) {
+            inner.clear();
+            self.where_.clone_from(&archive);
+        }
+        let (uid, gid, when) =
+            std::fs::metadata(&archive).map_or((0, 0, 0), |m| (m.uid(), m.gid(), m.mtime()));
+        let mut rows = listing.entries_at(&inner, uid, gid, when);
+        listing::sort_entries(&mut rows, self.sort);
+        // THE WAY OUT IS THE FIRST ROW, as in any folder: up a folder inside
+        // the archive, and out of it at its top.
+        rows.insert(
+            0,
+            Entry {
+                name: Entry::PARENT.to_owned(),
+                kind: Kind::Directory,
+                mode: 0o040_755,
+                links: 1,
+                uid,
+                gid,
+                bytes: 0,
+                modified: when,
+                target: None,
+                aims_at: None,
+            },
+        );
+        Some(rows)
+    }
+
+    /// The path inside the archive of the entry called `name` in the folder
+    /// the view is in.
+    fn member_path(&self, name: &str) -> Option<String> {
+        match self.place() {
+            ronoctua_files::archive::Place::Archive { inner, .. } if inner.is_empty() => {
+                Some(name.to_owned())
+            }
+            ronoctua_files::archive::Place::Archive { inner, .. } => {
+                Some(format!("{inner}/{name}"))
+            }
+            ronoctua_files::archive::Place::Folder(_) => None,
+        }
+    }
+
+    /// The members chosen — the marks, or the focused entry — each folder as
+    /// every member under it.
+    fn members_chosen(&self) -> Vec<String> {
+        let Some(inside) = self.inside.as_ref() else {
+            return Vec::new();
+        };
+        let names: Vec<String> = if self.marks.is_empty() {
+            self.focused()
+                .filter(|e| !e.is_parent())
+                .map(|e| e.name.clone())
+                .into_iter()
+                .collect()
+        } else {
+            self.marks.iter().cloned().collect()
+        };
+        let mut out = Vec::new();
+        for name in names {
+            let Some(path) = self.member_path(&name) else {
+                continue;
+            };
+            let under = inside.listing.at_and_under(&path);
+            if under.is_empty() {
+                out.push(path);
+            } else {
+                out.extend(under);
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Walks into the archive at `archive`: at once when this process kept
+    /// its listing, and otherwise by listing it off the loop.
+    fn walk_into_archive(
+        &mut self,
+        archive: &Path,
+        secret: Option<ronoctua_consent::keys::Secret>,
+    ) -> Step {
+        // NEVER ONE WHOSE NAMES ARE BEHIND A PASSWORD: those are not kept
+        // (`archive_reported`), and one that were would show the names to
+        // whoever walks in next without it.
+        if secret.is_none()
+            && let Some(listing) = ronoctua_files::archive::cached(archive)
+            && !listing.hidden_names()
+        {
+            let stamp = ronoctua_files::archive::Stamp::of(archive);
+            return self.stand_in(archive, stamp, listing, None);
+        }
+        self.listing_asked = Some((archive.to_path_buf(), secret.clone()));
+        Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::List {
+            archive: archive.to_path_buf(),
+            secret,
+        }))
+    }
+
+    /// Stands inside `archive`, listed as `listing` — at its top, or in the
+    /// folder the view was already in when this is the same archive listed
+    /// again.
+    fn stand_in(
+        &mut self,
+        archive: &Path,
+        stamp: Option<ronoctua_files::archive::Stamp>,
+        listing: std::sync::Arc<ronoctua_files::archive::Listing>,
+        secret: Option<ronoctua_consent::keys::Secret>,
+    ) -> Step {
+        let again = self.in_archive() && self.inside.as_ref().is_some_and(|i| i.archive == archive);
+        let to = if again {
+            self.where_.clone()
+        } else {
+            archive.to_path_buf()
+        };
+        self.inside = Some(crate::files_archive::Inside {
+            archive: archive.to_path_buf(),
+            stamp,
+            listing,
+            secret,
+        });
+        if again {
+            self.reread();
+        } else {
+            self.enter(&to);
+            self.pane = Pane::Listing;
+        }
+        Step::Changed
+    }
+
+    /// Opens a member: a folder is walked into, a file taken out into the
+    /// cache and opened.
+    fn open_member(&mut self, entry: &Entry) -> Step {
+        if matches!(entry.kind, Kind::Directory) {
+            let to = self.where_.join(&entry.name);
+            self.enter(&to);
+            return Step::Changed;
+        }
+        let (Some(member), Some(inside)) = (self.member_path(&entry.name), self.inside.as_ref())
+        else {
+            return Step::Nothing;
+        };
+        Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Open {
+            archive: inside.archive.clone(),
+            member,
+            secret: inside.secret.clone(),
+        }))
+    }
+
+    /// Hands the queue a job on an archive, remembering that THIS view sent it
+    /// — and the new archive's password it carried — so a refusal for want of
+    /// a password is asked here and nowhere else.
+    fn send(&mut self, doing: crate::files_archive::ArchiveDoing) -> Step {
+        /// How many sent jobs a view remembers: more than anybody sends and
+        /// then answers in one sitting.
+        const SENT: usize = 16;
+        if let crate::files_archive::ArchiveDoing::Queue { work, secret, .. } = &doing
+            && let Some(subject) = crate::files_archive::subject_of(work)
+        {
+            let new = matches!(**work, Work::Compress { .. } | Work::ArchiveConvert { .. })
+                .then(|| secret.clone())
+                .flatten();
+            self.sent.retain(|(p, _)| p != subject);
+            self.sent.push((subject.to_path_buf(), new));
+            if self.sent.len() > SENT {
+                self.sent.remove(0);
+            }
+        }
+        Step::Do(Doing::Archive(doing))
+    }
+
+    /// `extract` on an archive: every member, into a folder named after it
+    /// beside it.
+    fn extract_archive(&mut self, archive: PathBuf) -> Step {
+        let Some(dir) = archive.parent() else {
+            return Step::Nothing;
+        };
+        let name = archive
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let into = crate::files_archive::free_folder(dir, &ronoctua_files::archive::stem_of(&name));
+        self.send(crate::files_archive::ArchiveDoing::Queue {
+            work: Box::new(Work::Extract {
+                archive,
+                into,
+                members: Vec::new(),
+                secret: None,
+            }),
+            secret: None,
+            from_secret: None,
+        })
+    }
+
+    /// `archive-test` on an archive.
+    fn test_archive(&mut self, archive: PathBuf) -> Step {
+        self.send(crate::files_archive::ArchiveDoing::Queue {
+            work: Box::new(Work::ArchiveTest {
+                archive,
+                secret: None,
+            }),
+            secret: None,
+            from_secret: None,
+        })
+    }
+
+    /// `archive-add` on an archive: what was copied goes in.
+    fn add_to_archive(&mut self, archive: PathBuf) -> Step {
+        let add = self.clip.paths.clone();
+        self.send(crate::files_archive::ArchiveDoing::Queue {
+            work: Box::new(Work::ArchiveEdit {
+                archive,
+                add,
+                remove: Vec::new(),
+                secret: None,
+            }),
+            secret: None,
+            from_secret: None,
+        })
+    }
+
+    /// `archive-extract`, inside one: the chosen members, into the archive's
+    /// own folder.
+    fn extract_members(&mut self) -> Step {
+        let members = self.members_chosen();
+        let Some(inside) = self.inside.as_ref() else {
+            return Step::Nothing;
+        };
+        if members.is_empty() {
+            return Step::Say(does(ronoctua_i18n::key::FILES_ARCHIVE_NOTHING_CHOSEN));
+        }
+        let archive = inside.archive.clone();
+        let secret = inside.secret.clone();
+        let Some(into) = archive.parent().map(Path::to_path_buf) else {
+            return Step::Nothing;
+        };
+        self.send(crate::files_archive::ArchiveDoing::Queue {
+            work: Box::new(Work::Extract {
+                archive,
+                into,
+                members,
+                secret: None,
+            }),
+            secret,
+            from_secret: None,
+        })
+    }
+
+    /// `archive-remove`, inside one: the chosen members come out of it.
+    fn remove_members(&mut self) -> Step {
+        let members = self.members_chosen();
+        let Some(inside) = self.inside.as_ref() else {
+            return Step::Nothing;
+        };
+        if members.is_empty() {
+            return Step::Say(does(ronoctua_i18n::key::FILES_ARCHIVE_NOTHING_CHOSEN));
+        }
+        let archive = inside.archive.clone();
+        let secret = inside.secret.clone();
+        self.marks.clear();
+        self.send(crate::files_archive::ArchiveDoing::Queue {
+            work: Box::new(Work::ArchiveEdit {
+                archive,
+                add: Vec::new(),
+                remove: members,
+                secret: None,
+            }),
+            secret,
+            from_secret: None,
+        })
+    }
+
+    /// A drop that landed inside the archive the view stands in: added to it
+    /// at its top, and refused in words anywhere below.
+    fn dropped_into_archive(&mut self, into: &Path, paths: &[PathBuf]) -> Option<Step> {
+        let inside = self.inside.as_ref()?;
+        if !into.starts_with(&inside.archive) {
+            return None;
+        }
+        if into != inside.archive {
+            return Some(Step::Say(does(ronoctua_i18n::key::FILES_ARCHIVE_ADD_TOP)));
+        }
+        let archive = inside.archive.clone();
+        let secret = inside.secret.clone();
+        Some(self.send(crate::files_archive::ArchiveDoing::Queue {
+            work: Box::new(Work::ArchiveEdit {
+                archive,
+                add: paths.to_vec(),
+                remove: Vec::new(),
+                secret: None,
+            }),
+            secret,
+            from_secret: None,
+        }))
+    }
+
+    /// A row of the sheet was pressed: it turns in place, asks for the
+    /// password, or goes.
+    fn sheet_answered(&mut self) -> Step {
+        let Some(picker) = self.picking.as_mut() else {
+            return Step::Nothing;
+        };
+        let Some(id) = picker.answer() else {
+            return Step::Changed;
+        };
+        let Asking::Sheet(sheet) = &mut picker.asking else {
+            return Step::Nothing;
+        };
+        match sheet.turn(&id) {
+            crate::files_archive::Turned::Changed => {
+                self.rebuild_sheet(&id);
+                Step::Changed
+            }
+            crate::files_archive::Turned::AskPassword => {
+                self.wanting = Some(crate::files_archive::Wanting::SheetNew);
+                Step::Secret(crate::files_archive::PASSWORD_NEW)
+            }
+            crate::files_archive::Turned::Go(doing) => {
+                self.picking = None;
+                self.send(*doing)
+            }
+            crate::files_archive::Turned::Nothing => Step::Changed,
+        }
+    }
+
+    /// The sheet's rows again, with the cursor on the row `on`.
+    fn rebuild_sheet(&mut self, on: &str) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let Some(picker) = self.picking.as_mut() else {
+            return;
+        };
+        let Asking::Sheet(sheet) = &picker.asking else {
+            return;
+        };
+        picker.choices = sheet.choices(&texts);
+        let shown = picker.shown();
+        picker.cursor = shown
+            .iter()
+            .position(|i| picker.choices.get(*i).is_some_and(|c| c.id == on))
+            .unwrap_or(0);
+    }
+
+    /// The answer to one of this view's secret questions, typed on the door's
+    /// line — the same call from both doors.
+    pub fn secret_answered(&mut self, id: &str, text: &str) -> Step {
+        use crate::files_archive::{self as fa, Wanting};
+        if text.is_empty() {
+            self.wanting = None;
+            return Step::Changed;
+        }
+        let secret = ronoctua_consent::keys::Secret::new(text);
+        match (id, self.wanting.take()) {
+            (fa::PASSWORD_NEW, Some(Wanting::SheetNew)) => {
+                self.wanting = Some(Wanting::SheetAgain(secret));
+                Step::Secret(fa::PASSWORD_AGAIN)
+            }
+            (fa::PASSWORD_AGAIN, Some(Wanting::SheetAgain(first))) => {
+                if first != secret {
+                    return Step::Say(does(ronoctua_i18n::key::FILES_ARCHIVE_PASSWORDS_DIFFER));
+                }
+                if let Some(Picker {
+                    asking: Asking::Sheet(sheet),
+                    ..
+                }) = self.picking.as_mut()
+                {
+                    sheet.secret = Some(first);
+                }
+                self.rebuild_sheet("password");
+                Step::Changed
+            }
+            (fa::PASSWORD | fa::PASSWORD_WRONG, Some(Wanting::Listing(archive))) => {
+                self.walk_into_archive(&archive, Some(secret))
+            }
+            (fa::PASSWORD | fa::PASSWORD_WRONG, Some(Wanting::Member { archive, member })) => {
+                if let Some(inside) = self.inside.as_mut()
+                    && inside.archive == archive
+                {
+                    inside.secret = Some(secret.clone());
+                }
+                Step::Do(Doing::Archive(fa::ArchiveDoing::Open {
+                    archive,
+                    member,
+                    secret: Some(secret),
+                }))
+            }
+            (fa::PASSWORD | fa::PASSWORD_WRONG, Some(Wanting::Job(work, new))) => {
+                let doing = fa::with_password(*work, secret, new);
+                self.send(doing)
+            }
+            (fa::UNLOCK, Some(Wanting::Unlock { device, name })) => Step::Do(Doing::Unlock {
+                device,
+                passphrase: secret,
+                name,
+            }),
+            (_, other) => {
+                self.wanting = other;
+                Step::Nothing
+            }
+        }
+    }
+
+    /// One of this view's secret questions was let go.
+    pub fn secret_let_go(&mut self, id: &str) {
+        if crate::files_archive::QUESTIONS.contains(&id) {
+            self.secrets_let_go();
+        }
+    }
+
+    /// Whatever secret question the view was waiting on, let go.
+    pub fn secrets_let_go(&mut self) {
+        self.wanting = None;
+    }
+
+    /// What an archive's thread, or the queue, came back with.
+    pub fn archive_reported(&mut self, report: crate::files_archive::ArchiveReport) -> Step {
+        use crate::files_archive::{self as fa, ArchiveReport, Wanting};
+        let asks = |why: ronoctua_archive::Why| {
+            if why == ronoctua_archive::Why::WrongPassword {
+                fa::PASSWORD_WRONG
+            } else {
+                fa::PASSWORD
+            }
+        };
+        match report {
+            ArchiveReport::Listed {
+                archive,
+                stamp,
+                listed,
+            } => {
+                // ONLY THE LISTING ASKED FOR: the view may have moved on.
+                let Some((asked, secret)) = self.listing_asked.take() else {
+                    return Step::Nothing;
+                };
+                if asked != archive {
+                    self.listing_asked = Some((asked, secret));
+                    return Step::Nothing;
+                }
+                match listed {
+                    Ok((members, hidden)) => {
+                        let listing = std::sync::Arc::new(ronoctua_files::archive::Listing::of(
+                            members, hidden,
+                        ));
+                        // KEPT ONLY WHEN IT TOOK NO PASSWORD: the names of a 7z
+                        // with hidden headers are as secret as its contents,
+                        // and a listing kept for the process would walk anybody
+                        // in without it.
+                        if let Some(s) = stamp
+                            && !hidden
+                        {
+                            ronoctua_files::archive::keep(
+                                &archive,
+                                s,
+                                std::sync::Arc::clone(&listing),
+                            );
+                        }
+                        self.stand_in(&archive, stamp, listing, secret)
+                    }
+                    Err(why) if why.wants_a_password() => {
+                        self.wanting = Some(Wanting::Listing(archive));
+                        Step::Secret(asks(why))
+                    }
+                    Err(why) => Step::Say(fa::refusal(why, &archive)),
+                }
+            }
+            ArchiveReport::Opened(path) => Step::Do(Doing::Open(path)),
+            ArchiveReport::NotOpened {
+                archive,
+                member,
+                why,
+            } => {
+                if why.wants_a_password() {
+                    self.wanting = Some(Wanting::Member { archive, member });
+                    return Step::Secret(asks(why));
+                }
+                Step::Say(fa::refusal(why, Path::new(&member)))
+            }
+            ArchiveReport::JobRefused { work, why } => {
+                let Some(subject) = fa::subject_of(&work).map(Path::to_path_buf) else {
+                    return Step::Nothing;
+                };
+                // ONLY IN THE DOOR THAT SENT IT: another door open on the same
+                // folder hears the same end and says nothing.
+                let Some(at) = self.sent.iter().position(|(p, _)| *p == subject) else {
+                    return Step::Nothing;
+                };
+                let (_, new) = self.sent.remove(at);
+                if why.wants_a_password() {
+                    self.wanting = Some(Wanting::Job(work, new));
+                    return Step::Secret(asks(why));
+                }
+                Step::Say(fa::refusal(why, &subject))
+            }
+            // A JOB ON AN ARCHIVE ENDED — done, or given up — and nothing is
+            // to be asked again: the password kept for asking goes with it.
+            ArchiveReport::Ended(work) => {
+                if let Some(subject) = fa::subject_of(&work) {
+                    self.sent.retain(|(p, _)| p != subject);
+                }
+                self.reread();
+                Step::Changed
+            }
+            // THE QUEUE CHANGED THE ARCHIVE THE VIEW STANDS IN: listed again,
+            // and the view stays in the folder it was in.
+            ArchiveReport::Changed(archive) => {
+                self.sent.retain(|(p, _)| *p != archive);
+                // OUTSIDE IT, the folder it sits in is read again: its size
+                // and its date on the row changed with it.
+                let Some(inside) = self.inside.as_ref().filter(|i| i.archive == archive) else {
+                    self.reread();
+                    return Step::Changed;
+                };
+                // ALREADY LISTED AS IT IS NOW: nothing to read again.
+                if inside.stamp.is_some()
+                    && ronoctua_files::archive::Stamp::of(&archive) == inside.stamp
+                {
+                    return Step::Nothing;
+                }
+                let secret = inside.secret.clone();
+                self.listing_asked = Some((archive.clone(), secret.clone()));
+                Step::Do(Doing::Archive(fa::ArchiveDoing::List { archive, secret }))
+            }
+        }
+    }
+
+    /// Walks into an archive with a listing given — what a test and the
+    /// photograph's camera do instead of a program.
+    #[cfg(test)]
+    pub(crate) fn stand_in_for_test(
+        &mut self,
+        archive: &Path,
+        listing: ronoctua_files::archive::Listing,
+    ) {
+        let _ = self.stand_in(archive, None, std::sync::Arc::new(listing), None);
     }
 }
 
@@ -16241,6 +13581,13 @@ fn notation_of(t: Key) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // WHAT THE PANELS KEEP IS THE PANELS' (`crate::inspection`), and these
+    // tests still measure it through the view.
+    use crate::inspection::{
+        BLANK, FACT_COLUMN, Looked, NO_PREVIEW, PANEL_WANT, REFUSAL_CEILING, SPIN_STEP,
+        WIDE_HIDDEN, preview_lines,
+    };
+    use ronoctua_inspect::motion::Show;
 
     /// An entry of the catalogue that declares `types`.
     fn declaring(id: &str, types: &[&str]) -> ronoctua_apps::DesktopEntry {
@@ -16321,8 +13668,8 @@ mod tests {
         let dir = scratch(name);
         std::fs::write(dir.join("one.rs"), body).expect("write the file");
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         let read = ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab)
@@ -16341,6 +13688,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         (v, dir)
     }
@@ -16428,8 +13776,8 @@ mod tests {
         let dir = scratch("globe-lines");
         std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         v.looked(Looked {
@@ -16446,6 +13794,7 @@ mod tests {
             outlined: 0,
             // LONDON, which `assets/world.nix` already declares in the open.
             at: Some((51.51, -0.13)),
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         // THE ONE THING THIS TEST NEEDS FROM OUTSIDE, and it is not allowed to
         // be missing quietly: without the table `globe::present()` is false and
@@ -16460,7 +13809,7 @@ mod tests {
         // the region is as tall as invariant 14 lets it be.
         let tall = ronoctua_tokens::space::EXPANSION_MAXLINES;
         v.drawn_at.set(200);
-        v.drawn_lines.set(tall);
+        v.panel.drawn_lines.set(tall);
         assert_eq!(
             v.globe_rows(),
             usize::from(ronoctua_tokens::space::ATLAS_LINES),
@@ -16525,8 +13874,8 @@ mod tests {
             usize::from(short) >= usize::from(ronoctua_tokens::space::ATLAS_LINES),
             "a panel of {short} lines has no place for the globe, so this proves nothing"
         );
-        v.drawn_lines.set(short);
-        v.info_offset = 2;
+        v.panel.drawn_lines.set(short);
+        v.panel.info_offset = 2;
         let (left, _, gone) = v.globe_place().expect("the globe still has a place");
         // AND THE PICTURE KEEPS ITS SIZE: what was scrolled is CUT off its top,
         // never squeezed out of it. *"Quero que o globo mantenha o tamanho."*
@@ -16545,7 +13894,7 @@ mod tests {
         // sumir da tela"*. Asked for an offset far past the end, the sheet
         // shows its LAST page and the picture has given back exactly the rows
         // that were scrolled — no more.
-        v.info_offset = 999;
+        v.panel.info_offset = 999;
         let most = v.info_total().saturating_sub(v.info_room());
         assert!(
             most > 0 && most < usize::from(ronoctua_tokens::space::ATLAS_LINES),
@@ -16561,7 +13910,7 @@ mod tests {
             usize::from(ronoctua_tokens::space::ATLAS_LINES) - most,
             "the offset ran past the end of the sheet"
         );
-        v.info_offset = 0;
+        v.panel.info_offset = 0;
 
         // AND A FILE WITHOUT ONE RESERVES NOTHING. The same answer again with
         // the coordinate taken out of it — `wants_look` has nothing left to
@@ -16570,6 +13919,7 @@ mod tests {
         assert!(again.is_none(), "it asked for a file it already has");
         v.looked(Looked {
             key: v
+                .panel
                 .looked
                 .as_ref()
                 .expect("an answer is installed")
@@ -16586,6 +13936,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert_eq!(v.globe_lines(), 0, "a file with no coordinate got a globe");
         let _ = std::fs::remove_dir_all(&dir);
@@ -16600,8 +13951,8 @@ mod tests {
         let dir = scratch(name);
         std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         v.looked(Looked {
@@ -16617,6 +13968,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: Some((51.51, -0.13)),
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert!(
             crate::globe::present(),
@@ -16664,7 +14016,7 @@ mod tests {
         // at a time.
         let mut asked: Vec<f32> = Vec::new();
         for gone in 0..air {
-            v.info_offset = gone;
+            v.panel.info_offset = gone;
             let _ = the_facts(&v, lines, width, &texts);
             let Some((left, cells, cut)) = v.globe_place() else {
                 break;
@@ -16704,7 +14056,7 @@ mod tests {
             "the picture is not drawn at the size it was painted, so the map \
              changes scale as its rows go: {asked:?}"
         );
-        v.info_offset = 0;
+        v.panel.info_offset = 0;
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -16785,7 +14137,7 @@ mod tests {
             first
                 .fields
                 .iter()
-                .any(|f| f.color == ronoctua_tokens::color::TEXT_DIM && f.at >= info.from + cells),
+                .any(|f| a_label(f) && f.at >= info.from + cells),
             "no fact was drawn beside the globe: {first:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -16808,8 +14160,8 @@ mod tests {
         let dir = scratch("globe-target");
         std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         let key = ask.key.clone();
@@ -16826,13 +14178,15 @@ mod tests {
             turns: false,
             outlined: 0,
             at: Some((51.51, -0.13)),
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert!(
             crate::globe::present(),
             "RONOCTUA_ATLAS is unset, so this test proves nothing"
         );
         v.drawn_at.set(200);
-        v.drawn_lines
+        v.panel
+            .drawn_lines
             .set(ronoctua_tokens::space::EXPANSION_MAXLINES);
 
         // THE ANSWER INSTALLED BY HAND, through the same `Beat` the thread
@@ -16893,8 +14247,8 @@ mod tests {
         std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
         std::fs::write(dir.join("plain.txt"), b"no coordinate here").expect("write the file");
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         // NARROW ENOUGH FOR THE STRIP, which is what `panelsFrom` decides.
         let narrow = ronoctua_tokens::space::FILES_PANELSFROM - 1;
@@ -16913,6 +14267,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: Some((51.51, -0.13)),
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert!(crate::globe::present(), "RONOCTUA_ATLAS is unset");
         let with = v.panes(narrow).strip;
@@ -16939,6 +14294,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert_eq!(
             v.panes(narrow).strip,
@@ -16969,9 +14325,9 @@ mod tests {
 
         // AND THE KEY MOVES IT. `C-,` pages and comes back round.
         v.drawn_at.set(200);
-        v.drawn_lines.set(12);
+        v.panel.drawn_lines.set(12);
         assert!(matches!(v.key(of_view("C-,")), Step::Changed));
-        assert_eq!(v.preview_offset, 12, "the page did not move a page");
+        assert_eq!(v.panel.preview_offset, 12, "the page did not move a page");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -16981,14 +14337,14 @@ mod tests {
     fn the_wheel_over_the_preview_moves_only_the_preview() {
         let body: String = (0..200).map(|n| format!("let x{n} = {n};\n")).collect();
         let (mut v, dir) = a_text_view("text-wheel", &body);
-        let before = (v.list_offset, v.side_offset, v.info_offset);
+        let before = (v.list_offset, v.side_offset, v.panel.info_offset);
         assert!(
             v.wheel(Pane::Preview, 3, 200, 12),
             "it did not take the gesture"
         );
-        assert_eq!(v.preview_offset, 3);
+        assert_eq!(v.panel.preview_offset, 3);
         assert_eq!(
-            (v.list_offset, v.side_offset, v.info_offset),
+            (v.list_offset, v.side_offset, v.panel.info_offset),
             before,
             "it moved a list somewhere else on the screen"
         );
@@ -17003,7 +14359,7 @@ mod tests {
         let dir = scratch("picture-still");
         std::fs::write(dir.join("one.png"), b"\x89PNG\r\n\x1a\n").expect("write");
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         v.looked(Looked {
@@ -17023,10 +14379,11 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert_eq!(v.preview_total(), 1, "a picture claimed more than one row");
         assert!(v.wheel(Pane::Preview, 5, 200, 12), "the gesture escaped");
-        assert_eq!(v.preview_offset, 0, "a picture scrolled");
+        assert_eq!(v.panel.preview_offset, 0, "a picture scrolled");
 
         let texts = bundle();
         let sections = v.sections(&[], 64, 200, &texts);
@@ -17092,7 +14449,7 @@ mod tests {
         let (mut v, dir) = a_text_view("text-long", &long);
         for width in [110u16, 200] {
             for column in [0usize, 20, 400] {
-                v.preview_column = column;
+                v.panel.preview_column = column;
                 let texts = bundle();
                 let sections = v.sections(&[], 64, width, &texts);
                 let Some(section) = sections.iter().find(|s| matches!(s.pane, Pane::Preview))
@@ -17127,8 +14484,8 @@ mod tests {
         // own and the assertion passes with the preview asking for nothing —
         // which is exactly how this test first came out green with the defect
         // still in the code.
-        v.info_on = false;
-        let asked = v.panel_lines();
+        v.panel.info_on = false;
+        let asked = v.panel().panel_lines();
         assert!(
             asked > usize::from(preview_lines()),
             "a two-hundred-line file asked for {asked} lines"
@@ -17150,18 +14507,19 @@ mod tests {
     fn the_preview_goes_back_to_the_top_for_a_new_file_only() {
         let body: String = (0..200).map(|n| format!("let x{n} = {n};\n")).collect();
         let (mut v, dir) = a_text_view("text-reset", &body);
-        v.preview_offset = 50;
-        v.info_offset = 8;
-        v.preview_column = 12;
+        v.panel.preview_offset = 50;
+        v.panel.info_offset = 8;
+        v.panel.preview_column = 12;
 
         // THE SAME FILE, asked again at another size: the place is kept.
         let same = v
+            .panel
             .looked
             .as_ref()
             .expect("an answer is installed")
             .path
             .clone();
-        v.asked = Some("prev:again".to_owned());
+        v.panel.asked = Some("prev:again".to_owned());
         v.looked(Looked {
             key: "prev:again".to_owned(),
             path: same,
@@ -17175,12 +14533,16 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
-        assert_eq!(v.preview_offset, 50, "a re-decode threw the reader back");
-        assert_eq!(v.info_offset, 8);
+        assert_eq!(
+            v.panel.preview_offset, 50,
+            "a re-decode threw the reader back"
+        );
+        assert_eq!(v.panel.info_offset, 8);
 
         // ANOTHER FILE: the top.
-        v.asked = Some("prev:other".to_owned());
+        v.panel.asked = Some("prev:other".to_owned());
         v.looked(Looked {
             key: "prev:other".to_owned(),
             path: dir.join("other.rs"),
@@ -17194,10 +14556,14 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
-        assert_eq!(v.preview_offset, 0, "a new file kept the old one's place");
-        assert_eq!(v.preview_column, 0);
-        assert_eq!(v.info_offset, 0);
+        assert_eq!(
+            v.panel.preview_offset, 0,
+            "a new file kept the old one's place"
+        );
+        assert_eq!(v.panel.preview_column, 0);
+        assert_eq!(v.panel.info_offset, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -17214,7 +14580,7 @@ mod tests {
             .to_owned();
         assert!(at_start.starts_with("aaaa"), "{at_start:?}");
 
-        v.preview_column = 8;
+        v.panel.preview_column = 8;
         let moved: String = preview_row(&v, 200, 0)
             .iter()
             .map(|f| f.text.as_str())
@@ -17258,7 +14624,7 @@ mod tests {
             v.key(of_view("C-]"));
         }
         assert_eq!(
-            v.preview_column,
+            v.panel.preview_column,
             v.preview_widest() - room,
             "it did not stop at the end of the widest line"
         );
@@ -17266,7 +14632,10 @@ mod tests {
         for _ in 0..400 {
             v.key(of_view("C-["));
         }
-        assert_eq!(v.preview_column, 0, "it did not come back to the left edge");
+        assert_eq!(
+            v.panel.preview_column, 0,
+            "it did not come back to the left edge"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -17295,8 +14664,8 @@ mod tests {
         )
         .unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         let read = ronoctua_inspect::text::of(&ask.path, ask.mime, ask.tab)
@@ -17315,6 +14684,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
 
         let texts = bundle();
@@ -17391,15 +14761,18 @@ mod tests {
         };
         assert!(v.drag_to(Pane::Preview, Axis::Across, 1.0, 200, room));
         assert_eq!(
-            v.preview_column,
+            v.panel.preview_column,
             v.preview_widest() - usize::from(v.panes(200).preview_box(200).expect("a box").1),
             "dragging to the end did not reach the end"
         );
         assert!(v.drag_to(Pane::Preview, Axis::Across, 0.0, 200, room));
-        assert_eq!(v.preview_column, 0, "dragging back did not reach the start");
+        assert_eq!(
+            v.panel.preview_column, 0,
+            "dragging back did not reach the start"
+        );
 
         // AND THE THUMB MOVED WITH IT.
-        v.preview_column = v.preview_widest() / 2;
+        v.panel.preview_column = v.preview_widest() / 2;
         let sections = v.sections(&chrome, 20, 200, &texts);
         let sec = sections
             .iter()
@@ -17533,6 +14906,7 @@ mod tests {
                     title: None,
                     seconds: Some(30.0),
                     written: (*n).to_owned(),
+                    attributes: None,
                 })
                 .collect(),
             cut: false,
@@ -17557,7 +14931,7 @@ mod tests {
         let dir = scratch("fila-cursor");
         std::fs::write(dir.join("a.m3u"), b"one.mp3\n").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         v.measured_preview(256.0, 144.0);
         v.cursor = v
@@ -17565,7 +14939,7 @@ mod tests {
             .iter()
             .position(|&n| v.entries[n].name == "a.m3u")
             .expect("the playlist is in the listing");
-        v.asked = Some("prev:cursor".to_owned());
+        v.panel.asked = Some("prev:cursor".to_owned());
         v.looked(Looked {
             key: "prev:cursor".to_owned(),
             path: dir.join("a.m3u"),
@@ -17579,6 +14953,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         let _ = v.panes(200);
         v.set_pane(Pane::Preview);
@@ -17601,7 +14976,7 @@ mod tests {
         v.key(of_view("<up>"));
         assert!(matches!(v.key(of_view("RET")), Step::Changed | Step::Do(_)));
         assert_eq!(
-            v.playing, 1,
+            v.panel.playing, 1,
             "Enter did not play the entry under the cursor"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -17612,7 +14987,7 @@ mod tests {
         let dir = scratch("queue");
         std::fs::write(dir.join("a.m3u"), b"one.mp3\n").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         v.measured_preview(256.0, 144.0);
         v.cursor = v
@@ -17620,7 +14995,7 @@ mod tests {
             .iter()
             .position(|&n| v.entries[n].name == "a.m3u")
             .expect("the playlist is in the listing");
-        v.asked = Some("prev:list".to_owned());
+        v.panel.asked = Some("prev:list".to_owned());
         v.looked(Looked {
             key: "prev:list".to_owned(),
             path: dir.join("a.m3u"),
@@ -17637,20 +15012,21 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
 
         // IT DOES NOT START BY ITSELF, which is the owner's rule reaching a
         // list of nine tracks rather than one file.
-        assert!(!v.transport.on, "a playlist started by itself");
+        assert!(!v.panel.transport.on, "a playlist started by itself");
         assert!(v.wants_motion().is_none());
         // BUT THE TRANSPORT IS THERE, because what it names is playable.
-        assert!(v.plays_here(), "a playlist offered no transport");
+        assert!(v.panel().plays_here(), "a playlist offered no transport");
 
         // PLAY STARTS THE FIRST ENTRY, and the reel is about the ENTRY while
         // the key stays the playlist's — the era drops the old child's frames,
         // not the key.
-        let _ = v.play_pause();
-        let reel = v.wish().expect("a started list wants a player");
+        let _ = v.panel_mut().play_pause();
+        let reel = v.panel().wish().expect("a started list wants a player");
         assert_eq!(reel.path, dir.join("one.mp3"));
         assert_eq!(reel.key, "prev:list");
         assert!(reel.sound);
@@ -17660,41 +15036,44 @@ mod tests {
         v.played(crate::motion::Beat::Ended {
             key: "prev:list".to_owned(),
         });
-        assert!(v.transport.on, "the list stopped at its first entry");
-        assert_eq!(v.playing, 2, "the remote entry was played");
+        assert!(v.panel.transport.on, "the list stopped at its first entry");
+        assert_eq!(v.panel.playing, 2, "the remote entry was played");
         assert_eq!(
-            v.wish().expect("still playing").path,
+            v.panel().wish().expect("still playing").path,
             dir.join("three.flac")
         );
         // AND IT STARTS THAT ONE FROM ITS BEGINNING.
-        assert!((v.transport.from - 0.0).abs() < f64::EPSILON);
+        assert!((v.panel.transport.from - 0.0).abs() < f64::EPSILON);
 
         // AND THE END OF THE LAST ONE STOPS.
         v.played(crate::motion::Beat::Ended {
             key: "prev:list".to_owned(),
         });
-        assert!(!v.transport.on, "the list looped instead of ending");
+        assert!(!v.panel.transport.on, "the list looped instead of ending");
 
         // PRESSING PLAY ON A FINISHED LIST STARTS IT AGAIN AT THE TOP.
-        let _ = v.play_pause();
-        assert_eq!(v.playing, 0, "a finished list resumed on its last entry");
-        assert!(v.transport.on);
+        let _ = v.panel_mut().play_pause();
+        assert_eq!(
+            v.panel.playing, 0,
+            "a finished list resumed on its last entry"
+        );
+        assert!(v.panel.transport.on);
 
         // THE TWO KEYS WALK THE PLAYABLE ONES AND REFUSE AT THE ENDS.
         assert!(
-            matches!(v.step_entry(-1), Step::Say(_)),
+            matches!(v.panel_mut().step_entry(-1), Step::Say(_)),
             "it walked past the start"
         );
-        let _ = v.step_entry(1);
-        assert_eq!(v.playing, 2, "the key stopped on the remote entry");
+        let _ = v.panel_mut().step_entry(1);
+        assert_eq!(v.panel.playing, 2, "the key stopped on the remote entry");
         assert!(
-            matches!(v.step_entry(1), Step::Say(_)),
+            matches!(v.panel_mut().step_entry(1), Step::Say(_)),
             "it walked past the end"
         );
 
         // AND PRESSING THE REMOTE ONE SAYS WHY, rather than doing nothing.
-        assert!(matches!(v.play_entry(1), Step::Say(_)));
-        assert_eq!(v.playing, 2, "a remote entry became the one playing");
+        assert!(matches!(v.panel_mut().play_entry(1), Step::Say(_)));
+        assert_eq!(v.panel.playing, 2, "a remote entry became the one playing");
     }
 
     /// A SOUND WAITS TO BE STARTED, AND ITS CONTROLS NEVER LEAVE.
@@ -17713,7 +15092,7 @@ mod tests {
             std::fs::write(dir.join(name), b"ID3").unwrap();
         }
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         v.measured_preview(256.0, 144.0);
 
@@ -17731,7 +15110,7 @@ mod tests {
                 .iter()
                 .position(|&n| v.entries[n].name == name)
                 .expect("the file is in the listing");
-            v.asked = Some(format!("prev:{name}"));
+            v.panel.asked = Some(format!("prev:{name}"));
             v.looked(Looked {
                 key: format!("prev:{name}"),
                 path: dir.join(name),
@@ -17745,20 +15124,21 @@ mod tests {
                 turns: false,
                 outlined: 0,
                 at: None,
+                amendable: crate::inspection_edit::Amendable::default(),
             });
         };
 
         arrives(&mut v, "a.mp3", a_sound(132.9, true));
         // IT DOES NOT START. No child is asked for, which is the whole of it:
         // `wish` returns nothing while `on` is clear.
-        assert!(!v.transport.on, "a sound started by itself");
+        assert!(!v.panel.transport.on, "a sound started by itself");
         assert!(
             v.wants_motion().is_none(),
             "a sound asked for a player nobody started"
         );
         // AND IT ARRIVES AUDIBLE, so the key that starts it is the only key
         // needed. A film arrives the other way round.
-        assert!(v.transport.sound, "a sound arrived muted");
+        assert!(v.panel.transport.sound, "a sound arrived muted");
 
         // THE CONTROLS ARE THERE WITH NO POINTER ANYWHERE.
         v.pointing(None);
@@ -17768,7 +15148,7 @@ mod tests {
         );
         // AND THE GLYPHS WITH THEM, not just the band: the row's fields are
         // what carry the play mark and the clock.
-        let bare = v.transport_fields(0, 40, None);
+        let bare = v.panel().transport_fields(0, 40, None);
         assert!(
             bare.len() > 1,
             "the controls' ink went away with the pointer: {bare:?}"
@@ -17777,8 +15157,8 @@ mod tests {
         // A FILM KEEPS ITS OWN BEHAVIOUR, which is the half that must not have
         // been broken by the half above.
         arrives(&mut v, "b.mp4", a_film(60.0, true));
-        assert!(v.transport.on, "a film stopped playing on arrival");
-        assert!(!v.transport.sound, "a film arrived speaking");
+        assert!(v.panel.transport.on, "a film stopped playing on arrival");
+        assert!(!v.panel.transport.sound, "a film arrived speaking");
         v.pointing(None);
         assert!(
             !v.transport_showing(),
@@ -17790,10 +15170,10 @@ mod tests {
         // AND PRESSING PLAY ON A SOUND STARTS IT, still audible: the restart
         // must not answer a key about playing by muting the file.
         arrives(&mut v, "c.flac", a_sound(132.9, false));
-        let _ = v.play_pause();
-        assert!(v.transport.on, "play did not start a sound");
-        assert!(v.transport.sound, "play muted the sound it started");
-        let reel = v.wish().expect("a started sound wants a player");
+        let _ = v.panel_mut().play_pause();
+        assert!(v.panel.transport.on, "play did not start a sound");
+        assert!(v.panel.transport.sound, "play muted the sound it started");
+        let reel = v.panel().wish().expect("a started sound wants a player");
         assert_eq!(reel.show, Show::Sound { cover: false });
         assert!(reel.sound, "the player was asked for a silent sound");
     }
@@ -17808,7 +15188,7 @@ mod tests {
         let dir = scratch("motion");
         std::fs::write(dir.join("a-still.png"), b"\x89PNG\r\n\x1a\n").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
 
         // NOTHING TO FOLLOW YET, and nothing playing: no question to answer.
@@ -17829,6 +15209,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert!(
             v.wants_motion().is_none(),
@@ -17836,7 +15217,7 @@ mod tests {
         );
 
         // AND NOW ONE THAT MOVES.
-        v.asked = Some("prev:moves".to_owned());
+        v.panel.asked = Some("prev:moves".to_owned());
         v.looked(Looked {
             key: "prev:moves".to_owned(),
             path: dir.join("a-still.png"),
@@ -17850,6 +15231,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         // THE PANEL HAS TO HAVE BEEN MEASURED, because the frame is decoded at
         // the box's OWN shape — no box, no wish. It is the DOOR that measures
@@ -17875,7 +15257,7 @@ mod tests {
         assert!(v.moving_frame().is_some(), "the frame is not on screen");
 
         // AND THE PREVIEW GOES OFF: stop, and let the still picture back.
-        v.preview_on = false;
+        v.panel.preview_on = false;
         assert_eq!(
             v.wants_motion(),
             Some(crate::motion::Ask::Stop),
@@ -17898,7 +15280,7 @@ mod tests {
         let dir = scratch("motion-room");
         std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         let words = bundle();
         let ask = v.wants_look(512).expect("a file wants a look");
@@ -17916,6 +15298,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -17978,7 +15361,7 @@ mod tests {
         );
 
         // AND WITH NO FILM THERE IS NO BAND AT ALL.
-        v.frame = None;
+        v.panel.frame = None;
         v.looked(Looked {
             key,
             path: v.focused_path().expect("a file"),
@@ -17992,6 +15375,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         let still = preview_of(&v, &words);
         assert!(
@@ -18105,7 +15489,7 @@ mod tests {
         let dir = scratch("motion-hit");
         std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         let words = bundle();
         let ask = v.wants_look(512).expect("a look");
@@ -18123,6 +15507,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -18171,8 +15556,8 @@ mod tests {
         let dir = scratch("motion-band");
         std::fs::write(dir.join("a.gif"), b"GIF89a").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a look");
         v.looked(Looked {
@@ -18188,6 +15573,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         // THE WINDOW DOOR'S OWN REPORT: `pane=Preview cell=Some(11) columns=51`.
         let panes = v.panes(51);
@@ -18217,7 +15603,7 @@ mod tests {
         let dir = scratch("motion-photo");
         std::fs::write(dir.join("a.jpg"), b"\xff\xd8\xff").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         v.measured_preview(300.0, 200.0);
         let ask = v.wants_look(512).expect("a look");
@@ -18244,6 +15630,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
 
         // WITH NO FRAME IN HAND, THE PHOTOGRAPH IS WHAT IS DRAWN.
@@ -18379,6 +15766,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         (v, dir)
     }
@@ -18443,13 +15831,13 @@ mod tests {
                 .expect("a last line")
                 .fields
                 .iter()
-                .any(|f| f.color == ronoctua_tokens::color::TEXT_DIM),
+                .any(a_label),
             "the panel's last line has no fact on it at the top of the sheet"
         );
 
         // AND SCROLLED TO THE VERY END IT IS THE BLANK ROW, which is the only
         // place the button covers nothing.
-        v.info_offset = info.total.saturating_sub(v.info_room().max(1));
+        v.panel.info_offset = info.total.saturating_sub(v.info_room().max(1));
         let info = the_facts(&v, lines, width, &texts);
         assert!(
             info.content.last().expect("a last line").fields.is_empty(),
@@ -18474,7 +15862,9 @@ mod tests {
         let (v, dir) = a_view_with_facts("facts-button", 4);
         let texts = bundle();
         let width = 200u16;
-        let lines = 12usize;
+        // TALLER THAN THE SHEET: the filesystem's rows (the name among them)
+        // and the four the fixture adds, and the blank one after.
+        let lines = 16usize;
         let info = the_facts(&v, lines, width, &texts);
         assert!(
             info.content.last().expect("a last line").fields.is_empty(),
@@ -18658,7 +16048,7 @@ mod tests {
             "the drag was refused"
         );
         assert_eq!(
-            v.info_offset,
+            v.panel.info_offset,
             info.total - lines,
             "dragged to the end, the sheet stopped short of its last page"
         );
@@ -18684,8 +16074,8 @@ mod tests {
         let lines = 12usize;
         let narrow = the_facts(&v, lines, width, &texts);
         // TO THE VERY BOTTOM OF THE NARROW PANEL, which is where he was.
-        v.info_offset = narrow.total.saturating_sub(lines);
-        assert!(v.info_offset > 0, "the fixture did not scroll at all");
+        v.panel.info_offset = narrow.total.saturating_sub(lines);
+        assert!(v.panel.info_offset > 0, "the fixture did not scroll at all");
 
         let _ = v.key(of_view("C-W"));
         let wide = the_facts(&v, lines, width, &texts);
@@ -18700,10 +16090,7 @@ mod tests {
             "the expanded sheet was scrolled past its own end"
         );
         assert!(
-            wide.content[0]
-                .fields
-                .iter()
-                .any(|f| f.color == ronoctua_tokens::color::TEXT_DIM),
+            wide.content[0].fields.iter().any(a_label),
             "the expanded sheet's first line is empty — the content scrolled away"
         );
         // AND GIVING THE REGION BACK PUTS IT WHERE IT WAS. The clamp is on the
@@ -18809,7 +16196,7 @@ mod tests {
         let dir = scratch("motion-hover");
         std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         let words = bundle();
         let ask = v.wants_look(512).expect("a look");
@@ -18827,6 +16214,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -18898,7 +16286,7 @@ mod tests {
         std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
         std::fs::write(dir.join("b.txt"), b"letters").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         v.measured_preview(300.0, 200.0);
         let ask = v.wants_look(512).expect("a look");
@@ -18916,6 +16304,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         v.played(crate::motion::Beat::Frame(a_frame(&key)));
 
@@ -18948,11 +16337,11 @@ mod tests {
         assert!(v.whole(), "walking to the next file left the wide preview");
 
         // AND IT WORKS FOR A FILE THAT IS NOT A FILM AT ALL.
-        v.frame = None;
+        v.panel.frame = None;
         assert!(v.whole(), "the wide preview is still only for films");
 
         // THE PREVIEW GOING OFF DOES take it back.
-        v.preview_on = false;
+        v.panel.preview_on = false;
         assert!(
             !v.whole(),
             "the preview was hidden and the region stayed away"
@@ -18967,7 +16356,7 @@ mod tests {
         std::fs::write(dir.join("a.mp4"), b"\0\0\0\x18ftyp").unwrap();
         std::fs::write(dir.join("b.mp4"), b"\0\0\0\x18ftyp").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
         let install = |v: &mut View, sound: bool| {
             let ask = v.wants_look(512).expect("a look");
@@ -18985,6 +16374,7 @@ mod tests {
                 turns: false,
                 outlined: 0,
                 at: None,
+                amendable: crate::inspection_edit::Amendable::default(),
             });
             key
         };
@@ -19043,7 +16433,7 @@ mod tests {
             "it resumed somebody else's place"
         );
         assert!(
-            !v.transport.paused,
+            !v.panel.transport.paused,
             "another file's pause followed the cursor"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -19121,7 +16511,7 @@ mod tests {
         let dir = scratch("motion-stale");
         std::fs::write(dir.join("a.gif"), b"GIF89a").unwrap();
         let mut v = view_at(&dir);
-        v.preview_on = true;
+        v.panel.preview_on = true;
         v.reread();
 
         // A FILE IN FRONT, with an answer installed — without this the panel
@@ -19142,6 +16532,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         let frame = |key: &str| crate::motion::Beat::Frame(a_frame(key));
 
@@ -19161,7 +16552,7 @@ mod tests {
             "a frame of another file replaced the one on screen"
         );
         assert!(
-            v.frame.as_ref().is_some_and(|f| f.key == here),
+            v.panel.frame.as_ref().is_some_and(|f| f.key == here),
             "the stale frame was stored"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -19199,8 +16590,8 @@ mod tests {
     /// `the_three_columns_one_looks_up_start_hidden`. Those two build a view
     /// through `View::at` and never come through here.
     fn plainly(mut view: View) -> View {
-        view.preview_on = false;
-        view.info_on = false;
+        view.panel.preview_on = false;
+        view.panel.info_on = false;
         view.details_on = true;
         view
     }
@@ -19284,6 +16675,41 @@ mod tests {
         ronoctua_i18n::Texts::from_env()
     }
 
+    /// FAILS IF: the facts panel stays in the language it first read the
+    /// sheet in after the person chose another — the sheet is remembered by
+    /// its subject, and the words with it.
+    #[test]
+    fn the_facts_follow_a_live_language_switch() {
+        let root = scratch("speak");
+        std::fs::write(root.join("um.txt"), b"x").expect("a file");
+        let en = std::rc::Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        let pt = std::rc::Rc::new(ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR"));
+        let mut v = View::at(
+            &root,
+            Roster::default(),
+            Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            std::rc::Rc::clone(&en),
+            no_sidebar(),
+        );
+        v.reread();
+        let labels = |v: &View| -> Vec<String> { v.sheet().into_iter().map(|f| f.label).collect() };
+        // ON THE FILE, past `..`.
+        v.key(Key {
+            mods: ronoctua_keymap::Mods::default(),
+            sym: Sym::Down,
+        });
+        let before = labels(&v);
+        assert!(!before.is_empty(), "no facts to compare");
+        v.speak(std::rc::Rc::clone(&pt));
+        let after = labels(&v);
+        assert_ne!(before, after, "the facts did not change language");
+        v.speak(en);
+        assert_eq!(labels(&v), before, "the facts did not come back");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The hint as one sentence, for a test that only asks what it SAYS.
     fn hint_line(v: &View, b: &ronoctua_i18n::Texts) -> String {
         v.hint(b).iter().map(|p| p.text.as_str()).collect()
@@ -19320,6 +16746,14 @@ mod tests {
     /// carry a modifier.
     fn of_view(notation: &str) -> Key {
         Key::parse(notation).unwrap_or_else(|_| panic!("`{notation}` is not a key"))
+    }
+
+    /// Whether a field is a fact's LABEL — in the tone of either kind of row,
+    /// a fact's or a setting's (`chrome::Kind::tones`).
+    fn a_label(f: &Field) -> bool {
+        [crate::chrome::Kind::Fact, crate::chrome::Kind::Setting]
+            .iter()
+            .any(|k| f.color == k.tones(false).0)
     }
 
     #[test]
@@ -19484,7 +16918,7 @@ mod tests {
         // and row 0 of every listing with a parent is `..`.
         let _ = v.drawn(120, &bundle());
         v.cursor = 1;
-        let fields = v.mode_fields(0, 24);
+        let fields = v.panel().mode_fields(0, 24);
         let number = mode::octal(v.focused().expect("a file is focused").mode);
         // THE BRACKETS KEEP THE GENERAL SENTENCE, and the digits do not.
         let open = fields
@@ -19742,8 +17176,8 @@ mod tests {
     #[test]
     fn shift_with_a_click_takes_the_whole_run() {
         // AND OVER `shown`, NEVER OVER `entries`: a range built over the
-        // entries would mark what the filter and `C-h` are hiding, which is
-        // the same class of defect as marking the way out.
+        // entries would mark what the filter is hiding, which is the same
+        // class of defect as marking the way out.
         let root = scratch("shift-click");
         for n in ["a.txt", "b.txt", "c.txt", "d.txt"] {
             std::fs::write(root.join(n), b"x").unwrap();
@@ -19845,19 +17279,84 @@ mod tests {
     }
 
     #[test]
-    fn hidden_files_are_shown_and_the_key_hides_them() {
+    fn dotfiles_are_always_shown_and_c_h_is_the_history() {
         let root = scratch("hidden");
         std::fs::write(root.join(".oculto"), b"x").unwrap();
         std::fs::write(root.join("visivel"), b"x").unwrap();
         let mut v = view_at(&root);
-        // THREE ROWS: the way out, the hidden one and the plain one. `..`
-        // begins with a dot and is NOT hidden — hiding the way out with `C-h`
-        // would take the way back from exactly the people who pressed it.
+        // THREE ROWS: the way out, the hidden one and the plain one.
         assert_eq!(v.amount(), 3, "the hidden ones did not appear");
-        v.key(of_view("C-h"));
-        assert_eq!(v.amount(), 2, "`..` went away with the hidden files");
-        v.key(of_view("C-h"));
-        assert_eq!(v.amount(), 3);
+        // AND NO KEY HIDES THEM: nothing in the view's table hides anything.
+        assert!(
+            OF_THE_VIEW.iter().all(|(_, id, _)| !id.contains("hidden")),
+            "a key that hides dotfiles is back in the table"
+        );
+        // `C-h` IS THE HISTORY NOW. Outside a repository it says so — and
+        // it hides nothing.
+        match v.key(of_view("C-h")) {
+            Step::Say(e) => assert_eq!(e.key, ronoctua_i18n::key::FILES_GIT_WHY_NOT_A_REPO),
+            Step::Do(Doing::History(_)) => {
+                // THE SCRATCH FOLDER IS INSIDE SOME REPOSITORY of the machine
+                // running the test: the key found it, which is its job.
+            }
+            other => panic!("C-h did {other:?}"),
+        }
+        assert_eq!(v.amount(), 3, "C-h hid something");
+        // INSIDE ONE, it opens that repository's history — found by the walk
+        // up, whether or not the line has been read.
+        let repo = root.join("work");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        v.enter(&repo.join("src"));
+        assert_eq!(
+            v.key(of_view("C-h")),
+            Step::Do(Doing::History(repo.clone()))
+        );
+        // AND THE LINE'S CLICK IS THE SAME KEY.
+        assert_eq!(
+            v.click(usize::MAX, &Hit::Git, ronoctua_keymap::Mods::default()),
+            Step::Do(Doing::History(repo))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_git_line_is_drawn_under_the_path_only_inside_its_repository() {
+        let root = scratch("git-line");
+        let repo = root.join("work");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let mut v = view_at(&repo.join("src"));
+        let texts = bundle();
+        let before = v.chrome_lines();
+        assert!(v.git_heard(crate::git_line::Line {
+            root: repo,
+            read: Ok(crate::git_line::State {
+                head: crate::git_line::Head::Branch("main".to_owned()),
+                upstream: None,
+                changed: 2,
+                staged: 0,
+                untracked: 1,
+                conflicted: 0,
+                last: None,
+            }),
+        }));
+        assert_eq!(v.chrome_lines(), before + 1, "the line is not counted");
+        let rows = v.chrome_rows(120, &texts);
+        assert_eq!(rows.len(), v.chrome_lines());
+        assert!(rows[1].fields.iter().all(|f| f.hit == Hit::Git));
+        assert!(rows[1].fields.iter().any(|f| f.text == "main"));
+        // A POINT ON IT is the line's target.
+        let at = rows[1].fields[1].at;
+        let t = v.hit(120, 20, 1, at, &texts).expect("the line answers");
+        assert_eq!(t.hit, Hit::Git);
+        // OUT OF THE REPOSITORY, no line and no line counted.
+        v.enter(&root);
+        assert_eq!(v.chrome_lines(), before);
+        assert!(
+            v.chrome_rows(120, &texts)
+                .iter()
+                .all(|r| r.fields.iter().all(|f| f.hit != Hit::Git))
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -20254,6 +17753,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// FAILS IF: a change the kernel refused for want of privilege stops
+    /// going on through the sudo door, or any other refusal is taken for one.
+    #[test]
+    fn a_refusal_for_want_of_privilege_goes_to_the_door() {
+        let perm = anyhow::Error::new(std::io::Error::from_raw_os_error(1))
+            .context("change the permission of /etc/x");
+        assert!(super::needs_root(&perm));
+        let acces = anyhow::Error::new(rustix::io::Errno::PERM).context("change the group");
+        assert!(super::needs_root(&acces));
+        let gone = anyhow::Error::new(std::io::Error::from_raw_os_error(2)).context("x");
+        assert!(!super::needs_root(&gone));
+        assert!(!super::needs_root(&anyhow::anyhow!(
+            "a symbolic link has no permission of its own"
+        )));
+    }
+
     #[test]
     fn choosing_an_owner_produces_the_operation() {
         // REPORTED FROM THE SCREEN: choosing `nobody`, then `mail`, and the
@@ -20424,6 +17939,13 @@ mod tests {
         let file = root.join("um.txt");
         std::fs::write(&file, b"x").unwrap();
         let mut v = view_at(&root);
+        assert_eq!(
+            v.state(),
+            (
+                ronoctua_protocol::BASE_STATE,
+                ronoctua_protocol::Tone::Standard
+            )
+        );
         // THE CLICK ASKS FIRST — see `Asking::Confirm`. What it asks is on
         // screen, and the answer is what carries the change.
         // ROW ONE, because row zero is `..` — and every cell of that row is
@@ -20437,6 +17959,9 @@ mod tests {
             matches!(step, Step::Changed),
             "clicking a bit must not apply straight away: {step:?}"
         );
+        // AND THE MODELINE SAYS SO IN WARNING: the question waits on the
+        // person, and it is about who may touch the file.
+        assert_eq!(v.state(), ("permission", ronoctua_protocol::Tone::Warning));
         let enter = Key {
             mods: ronoctua_keymap::Mods::default(),
             sym: Sym::Enter,
@@ -20794,9 +18319,8 @@ mod tests {
         // defect `WITH_ACTION` refuses in the leader.
         let root = scratch("arms");
         std::fs::write(root.join("um.zip"), b"PK\x03\x04").unwrap();
-        // A plain `.tar` too: `extract-tar` applies to `application/x-tar`,
-        // and a `.zip` is not one — the two rows exist precisely because the
-        // database says the formats are unrelated.
+        // A plain `.tar` too: every archive the archive crate reads is offered
+        // the same rows, whatever the database calls its type.
         std::fs::write(root.join("two.tar"), b"").unwrap();
         std::fs::create_dir(root.join("folder")).unwrap();
         // A FRESH VIEW PER ROW, and the reason is a defect this test found:
@@ -20821,6 +18345,43 @@ mod tests {
                 reached.insert(a.id);
             }
             let _ = std::fs::remove_dir_all(&trash);
+        }
+        // AND ONE MEMBER OF AN ARCHIVE WALKED INTO, so the rows about members
+        // are asked the question too.
+        {
+            let mut v = view_at(&root);
+            v.stand_in_for_test(
+                &root.join("um.zip"),
+                ronoctua_files::archive::Listing::of(
+                    vec![ronoctua_archive::Member {
+                        path: "inside.txt".to_owned(),
+                        size_bytes: Some(1),
+                        packed_bytes: None,
+                        modified_s: None,
+                        is_dir: false,
+                        encrypted: false,
+                    }],
+                    false,
+                ),
+            );
+            v.cursor = 1;
+            for a in v.offered_now() {
+                let mut v2 = view_at(&root);
+                v2.stand_in_for_test(
+                    &root.join("um.zip"),
+                    v.inside.as_ref().unwrap().listing.as_ref().clone(),
+                );
+                v2.cursor = 1;
+                v2.menu = Some(0);
+                v2.arming = if a.confirms { Some(a.id) } else { None };
+                let step = v2.run(a);
+                assert!(
+                    !matches!(step, Step::Nothing),
+                    "`{}` does nothing on a member",
+                    a.id
+                );
+                reached.insert(a.id);
+            }
         }
         let how_many = view_at(&root).amount();
         for cursor in 0..how_many {
@@ -21798,6 +19359,7 @@ mod tests {
             needed: Some("/".to_owned()),
             removable: false,
             built_in: true,
+            seal: None,
         }]);
         let mut v = plainly(View::at(
             &dir,
@@ -22157,9 +19719,19 @@ mod tests {
             gap < sec.to,
             "the listing is too narrow for this measurement"
         );
+        // NO FIELD THERE — and the ROW still answers, as its name: a listing
+        // row is pressed wherever it is pressed (`View::hit`).
+        let there = v
+            .hit(120, TALL, over, gap, &b)
+            .expect("the folder's row answers");
         assert!(
-            v.hit(120, TALL, over, gap, &b).is_none(),
+            there.explain.is_none(),
             "this cell has a field on it, so it proves nothing about the gaps"
+        );
+        assert_eq!(
+            there.hit,
+            Hit::Name(folder),
+            "the gap is not the folder's row"
         );
 
         assert!(v.pressed(
@@ -23232,8 +20804,8 @@ mod tests {
         let dir = scratch("regiao-mais-tres");
         std::fs::write(dir.join("where.jpg"), b"not a real jpeg").expect("write the file");
         let mut v = view_at(&dir);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let ask = v.wants_look(512).expect("a file wants a look");
         // A SHEET LONGER THAN ANY CEILING, which is what a photograph's is:
@@ -23258,20 +20830,23 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         let ceiling = usize::from(ronoctua_tokens::space::EXPANSION_MAXLINES);
         v.drawn_at.set(200);
-        v.drawn_lines
+        v.panel
+            .drawn_lines
             .set(ronoctua_tokens::space::EXPANSION_MAXLINES);
         assert!(
-            v.panel_lines() > ceiling,
+            v.panel().panel_lines() > ceiling,
             "the panels ask for {} lines, which the ceiling never has to cut —              raising it would buy nothing",
-            v.panel_lines()
+            v.panel().panel_lines()
         );
         // AND EACH LINE IS A ROW. Three more of region, three more of facts —
         // never two, which is what a line spent on furniture would leave.
         let rows_at = |v: &mut View, lines: usize| {
-            v.drawn_lines
+            v.panel
+                .drawn_lines
                 .set(u16::try_from(lines).expect("a region of some lines"));
             v.info_room()
         };
@@ -23798,6 +21373,78 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a press on a listing row's size, date or owner — or the gap
+    /// between two columns — does not select the row, and the second press
+    /// does not open it, as a press on the name does.
+    #[test]
+    fn a_row_is_pressed_wherever_it_is_pressed() {
+        let dir = scratch("row-anywhere");
+        std::fs::write(dir.join("a.txt"), b"letters").unwrap();
+        std::fs::write(dir.join("b.txt"), b"more letters").unwrap();
+        let mut v = view_at(&dir);
+        v.details_on = true;
+        v.reread();
+        let b = bundle();
+        let width = 160u16;
+        let row = (0..v.amount())
+            .find(|n| v.name_of(*n).as_deref() == Some("b.txt"))
+            .expect("the file is listed");
+        let rows = v.drawn(width, &b);
+        // THE ROW AS DRAWN, and on it every column that is not the name: size,
+        // date, owner — each a field of its own, with no target.
+        let drawn = rows
+            .iter()
+            .find(|r| {
+                r.fields
+                    .iter()
+                    .any(|f| f.hit == Hit::Name(row) && f.text.contains("b.txt"))
+            })
+            .expect("the row is drawn");
+        let name_at = drawn
+            .fields
+            .iter()
+            .find(|f| f.hit == Hit::Name(row))
+            .map(|f| f.at)
+            .expect("the name is drawn");
+        // AND THE LINE THE POINTER FINDS IT ON, through the pointer's own path.
+        let line = (0..ROOM)
+            .find(|l| {
+                v.hit(width, ROOM, *l, name_at, &b)
+                    .is_some_and(|t| t.hit == Hit::Name(row))
+            })
+            .expect("the pointer finds the name");
+        let inert: Vec<u16> = drawn
+            .fields
+            .iter()
+            .filter(|f| f.hit == Hit::Nothing && !f.text.trim().is_empty())
+            .map(|f| f.at)
+            .collect();
+        assert!(
+            inert.len() >= 2,
+            "the fixture drew no size or date to press: {drawn:?}"
+        );
+        // AND A GAP: the cell just before the last inert field.
+        let mut cells = inert.clone();
+        cells.push(inert.last().copied().unwrap_or(1).saturating_sub(1));
+        for cell in cells {
+            let target = v.hit(width, ROOM, line, cell, &b).expect("the row answers");
+            assert_eq!(
+                target.hit,
+                Hit::Name(row),
+                "cell {cell} of the row is not the row"
+            );
+        }
+        // THE SAME TWO PRESSES THE NAME TAKES: select, then open.
+        let date = inert[inert.len() - 1];
+        let target = v.hit(width, ROOM, line, date, &b).expect("the row answers");
+        let first = v.click(target.row, &target.hit, ronoctua_keymap::Mods::default());
+        assert_eq!(first, Step::Changed);
+        assert_eq!(v.name_of(v.cursor).as_deref(), Some("b.txt"));
+        let second = v.click(target.row, &target.hit, ronoctua_keymap::Mods::default());
+        assert_eq!(second, Step::Do(Doing::Open(dir.join("b.txt"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_band_answers_where_no_field_does() {
         // THE DEFECT THIS CATCHES: the window door asked `View::hit` for its
@@ -23821,9 +21468,11 @@ mod tests {
         assert_eq!(v.band_row(120, ROOM, 2, first), Some((Pane::Listing, 2)));
         // AND A CELL FAR PAST THE END OF `a.txt`, still inside its column.
         let empty = first + 30;
+        // NO FIELD COVERS IT — and the row answers there as its name.
+        let there = v.hit(120, ROOM, 2, empty, &b).expect("the row answers");
         assert!(
-            v.hit(120, ROOM, 2, empty, &b).is_none(),
-            "cell {empty} was covered by a field, so this proves nothing"
+            there.explain.is_none() && there.hit == Hit::Name(there.row),
+            "cell {empty} was covered by a field, so this proves nothing: {there:?}"
         );
         assert_eq!(
             v.band_row(120, ROOM, 2, empty),
@@ -23921,6 +21570,7 @@ mod tests {
             needed: Some("/".to_owned()),
             removable: false,
             built_in: true,
+            seal: None,
         }]);
         let mut v = plainly(View::at(
             &dir,
@@ -24096,6 +21746,7 @@ mod tests {
             needed: None,
             removable: true,
             built_in: true,
+            seal: None,
         }]);
         let mut v = plainly(View::at(
             &dir,
@@ -24247,6 +21898,7 @@ mod tests {
                 needed: None,
                 removable: true,
                 built_in: true,
+                seal: None,
             },
             Side {
                 id: "device:/dev/sda2".to_owned(),
@@ -24260,6 +21912,7 @@ mod tests {
                 needed: None,
                 removable: true,
                 built_in: true,
+                seal: None,
             },
         ]);
         plainly(View::at(
@@ -24289,6 +21942,7 @@ mod tests {
             needed: None,
             removable,
             built_in: true,
+            seal: None,
         };
         let mut side = Sidebar::of(&[], None, None, Preferences::fresh(), None);
         side.devices_are(vec![
@@ -24429,6 +22083,7 @@ mod tests {
             needed: None,
             removable: false,
             built_in: true,
+            seal: None,
         }]);
         let mut v = plainly(View::at(
             &dir,
@@ -24659,8 +22314,8 @@ mod tests {
         std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_at(&dir);
         v.reread();
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         // NARROW ENOUGH that the panels cannot sit beside the listing.
         let narrow = 70u16;
         let panes = v.panes(narrow);
@@ -24679,10 +22334,12 @@ mod tests {
             hits.iter().any(|h| matches!(h, Hit::Bit(..))),
             "the band has no clickable permissions: {hits:?}"
         );
+        // AND THE NAME, which is the first fact and CHANGES the file: the
+        // strip carries its question as the side panel does.
         assert!(
             hits.iter()
-                .any(|h| matches!(h, Hit::Owner(_) | Hit::Group(_))),
-            "the band has no clickable owner or group: {hits:?}"
+                .any(|h| matches!(h, Hit::Amend(_, crate::inspection_sheet::Doable::Rename))),
+            "the band has no rename target: {hits:?}"
         );
         // AND `field_at` FINDS THEM, which is what the door calls.
         // ON ITS OWN ROW, which is what the door asks: `strip_rows[k]`, where
@@ -24717,8 +22374,8 @@ mod tests {
         }
         let mut v = view_beside(&dir, 6);
         v.reread();
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         let w = 200u16;
         let b = bundle();
         let panes = v.panes(w);
@@ -24787,8 +22444,8 @@ mod tests {
         std::fs::write(dir.join("um.png"), b"x").unwrap();
         let mut v = view_beside(&dir, 1);
         v.reread();
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         let w = 53u16;
         let b = bundle();
         let panes = v.panes(w);
@@ -24984,8 +22641,8 @@ mod tests {
         }
         let mut v = view_beside(&dir, 1);
         v.reread();
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         let w = 53u16;
         let b = bundle();
         let panes = v.panes(w);
@@ -25054,8 +22711,8 @@ mod tests {
         std::fs::write(dir.join("um.png"), b"x").unwrap();
         let mut v = view_beside(&dir, 1);
         v.reread();
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         let narrow = 53u16;
         let panes = v.panes(narrow);
         assert!(panes.strip > 0, "this width does not put the panels below");
@@ -25112,8 +22769,8 @@ mod tests {
         std::fs::write(dir.join("one.txt"), b"x").unwrap();
         let mut v = view_beside(&dir, 6);
         v.reread();
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         let w = 200u16;
         let panes = v.panes(w);
         assert!(
@@ -25787,7 +23444,13 @@ mod tests {
             info.1,
             there.at
         );
-        assert_eq!(there.hit, Hit::Nothing, "a fact is not an action");
+        // THE FIRST FACT IS THE NAME, and pressing it RENAMES — a fact that
+        // changes the file, and never the listing's own gesture.
+        assert_eq!(
+            there.hit,
+            Hit::Amend(1, crate::inspection_sheet::Doable::Rename),
+            "the name's row does not ask for a new name"
+        );
         // AND ONE CELL LEFT OF THE FIRST RULE: the listing, still.
         let from = w.saturating_sub(panes.right);
         let last = row
@@ -26479,8 +24142,8 @@ mod tests {
         // THE PANELS ON: `view_at` uses `plainly`, which switches them off for
         // the tests about the listing's own arithmetic, and `wants_look`
         // answers `None` with both of them off — correctly.
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         let at = v
             .shown
             .iter()
@@ -26501,6 +24164,7 @@ mod tests {
             turns: true,
             outlined,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         assert!(v.shape_here(), "the fixture did not become a shape");
     }
@@ -26526,7 +24190,8 @@ mod tests {
 
         let rows = 4;
         let words = |v: &View, n: usize| {
-            v.preview_fields(n, rows, 0, 40, &texts)
+            v.panel()
+                .preview_fields(n, rows, 0, 40, &texts)
                 .into_iter()
                 .map(|f| f.text)
                 .collect::<String>()
@@ -26568,7 +24233,7 @@ mod tests {
         std::fs::write(root.join("a.stl"), one_triangle_stl()).unwrap();
         let mut v = view_at(&root);
         point_at_a_shape(&mut v);
-        let first = v.pose;
+        let first = v.panel.pose;
 
         // THE SHIFTED ARROWS TURN IT ONLY WHERE THE SHAPE IS, which is the
         // whole of `strong_meaning`: the same four keys open a directory with
@@ -26577,19 +24242,19 @@ mod tests {
         let _ = v.panes(120);
         v.set_pane(Pane::Preview);
         v.key(of_view("S-<left>"));
-        assert_ne!(v.pose.yaw, first.yaw, "S-<left> did not turn it");
+        assert_ne!(v.panel.pose.yaw, first.yaw, "S-<left> did not turn it");
         v.key(of_view("S-<up>"));
-        assert_ne!(v.pose.pitch, first.pitch, "S-<up> did not tilt it");
+        assert_ne!(v.panel.pose.pitch, first.pitch, "S-<up> did not tilt it");
         v.key(of_view("C-k"));
-        assert!(v.pose.zoom > first.zoom, "C-k did not come nearer");
+        assert!(v.panel.pose.zoom > first.zoom, "C-k did not come nearer");
         v.key(of_view("C-j"));
         v.key(of_view("C-j"));
-        assert!(v.pose.zoom < first.zoom, "C-j did not go further");
+        assert!(v.panel.pose.zoom < first.zoom, "C-j did not go further");
 
         // AND THE WHEEL, which is the gesture the figure already swallowed.
-        let before = v.pose.zoom;
+        let before = v.panel.pose.zoom;
         assert!(v.wheel(Pane::Preview, -3, 200, 12), "the wheel was refused");
-        assert!(v.pose.zoom > before, "the wheel did not come nearer");
+        assert!(v.panel.pose.zoom > before, "the wheel did not come nearer");
 
         // AND THE DRAG GOES THE WAY THE HAND DOES.
         //
@@ -26599,18 +24264,18 @@ mod tests {
         // key, which he confirmed was correct.
         v.key(of_view("C-r"));
         v.key(of_view("S-<left>"));
-        let by_key = v.pose.yaw;
+        let by_key = v.panel.pose.yaw;
         v.key(of_view("C-r"));
         assert!(v.spin(-SPIN_STEP, 0.0), "the drag was refused");
         assert!(
-            (v.pose.yaw - by_key).abs() < 1e-6,
+            (v.panel.pose.yaw - by_key).abs() < 1e-6,
             "a hand moving left gave {} and the left key gives {by_key}",
-            v.pose.yaw
+            v.panel.pose.yaw
         );
 
         // AND ONE KEY PUTS IT ALL BACK.
         v.key(of_view("C-r"));
-        assert_eq!(v.pose, first, "C-r did not reframe it");
+        assert_eq!(v.panel.pose, first, "C-r did not reframe it");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -26624,10 +24289,10 @@ mod tests {
         std::fs::write(root.join("b.txt"), b"x").unwrap();
         let mut v = view_at(&root);
         point_at_a_shape(&mut v);
-        let (was, pose) = (v.cursor, v.pose);
+        let (was, pose) = (v.cursor, v.panel.pose);
         v.key(of_view("<down>"));
         assert_ne!(v.cursor, was, "the arrow did not walk the files");
-        assert_eq!(v.pose, pose, "the arrow turned the shape");
+        assert_eq!(v.panel.pose, pose, "the arrow turned the shape");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -26758,7 +24423,7 @@ mod tests {
         // whichever dimension is the tight one comes out exactly as long as
         // the box. Photographed in both doors — against the top edge in the
         // window, against the right-hand rule in the footer.
-        let air = f32::from(ronoctua_tokens::space::FILES_PICTUREAIR);
+        let air = crate::files::picture_air();
         let space = Area {
             x: 100.0,
             y: 50.0,
@@ -26895,8 +24560,8 @@ mod tests {
         // THE PANELS ON, which is how the manager opens: `view_beside` goes
         // through `plainly` and turns them off.
         let mut v = view_beside(&dir, 4);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let wide = 160u16;
         assert_eq!(
@@ -26969,8 +24634,8 @@ mod tests {
             std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
         }
         let mut v = view_beside(&dir, 30);
-        v.preview_on = true;
-        v.info_on = true;
+        v.panel.preview_on = true;
+        v.panel.info_on = true;
         v.reread();
         let wide = 160u16;
         let panes = v.panes(wide);
@@ -27207,8 +24872,8 @@ mod tests {
 
         // WITH NOTHING UNDER THE CURSOR BUT A FILE: no film, no shape, no
         // playlist, no text read yet.
-        v.preview_on = false;
-        v.info_on = false;
+        v.panel.preview_on = false;
+        v.panel.info_on = false;
         let bare = hint_keys(&v, &b);
         let mut proved = 0;
         for (notation, id, w) in OF_THE_VIEW {
@@ -27249,7 +24914,7 @@ mod tests {
 
         // AND WITH A FILM UNDER IT, the film's own keys arrive — and in the
         // guest's register, which is the other half of the report.
-        v.preview_on = true;
+        v.panel.preview_on = true;
         let ask = v.wants_look(512).expect("a look");
         v.looked(Looked {
             key: ask.key.clone(),
@@ -27264,6 +24929,7 @@ mod tests {
             turns: false,
             outlined: 0,
             at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
         });
         let playing = hint_keys(&v, &b);
         for want in ["C-;", "C--", "C-="] {
@@ -27340,6 +25006,966 @@ mod tests {
             ),
             other => panic!("a file with no coordinate did not refuse: {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: inside the filter `C-v` stops pasting — or pastes with
+    /// nothing typed, where it is still the preview — `C-y` stops pasting
+    /// always, the text does not land in the filter as ONE line, or a
+    /// question's query does not take it instead.
+    #[test]
+    fn inside_the_filter_c_v_pastes_and_outside_it_is_the_preview() {
+        let root = scratch("paste");
+        std::fs::write(root.join("alpha.txt"), b"x").unwrap();
+        std::fs::write(root.join("beta.txt"), b"x").unwrap();
+        let mut v = view_at(&root);
+        // NOTHING TYPED: `C-v` is the preview, as it always was.
+        assert_ne!(v.key(of_view("C-v")), Step::Paste);
+        assert_eq!(v.key(of_view("C-y")), Step::Paste, "C-y pastes always");
+        // SOMETHING TYPED: the keys are the query's, and `C-v` pastes.
+        v.key(of_view("a"));
+        assert_eq!(v.key(of_view("C-v")), Step::Paste);
+        assert_eq!(v.pasted("lp\nha"), Step::Changed);
+        assert_eq!(v.filter(), "alp ha");
+        assert_eq!(v.pasted(""), Step::Nothing);
+        // A QUESTION'S QUERY TAKES IT, while one is up — a rename's above all.
+        // `Esc` clears the filter first, so the listing has a file to rename.
+        v.key(of_view("ESC"));
+        assert_eq!(v.filter(), "");
+        v.cursor = 1;
+        v.menu = Some(0);
+        v.run(menu::by_id("rename").unwrap());
+        assert!(v.picking.is_some(), "the rename asked nothing");
+        assert_eq!(v.key(of_view("C-v")), Step::Paste);
+        let before = v
+            .picking
+            .as_ref()
+            .map(|p| p.query.clone())
+            .unwrap_or_default();
+        assert_eq!(v.pasted("new"), Step::Changed);
+        assert_eq!(
+            v.picking.as_ref().map(|p| p.query.clone()),
+            Some(format!("{before}new"))
+        );
+        assert_eq!(
+            v.filter(),
+            "",
+            "the paste went to the filter under the question"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ── EVERYTHING THAT CAN BE EDITED, IS (inspection_edit) ──────────────
+
+    /// The facts of `a_view_with_facts`, drawn wide enough for every one.
+    fn facts_drawn(v: &View) -> Section {
+        the_facts(v, 20, 200, &bundle())
+    }
+
+    /// The field of the facts whose text is `text`, and the line it is on.
+    fn fact_labelled<'a>(info: &'a Section, text: &str) -> (usize, &'a Field) {
+        info.content
+            .iter()
+            .enumerate()
+            .find_map(|(n, r)| r.fields.iter().find(|f| f.text == text).map(|f| (n, f)))
+            .unwrap_or_else(|| panic!("no fact labelled {text:?}"))
+    }
+
+    /// FAILS IF: a row that changes the file is not drawn as a SETTING, or a
+    /// row nothing can change is not drawn as a FACT — the two tones of
+    /// `chrome::Kind`, and never a colour picked by hand.
+    #[test]
+    fn editable_rows_are_settings_and_facts_are_facts() {
+        use crate::chrome::Kind;
+        let (v, dir) = a_view_with_facts("edit-kinds", 1);
+        let b = bundle();
+        let info = facts_drawn(&v);
+        let sheet = v.sheet();
+        assert!(
+            sheet.iter().any(|f| f.does.edits()),
+            "nothing here is editable"
+        );
+        assert!(
+            sheet.iter().any(|f| !f.does.edits()),
+            "nothing here is a fact"
+        );
+        for fact in &sheet {
+            let (_, label) = fact_labelled(&info, &fact.label);
+            let kind = Kind::of(fact.does.edits());
+            assert_eq!(
+                label.color,
+                kind.tones(false).0,
+                "{:?} is drawn in the wrong tone for a {kind:?}",
+                fact.label
+            );
+        }
+        // THE NAME AND THE DATE ARE SETTINGS; the path and the links are not.
+        let setting = |key| sheet.iter().find(|f| f.label == b.t(key)).map(|f| f.does);
+        assert_eq!(
+            setting(ronoctua_i18n::key::FILES_DETAIL_NAME),
+            Some(crate::inspection_sheet::Doable::Rename)
+        );
+        assert_eq!(
+            setting(ronoctua_i18n::key::FILES_DETAIL_MODIFIED),
+            Some(crate::inspection_sheet::Doable::Modified)
+        );
+        assert_eq!(
+            setting(ronoctua_i18n::key::FILES_DETAIL_PATH),
+            Some(crate::inspection_sheet::Doable::Nothing)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: pressing the name's row — its label or its value — does not
+    /// ask for a new name prefilled with this one, or `RET` on that row with
+    /// the facts focused asks something else.
+    #[test]
+    fn the_name_in_the_facts_renames_by_the_pointer_and_by_the_keyboard() {
+        let (mut v, dir) = a_view_with_facts("edit-name", 0);
+        let b = bundle();
+        let info = facts_drawn(&v);
+        let (_, label) = fact_labelled(&info, &b.t(ronoctua_i18n::key::FILES_DETAIL_NAME));
+        let (_, value) = fact_labelled(&info, "a.txt");
+        assert_eq!(
+            label.hit, value.hit,
+            "the two halves of the row ask different things"
+        );
+        // AND THE AIR BETWEEN THEM, through the pointer's own path: the row is
+        // pressed across its width.
+        let line = (0..20)
+            .find(|l| {
+                v.hit(200, 20, *l, label.at, &b)
+                    .is_some_and(|t| t.hit == label.hit)
+            })
+            .expect("the pointer finds the name's row");
+        let gap = label.at + u16::try_from(label.text.chars().count()).unwrap_or(0) + 1;
+        assert!(
+            gap < value.at,
+            "the fixture has no air between the two halves"
+        );
+        assert_eq!(
+            v.hit(200, 20, line, gap, &b).map(|t| t.hit),
+            Some(label.hit.clone()),
+            "the air inside the name's row answers nothing"
+        );
+        let hit = label.hit.clone();
+        assert_eq!(
+            v.click(0, &hit, ronoctua_keymap::Mods::default()),
+            Step::Changed
+        );
+        let asked = v
+            .picking
+            .as_ref()
+            .map(|p| (p.asking.clone(), p.query.clone()));
+        assert_eq!(
+            asked,
+            Some((Asking::Name(dir.join("a.txt")), "a.txt".to_owned())),
+            "the name's row did not ask for a new name"
+        );
+        let _ = v.key(of_view("ESC"));
+        assert!(v.picking.is_none());
+        // AND THE KEYBOARD: the facts focused, the cursor on the name, `RET`.
+        v.set_pane(Pane::Info);
+        v.panel.info_cursor = 0;
+        let _ = v.key(of_view("RET"));
+        assert_eq!(
+            v.picking.as_ref().map(|p| p.asking.clone()),
+            Some(Asking::Name(dir.join("a.txt"))),
+            "`RET` on the name's row asked something else"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the date typed into the facts does not become the file's
+    /// modification time, or a date that is not one is written anyway.
+    #[test]
+    fn a_date_typed_into_the_facts_is_the_files_new_date() {
+        use smithay_client_toolkit::reexports::calloop::channel;
+        use std::os::unix::fs::MetadataExt as _;
+        let (mut v, dir) = a_view_with_facts("edit-date", 0);
+        let b = bundle();
+        let file = dir.join("a.txt");
+        let info = facts_drawn(&v);
+        let (_, label) = fact_labelled(&info, &b.t(ronoctua_i18n::key::FILES_DETAIL_MODIFIED));
+        let hit = label.hit.clone();
+        let _ = v.click(0, &hit, ronoctua_keymap::Mods::default());
+        // PREFILLED WITH THE DATE IT HAS, in the shape the answer is read in.
+        let now = std::fs::metadata(&file).unwrap().mtime();
+        assert_eq!(
+            v.picking.as_ref().map(|p| p.query.clone()),
+            Some(ronoctua_files::when::typed(now, &Zone::utc()))
+        );
+        // NOT A DATE: said, and nothing is done.
+        v.picking.as_mut().unwrap().query = "yesterday".to_owned();
+        assert!(matches!(v.key(of_view("RET")), Step::Say(_)));
+        // A DATE: done, through the same `carry_out` both doors call.
+        let _ = v.click(0, &hit, ronoctua_keymap::Mods::default());
+        v.picking.as_mut().unwrap().query = "2001-02-03 04:05:06".to_owned();
+        let step = v.key(of_view("RET"));
+        let Step::Do(doing) = step else {
+            panic!("the date asked nothing to be done: {step:?}");
+        };
+        let (tx, _rx) = channel::channel::<Report>();
+        assert_eq!(carry_out(doing, &tx, &Clip::default()), Errand::Done);
+        assert_eq!(std::fs::metadata(&file).unwrap().mtime(), 981_173_106);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the place can be taken out of a file without a question, or
+    /// the question does not put `no` first with the cursor on it.
+    #[test]
+    fn a_place_leaves_only_after_a_question_whose_first_answer_is_no() {
+        let (mut v, dir) = a_view_with_facts("edit-place", 0);
+        let file = dir.join("a.txt");
+        // THE ROW'S OWN QUESTION.
+        let step = v.amend(crate::inspection_sheet::Doable::RemoveLocation);
+        assert_eq!(
+            step,
+            Step::Changed,
+            "the place row did something without asking"
+        );
+        let picker = v.picking.clone().expect("a question");
+        assert_eq!(picker.asking, Asking::Location(vec![file.clone()]));
+        assert_eq!(picker.cursor, 0);
+        let ids: Vec<&str> = picker.choices.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["no", "copy", "overwrite"]);
+        // A STRAY `RET` DOES NOTHING.
+        assert_eq!(v.key(of_view("RET")), Step::Changed);
+        assert!(v.picking.is_none());
+        // AND THE ANSWERS ARE WHAT THEY SAY.
+        let _ = v.amend(crate::inspection_sheet::Doable::RemoveLocation);
+        let _ = v.key(of_view("<down>"));
+        assert_eq!(
+            v.key(of_view("RET")),
+            Step::Do(Doing::RemoveLocation(vec![file.clone()], true))
+        );
+        let _ = v.amend(crate::inspection_sheet::Doable::RemoveLocation);
+        let _ = v.key(of_view("<down>"));
+        let _ = v.key(of_view("<down>"));
+        assert_eq!(
+            v.key(of_view("RET")),
+            Step::Do(Doing::RemoveLocation(vec![file], false))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the trash's listing leaves out what a mounted volume's own
+    /// trash holds, or draws it under its whole path.
+    #[test]
+    fn the_trash_lists_every_mounted_volumes_own_trash_too() {
+        let root = scratch("trash-gathered");
+        let mut v = view_in_trash(&root);
+        std::fs::write(
+            ronoctua_files::trash::Bin::at(root.join("Trash"))
+                .files()
+                .join("home.txt"),
+            b"h",
+        )
+        .unwrap();
+        // A STICK, mounted where the sidebar says, with a file in its trash.
+        let stick = root.join("STICK");
+        std::fs::create_dir_all(&stick).unwrap();
+        let bin = ronoctua_files::trash::Bin::of_volume(&stick, rustix::process::getuid().as_raw());
+        bin.ensure().unwrap();
+        std::fs::write(bin.files().join("stick.txt"), b"s").unwrap();
+        v.side.devices_are(vec![ronoctua_files::sidebar::Row {
+            id: "device:stick".to_owned(),
+            target: ronoctua_files::sidebar::Target::Device("stick".to_owned()),
+            label: Some("STICK".to_owned()),
+            section: ronoctua_files::sidebar::Section::Devices,
+            mounted: Some(true),
+            at: Some(stick),
+            quiet: false,
+            system: false,
+            needed: None,
+            removable: true,
+            built_in: true,
+            seal: None,
+        }]);
+        v.reread();
+        let shown: Vec<String> = (0..v.amount()).filter_map(|n| v.name_of(n)).collect();
+        assert!(shown.iter().any(|n| n == "home.txt"), "{shown:?}");
+        let on_the_stick = (0..v.amount())
+            .find(|n| {
+                v.name_of(*n)
+                    .as_deref()
+                    .is_some_and(|m| m.ends_with("stick.txt"))
+            })
+            .expect("the stick's trash is not in the listing");
+        // ITS PATH IS WHERE IT IS, and what is drawn is its name.
+        v.cursor = on_the_stick;
+        assert_eq!(v.focused_path(), Some(bin.files().join("stick.txt")));
+        assert_eq!(
+            v.focused().map(|e| e.shown().to_owned()).as_deref(),
+            Some("stick.txt")
+        );
+        // AND RESTORING IT GOES THROUGH ITS OWN BIN.
+        let restore = ronoctua_files::menu::all_of()
+            .iter()
+            .find(|a| a.id == "restore")
+            .expect("the menu restores");
+        let step = v.run(restore);
+        assert_eq!(
+            step,
+            Step::Do(Doing::Restore(vec![(
+                bin.root,
+                vec!["stick.txt".to_owned()]
+            )]))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a drive mounted or unmounted while the trash is on screen —
+    /// by the sidebar or by anything else — leaves the gathered listing as it
+    /// was: a stick that left still listed, one that arrived missing.
+    #[test]
+    fn the_trash_follows_a_drive_that_comes_and_goes() {
+        let root = scratch("trash-racked");
+        let mut v = view_in_trash(&root);
+        let stick = root.join("STICK");
+        std::fs::create_dir_all(&stick).unwrap();
+        let bin = ronoctua_files::trash::Bin::of_volume(&stick, rustix::process::getuid().as_raw());
+        bin.ensure().unwrap();
+        std::fs::write(bin.files().join("stick.txt"), b"s").unwrap();
+        // THE ROWS `racked` BUILDS out of a reading, handed in directly:
+        // `racked` would judge a scratch folder under `/home` a volume the
+        // system needs (`ronoctua_disks::needed`) — true of `/home`, and
+        // beside the point here.
+        let row = |mounted: bool| ronoctua_files::sidebar::Row {
+            id: "device:/dev/sdz1".to_owned(),
+            target: ronoctua_files::sidebar::Target::Device("sdz1".to_owned()),
+            label: Some("STICK".to_owned()),
+            section: ronoctua_files::sidebar::Section::Devices,
+            mounted: Some(mounted),
+            at: mounted.then(|| stick.clone()),
+            quiet: false,
+            system: false,
+            needed: None,
+            removable: true,
+            built_in: true,
+            seal: None,
+        };
+        let listed = |v: &View| {
+            (0..v.amount())
+                .filter_map(|n| v.name_of(n))
+                .any(|n| n.ends_with("stick.txt"))
+        };
+        assert!(!listed(&v), "nothing is mounted yet");
+        v.devices_are(vec![row(true)]);
+        assert!(listed(&v), "the drive arrived and its trash is not listed");
+        v.devices_are(vec![row(false)]);
+        assert!(!listed(&v), "the drive left and its trash is still listed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a path outside the home's filesystem is sent to the trash
+    /// of a volume the system NEEDS — the root, mounted at `/` — instead of to
+    /// the home's (which refuses it by name), or a drive's own trash stops
+    /// being chosen for a path on that drive.
+    #[test]
+    fn only_a_drive_the_system_does_not_need_gets_a_trash_of_its_own() {
+        let root = scratch("trash-router");
+        let mut v = view_in_trash(&root);
+        let home = v.bin.clone().expect("the view has a home trash").root;
+        let device = |id: &str, at: &str, needed: Option<&str>| ronoctua_files::sidebar::Row {
+            id: format!("device:{id}"),
+            target: ronoctua_files::sidebar::Target::Device(id.to_owned()),
+            label: Some(id.to_owned()),
+            section: ronoctua_files::sidebar::Section::Devices,
+            mounted: Some(true),
+            at: Some(PathBuf::from(at)),
+            quiet: false,
+            system: needed.is_some(),
+            needed: needed.map(ToOwned::to_owned),
+            removable: needed.is_none(),
+            built_in: true,
+            seal: None,
+        };
+        // THE ROOT FILESYSTEM, as the disk border lists it: a row at `/`.
+        v.side.devices_are(vec![device("root", "/", Some("/"))]);
+        // `/proc` is on another filesystem than any home trash can be.
+        let elsewhere = [PathBuf::from("/proc/version")];
+        assert_eq!(
+            v.bin_for(&elsewhere).map(|b| b.root),
+            Some(home),
+            "a path on no drive went to the trash of the root filesystem"
+        );
+        // AND A DRIVE NOTHING NEEDS still keeps its own.
+        v.side.devices_are(vec![
+            device("root", "/", Some("/")),
+            device("stick", "/proc", None),
+        ]);
+        assert_eq!(
+            v.bin_for(&elsewhere).map(|b| b.root),
+            Some(PathBuf::from(format!(
+                "/proc/.Trash-{}",
+                rustix::process::getuid().as_raw()
+            )))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: unmounting a volume whose own trash holds files says
+    /// nothing about the space still taken on it.
+    #[test]
+    fn unmounting_with_a_full_volume_trash_says_so() {
+        use smithay_client_toolkit::reexports::calloop::channel;
+        let root = scratch("trash-unmount");
+        let stick = root.join("STICK");
+        let row = ronoctua_files::sidebar::Row {
+            id: "device:stick".to_owned(),
+            target: ronoctua_files::sidebar::Target::Device("stick".to_owned()),
+            label: Some("STICK".to_owned()),
+            section: ronoctua_files::sidebar::Section::Devices,
+            mounted: Some(true),
+            at: Some(stick.clone()),
+            quiet: false,
+            system: false,
+            needed: None,
+            removable: true,
+            built_in: true,
+            seal: None,
+        };
+        let v = view_at(&root);
+        assert_eq!(v.trash_left(&row), None, "an empty trash is not news");
+        std::fs::create_dir_all(&stick).unwrap();
+        let bin = ronoctua_files::trash::Bin::of_volume(&stick, rustix::process::getuid().as_raw());
+        bin.ensure().unwrap();
+        std::fs::write(bin.files().join("x"), b"x").unwrap();
+        let left = v.trash_left(&row);
+        assert_eq!(left, Some(("STICK".to_owned(), 1)));
+        // NOTHING IS SAID WHEN IT IS ASKED: the unmount runs on a thread (and
+        // fails here — no udisks in a test), and "STICK left" in front of
+        // "the device is busy" would be a sentence about a stick that stayed.
+        let (tx, _rx) = channel::channel::<Report>();
+        assert_eq!(
+            carry_out(
+                Doing::Unmount("stick".to_owned(), left.clone()),
+                &tx,
+                &Clip::default(),
+            ),
+            Errand::Done
+        );
+        // THE SENTENCE COMES WITH THE ANSWER, after the `Done` that makes the
+        // doors read the directory again — and a refusal comes alone.
+        let reports = unmounted(Ok(()), left.clone());
+        assert_eq!(reports.len(), 2, "{reports:?}");
+        assert_eq!(reports[0], Report::Done);
+        match &reports[1] {
+            Report::Said(e) => {
+                assert_eq!(e.key, ronoctua_i18n::key::FILES_TRASH_LEFT_ON_VOLUME);
+                assert!(e.args.contains(&("volume", "STICK".to_owned())), "{e:?}");
+            }
+            other => panic!("unmounting with a full trash said nothing: {other:?}"),
+        }
+        let busy = Report::Refused(ronoctua_disks::Refusal::Busy, "busy".to_owned());
+        assert_eq!(unmounted(Err(busy.clone()), left), vec![busy]);
+        assert_eq!(unmounted(Ok(()), None), vec![Report::Done]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // =====================================================================
+    // ARCHIVES AND ENCRYPTED DISKS (archive-luks)
+    // =====================================================================
+
+    /// A member for a listing.
+    fn member(path: &str, size: u64) -> ronoctua_archive::Member {
+        ronoctua_archive::Member {
+            path: path.to_owned(),
+            size_bytes: Some(size),
+            packed_bytes: None,
+            modified_s: Some(1_767_225_600),
+            is_dir: path.ends_with('/'),
+            encrypted: false,
+        }
+    }
+
+    /// A folder holding `photos.zip`, and a view on it.
+    fn a_view_by_an_archive(name: &str) -> (View, PathBuf, PathBuf) {
+        let root = scratch(name);
+        let zip = root.join("photos.zip");
+        std::fs::write(&zip, b"PK\x03\x04").unwrap();
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        let v = view_at(&root);
+        (v, root, zip)
+    }
+
+    fn a_listing() -> ronoctua_files::archive::Listing {
+        ronoctua_files::archive::Listing::of(
+            vec![
+                member("2026/june/a.jpg", 10),
+                member("2026/b.jpg", 20),
+                member("readme.txt", 5),
+            ],
+            false,
+        )
+    }
+
+    fn names_of(v: &View) -> Vec<String> {
+        v.shown.iter().map(|i| v.entries[*i].name.clone()).collect()
+    }
+
+    #[test]
+    fn an_archive_is_walked_into_like_a_folder_and_out_again() {
+        let (mut v, root, zip) = a_view_by_an_archive("archive-walk");
+        v.stand_in_for_test(&zip, a_listing());
+        assert!(v.in_archive());
+        assert_eq!(v.where_(), zip.as_path());
+        assert_eq!(names_of(&v), ["..", "2026", "readme.txt"]);
+        // A PATH INSIDE AN ARCHIVE IS NOT WATCHED: its folder is.
+        assert_eq!(v.watched(), root.as_path());
+        // A FOLDER INSIDE IS ENTERED LIKE ANY OTHER, and the crumbs follow.
+        v.cursor = 1;
+        assert_eq!(v.open_here(), Step::Changed);
+        assert_eq!(v.where_(), zip.join("2026").as_path());
+        assert_eq!(names_of(&v), ["..", "june", "b.jpg"]);
+        let b = v.entries.iter().find(|e| e.name == "b.jpg").unwrap();
+        assert_eq!((b.bytes, b.modified), (20, 1_767_225_600));
+        // A MEMBER IS OPENED BY TAKING IT OUT, off the loop.
+        v.cursor = 2;
+        match v.open_here() {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Open {
+                archive,
+                member,
+                secret,
+            })) => {
+                assert_eq!(
+                    (archive, member.as_str(), secret),
+                    (zip.clone(), "2026/b.jpg", None)
+                );
+            }
+            other => panic!("opening a member did {other:?}"),
+        }
+        // NOTHING OF A MEMBER IS CARRIED OUT BY THE POINTER, and the panels
+        // have nothing on the disk to read.
+        assert!(v.begun_carrying().is_none());
+        // UP, AND UP AGAIN: out of the archive, the cursor on it.
+        v.up();
+        assert_eq!(v.where_(), zip.as_path());
+        v.up();
+        assert!(!v.in_archive());
+        assert_eq!(v.where_(), root.as_path());
+        assert_eq!(v.focused().map(|e| e.name.as_str()), Some("photos.zip"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn inside_an_archive_the_menu_is_about_members_and_they_come_out_by_the_queue() {
+        let (mut v, root, zip) = a_view_by_an_archive("archive-menu");
+        v.stand_in_for_test(&zip, a_listing());
+        v.cursor = 1; // 2026
+        let ids: Vec<&str> = v.offered_now().iter().map(|a| a.id).collect();
+        assert_eq!(ids, ["open", "archive-extract", "archive-remove"]);
+        // A FOLDER CHOSEN IS EVERY MEMBER UNDER IT, into the archive's folder.
+        v.menu = Some(0);
+        match v.run(menu::by_id("archive-extract").unwrap()) {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Queue {
+                work, ..
+            })) => {
+                let Work::Extract {
+                    archive,
+                    into,
+                    members,
+                    ..
+                } = *work
+                else {
+                    panic!("not an extraction");
+                };
+                assert_eq!((archive, into), (zip.clone(), root.clone()));
+                assert_eq!(members, ["2026/b.jpg", "2026/june/a.jpg"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        // TAKING OUT IS ARMED, like `delete`.
+        v.menu = Some(0);
+        let remove = menu::by_id("archive-remove").unwrap();
+        assert_eq!(
+            v.run(remove),
+            Step::Changed,
+            "the first press armed nothing"
+        );
+        v.menu = Some(0);
+        assert!(matches!(
+            v.run(remove),
+            Step::Do(Doing::Archive(
+                crate::files_archive::ArchiveDoing::Queue { .. }
+            ))
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pressing_an_archive_lists_it_and_its_password_is_asked_in_the_door() {
+        let root = scratch("archive-press");
+        let seven = root.join("hidden.7z");
+        std::fs::write(&seven, b"7z").unwrap();
+        let mut v = view_at(&root);
+        v.cursor = v
+            .shown
+            .iter()
+            .position(|i| v.entries[*i].name == "hidden.7z")
+            .unwrap();
+        let listed = |listed| crate::files_archive::ArchiveReport::Listed {
+            archive: seven.clone(),
+            stamp: None,
+            listed,
+        };
+        match v.open_here() {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::List {
+                archive,
+                secret,
+            })) => {
+                assert_eq!((archive, secret), (seven.clone(), None));
+            }
+            other => panic!("pressing an archive did {other:?}"),
+        }
+        // ITS NAMES ARE BEHIND A PASSWORD: the door asks, masked.
+        assert_eq!(
+            v.archive_reported(listed(Err(ronoctua_archive::Why::NeedsPassword))),
+            Step::Secret(crate::files_archive::PASSWORD)
+        );
+        match v.secret_answered(crate::files_archive::PASSWORD, "right horse") {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::List {
+                secret, ..
+            })) => {
+                assert_eq!(
+                    secret.map(|s| s.expose().to_owned()).as_deref(),
+                    Some("right horse")
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // A WRONG ONE IS ASKED AGAIN, in other words.
+        assert_eq!(
+            v.archive_reported(listed(Err(ronoctua_archive::Why::WrongPassword))),
+            Step::Secret(crate::files_archive::PASSWORD_WRONG)
+        );
+        let _ = v.secret_answered(crate::files_archive::PASSWORD_WRONG, "right horse");
+        assert_eq!(
+            v.archive_reported(listed(Ok((vec![member("x.txt", 1)], true)))),
+            Step::Changed
+        );
+        assert!(v.in_archive());
+        assert_eq!(names_of(&v), ["..", "x.txt"]);
+        // AND THE PASSWORD IS KEPT for taking members out.
+        v.cursor = 1;
+        match v.open_here() {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Open {
+                secret, ..
+            })) => {
+                assert!(secret.is_some(), "the password was not kept");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A LISTING NOBODY ASKED FOR IS NOT WALKED INTO.
+        let mut other = view_at(&root);
+        assert_eq!(
+            other.archive_reported(listed(Ok((Vec::new(), false)))),
+            Step::Nothing
+        );
+        assert!(!other.in_archive());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_sheet_turns_in_place_and_its_password_is_asked_twice() {
+        let (mut v, root, _zip) = a_view_by_an_archive("archive-sheet");
+        v.cursor = v
+            .shown
+            .iter()
+            .position(|i| v.entries[*i].name == "notes.txt")
+            .unwrap();
+        v.menu = Some(0);
+        v.run(menu::by_id("compress").unwrap());
+        let ids = |v: &View| -> Vec<String> {
+            v.picking
+                .as_ref()
+                .unwrap()
+                .choices
+                .iter()
+                .map(|c| c.id.clone())
+                .collect()
+        };
+        assert_eq!(ids(&v), ["format", "level", "password", "split", "go"]);
+        let press = |v: &mut View, id: &str| {
+            let p = v.picking.as_mut().unwrap();
+            p.cursor = p
+                .shown()
+                .iter()
+                .position(|i| p.choices[*i].id == id)
+                .unwrap();
+            v.answered()
+        };
+        // A ROW TURNS AND THE SHEET STAYS, the cursor where it was.
+        assert_eq!(press(&mut v, "format"), Step::Changed);
+        let p = v.picking.as_ref().expect("the sheet went away");
+        assert_eq!(p.choices[p.cursor].id, "format");
+        assert!(
+            p.choices[p.cursor].label.contains("7z"),
+            "{:?}",
+            p.choices[p.cursor]
+        );
+        // THE PASSWORD, TWICE — and two that differ set nothing.
+        assert_eq!(
+            press(&mut v, "password"),
+            Step::Secret(crate::files_archive::PASSWORD_NEW)
+        );
+        assert_eq!(
+            v.secret_answered(crate::files_archive::PASSWORD_NEW, "one"),
+            Step::Secret(crate::files_archive::PASSWORD_AGAIN)
+        );
+        assert!(matches!(
+            v.secret_answered(crate::files_archive::PASSWORD_AGAIN, "two"),
+            Step::Say(_)
+        ));
+        press(&mut v, "password");
+        v.secret_answered(crate::files_archive::PASSWORD_NEW, "same");
+        assert_eq!(
+            v.secret_answered(crate::files_archive::PASSWORD_AGAIN, "same"),
+            Step::Changed
+        );
+        assert_eq!(
+            ids(&v),
+            ["format", "level", "password", "hide", "split", "go"]
+        );
+        // AND IT GOES, through the queue, remembered as this view's.
+        match press(&mut v, "go") {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Queue {
+                work,
+                secret,
+                ..
+            })) => {
+                assert_eq!(
+                    secret.map(|s| s.expose().to_owned()).as_deref(),
+                    Some("same")
+                );
+                let Work::Compress {
+                    archive,
+                    names,
+                    secret: none,
+                    ..
+                } = *work
+                else {
+                    panic!("not a compress");
+                };
+                assert_eq!(names, ["notes.txt"]);
+                assert_eq!(archive, root.join("notes.7z"));
+                assert_eq!(none, None, "the password's FILE is the door's to write");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(v.picking.is_none());
+        assert!(
+            v.sent
+                .iter()
+                .any(|(p, s)| *p == root.join("notes.7z") && s.is_some())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_refused_job_asks_its_password_only_in_the_view_that_sent_it() {
+        let (mut sender, root, zip) = a_view_by_an_archive("archive-refused");
+        let mut bystander = view_at(&root);
+        sender.cursor = sender
+            .shown
+            .iter()
+            .position(|i| sender.entries[*i].name == "photos.zip")
+            .unwrap();
+        sender.menu = Some(0);
+        let Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Queue { work, .. })) =
+            sender.run(menu::by_id("extract").unwrap())
+        else {
+            panic!("extract sent nothing");
+        };
+        let Work::Extract { into, .. } = &*work else {
+            panic!();
+        };
+        assert_eq!(*into, root.join("photos"), "into a folder named after it");
+        let refused = crate::files_archive::ArchiveReport::JobRefused {
+            work,
+            why: ronoctua_archive::Why::NeedsPassword,
+        };
+        assert_eq!(bystander.archive_reported(refused.clone()), Step::Nothing);
+        assert_eq!(
+            sender.archive_reported(refused),
+            Step::Secret(crate::files_archive::PASSWORD)
+        );
+        match sender.secret_answered(crate::files_archive::PASSWORD, "pw") {
+            Step::Do(Doing::Archive(crate::files_archive::ArchiveDoing::Queue {
+                work,
+                secret,
+                ..
+            })) => {
+                assert!(matches!(*work, Work::Extract { .. }));
+                assert!(secret.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+        // ANY OTHER REFUSAL IS A SENTENCE, naming the archive.
+        let corrupt = crate::files_archive::ArchiveReport::JobRefused {
+            work: Box::new(Work::ArchiveTest {
+                archive: zip,
+                secret: None,
+            }),
+            why: ronoctua_archive::Why::Corrupt,
+        };
+        sender.menu = Some(0);
+        let _ = sender.run(menu::by_id("archive-test").unwrap());
+        match sender.archive_reported(corrupt) {
+            Step::Say(e) => {
+                assert_eq!(e.key, ronoctua_i18n::key::FILES_ARCHIVE_WHY_CORRUPT);
+                assert_eq!(e.args, vec![("name", "photos.zip".to_owned())]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A sidebar with one encrypted stick, locked or open.
+    fn a_view_with_a_stick(name: &str, open: bool) -> (View, PathBuf) {
+        use ronoctua_disks::{Bus, Drive, Holding, Rack, Volume};
+        let root = scratch(name);
+        let mut v = view_at(&root);
+        let mut rack = Rack::default();
+        rack.drives.push(Drive {
+            at: "/drive/stick".to_owned(),
+            removable: true,
+            can_power_off: true,
+            bus: Bus::Usb,
+            ..Drive::default()
+        });
+        rack.volumes.push(Volume {
+            at: "/block/sdb1".to_owned(),
+            node: "/dev/sdb1".to_owned(),
+            label: "COFRE".to_owned(),
+            id_type: "crypto_LUKS".to_owned(),
+            bytes: 1_000_000,
+            drive: Some("/drive/stick".to_owned()),
+            cleartext: open.then(|| "/block/dm-3".to_owned()),
+            holds: Holding {
+                encrypted: true,
+                partition: true,
+                ..Holding::default()
+            },
+            ..Volume::default()
+        });
+        if open {
+            rack.volumes.push(Volume {
+                at: "/block/dm-3".to_owned(),
+                node: "/dev/dm-3".to_owned(),
+                label: "COFRE".to_owned(),
+                id_type: "ext4".to_owned(),
+                bytes: 990_000,
+                // THE HINT udisks may copy from the container's drive: what
+                // came out of a disk this system opens is still not the
+                // system's.
+                system: true,
+                mounted_at: vec!["/run/media/somebody/COFRE".to_owned()],
+                behind: Some("/block/sdb1".to_owned()),
+                holds: Holding {
+                    filesystem: true,
+                    ..Holding::default()
+                },
+                ..Volume::default()
+            });
+        }
+        v.racked(&rack);
+        (v, root)
+    }
+
+    #[test]
+    fn a_locked_stick_wears_a_lock_and_mounting_it_asks_its_passphrase_first() {
+        let (mut v, root) = a_view_with_a_stick("luks-locked", false);
+        let b = bundle();
+        let row = v
+            .side
+            .device_rows()
+            .into_iter()
+            .next()
+            .expect("the stick is a row");
+        assert_eq!(row.seal, Some(ronoctua_files::sidebar::Seal::Locked));
+        assert_eq!(row.label.as_deref(), Some("COFRE"));
+        // THE LOCK IS DRAWN where the disk's glyph was.
+        let side = v.side_fields(0, &row, 30, &b);
+        assert_eq!(
+            side[0].text,
+            ronoctua_tokens::icon::DEVICE_LOCKED.to_string()
+        );
+        assert_eq!(
+            side[1].explain.as_ref().map(|e| e.key),
+            Some(ronoctua_i18n::key::FILES_ENCRYPTED_LOCKED)
+        );
+        // MOUNTING ASKS, masked, on the door's line — and the answer unlocks.
+        v.side_cursor = v.side.shown().iter().position(Option::is_some).unwrap_or(0);
+        let mount = ronoctua_files::sidebar_menu::all_of()
+            .iter()
+            .find(|a| a.id == "mount")
+            .unwrap();
+        assert_eq!(
+            v.run_side(mount),
+            Step::Secret(crate::files_archive::UNLOCK)
+        );
+        match v.secret_answered(crate::files_archive::UNLOCK, "open sesame") {
+            Step::Do(Doing::Unlock {
+                device,
+                passphrase,
+                name,
+            }) => {
+                assert_eq!(device, "/block/sdb1");
+                assert_eq!(passphrase.expose(), "open sesame");
+                assert_eq!(name, "COFRE");
+            }
+            other => panic!("{other:?}"),
+        }
+        // AND A PASSPHRASE THAT DOES NOT OPEN IT IS SAID AS SUCH.
+        let said = v.refusal_said(ronoctua_disks::Refusal::WrongPassphrase, "");
+        assert_eq!(said.key, ronoctua_i18n::key::FILES_UNLOCK_WRONG);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_open_stick_is_its_cleartext_row_and_locks_again() {
+        let (mut v, root) = a_view_with_a_stick("luks-open", true);
+        let rows = v.side.device_rows();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the container and what came out of it are one row"
+        );
+        let row = &rows[0];
+        assert_eq!(row.seal, Some(ronoctua_files::sidebar::Seal::Unlocked));
+        assert_eq!(
+            row.target,
+            ronoctua_files::sidebar::Target::Device("/block/dm-3".to_owned())
+        );
+        assert!(
+            !row.system,
+            "what this system opened was sent to the root terminal"
+        );
+        assert!(row.removable, "the stick's drive, through the container");
+        let b = bundle();
+        assert_eq!(
+            v.side_fields(0, row, 30, &b)[0].text,
+            ronoctua_tokens::icon::DEVICE_UNLOCKED.to_string()
+        );
+        v.side_cursor = v.side.shown().iter().position(Option::is_some).unwrap_or(0);
+        let ids: Vec<&str> = ronoctua_files::sidebar_menu::for_row(row)
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        assert!(ids.contains(&"lock") && ids.contains(&"eject"), "{ids:?}");
+        let lock = ronoctua_files::sidebar_menu::all_of()
+            .iter()
+            .find(|a| a.id == "lock")
+            .unwrap();
+        assert_eq!(
+            v.run_side(lock),
+            Step::Do(Doing::Lock {
+                device: "/block/dm-3".to_owned(),
+                name: "COFRE".to_owned(),
+            })
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

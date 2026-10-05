@@ -1066,3 +1066,24 @@ fn a_subtitle_is_fetched_only_from_a_service_let() {
     assert!(link.headers.is_empty(), "no key goes to the link: {link:?}");
     assert!(matches!(net.asked()[0].body, Some(Value::Plain(_))));
 }
+
+/// FAILS IF: a lookup refused for want of the person's pass is said as a
+/// failure the person cannot act on, instead of the consent row naming the
+/// host that service's row lets — or any other refusal is turned into one.
+#[test]
+fn a_lookup_not_let_is_its_consent_row() {
+    assert_eq!(
+        lookup(Refusal::new(Service::OpenSubtitles, Why::NotLet)),
+        Trouble::Off {
+            host: "api.opensubtitles.com".to_owned()
+        }
+    );
+    assert_eq!(
+        lookup(Refusal::new(Service::Lrclib, Why::NotLet)),
+        Trouble::Off {
+            host: ronoctua_player::prefs::LRCLIB_HOST.to_owned()
+        }
+    );
+    let other = Refusal::new(Service::Lrclib, Why::Unreachable);
+    assert_eq!(lookup(other), Trouble::Lookup(other));
+}

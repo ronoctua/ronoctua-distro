@@ -514,7 +514,7 @@ pub const NAME_MOST_BYTES: usize = 1024;
 ///
 /// [`Why::BadName`] for a name the format's grammar refuses (and for an
 /// empty one, one with a control character, one past [`NAME_MOST_BYTES`]);
-/// [`Why::NoPlace`] for ID3v1, which has no names; [`Why::NotGlobal`];
+/// [`Why::TagReadOnly`] for ID3v1, which has no names; [`Why::NotGlobal`];
 /// [`Why::ReadOnlyView`] for exiftool's rows and [`Why::NotAFile`] for a
 /// stream's, which nothing here writes.
 pub fn tag_name(origin: &Origin, raw: &str) -> Result<String, Why> {
@@ -522,12 +522,20 @@ pub fn tag_name(origin: &Origin, raw: &str) -> Result<String, Why> {
     match origin {
         Origin::Exiftool { .. } => return Err(Why::ReadOnlyView),
         Origin::Stream => return Err(Why::NotAFile),
-        Origin::Matroska { target } if *target != Target::Global => {
+        // A TRACK'S tag is written into that track, found by its UID; any
+        // other that targets something is not written here.
+        Origin::Matroska { target, track }
+            if *target != Target::Global && !(*target == Target::Track && track.is_some()) =>
+        {
             return Err(Why::NotGlobal);
         }
         Origin::Lofty {
             format: TagFormat::Id3v1,
-        } => return Err(Why::NoPlace),
+        } => {
+            return Err(Why::TagReadOnly {
+                format: TagFormat::Id3v1,
+            });
+        }
         _ => {}
     }
     if name.is_empty() || name.len() > NAME_MOST_BYTES || name.chars().any(char::is_control) {
@@ -566,7 +574,7 @@ pub fn tag_name(origin: &Origin, raw: &str) -> Result<String, Why> {
             },
             TagFormat::Id3v2 => Ok(id3_name(name)),
             TagFormat::Mp4 => mp4_name(name),
-            TagFormat::Id3v1 => Err(Why::NoPlace),
+            TagFormat::Id3v1 => Err(Why::TagReadOnly { format: *format }),
         },
         Origin::Matroska { .. } => Ok(name.to_owned()),
         Origin::Ffprobe { .. } => fits(!name.contains('=')),
@@ -910,6 +918,12 @@ pub struct Stream {
     pub attached: bool,
     /// Whether language, title and the two marks can be changed.
     pub can: Can,
+    /// A Matroska track's UID — what its own tags are kept by
+    /// (`Origin::Matroska::track`), so the Every-tag page can name the
+    /// stream a group of them belongs to. `None` elsewhere, and when the
+    /// tracks mkvmerge counts are not the streams ffprobe lists.
+    #[serde(default)]
+    pub uid: Option<u64>,
 }
 
 /// A chapter.
@@ -1033,6 +1047,11 @@ pub enum Origin {
     Matroska {
         /// What it targets.
         target: Target,
+        /// THE TRACK, by its `TrackUID`, for a tag of one track alone —
+        /// what a write of it is aimed at (`mkvpropedit --tags track:<n>:`,
+        /// the track found by that UID in `mkvmerge -J`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        track: Option<u64>,
     },
     /// ffprobe: the container's (`stream: None`) or a stream's tags.
     Ffprobe {
@@ -1172,6 +1191,10 @@ pub struct Sheet {
     pub streams: Vec<Stream>,
     /// The chapters.
     pub chapters: Vec<Chapter>,
+    /// Whether a chapter's title can be changed here, and by what — or why
+    /// not. `None` from a daemon that predates it: the door offers no row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapters_can: Option<Can>,
     /// Every tag, from every reader, by its own name.
     pub other: Vec<Tag>,
     /// What could not be read.
@@ -1262,6 +1285,15 @@ pub enum Edit {
         /// What.
         change: StreamChange,
     },
+    /// Retitle the chapter that starts at `start_ms` (Matroska only) — by
+    /// where it starts, which the sheet's chapters say and every edition's
+    /// atom keeps; its place among them is ffprobe's order, not the file's.
+    Chapter {
+        /// Where it starts, as the sheet says it.
+        start_ms: u64,
+        /// Its new title.
+        title: String,
+    },
 }
 
 /// A change to the front cover.
@@ -1330,8 +1362,50 @@ pub enum Why {
         /// Which container.
         container: Container,
     },
-    /// This container, or this tag, has no place for that field or name.
-    NoPlace,
+    /// The tag a field is written to has no place for it: an ID3v1 tag
+    /// has no composer, only an MP4 one keeps a season.
+    NoFieldIn {
+        /// Which field.
+        field: Field,
+        /// The tag that has no place for it.
+        format: TagFormat,
+    },
+    /// The file's main tag holds no pictures (ID3v1, RIFF INFO, AIFF's text
+    /// chunks): its cover cannot be put in or taken out.
+    NoPicturesIn {
+        /// The tag.
+        format: TagFormat,
+    },
+    /// A stream's language, name and marks are written in Matroska only:
+    /// lofty edits tags, not tracks, and a remux would rebuild the file for
+    /// a two-letter change.
+    StreamsOnlyInMatroska {
+        /// What the file is instead.
+        container: Container,
+    },
+    /// A chapter's title is written in Matroska only: lofty has no
+    /// chapters, and a remux would rebuild the file for a word.
+    ChaptersOnlyInMatroska {
+        /// What the file is instead.
+        container: Container,
+    },
+    /// An attachment — a picture, a font — is kept in the file and not
+    /// played: it has no stream's language or name to change.
+    AttachmentIsNotAStream,
+    /// An MP4 past what lofty holds is written by a remux, and this one
+    /// keeps items (a freeform atom, a store's ids) its muxer does not write
+    /// back: the copy would lose them.
+    RemuxWouldDrop,
+    /// A tag of this kind is shown and not changed on its own: the file's
+    /// kind does not let it be written (lofty says so), or it has no names
+    /// and follows the main tag (ID3v1).
+    TagReadOnly {
+        /// The tag.
+        format: TagFormat,
+    },
+    /// Of a Matroska file's pictures only the FRONT cover is replaced or
+    /// taken out here; its other attachments stay as they are.
+    OnlyTheFrontCover,
     /// A program this needs is not installed.
     Missing {
         /// Which.
@@ -1385,9 +1459,142 @@ pub enum Why {
     Cancelled,
 }
 
+/// What the `ronoctua-tags` program answers, one JSON document on stdout.
+///
+/// # Why a program at all
+///
+/// Because lofty parses what a file says about itself, and the file can come
+/// from anywhere. The player's daemon links it and may crash on a bad file;
+/// the FOOTER must not — it is the desktop — so the file manager's panel asks
+/// this program, as a child, and reads this answer (`ronoctua_shell`'s
+/// `inspection_edit`). The shell links this crate WITHOUT `engine`: the
+/// schema is all it needs to read the answer.
+///
+/// A refusal is an ANSWER here and not an exit status: a file that has no
+/// tags to show is a sentence on the panel, and the status is kept for a
+/// program that could not answer at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "answer")]
+pub enum Answer {
+    /// `sheet <path>`: everything the file says about itself.
+    Sheet {
+        /// The sheet.
+        sheet: Box<Sheet>,
+    },
+    /// `apply <path> --stamp <json>`: written, and the file's new stamp.
+    Written {
+        /// What the next write must name.
+        stamp: Stamp,
+    },
+    /// Either one, refused.
+    Refused {
+        /// Why.
+        why: Why,
+    },
+}
+
+/// Writes [`Why::every`] out of ONE list — a variant, and the values its
+/// sample carries — and beside it a `match` over the same list with no
+/// wildcard: a reason added to [`Why`] and left out of the list is a program
+/// that does not COMPILE ("non-exhaustive patterns"), so its sentence in the
+/// doors is never left untested.
+macro_rules! every_reason {
+    ($($variant:ident $({ $($field:ident: $value:expr),+ $(,)? })?),+ $(,)?) => {
+        impl Why {
+            /// One of every reason, each with values of its own — what a test
+            /// walks to prove each has its sentence in the doors
+            /// (`player::tags_refusal`). Every one, and kept so: see
+            /// `every_reason!`.
+            #[must_use]
+            pub fn every() -> Vec<Self> {
+                vec![$(Self::$variant $({ $($field: $value),+ })?),+]
+            }
+        }
+
+        /// THE GUARD: every variant of [`Why`] is in the list [`Why::every`]
+        /// is made of, or this does not compile.
+        const _: fn(&Why) = |why| match why {
+            $(Why::$variant { .. })|+ => {}
+        };
+    };
+}
+
+every_reason! {
+    NotAFile,
+    Gone,
+    ChangedSince,
+    HardLinked,
+    ReadOnlyFolder,
+    ReadOnlyFile,
+    NotYours,
+    NoRoom {
+        need_bytes: 2_000_000,
+        free_bytes: 1_000,
+    },
+    Unreadable,
+    Unwritable,
+    NoWriter {
+        container: Container::Avi,
+    },
+    NoFieldIn {
+        field: Field::Description,
+        format: TagFormat::Id3v1,
+    },
+    NoPicturesIn {
+        format: TagFormat::RiffInfo,
+    },
+    StreamsOnlyInMatroska {
+        container: Container::Mp4,
+    },
+    ChaptersOnlyInMatroska {
+        container: Container::Mp4,
+    },
+    AttachmentIsNotAStream,
+    RemuxWouldDrop,
+    TagReadOnly {
+        format: TagFormat::Id3v1,
+    },
+    OnlyTheFrontCover,
+    Missing {
+        program: Program::Ffprobe,
+    },
+    ProgramFailed {
+        program: Program::Exiftool,
+    },
+    TimedOut {
+        program: Program::Ffmpeg,
+    },
+    TooBig {
+        bytes: 600_000_000,
+        most_bytes: 500_000_000,
+    },
+    NotAnImage,
+    BadNumber,
+    BadDate,
+    BadIsrc,
+    BadLanguage,
+    ReadOnlyView,
+    BadName,
+    NotText,
+    NotGlobal,
+    NoSuchThing,
+    Taken,
+    Cancelled,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Field, Kind, Numbered, Why, count, date, isrc, language, numbered};
+
+    /// FAILS IF: a reason is listed twice in `Why::every` — one missing
+    /// from it is the guard `every_reason!` writes, which does not compile.
+    #[test]
+    fn every_reason_is_listed_once() {
+        let every = Why::every();
+        let kinds: std::collections::HashSet<_> =
+            every.iter().map(std::mem::discriminant).collect();
+        assert_eq!(kinds.len(), every.len(), "a reason listed twice");
+    }
 
     #[test]
     fn a_track_is_a_number_or_a_number_out_of_a_total() {
@@ -1531,6 +1738,7 @@ mod tests {
             technical: Vec::new(),
             streams: Vec::new(),
             chapters: Vec::new(),
+            chapters_can: None,
             other: Vec::new(),
             unread: Vec::new(),
             cover_file: None,
@@ -1594,10 +1802,13 @@ mod tests {
         assert_eq!(tag_name(&mp4, "----:only-a-mean"), Err(Why::BadName));
         assert_eq!(
             tag_name(&lofty(TagFormat::Id3v1), "TITLE"),
-            Err(Why::NoPlace)
+            Err(Why::TagReadOnly {
+                format: TagFormat::Id3v1
+            })
         );
         let global = Origin::Matroska {
             target: Target::Global,
+            track: None,
         };
         assert_eq!(
             tag_name(&global, "Mood = high"),
@@ -1605,8 +1816,14 @@ mod tests {
         );
         let track = Origin::Matroska {
             target: Target::Track,
+            track: None,
         };
         assert_eq!(tag_name(&track, "BPS"), Err(Why::NotGlobal));
+        let one_track = Origin::Matroska {
+            target: Target::Track,
+            track: Some(7),
+        };
+        assert_eq!(tag_name(&one_track, "BPS"), Ok("BPS".to_owned()));
         let container = Origin::Ffprobe { stream: None };
         assert_eq!(tag_name(&container, "comment"), Ok("comment".to_owned()));
         assert_eq!(tag_name(&container, "a=b"), Err(Why::BadName));

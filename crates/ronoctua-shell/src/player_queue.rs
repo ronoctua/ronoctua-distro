@@ -28,12 +28,13 @@
 //! this one" never land on another entry after the queue changed shape
 //! ([`View::outline_heard`]).
 
-use crate::player::{Target, View, name_of, node_of};
+use crate::player::{Errand, Target, View, name_of, node_of};
 use crate::player_rows::{Builder, Entry};
 use ronoctua_i18n::key;
 use ronoctua_player::own::{Lane, LaneKind};
-use ronoctua_player::queue::{EntryId, Name, Node, NodeKind, Outline};
+use ronoctua_player::queue::{EntryId, Name, Node, NodeKind, Outline, QueueKept};
 use ronoctua_player::wire::State;
+use ronoctua_player::wire::{Ask, Trouble};
 use ronoctua_tokens as tokens;
 
 /// The spot of entry `id`'s row.
@@ -159,18 +160,44 @@ impl View {
             .into_iter()
             .filter(|g| !before.contains(g))
             .collect();
+        // THE ROW UNDER THE CURSOR as it was drawn, with what played before:
+        // a group opening above it puts rows over it, and the home's windows
+        // move with what plays.
+        let drawn = state.map(|s| {
+            let mut drawn = s.clone();
+            drawn.current = self.last_current;
+            drawn
+        });
+        let here = self.spot_here(drawn.as_ref(), columns, texts);
         self.last_current = current;
-        // ONLY A GROUP A PERSON FOLDED changes the rows by opening here: one
-        // nobody touched is open already while what plays is in it.
-        let unfolds = entered.iter().any(|g| self.folds.get(g) == Some(&false));
-        let here = unfolds
-            .then(|| self.spot_here(state, columns, texts))
-            .flatten();
+        self.home_held = None;
         for id in entered {
             self.folds.insert(id, true);
         }
         if let Some(spot) = here {
-            self.follow(&spot, state, columns, texts);
+            self.follow_entry(&spot, state, columns, texts);
+        }
+    }
+
+    /// The cursor on the row `spot` was on — and, when that was an entry the
+    /// home's window no longer shows, on what plays: never on another entry
+    /// by its place, which the next `RET`, `d` or move would act on.
+    pub(crate) fn follow_entry(
+        &mut self,
+        spot: &str,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        let gone = entry_of_spot(spot).is_some()
+            && !self
+                .rows(state, columns, texts)
+                .iter()
+                .any(|r| r.spot == spot);
+        let current = state.and_then(|s| s.current).map(spot_of);
+        match current.filter(|_| gone) {
+            Some(playing) => self.follow(&playing, state, columns, texts),
+            None => self.follow(spot, state, columns, texts),
         }
     }
 
@@ -221,32 +248,290 @@ impl View {
         let spot = self.spot_here(state, columns, texts);
         self.outline_arrived(outline);
         if let Some(spot) = spot {
-            self.follow(&spot, state, columns, texts);
+            self.follow_entry(&spot, state, columns, texts);
         }
         self.settle_in(state, columns, texts);
     }
 }
 
-/// THE QUEUE: its title — with the glyph that empties it — and the tree.
-pub(crate) fn queue(v: &View, s: &State, outline: Option<&Outline>, b: &mut Builder<'_>) {
-    b.heading_with(
-        key::PLAYER_HEADING_QUEUE,
-        tokens::icon::PLAYER_CLEAR_QUEUE,
-        Target::ClearQueue,
+/// What the Queue's title says after its name — the file it is kept in —
+/// and in which tone: the file's name while the queue is what it says, and
+/// NOT SAVED in the danger tone while it is not, or was never saved at all.
+/// Nothing while it holds nothing.
+#[must_use]
+pub fn kept_mark(
+    kept: &QueueKept,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<(String, ronoctua_tokens::Color)> {
+    match kept {
+        QueueKept::Empty => None,
+        QueueKept::Never => Some((
+            texts.t(key::PLAYER_QUEUE_NEW_UNSAVED),
+            tokens::color::STATE_ERROR,
+        )),
+        QueueKept::Same { name, .. } => Some((name.clone(), tokens::color::TEXT_HEADING)),
+        QueueKept::Changed { name, .. } => Some((
+            texts.t_with(key::PLAYER_QUEUE_UNSAVED, &[("name", name)]),
+            tokens::color::STATE_ERROR,
+        )),
+    }
+}
+
+/// The entries of one level of the queue the home shows — `None` for all of
+/// them, when they fit — as the range of their places: the ones that hold an
+/// entry of `kept` (what plays, and the one a person is moving, so a move
+/// never takes the row from under the cursor) with `around` on each side
+/// (`space.player.queueAround`), moved in from an end so the window is
+/// always as long; with none of them on this level, the first ones. The
+/// home is about what plays, and what follows it there (Listen and watch,
+/// More features) is never two hundred lines below: the whole queue is its
+/// own page ([`crate::player::PageId::Queue`]).
+#[must_use]
+pub fn home_window(
+    entries: &[Node],
+    kept: &[EntryId],
+    around: usize,
+) -> Option<std::ops::Range<usize>> {
+    let most = around.saturating_mul(2).saturating_add(1);
+    if entries.len() <= most {
+        return None;
+    }
+    let held: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| kept.iter().any(|k| holds(n, *k)))
+        .map(|(i, _)| i)
+        .collect();
+    let (lo, hi) = (
+        held.iter().copied().min().unwrap_or(0),
+        held.iter().copied().max().unwrap_or(0),
     );
+    // AS LONG AS IT HAS TO BE to hold both, never shorter than `most`.
+    let len = most.max(hi - lo + 1);
+    let first = lo
+        .saturating_sub((len - (hi - lo + 1)) / 2)
+        .min(entries.len() - len);
+    Some(first..first + len)
+}
+
+/// How many entries of `nodes` play — a playlist is what it holds, every
+/// other entry (a file, a stream, a set) one: what "the whole queue" says it
+/// holds, where the home showed a window of a playlist that plays.
+#[must_use]
+pub fn plays(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n.kind {
+            NodeKind::Playlist => plays(&n.children),
+            _ => 1,
+        })
+        .sum()
+}
+
+/// The entry a row's spot stands for — `None` for a row that is no entry's.
+#[must_use]
+pub fn entry_of_spot(spot: &str) -> Option<EntryId> {
+    spot.strip_prefix("entry-")?.parse().ok().map(EntryId)
+}
+
+/// THE QUEUE: its title — the file it is kept in, "not saved" in the danger
+/// tone, the glyph that saves it again while the file says something else,
+/// and the one that empties it — and the tree. On the HOME (`whole` false)
+/// a long queue is a window of it ([`home_window`]) and a row that opens its
+/// page, saying how many it holds; the page (`whole`) is every entry, titled
+/// by the page's own key.
+pub(crate) fn queue(
+    v: &View,
+    s: &State,
+    outline: Option<&Outline>,
+    whole: bool,
+    b: &mut Builder<'_>,
+) {
+    let title = if whole {
+        crate::player::PageId::Queue.key()
+    } else {
+        key::PLAYER_HEADING_QUEUE
+    };
+    b.title_mark(kept_mark(&s.queue_file, b.texts));
+    // THE GLYPH THAT SAVES AGAIN only while the file says something else.
+    if matches!(s.queue_file, QueueKept::Changed { .. }) {
+        b.heading_controls(
+            title,
+            &[
+                (
+                    tokens::icon::PLAYER_SAVE_AGAIN,
+                    Target::SaveQueueAgain,
+                    "player-save-queue-again",
+                ),
+                (
+                    tokens::icon::PLAYER_CLEAR_QUEUE,
+                    Target::ClearQueue,
+                    "player-clear",
+                ),
+            ],
+        );
+    } else {
+        b.heading_with(
+            title,
+            tokens::icon::PLAYER_CLEAR_QUEUE,
+            Target::ClearQueue,
+            "player-clear",
+        );
+    }
     let entries: &[Node] = outline.map_or(&[], |o| o.entries.as_slice());
     if entries.is_empty() {
         b.note(key::PLAYER_QUEUE_EMPTY);
     }
-    level(v, entries, s, (0, ""), b);
+    // ON THE HOME, every level a window: the top, and a playlist open under
+    // it — one that plays opens by itself, and two hundred tracks of it were
+    // two hundred lines.
+    let kept: Vec<EntryId> = s.current.into_iter().chain(v.home_held).collect();
+    let windowed = level(
+        v,
+        entries,
+        s,
+        (0, ""),
+        (!whole).then_some(kept.as_slice()),
+        b,
+    );
+    // THE ROW THAT OPENS THE WHOLE QUEUE, under its window, with how many it
+    // holds: "Queue · N".
+    if windowed {
+        let count = b.texts.t_args(
+            key::PLAYER_QUEUE_ENTRIES,
+            &[(
+                "count",
+                ronoctua_i18n::Arg::Number(i64::try_from(plays(entries)).unwrap_or(i64::MAX)),
+            )],
+        );
+        let page = crate::player::PageId::Queue;
+        b.pair(b.t(page.key()), count, Target::Go(page), page.spot());
+    }
+}
+
+/// Entry `id`'s number in the queue as its row says it — `3.2.` is the
+/// second of the third — without the last dot, as a sentence says it.
+#[must_use]
+pub fn number_of(outline: &Outline, id: EntryId) -> Option<String> {
+    fn walk(nodes: &[Node], id: EntryId, prefix: &str) -> Option<String> {
+        for (node, n) in nodes.iter().zip(1..) {
+            let number = format!("{prefix}{n}.");
+            if node.id == id {
+                return Some(number);
+            }
+            if let Some(found) = walk(&node.children, id, &number) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(&outline.entries, id, "").map(|n| n.trim_end_matches('.').to_owned())
+}
+
+impl View {
+    /// The question a refusal the person may overrule is asked with, and
+    /// what its "yes" sends — `again`, said as the order it is: the
+    /// queue's "already there, add it again?" (decision A5) and "the file
+    /// changed on the disk, write over it?". `None` for a refusal that is
+    /// none of those.
+    pub(crate) fn overrule(
+        &self,
+        again: &Ask,
+        trouble: &Trouble,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<(String, Errand)> {
+        match trouble {
+            Trouble::AlreadyQueued { entry, name } => {
+                let name = name_of(name, texts, crate::player::NAME_IN_A_SENTENCE);
+                let number = self.outline.as_deref().and_then(|o| number_of(o, *entry));
+                let sentence = match &number {
+                    Some(number) => texts.t_with(
+                        key::ASK_PLAYER_ALREADY_QUEUED,
+                        &[("name", name.as_str()), ("number", number)],
+                    ),
+                    None => texts.t_with(
+                        key::ASK_PLAYER_ALREADY_QUEUED_SOMEWHERE,
+                        &[("name", name.as_str())],
+                    ),
+                };
+                let play = matches!(again, Ask::Put { play: true, .. });
+                let said = texts.t_with(
+                    if play {
+                        key::PLAYER_PLAYING_NOW
+                    } else {
+                        key::PLAYER_ADDED
+                    },
+                    &[("name", &name)],
+                );
+                Some((sentence, Errand::TellSaying(again.clone(), said)))
+            }
+            Trouble::ChangedOnDisk { path } => {
+                let file = std::path::Path::new(path)
+                    .file_name()
+                    .map_or_else(|| path.clone(), |f| f.to_string_lossy().into_owned());
+                Some((
+                    texts.t_with(key::ASK_PLAYER_QUEUE_CHANGED_ON_DISK, &[("path", path)]),
+                    Errand::TellSaying(
+                        again.clone(),
+                        texts.t_with(key::PLAYER_SAVED_AGAIN, &[("name", &file)]),
+                    ),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// `C-s` and the glyph on the Queue's title: the queue SAVED AGAIN into
+    /// the file it was opened from or saved as — refused with a question
+    /// when that file changed on the disk since (`Told::Asks`). A queue
+    /// never saved asks its name and folder, as "Save the queue…" does; an
+    /// empty one says so.
+    pub(crate) fn save_again(
+        &mut self,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let Some(s) = state else {
+            return Errand::Said(texts.t(key::PLAYER_NOT_RUNNING));
+        };
+        match &s.queue_file {
+            QueueKept::Empty => Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY)),
+            QueueKept::Never => self.save(crate::player::Saved::Queue, state, columns, texts),
+            QueueKept::Same { path, .. } | QueueKept::Changed { path, .. } => {
+                let file = std::path::Path::new(path)
+                    .file_name()
+                    .map_or_else(|| path.clone(), |f| f.to_string_lossy().into_owned());
+                Errand::TellSaying(
+                    Ask::SaveQueueAgain { force: false },
+                    texts.t_with(key::PLAYER_SAVED_AGAIN, &[("name", &file)]),
+                )
+            }
+        }
+    }
 }
 
 /// The rows of one level of the tree, `depth` levels in — each numbered
 /// after `prefix`, its group's own number, so `3.2.` reads as the second of
 /// the third and never as another `2.` of the top — and of what each open
-/// group under it holds.
-fn level(v: &View, nodes: &[Node], s: &State, (depth, prefix): (u16, &str), b: &mut Builder<'_>) {
-    let widest = format!("{prefix}{}.", nodes.len());
+/// group under it holds. On the home (`kept`, the entries a window keeps in
+/// sight) each level is a window of itself ([`home_window`]); whether any
+/// was is the answer.
+fn level(
+    v: &View,
+    nodes: &[Node],
+    s: &State,
+    (depth, prefix): (u16, &str),
+    kept: Option<&[EntryId]>,
+    b: &mut Builder<'_>,
+) -> bool {
+    let window =
+        kept.and_then(|k| home_window(nodes, k, usize::from(tokens::space::PLAYER_QUEUEAROUND)));
+    let mut windowed = window.is_some();
+    let shown = window.unwrap_or(0..nodes.len());
+    // THE WIDEST NUMBER OF WHAT IS SHOWN: a window's names line up with each
+    // other, and every entry keeps its number in the whole queue.
+    let widest = format!("{prefix}{}.", shown.end.min(nodes.len()));
     let number_cells =
         ronoctua_protocol::cells(&widest).saturating_add(tokens::space::PLAYER_QUEUEAIR);
     // THE TRIANGLE'S ROOM on every level but a flat queue's top: under a
@@ -262,6 +547,9 @@ fn level(v: &View, nodes: &[Node], s: &State, (depth, prefix): (u16, &str), b: &
     let room = b.room.saturating_sub(indent.saturating_add(head));
     let last = nodes.len().saturating_sub(1);
     for (i, (node, n)) in nodes.iter().zip(1..).enumerate() {
+        if !shown.contains(&i) {
+            continue;
+        }
         let group = is_group(node);
         let open = group && v.is_open(node, s.current);
         let number = format!("{prefix}{n}.");
@@ -309,11 +597,14 @@ fn level(v: &View, nodes: &[Node], s: &State, (depth, prefix): (u16, &str), b: &
             continue;
         }
         match node.kind {
-            NodeKind::Playlist => level(v, &node.children, s, (depth + 1, &number), b),
+            NodeKind::Playlist => {
+                windowed |= level(v, &node.children, s, (depth + 1, &number), kept, b);
+            }
             NodeKind::Set => lanes(node, s, depth + 1, b),
             NodeKind::Single | NodeKind::Stream => {}
         }
     }
+    windowed
 }
 
 /// What an open SET holds: its lanes, each by its kind's glyph and its name,
@@ -462,6 +753,220 @@ mod tests {
             .last()
             .map(|f| f.text.clone())
             .unwrap_or_default()
+    }
+
+    /// The cursor's entry, by the row it is on.
+    fn under_cursor(v: &View, s: &State, t: &ronoctua_i18n::Texts) -> Target {
+        v.rows(Some(s), 80, t)[v.cursor()].target.clone()
+    }
+
+    /// FAILS IF: an entry moved out of the home's window by `C-↓` leaves the
+    /// rows — the cursor falling back to its row's PLACE, on another entry,
+    /// which the next `C-↓` would move instead — or the window stops showing
+    /// what plays while it keeps the moved one in sight.
+    #[test]
+    fn a_move_at_the_edge_of_the_home_s_window_keeps_its_entry() {
+        let t = texts("en-GB");
+        let order = |ids: &[u64]| {
+            Box::new(Outline {
+                revision: 1,
+                entries: ids
+                    .iter()
+                    .map(|i| single(*i, &format!("Track {i}")))
+                    .collect(),
+            })
+        };
+        let mut ids: Vec<u64> = (1..=200).collect();
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(order(&ids)));
+        let s = playing(100);
+        v.settle_in(Some(&s), 80, &t);
+        v.follow(&spot_of(EntryId(103)), Some(&s), 80, &t);
+        assert_eq!(under_cursor(&v, &s, &t), Target::Entry(EntryId(103)));
+        for step in 0..2_usize {
+            let Errand::Tell(Ask::Move { id, after, .. }) = v.key(Press::Later, Some(&s), 80, &t)
+            else {
+                panic!("not moved");
+            };
+            assert_eq!(id, EntryId(103), "step {step}: the same entry moves");
+            // THE PLAYER MOVES IT, and the whole outline comes again.
+            let at = ids.iter().position(|i| *i == 103).expect("there");
+            ids.remove(at);
+            let after = after.expect("after one").0;
+            let to = ids.iter().position(|i| *i == after).expect("there") + 1;
+            ids.insert(to, 103);
+            v.outline_heard(Some(order(&ids)), Some(&s), 80, &t);
+            assert_eq!(
+                under_cursor(&v, &s, &t),
+                Target::Entry(EntryId(103)),
+                "step {step}: the cursor stays on what it moved"
+            );
+            let rows = v.rows(Some(&s), 80, &t);
+            assert!(row_of(&rows, &Target::Entry(EntryId(100))).is_some());
+        }
+        // WHAT PLAYS MOVES ON, far away (shuffle): the window goes with it,
+        // and the cursor whose entry it left lands on what plays — never on
+        // another entry by its place.
+        let far = playing(150);
+        v.settle_in(Some(&far), 80, &t);
+        assert_eq!(under_cursor(&v, &far, &t), Target::Entry(EntryId(150)));
+        let rows = v.rows(Some(&far), 80, &t);
+        assert!(row_of(&rows, &Target::Entry(EntryId(103))).is_none());
+    }
+
+    /// FAILS IF: a playlist that plays — open by itself on the home — lists
+    /// every track there, pushing what follows the queue two hundred lines
+    /// down, instead of a window of it around what plays and the row that
+    /// opens the whole queue.
+    #[test]
+    fn a_long_playlist_that_plays_is_a_window_on_the_home() {
+        use crate::player::PageId;
+        let t = texts("en-GB");
+        let tracks: Vec<Node> = (1..=200)
+            .map(|i| single(i, &format!("Track {i}")))
+            .collect();
+        let list = node(
+            1000,
+            Name::Titled("Long".into()),
+            NodeKind::Playlist,
+            tracks,
+            0,
+        );
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(Box::new(Outline {
+            revision: 1,
+            entries: vec![single(2000, "Before"), list, single(3000, "After")],
+        })));
+        let s = playing(150);
+        let rows = v.rows(Some(&s), 80, &t);
+        let shown: Vec<u64> = rows
+            .iter()
+            .filter_map(|r| match r.target {
+                Target::Entry(id) if id.0 <= 200 => Some(id.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, (147..=153).collect::<Vec<_>>());
+        let (_, at) = row_of(&rows, &Target::Entry(EntryId(147))).expect("its row");
+        assert!(
+            at.fields.iter().any(|f| f.text == "2.147."),
+            "its number in the whole queue: {:?}",
+            at.fields
+        );
+        let (_, whole) = row_of(&rows, &Target::Go(PageId::Queue)).expect("Queue · N");
+        assert_eq!(
+            whole.fields[1].text, "202 entries",
+            "what plays, not the top's three"
+        );
+        assert!(rows.len() < 60, "{} rows", rows.len());
+        // THE PAGE is every track.
+        v.key(Press::Go(PageId::Queue), Some(&s), 80, &t);
+        let rows = v.rows(Some(&s), 80, &t);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r.target, Target::Entry(id) if id.0 <= 200))
+                .count(),
+            200
+        );
+    }
+
+    /// FAILS IF: the home lists every entry of a long queue — two hundred
+    /// loose files pushing "Listen and watch" two hundred lines down — instead
+    /// of a window around what plays and a row that opens the whole queue
+    /// saying how many it holds; or the window renumbers its entries, or
+    /// the whole queue's page leaves one out.
+    #[test]
+    fn the_home_shows_a_window_of_a_long_queue() {
+        use crate::player::{PageId, Press};
+        let t = texts("en-GB");
+        let long = |n: u64| {
+            Box::new(Outline {
+                revision: 1,
+                entries: (1..=n).map(|i| single(i, &format!("Track {i}"))).collect(),
+            })
+        };
+        let entries = |rows: &[Row]| -> Vec<u64> {
+            rows.iter()
+                .filter_map(|r| match r.target {
+                    Target::Entry(id) => Some(id.0),
+                    _ => None,
+                })
+                .collect()
+        };
+        // A SHORT QUEUE is whole on the home, with no row to open it.
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(long(7)));
+        let rows = v.rows(Some(&playing(3)), 80, &t);
+        assert_eq!(entries(&rows), (1..=7).collect::<Vec<_>>());
+        assert!(row_of(&rows, &Target::Go(PageId::Queue)).is_none());
+        // A LONG ONE: what plays with three on each side, moved in at an end.
+        v.outline_arrived(Some(long(200)));
+        for (current, first) in [(100, 97), (1, 1), (2, 1), (200, 194), (199, 194)] {
+            let rows = v.rows(Some(&playing(current)), 80, &t);
+            let shown = entries(&rows);
+            assert_eq!(
+                shown,
+                (first..first + 7).collect::<Vec<_>>(),
+                "playing {current}"
+            );
+            // EACH KEEPS ITS NUMBER in the whole queue.
+            let (_, row) = row_of(&rows, &Target::Entry(EntryId(first))).expect("its row");
+            assert!(
+                row.fields.iter().any(|f| f.text == format!("{first}.")),
+                "{:?}",
+                row.fields
+            );
+            let (_, whole) = row_of(&rows, &Target::Go(PageId::Queue)).expect("Queue · N");
+            assert_eq!(whole.fields[0].text, t.t(key::PLAYER_PAGE_QUEUE));
+            assert_eq!(whole.fields[1].text, "200 entries");
+            // AND WHAT FOLLOWS IS NEAR: the window and its row, then the
+            // next section.
+            assert!(rows.len() < 60, "{} rows", rows.len());
+        }
+        // NOTHING PLAYING: the first ones.
+        let mut s = playing(1);
+        s.current = None;
+        assert_eq!(
+            entries(&v.rows(Some(&s), 80, &t)),
+            (1..=7).collect::<Vec<_>>()
+        );
+        // THE ROW OPENS THE WHOLE QUEUE, every entry, titled by its key.
+        let s = playing(100);
+        v.key(Press::Go(PageId::Queue), Some(&s), 80, &t);
+        assert_eq!(v.page(), PageId::Queue);
+        let rows = v.rows(Some(&s), 80, &t);
+        assert_eq!(entries(&rows), (1..=200).collect::<Vec<_>>());
+        assert_eq!(
+            rows[v.cursor()].target,
+            Target::Entry(EntryId(100)),
+            "it opens on what plays"
+        );
+        assert!(
+            rows.iter().any(|r| r.heading
+                && r.fields
+                    .iter()
+                    .any(|f| f.text == t.t(key::PLAYER_PAGE_QUEUE))),
+            "titled by its own key"
+        );
+        assert!(row_of(&rows, &Target::Go(PageId::Queue)).is_none());
+        // IN PORTUGUESE too.
+        let pt = texts("pt-BR");
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(long(200)));
+        let rows = v.rows(Some(&playing(100)), 80, &pt);
+        let (_, whole) = row_of(&rows, &Target::Go(PageId::Queue)).expect("Fila · N");
+        let count = pt.t_args(
+            key::PLAYER_QUEUE_ENTRIES,
+            &[("count", ronoctua_i18n::Arg::Number(200))],
+        );
+        assert_eq!(whole.fields[1].text, count);
+        assert_ne!(
+            count,
+            t.t_args(
+                key::PLAYER_QUEUE_ENTRIES,
+                &[("count", ronoctua_i18n::Arg::Number(200))]
+            )
+        );
     }
 
     /// FAILS IF: a set nobody named is drawn under the name of ONE of its
@@ -807,5 +1312,273 @@ mod tests {
             .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
             .collect();
         assert!(words.contains(&"3 lanes".to_owned()), "{words:?}");
+    }
+
+    /// A queue of three, current the first, kept in `kept`.
+    fn kept_as(kept: ronoctua_player::queue::QueueKept) -> (State, Box<Outline>) {
+        let outline = crate::player::fixture::outline(vec![
+            Name::Titled("One".into()),
+            Name::Titled("Two".into()),
+            Name::Titled("Three".into()),
+        ]);
+        let s = State {
+            queue_file: kept,
+            ..crate::player::fixture::idle()
+        };
+        (s, outline)
+    }
+
+    /// FAILS IF: the Queue's title stops saying the file it is kept in, or
+    /// "not saved" — and "new, not saved" — stops being said in the danger
+    /// tone, in both languages; or the glyph that saves it again is drawn
+    /// while the file says what the queue is, or missing while it does not;
+    /// or `C-s` is taught where there is nothing to save again.
+    #[test]
+    fn the_queue_title_says_whether_it_is_saved() {
+        use ronoctua_player::queue::QueueKept;
+        let changed = QueueKept::Changed {
+            path: "/q/road trip.rqueue".into(),
+            name: "road trip".into(),
+        };
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            for (kept, words, danger, glyph) in [
+                (QueueKept::Empty, None, false, false),
+                (
+                    QueueKept::Never,
+                    Some(t.t(key::PLAYER_QUEUE_NEW_UNSAVED)),
+                    true,
+                    false,
+                ),
+                (
+                    QueueKept::Same {
+                        path: "/q/road trip.rqueue".into(),
+                        name: "road trip".into(),
+                    },
+                    Some("road trip".to_owned()),
+                    false,
+                    false,
+                ),
+                (
+                    changed.clone(),
+                    Some(t.t_with(key::PLAYER_QUEUE_UNSAVED, &[("name", "road trip")])),
+                    true,
+                    true,
+                ),
+            ] {
+                let (s, outline) = kept_as(kept.clone());
+                let mut v = View::blank(None);
+                v.outline_arrived(Some(outline));
+                let rows = v.rows(Some(&s), 100, &t);
+                let title = rows
+                    .iter()
+                    .position(|r| r.cells.iter().any(|c| c.about == Some("player-clear")))
+                    .expect("the queue's title");
+                let fields = &rows[title].fields;
+                let heading = t.t(key::PLAYER_HEADING_QUEUE);
+                assert!(
+                    fields[0].text.starts_with(&heading),
+                    "{language}: {fields:?}"
+                );
+                match &words {
+                    None => assert!(
+                        !fields.iter().any(|f| f.color == tokens::color::STATE_ERROR),
+                        "{language}: {kept:?}"
+                    ),
+                    Some(words) => {
+                        let mark = fields
+                            .iter()
+                            .find(|f| &f.text == words)
+                            .unwrap_or_else(|| panic!("{language}: {words} in {fields:?}"));
+                        assert_eq!(
+                            mark.color == tokens::color::STATE_ERROR,
+                            danger,
+                            "{language}: {kept:?}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    rows[title]
+                        .cells
+                        .iter()
+                        .any(|c| c.about == Some("player-save-queue-again")),
+                    glyph,
+                    "{language}: {kept:?}"
+                );
+                let hint: String = v
+                    .hint(Some(&s), 100, &t)
+                    .iter()
+                    .map(|p| p.text.clone())
+                    .collect();
+                assert_eq!(
+                    hint.contains(&t.t("player-save-queue-again")),
+                    glyph,
+                    "{language}: {kept:?} teaches {hint}"
+                );
+            }
+        }
+    }
+
+    /// FAILS IF: saving again stops asking the player to write over the
+    /// file it came from — saying so — or a queue never saved stops opening
+    /// the save's picker (where its folder is chosen and its name typed), or
+    /// an empty one stops saying so.
+    #[test]
+    fn save_again_writes_the_file_it_came_from() {
+        use ronoctua_player::queue::QueueKept;
+        let t = texts("en-GB");
+        let mut v = View::blank(None);
+        let (s, outline) = kept_as(QueueKept::Changed {
+            path: "/q/road trip.rqueue".into(),
+            name: "road trip".into(),
+        });
+        v.outline_arrived(Some(outline));
+        match v.key(Press::SaveQueueAgain, Some(&s), 100, &t) {
+            Errand::TellSaying(Ask::SaveQueueAgain { force: false }, said) => {
+                assert!(said.contains("road trip.rqueue"), "{said}");
+            }
+            other => panic!("{other:?}"),
+        }
+        let (never, _) = kept_as(QueueKept::Never);
+        assert_eq!(
+            v.key(Press::SaveQueueAgain, Some(&never), 100, &t),
+            Errand::Nothing
+        );
+        assert_eq!(
+            v.page(),
+            crate::player::PageId::Pick(crate::player::Purpose::SaveQueue),
+            "a queue never saved opens the save's picker"
+        );
+        v.let_go();
+        let (empty, _) = kept_as(QueueKept::Empty);
+        assert_eq!(
+            v.key(Press::SaveQueueAgain, Some(&empty), 100, &t),
+            Errand::Said(t.t(key::PLAYER_QUEUE_EMPTY))
+        );
+    }
+
+    /// FAILS IF: "already in the queue" stops being a question on the page —
+    /// "no" first and the cursor born on it, the entry's number said — or its
+    /// "yes" stops putting it again without `once`; or the file changed on
+    /// the disk stops asking before it is written over, `force` on its yes;
+    /// or another refusal is taken for one of these.
+    #[test]
+    fn a_refusal_the_person_may_overrule_is_asked() {
+        use crate::player::Told;
+        use ronoctua_player::queue::QueueKept;
+        let t = texts("en-GB");
+        let (s, outline) = kept_as(QueueKept::Never);
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(outline));
+        let put = crate::player::put("/m/two.flac".into(), false);
+        let trouble = Trouble::AlreadyQueued {
+            entry: EntryId(2),
+            name: Name::Titled("Two".into()),
+        };
+        let again = crate::player::overruled(&put, &trouble).expect("overruled");
+        assert!(matches!(
+            again,
+            Ask::Put {
+                once: false,
+                play: false,
+                ..
+            }
+        ));
+        assert!(v.told(
+            &Told::Asks {
+                again: Box::new(again.clone()),
+                trouble,
+            },
+            &t
+        ));
+        v.settle_in(Some(&s), 100, &t);
+        let rows = v.rows(Some(&s), 100, &t);
+        let words: String = rows
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            words.contains("Two is already in the queue as 2"),
+            "{words}"
+        );
+        assert_eq!(rows[v.cursor()].target, Target::Answer(false), "no first");
+        assert_eq!(v.key(Press::Escape, Some(&s), 100, &t), Errand::Nothing);
+        // AND AGAIN, answered yes.
+        let trouble = Trouble::AlreadyQueued {
+            entry: EntryId(2),
+            name: Name::Titled("Two".into()),
+        };
+        v.told(
+            &Told::Asks {
+                again: Box::new(again.clone()),
+                trouble,
+            },
+            &t,
+        );
+        v.settle_in(Some(&s), 100, &t);
+        v.key(Press::Down, Some(&s), 100, &t);
+        assert!(matches!(
+            v.key(Press::Enter, Some(&s), 100, &t),
+            Errand::TellSaying(a, _) if a == again
+        ));
+        // THE FILE CHANGED ON THE DISK: written over only after a yes.
+        let save = Ask::SaveQueueAgain { force: false };
+        let changed = Trouble::ChangedOnDisk {
+            path: "/q/road trip.rqueue".into(),
+        };
+        let force = crate::player::overruled(&save, &changed).expect("overruled");
+        assert_eq!(force, Ask::SaveQueueAgain { force: true });
+        v.told(
+            &Told::Asks {
+                again: Box::new(force),
+                trouble: changed,
+            },
+            &t,
+        );
+        v.settle_in(Some(&s), 100, &t);
+        let rows = v.rows(Some(&s), 100, &t);
+        assert_eq!(rows[v.cursor()].target, Target::Answer(false), "no first");
+        v.key(Press::Down, Some(&s), 100, &t);
+        assert!(matches!(
+            v.key(Press::Enter, Some(&s), 100, &t),
+            Errand::TellSaying(Ask::SaveQueueAgain { force: true }, _)
+        ));
+        // ANOTHER REFUSAL is none of these.
+        assert_eq!(crate::player::overruled(&save, &Trouble::NoOrigin), None);
+        assert_eq!(
+            crate::player::overruled(
+                &crate::player::put("/m/a.flac".into(), true),
+                &Trouble::AlreadyQueued {
+                    entry: EntryId(1),
+                    name: Name::Titled("One".into()),
+                }
+            ),
+            None,
+            "played now was never asked once"
+        );
+    }
+
+    /// FAILS IF: an entry's number stops being the one its row says —
+    /// `3.2` the second of the third.
+    #[test]
+    fn an_entry_is_numbered_as_its_row() {
+        let outline = Outline {
+            revision: 1,
+            entries: vec![
+                single(1, "a"),
+                single(2, "b"),
+                node(
+                    3,
+                    Name::Titled("list".into()),
+                    NodeKind::Playlist,
+                    vec![single(4, "c"), single(5, "d")],
+                    0,
+                ),
+            ],
+        };
+        assert_eq!(number_of(&outline, EntryId(2)).as_deref(), Some("2"));
+        assert_eq!(number_of(&outline, EntryId(5)).as_deref(), Some("3.2"));
+        assert_eq!(number_of(&outline, EntryId(9)), None);
     }
 }

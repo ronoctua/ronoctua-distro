@@ -1,12 +1,11 @@
 //! THE DIRECTORIES, as a door sees them (plan P9): world radio, world TV,
-//! channels by theme — live TV, the Internet Archive's films, what is live
-//! on YouTube — and the favourites and the played lately.
+//! and the favourites and the played lately. Channels by theme are the local
+//! catalogue's (`crate::player_catalog`).
 //!
 //! # The daemon lists, the door shows
 //!
-//! Every list is the daemon's, on a DESK of its own — radio, television, a
-//! theme's channels, the archive, the lives (`ronoctua_player::find`) — one
-//! page per desk for the whole machine. So a page of a door ASKS FOR ITS
+//! Every list is the daemon's, on a DESK of its own — radio, television
+//! (`ronoctua_player::find`) — one page per desk for the whole machine. So a page of a door ASKS FOR ITS
 //! LIST as it opens, and again when it is come back to ([`View::owing`]):
 //! the desk may hold what another door, or another page of this one, asked
 //! for. What the desk said of each list on this door's stack is kept
@@ -35,11 +34,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::player::{Errand, PageId, Target, Typing, View};
 use crate::player_rows::Builder;
 use ronoctua_broadcast::picks::{Kind, Pick};
-use ronoctua_broadcast::table::Category;
 use ronoctua_i18n::{Arg, key};
 use ronoctua_player::find::{Desk, Directory, Listed, Page, Query, RadioList, TvList};
 use ronoctua_player::own::Stream;
 use ronoctua_player::wire::{Ask, DeskKind, State, Thing};
+use ronoctua_tokens as tokens;
 
 /// What a page lists as it opens, when that is always the same list — the
 /// world's countries, the genres, the languages, a theme's first page of
@@ -52,38 +51,15 @@ pub fn listed_on(page: PageId) -> Option<Query> {
         PageId::RadioGenres => Some(Query::Radio(RadioList::Tags)),
         PageId::RadioLanguages => Some(Query::Radio(RadioList::Languages)),
         PageId::Tv => Some(Query::Tv(TvList::Countries)),
-        PageId::Theme(c) => (!c.archive.is_empty()).then(|| Query::Archive {
-            category: c.id.to_owned(),
-            words: None,
-            page: 1,
-        }),
         _ => None,
     }
 }
 
-/// Every list a page shows — one, and a theme's three: its live TV, its page
-/// of films (the level's, which holds the words and the page number) and its
-/// lives, each only where the theme has that source.
+/// Every list a page shows: the one its level holds.
 #[must_use]
 pub fn queries_of(page: PageId, query: Option<&Query>) -> Vec<Query> {
-    match page {
-        PageId::Theme(c) => {
-            let mut all = Vec::new();
-            if !c.iptv.is_empty() {
-                all.push(Query::Tv(TvList::Category {
-                    category: c.id.to_owned(),
-                }));
-            }
-            all.extend(query.cloned());
-            if !c.lives.is_empty() {
-                all.push(Query::Lives {
-                    category: c.id.to_owned(),
-                });
-            }
-            all
-        }
-        _ => query.cloned().into_iter().collect(),
-    }
+    let _ = page;
+    query.cloned().into_iter().collect()
 }
 
 /// The directory's word in a row's spot.
@@ -262,7 +238,6 @@ pub fn asks(id: &str) -> bool {
     [
         crate::player_question::SEARCH_RADIO,
         crate::player_question::SEARCH_TV,
-        crate::player_question::SEARCH_ARCHIVE,
         crate::player_question::SEARCH_GENRE,
         crate::player_question::SEARCH_LANGUAGE,
     ]
@@ -274,14 +249,13 @@ const fn question_of(kind: DeskKind) -> Option<&'static str> {
     match kind {
         DeskKind::Radio => Some(crate::player_question::SEARCH_RADIO),
         DeskKind::Television => Some(crate::player_question::SEARCH_TV),
-        DeskKind::Archive => Some(crate::player_question::SEARCH_ARCHIVE),
         _ => None,
     }
 }
 
 /// The desk a search question is answered on.
 fn desk_of_question(id: &str) -> Option<DeskKind> {
-    [DeskKind::Radio, DeskKind::Television, DeskKind::Archive]
+    [DeskKind::Radio, DeskKind::Television]
         .into_iter()
         .find(|k| question_of(*k) == Some(id))
 }
@@ -296,6 +270,9 @@ fn put(stream: Stream, name: &str, play: bool, texts: &ronoctua_i18n::Texts) -> 
             into: None,
             play,
             replace: false,
+            // ADDED, it is asked once: already in the queue, the person is
+            // asked whether to add it again (`Told::Asks`, decision A5).
+            once: !play,
         },
         texts.t_with(
             if play {
@@ -336,6 +313,33 @@ fn then_asking(errand: Errand, asks: Vec<Ask>) -> Errand {
 }
 
 impl View {
+    /// `O` and the glyph on a world page's "Countries": their order turned —
+    /// A to Z by the name the person reads, or the most first — on this page
+    /// only, and the cursor on the row it was on, by its identity: a list
+    /// that reorders keeps the country, never the line.
+    pub(crate) fn countries_order(
+        &mut self,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        if !matches!(self.page(), PageId::Radio | PageId::Tv) {
+            return Errand::Nothing;
+        }
+        let here = self.spot_here(state, columns, texts);
+        let top = self.top_mut();
+        top.by_name = !top.by_name;
+        let by_name = top.by_name;
+        if let Some(spot) = here {
+            self.follow(&spot, state, columns, texts);
+        }
+        Errand::Said(texts.t(if by_name {
+            key::PLAYER_COUNTRIES_BY_NAME
+        } else {
+            key::PLAYER_COUNTRIES_BY_COUNT
+        }))
+    }
+
     /// THE PAGE ON TOP CAME UP — opened, or come back to: its lists are owed
     /// to the player, and the favourites read again where it shows them.
     pub(crate) fn listing_follows(&mut self) {
@@ -398,6 +402,21 @@ impl View {
         d.asked.retain(|a| a.query != *query);
         d.refused.retain(|(q, _)| q != query);
         d.refused.push((query.clone(), answer.clone()));
+    }
+
+    /// What the desk holds of `query`'s list — only while its directory is
+    /// ALLOWED: a list kept from before the person took the permission back
+    /// is no longer shown, on the page nor on its globe. A query of no
+    /// directory (the favourites) is the desk's as it is.
+    #[must_use]
+    pub(crate) fn allowed_listing(&self, query: &Query) -> Option<&Desk> {
+        if query
+            .directory()
+            .is_some_and(|d| !self.prefs.allows_directory(d))
+        {
+            return None;
+        }
+        self.found.listing(query)
     }
 
     /// The desks a page of the directories reads, while it is on screen.
@@ -492,7 +511,6 @@ impl View {
                 DeskKind::Radio
             }
             PageId::Tv | PageId::TvChannels => DeskKind::Television,
-            PageId::Theme(c) if !c.archive.is_empty() => DeskKind::Archive,
             _ => return Errand::Nothing,
         };
         self.search_asked(kind)
@@ -561,20 +579,7 @@ impl View {
                 columns,
                 texts,
             ),
-            _ => {
-                let PageId::Theme(c) = self.page() else {
-                    return Errand::Nothing;
-                };
-                let films = Query::Archive {
-                    category: c.id.to_owned(),
-                    words: Some(words.to_owned()),
-                    page: 1,
-                };
-                self.top_mut().query = Some(films.clone());
-                // ONLY THE FILMS are asked again: the theme's live TV and
-                // lives are the same lists they were.
-                self.directories.owed = vec![films];
-            }
+            _ => {}
         }
         Errand::Nothing
     }
@@ -615,15 +620,6 @@ impl View {
                 top.only = None;
                 top.cursor = 0;
                 top.moved = false;
-                self.directories.owed = top.query.iter().cloned().collect();
-                Some(Errand::Nothing)
-            }
-            // A THEME'S NEXT OR EARLIER PAGE OF FILMS.
-            (Target::FilmsPage(number), Press::Enter) => {
-                let top = self.top_mut();
-                if let Some(Query::Archive { page, .. }) = top.query.as_mut() {
-                    *page = (*number).max(1);
-                }
                 self.directories.owed = top.query.iter().cloned().collect();
                 Some(Errand::Nothing)
             }
@@ -713,8 +709,6 @@ impl View {
             PageId::Tv => self.world_page(s, DeskKind::Television, b),
             PageId::RadioGenres | PageId::RadioLanguages => self.named_page(s, b),
             PageId::Stations | PageId::TvChannels => self.list_page(s, b),
-            PageId::Channels => themes(b),
-            PageId::Theme(c) => self.theme_page(c, s, b),
             PageId::Favourites => self.picks_page(true, b),
             PageId::Recent => self.picks_page(false, b),
             _ => {}
@@ -799,8 +793,12 @@ impl View {
     /// the row that tries again; and when the list was made.
     fn status<'v>(&'v self, s: &State, query: &Query, b: &mut Builder<'_>) -> Option<&'v Desk> {
         let d = query.directory()?;
-        let desk = self.found.listing(query);
+        let desk = self.allowed_listing(query);
         if !self.prefs.allows_directory(d) {
+            // NOT ALLOWED — or allowed no more: the row that asks, and no
+            // list. The one the desk still holds is of before the permission
+            // was taken back, and showing it would say the directory is
+            // still asked ([`View::allowed_listing`]).
             b.pair_under(
                 b.texts
                     .t_with(key::PLAYER_CONSENT_ASK, &[("hosts", d.host())]),
@@ -809,7 +807,7 @@ impl View {
                 Target::Asks(query.clone()),
                 &format!("ask-{}", spot_word(d)),
             );
-            return desk;
+            return None;
         }
         // THE DESK IS ON THIS LIST — the held page is this one — and busy.
         let live = self
@@ -966,7 +964,19 @@ impl View {
                 );
             }
         }
-        b.heading(key::PLAYER_HEADING_COUNTRIES);
+        // THEIR ORDER ON THEIR TITLE, drawn as the order they are in — the
+        // most first, or A to Z — and `O` (`View::countries_order`).
+        let by_name = self.top().by_name;
+        b.heading_with(
+            key::PLAYER_HEADING_COUNTRIES,
+            if by_name {
+                tokens::icon::PLAYER_COUNTRIES_BY_NAME
+            } else {
+                tokens::icon::PLAYER_COUNTRIES_BY_COUNT
+            },
+            Target::CountriesOrder,
+            "player-countries-order",
+        );
         let Some(desk) = self.status(s, &query, b) else {
             return;
         };
@@ -980,10 +990,18 @@ impl View {
             return;
         };
         let only = self.top().only.as_deref();
-        let shown: Vec<_> = countries
+        let mut shown: Vec<_> = countries
             .iter()
             .filter(|r| crate::player_globe::kept(only, r.mark))
             .collect();
+        // A TO Z BY THE NAME THE PERSON READS — folded, so `Á` sits with `A`
+        // and `É` with `E` — in each of the two groups below; else as the
+        // directory counts them, the most first.
+        if by_name {
+            shown.sort_by_cached_key(|r| {
+                ronoctua_apps::fold::fold(&crate::player_globe::country_name(r.country, b.texts))
+            });
+        }
         self.every_row(shown.len(), countries.len(), b);
         let country_row = |r: &ronoctua_player::find::CountryRow, b: &mut Builder<'_>| {
             let opens = if radio {
@@ -1307,148 +1325,6 @@ impl View {
         );
     }
 
-    /// A THEME: its live TV, its films on the Internet Archive — a search by
-    /// title, the page's rows, its rights, the next page — and what is live on
-    /// YouTube for it, each only where the theme has that source, each with
-    /// its own consent and status.
-    fn theme_page(&self, c: &'static Category, s: &State, b: &mut Builder<'_>) {
-        b.note(key::PLAYER_ABOUT_THEME);
-        if !c.iptv.is_empty() {
-            b.heading(key::PLAYER_HEADING_LIVE_TV);
-            let query = Query::Tv(TvList::Category {
-                category: c.id.to_owned(),
-            });
-            if let Some(desk) = self.status(s, &query, b)
-                && let Page::Channels {
-                    channels, total, ..
-                } = &desk.page
-            {
-                shown_of_total(channels.len(), *total, b);
-                for r in channels {
-                    self.channel_row(s, r, false, b);
-                }
-            }
-        }
-        if let Some(query) = self.top().query.clone() {
-            b.heading(key::PLAYER_HEADING_ARCHIVE);
-            b.pair(
-                b.t(key::PLAYER_ARCHIVE_SEARCH),
-                String::new(),
-                Target::SearchDirectory(DeskKind::Archive),
-                "search-archive",
-            );
-            if let Some(Query::Archive {
-                words: Some(words), ..
-            }) = self.top().query.as_ref()
-            {
-                let said = b
-                    .texts
-                    .t_with(key::PLAYER_DESK_SEARCHED_FOR, &[("words", words)]);
-                crate::player_find::note_said(&said, b);
-            }
-            if let Some(desk) = self.status(s, &query, b)
-                && let Page::Archive {
-                    items,
-                    total,
-                    number,
-                    more,
-                    ..
-                } = &desk.page
-            {
-                if !items.is_empty() {
-                    let said = b.texts.t_args(
-                        key::PLAYER_ARCHIVE_PAGE,
-                        &[
-                            ("number", Arg::Number(i64::from(*number))),
-                            (
-                                "total",
-                                Arg::Number(i64::try_from(*total).unwrap_or(i64::MAX)),
-                            ),
-                        ],
-                    );
-                    crate::player_find::note_said(&said, b);
-                }
-                for r in items {
-                    let item = &r.item;
-                    let said: Vec<String> = item
-                        .year
-                        .map(|y| y.to_string())
-                        .into_iter()
-                        .chain(item.license_url.as_deref().map(|u| {
-                            b.texts.t_with(
-                                key::PLAYER_ARCHIVE_RIGHTS,
-                                &[("licence", &licence_name(u, b.texts))],
-                            )
-                        }))
-                        .collect();
-                    self.pick_row(
-                        Kind::Archive,
-                        &item.identifier,
-                        item.title.clone(),
-                        &said.join(&b.t(key::PLAYER_META_JOINER)),
-                        b,
-                    );
-                }
-                if *number > 1 {
-                    b.pair(
-                        b.t(key::PLAYER_ARCHIVE_EARLIER),
-                        String::new(),
-                        Target::FilmsPage(number - 1),
-                        "films-earlier",
-                    );
-                }
-                if *more {
-                    b.pair(
-                        b.t(key::PLAYER_ARCHIVE_MORE),
-                        String::new(),
-                        Target::FilmsPage(number + 1),
-                        "films-more",
-                    );
-                }
-            }
-        }
-        if !c.lives.is_empty() {
-            b.heading(key::PLAYER_HEADING_LIVES);
-            let query = Query::Lives {
-                category: c.id.to_owned(),
-            };
-            if let Some(desk) = self.status(s, &query, b)
-                && let Page::Lives { lives, .. } = &desk.page
-            {
-                for r in lives {
-                    let live = &r.live;
-                    // A LIVE WITH NO TITLE is named by its channel, which is
-                    // then not said twice.
-                    let untitled = live.title.trim().is_empty();
-                    let name = if untitled {
-                        live.channel.clone().unwrap_or_else(|| live.id.clone())
-                    } else {
-                        live.title.clone()
-                    };
-                    let mut said: Vec<String> =
-                        live.channel.iter().filter(|_| !untitled).cloned().collect();
-                    if let Some(n) = live.watching {
-                        said.push(b.texts.t_args(
-                            key::PLAYER_LIVES_WATCHING,
-                            &[("count", Arg::Number(i64::try_from(n).unwrap_or(i64::MAX)))],
-                        ));
-                    }
-                    said.push(
-                        b.texts
-                            .t_with(key::PLAYER_LIVES_FOUND_BY, &[("words", &r.asked)]),
-                    );
-                    self.pick_row(
-                        Kind::Live,
-                        &live.id,
-                        name,
-                        &said.join(&b.t(key::PLAYER_META_JOINER)),
-                        b,
-                    );
-                }
-            }
-        }
-    }
-
     /// THE FAVOURITES, or THE PLAYED LATELY: by kind, each its star, its
     /// name and its country; nothing kept said so.
     fn picks_page(&self, favourites: bool, b: &mut Builder<'_>) {
@@ -1488,43 +1364,6 @@ impl View {
     }
 }
 
-/// A licence by its name, from the address a film's rights point at: the
-/// public domain, or Creative Commons' licence and version (`CC BY-SA 4.0`)
-/// — the address itself only for one neither of those. Pure.
-fn licence_name(url: &str, texts: &ronoctua_i18n::Texts) -> String {
-    let path = url
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_start_matches("www.");
-    let Some(rest) = path.strip_prefix("creativecommons.org/") else {
-        return url.trim().to_owned();
-    };
-    let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
-    match parts.as_slice() {
-        ["publicdomain", "zero", ..] => texts.t(key::PLAYER_LICENCE_CC0),
-        ["publicdomain", "mark", ..] => texts.t(key::PLAYER_LICENCE_PUBLIC_DOMAIN),
-        ["licenses", kind, rest @ ..]
-            if kind
-                .split('-')
-                .all(|k| ["by", "sa", "nc", "nd"].contains(&k)) =>
-        {
-            let kind = kind.to_uppercase();
-            match rest
-                .first()
-                .filter(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
-            {
-                Some(version) => texts.t_with(
-                    key::PLAYER_LICENCE_CC_VERSION,
-                    &[("kind", &kind), ("version", version)],
-                ),
-                None => texts.t_with(key::PLAYER_LICENCE_CC, &[("kind", &kind)]),
-            }
-        }
-        _ => url.trim().to_owned(),
-    }
-}
-
 /// Whether asking again could not answer `t`: a machine with no yt-dlp has
 /// none to list the lives with, however often asked.
 const fn hopeless(t: &ronoctua_player::wire::Trouble) -> bool {
@@ -1545,9 +1384,7 @@ const fn listed_of(page: &Page) -> Option<Listed> {
         | Page::Genres { listed, .. }
         | Page::Languages { listed, .. }
         | Page::TvCountries { listed, .. }
-        | Page::Channels { listed, .. }
-        | Page::Archive { listed, .. }
-        | Page::Lives { listed, .. } => Some(*listed),
+        | Page::Channels { listed, .. } => Some(*listed),
         Page::Nothing | Page::Suggestions { .. } | Page::Subtitles { .. } | Page::Lyrics { .. } => {
             None
         }
@@ -1566,21 +1403,6 @@ fn shown_of_total(shown: usize, total: u32, b: &mut Builder<'_>) {
             ],
         );
         crate::player_find::note_said(&said, b);
-    }
-}
-
-/// CHANNELS BY THEME: a row a theme, each opening its page — in the table's
-/// order (`assets/channels.nix`).
-fn themes(b: &mut Builder<'_>) {
-    b.note(key::PLAYER_ABOUT_CHANNELS);
-    for c in ronoctua_broadcast::table::CATEGORIES {
-        let page = PageId::Theme(c);
-        b.pair(
-            b.t(page.key()),
-            String::new(),
-            Target::Go(page),
-            page.spot(),
-        );
     }
 }
 
@@ -1610,7 +1432,6 @@ pub(crate) mod tests {
     use crate::player::Press;
     use crate::player_globe::tests::{countries_desk, stations_desk, with_radio};
     use ronoctua_player::find::Directory;
-    use ronoctua_player::wire::DeskSummary;
     use ronoctua_tokens as tokens;
 
     fn texts() -> ronoctua_i18n::Texts {
@@ -1708,6 +1529,38 @@ pub(crate) mod tests {
             !now.contains("Frevo FM"),
             "the world page shows a country's stations"
         );
+    }
+
+    /// FAILS IF: a directory's page whose permission was taken back still
+    /// shows the list the desk kept from before — under the row that asks,
+    /// as if the directory were still asked — or its globe keeps the marks;
+    /// or the list does not come back when it is allowed again.
+    #[test]
+    fn a_list_goes_when_its_permission_is_taken_back() {
+        let t = texts();
+        let s = with_radio(3);
+        let mut v = View::blank(None);
+        v.prefs.let_directory(Directory::Radio);
+        v.key(Press::Go(PageId::Radio), Some(&s), 80, &t);
+        v.found.given(countries_desk());
+        v.settle_in(Some(&s), 80, &t);
+        let countries = Query::Radio(RadioList::Countries);
+        let allowed = said(&v.rows(Some(&s), 80, &t));
+        assert!(allowed.contains("40 stations"), "{allowed}");
+        assert!(crate::player_globe::of_page(&v).is_some(), "its marks");
+        // TAKEN BACK: the row that asks, and nothing of the old list.
+        v.prefs.withdraw_directory(Directory::Radio);
+        let rows = v.rows(Some(&s), 80, &t);
+        assert!(row_of(&rows, &Target::Asks(countries)).is_some());
+        let withdrawn = said(&rows);
+        assert!(
+            !withdrawn.contains("40 stations") && !withdrawn.contains("Brazil"),
+            "the old list stayed:\n{withdrawn}"
+        );
+        assert!(crate::player_globe::of_page(&v).is_none(), "no marks");
+        // ALLOWED AGAIN: what the desk holds is shown again.
+        v.prefs.let_directory(Directory::Radio);
+        assert!(said(&v.rows(Some(&s), 80, &t)).contains("40 stations"));
     }
 
     /// FAILS IF: a station's row is not its star, its name and what it is;
@@ -1882,10 +1735,13 @@ pub(crate) mod tests {
         let off = Trouble::Off {
             host: Directory::Radio.host().to_owned(),
         };
-        assert!(v.told(&Told::Listing {
-            query: countries.clone(),
-            answer: Box::new(Told::Refused(off.clone())),
-        }));
+        assert!(v.told(
+            &Told::Listing {
+                query: countries.clone(),
+                answer: Box::new(Told::Refused(off.clone())),
+            },
+            &t
+        ));
         v.settle_in(Some(&s), 80, &t);
         let rows = v.rows(Some(&s), 80, &t);
         let now = said(&rows);
@@ -1907,10 +1763,13 @@ pub(crate) mod tests {
         );
         // TAKEN — and ANOTHER DOOR'S ASK REPLACED IT on the desk: once the desk
         // moved on and is idle with another list, the page is not "asking".
-        assert!(v.told(&Told::Listing {
-            query: countries.clone(),
-            answer: Box::new(Told::Taken),
-        }));
+        assert!(v.told(
+            &Told::Listing {
+                query: countries.clone(),
+                answer: Box::new(Told::Taken),
+            },
+            &t
+        ));
         v.settle_in(Some(&s), 80, &t);
         assert!(
             said(&v.rows(Some(&s), 80, &t)).contains(&asking),
@@ -1928,35 +1787,6 @@ pub(crate) mod tests {
         assert!(
             row_of(&rows, &Target::Asks(countries)).is_some(),
             "no row asks again"
-        );
-        // THE LIVES WITHOUT YT-DLP: said by the theme's name, never tried again.
-        let news = ronoctua_broadcast::table::Category::of("news").expect("news");
-        v.prefs.let_directory(Directory::Lives);
-        v.key(Press::Go(PageId::Theme(news)), Some(&s), 80, &t);
-        let lives = Query::Lives {
-            category: "news".into(),
-        };
-        v.told(&Told::Listing {
-            query: lives.clone(),
-            answer: Box::new(Told::Refused(Trouble::Listing {
-                what: "news".into(),
-                why: ronoctua_player::Listing::Absent,
-            })),
-        });
-        v.settle_in(Some(&s), 80, &t);
-        let rows = v.rows(Some(&s), 80, &t);
-        let now = said(&rows);
-        assert!(
-            now.contains(&t.t_with(
-                key::PLAYER_TROUBLE_LISTING_ABSENT,
-                &[("what", &t.t(news.key))]
-            )),
-            "the theme is not named:\n{now}"
-        );
-        assert!(!now.contains("news:"), "the theme's id leaks:\n{now}");
-        assert!(
-            row_of(&rows, &Target::Asks(lives)).is_none(),
-            "tried again without yt-dlp"
         );
     }
 
@@ -2132,131 +1962,114 @@ pub(crate) mod tests {
         assert_eq!(v.page(), PageId::Stations);
     }
 
-    /// FAILS IF: a film's rights are an address, not the licence by its name.
+    /// FAILS IF: a world page's countries stop turning between the most
+    /// first and A to Z by the name the person reads — in each language its
+    /// own order, accents folded — by `O` and by the glyph on their title,
+    /// which says the order it is in; or the cursor stays on the line and
+    /// not on the country when they reorder; or the order outlives its page.
     #[test]
-    fn a_licence_is_named() {
-        let t = texts();
-        assert_eq!(
-            licence_name("https://creativecommons.org/licenses/by-sa/4.0/", &t),
-            "CC BY-SA 4.0"
-        );
-        assert_eq!(
-            licence_name("http://creativecommons.org/licenses/by-nc/3.0", &t),
-            "CC BY-NC 3.0"
-        );
-        assert_eq!(
-            licence_name("http://creativecommons.org/publicdomain/mark/1.0/", &t),
-            t.t(key::PLAYER_LICENCE_PUBLIC_DOMAIN)
-        );
-        assert_eq!(
-            licence_name("https://creativecommons.org/publicdomain/zero/1.0/", &t),
-            t.t(key::PLAYER_LICENCE_CC0)
-        );
-        assert_eq!(
-            licence_name("https://example.org/terms", &t),
-            "https://example.org/terms"
-        );
-    }
-
-    /// FAILS IF: a theme's page is not its three sources, each where the theme
-    /// has it, each asked on its own — or its films' next page is not a row.
-    #[test]
-    fn a_theme_is_three_lists_each_asked_on_its_own() {
-        let t = texts();
-        let mut s = with_radio(0);
-        s.desks.push(DeskSummary {
-            kind: DeskKind::Archive,
-            generation: 2,
-            busy: false,
-            trouble: None,
-        });
-        let news = Category::of("news").expect("news");
-        let mut v = View::blank(None);
-        for d in Directory::ALL {
-            v.prefs.let_directory(d);
-        }
-        let opened = v.key(Press::Go(PageId::Theme(news)), Some(&s), 80, &t);
-        let mut asked = Vec::new();
-        let mut e = opened;
-        loop {
-            match e {
-                Errand::Then(a, b) => {
-                    asked.push(*b);
-                    e = *a;
-                }
-                other => {
-                    asked.push(other);
-                    break;
-                }
+    fn the_countries_turn_between_the_most_and_a_to_z() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let s = with_radio(3);
+            let mut v = View::blank(None);
+            v.prefs.let_directory(Directory::Radio);
+            let mut world = countries_desk();
+            if let Page::RadioCountries { countries, .. } = &mut world.page {
+                countries.push(ronoctua_player::find::CountryRow {
+                    country: ronoctua_broadcast::country::normal("AR").expect("AR"),
+                    count: 5,
+                    mark: Some(0),
+                });
             }
+            v.key(Press::Go(PageId::Radio), Some(&s), 80, &t);
+            v.found.given(world);
+            v.settle_in(Some(&s), 80, &t);
+            let order = |v: &View| -> Vec<String> {
+                v.rows(Some(&s), 80, &t)
+                    .iter()
+                    .filter(|r| r.spot.starts_with("country-") && !r.continues)
+                    .map(|r| r.spot.trim_start_matches("country-").to_owned())
+                    .collect()
+            };
+            let glyph = |v: &View| -> char {
+                let rows = v.rows(Some(&s), 80, &t);
+                let title = rows
+                    .iter()
+                    .find(|r| {
+                        r.cells
+                            .iter()
+                            .any(|c| c.about == Some("player-countries-order"))
+                    })
+                    .expect("the countries' title");
+                let at = title.cells[0].from;
+                title
+                    .fields
+                    .iter()
+                    .find(|f| f.at == at)
+                    .and_then(|f| f.text.chars().next())
+                    .expect("its glyph")
+            };
+            assert_eq!(
+                order(&v),
+                ["BR", "PT", "ES", "AR"],
+                "{language}: the most first"
+            );
+            assert_eq!(glyph(&v), tokens::icon::PLAYER_COUNTRIES_BY_COUNT);
+            // THE CURSOR ON PORTUGAL, which moves.
+            v.follow("country-PT", Some(&s), 80, &t);
+            // THE KEY ITSELF, read by the view as every door reads it.
+            let o = v
+                .press_of_key(ronoctua_keymap::Key::parse("O").expect("O"))
+                .expect("O is a key of the page");
+            assert_eq!(o, Press::CountriesOrder);
+            let said_now = v.key(o, Some(&s), 80, &t);
+            assert_eq!(said_now, Errand::Said(t.t(key::PLAYER_COUNTRIES_BY_NAME)));
+            let by_name: Vec<String> = {
+                let mut names: Vec<(String, String)> = ["BR", "PT", "ES", "AR"]
+                    .iter()
+                    .map(|c| {
+                        let code = ronoctua_broadcast::country::normal(c).expect("a code");
+                        (
+                            ronoctua_apps::fold::fold(&crate::player_globe::country_name(code, &t)),
+                            (*c).to_owned(),
+                        )
+                    })
+                    .collect();
+                names.sort();
+                names.into_iter().map(|(_, c)| c).collect()
+            };
+            assert_eq!(order(&v), by_name, "{language}: A to Z");
+            assert_eq!(order(&v)[0], "AR", "{language}");
+            assert_eq!(glyph(&v), tokens::icon::PLAYER_COUNTRIES_BY_NAME);
+            let rows = v.rows(Some(&s), 80, &t);
+            assert_eq!(
+                rows[v.cursor()].spot,
+                "country-PT",
+                "the cursor kept the line"
+            );
+            // AND BACK, by the glyph's click.
+            let title = rows
+                .iter()
+                .position(|r| {
+                    r.cells
+                        .iter()
+                        .any(|c| c.about == Some("player-countries-order"))
+                })
+                .expect("the title");
+            let at = rows[title].cells[0].from;
+            assert!(v.clicked_at(title, at, &rows));
+            v.key(Press::Enter, Some(&s), 80, &t);
+            assert_eq!(order(&v), ["BR", "PT", "ES", "AR"], "{language}");
+            // THE PAGE'S OWN: left and opened again, the most first.
+            v.key(Press::CountriesOrder, Some(&s), 80, &t);
+            v.key(Press::Escape, Some(&s), 80, &t);
+            v.key(Press::Go(PageId::Radio), Some(&s), 80, &t);
+            assert_eq!(
+                order(&v),
+                ["BR", "PT", "ES", "AR"],
+                "{language}: kept past its page"
+            );
         }
-        let kinds: Vec<DeskKind> = asked
-            .iter()
-            .filter_map(|e| match e {
-                Errand::Tell(Ask::Find { query }) => Some(query.desk()),
-                _ => None,
-            })
-            .collect();
-        for k in [DeskKind::Channels, DeskKind::Archive, DeskKind::Lives] {
-            assert!(kinds.contains(&k), "{k:?} was not asked: {kinds:?}");
-        }
-        let archive = Desk {
-            kind: DeskKind::Archive,
-            generation: 2,
-            busy: false,
-            trouble: None,
-            query: Some(Query::Archive {
-                category: "news".into(),
-                words: None,
-                page: 1,
-            }),
-            asked: None,
-            refused: Vec::new(),
-            page: Page::Archive {
-                category: "news".into(),
-                items: vec![ronoctua_player::find::ArchiveRow {
-                    item: ronoctua_broadcast::archive::Item {
-                        identifier: "night".into(),
-                        title: "The Night".into(),
-                        year: Some(1950),
-                        downloads: 9,
-                        license_url: Some(
-                            "https://creativecommons.org/publicdomain/mark/1.0/".into(),
-                        ),
-                    },
-                    stream: Stream::typed("https://archive.org/details/night"),
-                }],
-                total: 60,
-                number: 1,
-                more: true,
-                listed: Listed::default(),
-            },
-            taken: None,
-        };
-        v.found.given(archive);
-        v.settle_in(Some(&s), 80, &t);
-        let rows = v.rows(Some(&s), 80, &t);
-        let text = said(&rows);
-        assert!(text.contains("The Night"), "{text}");
-        assert!(
-            text.contains(&t.t(key::PLAYER_LICENCE_PUBLIC_DOMAIN)),
-            "the rights are not named: {text}"
-        );
-        assert!(
-            !text.contains("creativecommons.org"),
-            "the rights are an address: {text}"
-        );
-        let more = row_of(&rows, &Target::FilmsPage(2)).expect("the next page");
-        v.clicked(more, &rows);
-        assert_eq!(
-            v.key(Press::Enter, Some(&s), 80, &t),
-            Errand::Tell(Ask::Find {
-                query: Query::Archive {
-                    category: "news".into(),
-                    words: None,
-                    page: 2
-                }
-            })
-        );
     }
 }

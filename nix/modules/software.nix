@@ -227,7 +227,7 @@ in
 
     # THE UPDATE MOVES WHAT THE MACHINE CAN MOVE.
     #
-    # `assets/updates.nix` declares the steps; which of them apply is decided by
+    # The update's `steps.nix` declares the steps; which of them apply is decided by
     # the module that knows the support is there — the shape
     # `nix/modules/emacs.nix` has for `doom-sync`. A step for a source this
     # machine does not have would only ever be skipped, and a skipped line on

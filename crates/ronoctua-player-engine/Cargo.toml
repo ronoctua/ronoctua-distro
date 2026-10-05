@@ -60,8 +60,27 @@ ronoctua-broadcast = { path = "../ronoctua-broadcast" }
 # placed here, and a door only draws it.
 ronoctua-atlas = { path = "../ronoctua-atlas" }
 
+# The queue's fingerprint (`engine/queue.rs`): SHA-256 of the queue as a
+# file keeps it, to tell "not saved" from a queue that only moved — the TLS
+# stack's own digest, already linked through `ronoctua-http`.
+ring.workspace = true
+# The lyrics translated (`engine/translate.rs`): the one crate that talks to
+# a translator, asked on a thread of its own with the person's pass for the
+# host.
+ronoctua-words = { path = "../ronoctua-words" }
+# The person's consent, host by host: a pass for the host a translation or a
+# radio's list goes to, and the player's older list merged into it once; and
+# every default source of the catalogue asks its hosts with a `Pass` only that
+# crate mints (`engine/catalog.rs`), as a NASA video is opened on one.
+ronoctua-consent = { path = "../ronoctua-consent" }
+
 [dependencies.tracing-subscriber]
 workspace = true
+
+[dev-dependencies]
+# A test mints its passes from a consent file of its own; the helpers that do
+# are behind `test-support`, which no product takes (`network-asks-with-a-pass`).
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [[bin]]
 name = "ronoctua-player"

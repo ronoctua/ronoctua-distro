@@ -297,5 +297,49 @@ pkgs.testers.runNixOSTest {
             f"the panel opened without the list the footer already had "
             f"({listed} in the queue):\n{journal}"
         )
+
+    with subtest("stopping the unit mid-copy leaves NO piece behind"):
+        # `SIGTERM`, which is what `systemctl stop` sends: the queue stops
+        # every job and waits for the copy to unwind before it exits
+        # (`Shared::wind_down`). Without the handler the signal ended the
+        # process mid-file and the piece stayed. LAST, because the queue is
+        # gone after it.
+        machine.succeed("mkdir -p /root/destination-stop")
+        third = ask(
+            '{"ask":"add","work":{"work":"paste",'
+            '"paths":["/root/source/large.bin"],'
+            '"into":"/root/destination-stop","moves":false}}'
+        )
+        assert third["say"] == "took", third
+        stopping = third["id"]
+        tell('{"ask":"pause","id":%d}' % stopping)
+        # A PIECE, PROVABLY, before the stop: a pause that landed before the
+        # copy opened its file would leave nothing to remove, and "nothing
+        # left" would then hold for a copy that never began. So the copy is
+        # let go until its file has bytes and held again — in ONE guest
+        # command, so the window is a shell loop's and not the driver's.
+        py = (
+            "XDG_RUNTIME_DIR=/run/user/0 "
+            "${pkgs.python3}/bin/python3 /tmp/ask.py"
+        )
+        machine.succeed(
+            f"""{py} '{{"ask":"resume","id":{stopping}}}' && """
+            "until [ -s /root/destination-stop/large.bin ]; do sleep 0.01; done && "
+            f"""{py} '{{"ask":"pause","id":{stopping}}}'"""
+        )
+        machine.sleep(1)
+        piece = next(j for j in ask('{"ask":"list"}')["jobs"] if j["id"] == stopping)
+        assert piece["stage"] == "paused", piece
+        machine.succeed("test -s /root/destination-stop/large.bin")
+        machine.succeed(
+            "[ $(stat -c %s /root/destination-stop/large.bin) -lt "
+            "$(stat -c %s /root/source/large.bin) ]"
+        )
+        machine.succeed("systemctl stop queue")
+        machine.wait_until_fails("systemctl is-active queue", timeout=30)
+        print(machine.succeed("journalctl -u queue --no-pager | tail -5"))
+        machine.succeed("journalctl -u queue --no-pager | grep 'told to stop' > /dev/null")
+        left = machine.succeed("ls -A /root/destination-stop").strip()
+        assert left == "", f"the stop left a piece at the destination: {left}"
   '';
 }

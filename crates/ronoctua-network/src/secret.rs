@@ -36,7 +36,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 /// Where the blobs live.
 ///
@@ -147,10 +147,11 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
     if !output.status.success() {
         // `systemd-creds`'s stderr says whether the TPM is absent, busy or
         // refusing. Passing it along is the difference between "it did not work" and knowing why.
-        bail!(
-            "the TPM refused to seal: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        tracing::warn!(
+            said = %String::from_utf8_lossy(&output.stderr).trim(),
+            "the TPM refused to seal"
         );
+        return Err(crate::refusal::Named(crate::refusal::Refusal::Vault).into());
     }
 
     write_restricted(&destination, &output.stdout)
@@ -186,10 +187,11 @@ pub fn open(ssid: &str) -> Result<String> {
 
     let output = child.wait_with_output().context("wait for systemd-creds")?;
     if !output.status.success() {
-        bail!(
-            "the TPM refused to unseal: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        tracing::warn!(
+            said = %String::from_utf8_lossy(&output.stderr).trim(),
+            "the TPM refused to unseal"
         );
+        return Err(crate::refusal::Named(crate::refusal::Refusal::Vault).into());
     }
 
     // The password may contain any byte; `from_utf8_lossy` would swap an invalid

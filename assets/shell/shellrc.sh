@@ -335,9 +335,9 @@ extract() {
             *.zst)            unzstd -k "$archive" ;;
             *.zip)            unzip "$archive" ;;
             *.rar)            unrar x "$archive" ;;
-            *.7z)             7z x "$archive" ;;
+            *.7z)             7zz x "$archive" ;;
             *.deb)            ar x "$archive" ;;
-            *.iso)            7z x "$archive" ;;
+            *.iso)            7zz x "$archive" ;;
             *)
                 # `bsdtar` reads more formats than all of the above together;
                 # it is the honest last resort before giving up.

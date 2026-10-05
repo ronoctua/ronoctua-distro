@@ -101,6 +101,7 @@ pub fn sheet(location: &str, kind: Kind, tags: &[(String, String)], technical: V
         technical,
         streams: Vec::new(),
         chapters: Vec::new(),
+        chapters_can: None,
         other,
         unread: Vec::new(),
         cover_file: None,

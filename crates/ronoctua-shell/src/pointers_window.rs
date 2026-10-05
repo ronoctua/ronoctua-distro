@@ -123,7 +123,7 @@ impl PointersWindow {
             }
             ronoctua_pointers::Event::Done { refused, .. } => {
                 if let Some(words) = refused {
-                    ui.message = Some(words);
+                    ui.say(words);
                     ui.ask_paint();
                 }
             }
@@ -137,7 +137,10 @@ impl PointersWindow {
             Errand::Nothing => {}
             // AN INFORMATIVE ROW COPIES ITSELF — `chrome::information_of`.
             Errand::Copy(text) => {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             Errand::Close => {
                 ui.quit = true;
@@ -151,7 +154,7 @@ impl PointersWindow {
             Errand::Order(order) => match &self.pointers_thread {
                 Some(h) => h.send(order),
                 None => {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::POINTERS_NO_COMPOSITOR));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::POINTERS_NO_COMPOSITOR));
                 }
             },
         }

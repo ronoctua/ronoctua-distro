@@ -820,6 +820,116 @@ Dialogue: 2,0:00:01.00,0:00:03.00,Board,,0,0,0,,{\\pos(640,360)}SHOP\n";
         );
     }
 
+    /// FAILS IF: libass — the one the pinned ffmpeg is built with, which is
+    /// the one mpv draws with — does not draw the merge where the margins
+    /// say: lane 1 nearest the foot, lane 2 right above it, a top lane at
+    /// the top. The margins are this module's arithmetic; WHERE THE LINES
+    /// LAND is libass's, and only drawing them says it
+    /// (`subtitles-stack-in-libass` runs this with the program and a face).
+    #[test]
+    fn the_lanes_stack_in_libass() {
+        use std::io::Write as _;
+        let (Some(ffmpeg), Some(face)) = (
+            std::env::var_os("RONOCTUA_FFMPEG"),
+            std::env::var_os("RONOCTUA_FONT_REGULAR"),
+        ) else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ronoctua-libass-{}", std::process::id()));
+        let fonts = dir.join("fonts");
+        std::fs::create_dir_all(&fonts).expect("a folder");
+        std::fs::copy(&face, fonts.join("face.ttf")).expect("the face");
+        let (red, green, blue) = (
+            Rgb::new(255, 0, 0),
+            Rgb::new(0, 255, 0),
+            Rgb::new(0, 0, 255),
+        );
+        let words = [Cue::plain(0, 4000, "HHHHHHHH")];
+        let coloured = |colour, stack| MergeLane {
+            cues: &words,
+            signs: &[],
+            colour,
+            stack,
+            offset_ms: 0,
+        };
+        let mut drawn = look();
+        "NoctuaIosevka Nerd Font Mono".clone_into(&mut drawn.font);
+        drawn.edge_colour = Rgb::new(0, 0, 0);
+        let script = merge(
+            &[
+                coloured(red, Band::Bottom),
+                coloured(green, Band::Bottom),
+                coloured(blue, Band::Top),
+            ],
+            &drawn,
+        );
+        let path = dir.join("merged.ass");
+        std::fs::File::create(&path)
+            .and_then(|mut f| f.write_all(script.as_bytes()))
+            .expect("the script");
+        let (w, h) = (640_usize, 360_usize);
+        let filter = format!(
+            "subtitles=filename={}:fontsdir={}",
+            path.display(),
+            fonts.display()
+        );
+        let out = std::process::Command::new(&ffmpeg)
+            .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
+            .arg(format!("color=c=black:s={w}x{h}:d=1"))
+            .args([
+                "-vf",
+                &filter,
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ])
+            .output()
+            .expect("ffmpeg runs");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout.len(), w * h * 3, "one frame");
+        // WHERE EACH COLOUR'S INK IS, down the picture: the mean row of the
+        // pixels that are plainly that colour (the edge is black, so
+        // antialiasing only darkens).
+        let row_of = |want: usize| {
+            let (mut sum, mut count) = (0_usize, 0_usize);
+            for (i, px) in out.stdout.chunks_exact(3).enumerate() {
+                let others = (0..3)
+                    .filter(|c| *c != want)
+                    .map(|c| px[c])
+                    .max()
+                    .unwrap_or(0);
+                if px[want] > 160 && others < 90 {
+                    sum += i / w;
+                    count += 1;
+                }
+            }
+            assert!(
+                count > 50,
+                "colour {want}: {count} pixels drawn — no text at all"
+            );
+            sum / count
+        };
+        let (lane1, lane2, top) = (row_of(0), row_of(1), row_of(2));
+        assert!(
+            lane1 > h / 2 && lane2 > h / 2,
+            "both foot lanes at the foot: {lane1} {lane2}"
+        );
+        assert!(
+            lane1 > lane2,
+            "lane 1 nearest the foot, lane 2 above it: {lane1} {lane2}"
+        );
+        assert!(top < h / 2, "the top lane at the top: {top}");
+    }
+
     #[test]
     fn the_scripts_width_follows_the_picture() {
         assert_eq!(Look::play_res_for(1920, 1080), (1920, 1080));

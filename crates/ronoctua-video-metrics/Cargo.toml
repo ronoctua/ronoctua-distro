@@ -1,0 +1,55 @@
+[package]
+name = "ronoctua-video-metrics"
+description = "The catalogue and ranking of the person's YouTube channels: the SQLite catalogue, the score, and the one boundary with YouTube over plain HTTP (channel feeds, thumbnails)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THREE LAYERS, AND THE DOORS LINK TWO.
+#
+# Without features the crate is the SHAPE — ids, filters, rows, rules,
+# weights, refusals — and the pure score; every catalogue call refuses with
+# `NoDatabase`. `db` is the catalogue: `rusqlite` over the system's
+# `libsqlite3` (never `bundled`; `sqlite` is in the build and devshell inputs
+# of `nix/rust.nix`), the schema and its migrations, the read API (`Catalog`,
+# read-only but for `hide` and `delete`), the person's edits (`Person`), the
+# feed reader and the scanner's decisions over any `Reach` — which is what
+# the tests drive. `net` is the one `Reach` that goes out (feeds and
+# thumbnails through `ronoctua-http`, tabs and details through
+# `ronoctua-ytdlp`, a consent `Pass` minted at every request) and the
+# `ronoctua-video-metrics` binary the unit runs.
+#
+# `db` is OFF by default: a crate that only names the types (a reader of the
+# shape) pulls in no SQLite. No SQL leaves this crate (`one-sqlite-boundary`).
+[features]
+default = [ ]
+db = [ "dep:rusqlite", "dep:ronoctua-xml", "dep:ronoctua-ytdlp" ]
+net = [ "db", "dep:ronoctua-http", "ronoctua-http/tls", "dep:ronoctua-consent" ]
+
+[[bin]]
+name = "ronoctua-video-metrics"
+path = "src/main.rs"
+# THE UNIT'S PROGRAM, and a workspace build compiles it only when some member
+# enables `net` — `nix/rust.nix` names `ronoctua-video-metrics/net` in its
+# `cargoExtraArgs` for that (the software CLI's arrangement).
+required-features = [ "net" ]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# `$XDG_DATA_HOME/ronoctua[-dev]`: the catalogue is the person's data, not a
+# cache — the channels, ratings and second descriptions were typed by them.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# `fold`, the tree's one accent-and-case folding: a term rule reads the way
+# the rest of the distro searches.
+ronoctua-apps = { path = "../ronoctua-apps" }
+rusqlite = { workspace = true, optional = true }
+ronoctua-http = { path = "../ronoctua-http", optional = true }
+ronoctua-xml = { path = "../ronoctua-xml", optional = true }
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp", optional = true }
+ronoctua-consent = { path = "../ronoctua-consent", optional = true }
+
+[lints]
+workspace = true

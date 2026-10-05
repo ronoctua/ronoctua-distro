@@ -706,7 +706,7 @@
   # are noise at one cell, nor `md-gesture_tap`, the notification's "has
   # actions".
   gestures = "md-hand_back_right";
-  # THE SCREEN IS CUT by the resizer (`LEADER d r`): the corner grip, which is
+  # THE SCREEN IS CUT by the resizer (`LEADER / r`): the corner grip, which is
   # what gets dragged.
   resizer = "md-resize_bottom_right";
   # THE DRAWER HOLDS SOMETHING: windows put away (the compositor's
@@ -915,4 +915,129 @@
   kiosk-address-off = "md-link_variant_off";
   kiosk-audible = "md-volume_high";
   kiosk-offline = "cod-debug_disconnect";
+
+  # THE THIRD KIND OF TASK: a brain module that runs nothing on a schedule and
+  # LISTENS — to the journal, a path, a clock. An eye, beside the two arrows
+  # of `task-routine` and `task-once`: it is not one more way of coming round,
+  # it is a different kind of thing, and its row says "watching" instead of a
+  # date.
+  task-watch = "md-eye_outline";
+  # A ROW OF THE BRAIN'S LOG THAT FOLDS SEVERAL, shut and open: the plain
+  # triangle every tree draws, pointing at what it holds — the same drawing
+  # `player-folded` is, because it is the same gesture.
+  brain-group = "md-menu_right";
+  brain-group-open = "md-menu_down";
+
+  # THE MAXIMUM ALERT BAR (`crate::alert`): the battery's own alarm drawing in
+  # its margin — the modeline's `battery-danger`, which says the same thing —
+  # and the close button at its right edge, the drawing every other close
+  # button of this system wears.
+  alert-battery = "md-battery_alert";
+  alert-close = "md-close";
+
+  # AN ENCRYPTED DISK in the file manager's sidebar: the closed padlock while
+  # it is locked (dim, like any disk nothing can be reached on yet), the open
+  # one on the row of what came out of it. The disk's own glyph gives way to
+  # them: that it is locked is what decides what pressing the row does.
+  device-locked = "md-lock";
+  device-unlocked = "md-lock_open_variant";
+
+  # THE ICONS APP (`LEADER m i`): the glyph in front of its header's title —
+  # shapes, which is what one comes looking for.
+  icons-app = "md-shape_outline";
+
+  # THE CALCULATOR (`LEADER =`). Its title's glyph is the keypad itself; the
+  # key that takes the last character back is the key every keyboard prints
+  # for it; the converter's swap is the two arrows that trade places, one up
+  # and one down, because From is over To; and the category ring turns with
+  # the two triangles every ring of this system turns with.
+  calc = "md-calculator_variant";
+  calc-backspace = "md-backspace_outline";
+  calc-swap = "md-swap_vertical";
+  calc-earlier = "md-chevron_left";
+  calc-later = "md-chevron_right";
+
+  # THE SEEKS BESIDE THE CLOCK (`player_media::clock_group`): ten seconds
+  # back and ahead, the drawing that carries its number — the step is
+  # `player::SEEK_STEP`, ten.
+  player-rewind = "md-rewind_10";
+  player-forward = "md-fast_forward_10";
+  # SAVE THE QUEUE AGAIN into the file it came from, which it no longer is:
+  # the disk with the mark every editor draws for "changed, not saved".
+  player-save-again = "md-content_save_alert";
+  # THE PICTURE FOLDED AWAY on the "Now" title, and back: drawn as what a
+  # press does — lines drawn together, lines let apart.
+  player-picture-fold = "md-unfold_less_horizontal";
+  player-picture-unfold = "md-unfold_more_horizontal";
+  # THE COUNTRIES' ORDER on their title, drawn as the order they are in: the
+  # most first, or A to Z.
+  player-countries-by-count = "md-sort_numeric_descending";
+  player-countries-by-name = "md-sort_alphabetical_ascending";
+  # THE LYRICS TRANSLATED under their verses, and not: on the Lyrics title.
+  player-lyrics-translate = "md-translate";
+  player-lyrics-untranslate = "md-translate_off";
+
+  # THE CATALOGUE'S LISTING (`player_catalog`): the title's two controls — the
+  # layout it is drawn in (`L`), a glyph for each so the control says which it
+  # is now, and the listing on the whole screen (`F`) — and the adult
+  # category's lock, shut and open.
+  catalog-layout-list = "md-view_list";
+  catalog-layout-lines = "md-view_agenda";
+  catalog-layout-columns = "md-view_column";
+  catalog-layout-posters = "md-view_grid";
+  catalog-layout-big = "md-view_module";
+  catalog-fullscreen = "md-fullscreen";
+  catalog-live = "md-television_classic";
+  catalog-locked = "md-lock";
+  catalog-unlocked = "md-lock_open_variant";
+
+  # A VIDEO WHOSE THUMBNAIL HAS NOT ARRIVED YET, in the grid's cell where the
+  # picture goes (`video_metrics.rs`): the outline of a film, dim, until the
+  # scan fetches the picture.
+  video-no-thumb = "md-video_outline";
+
+  # THE PASSWORDLESS WINDOW, on the modeline beside the hour it ends: a lock
+  # standing open, which is exactly what sudo is for as long as it lasts. The
+  # brain's shield says something is off; this says what and until when.
+  security-sudo-open = "md-lock_open_variant";
+  # THE CENTRE'S OWN THREE: the shield beside "nothing is off" and the
+  # firewall on, the shield struck through beside the firewall off, and the
+  # fingerprint beside each finger enrolled. Material, as the brain's shield
+  # with the alert is, so the modeline's mark and the page's read as one set.
+  security-shield = "md-shield";
+  security-shield-off = "md-shield_off";
+  security-fingerprint = "md-fingerprint";
+
+  # THE PERSON'S CONTAINERS (`LEADER s o`, `crate::containers`): the view's
+  # own glyph, and one per kind in its first column. Plain drawings of what
+  # each thing is — a box, pods as boxes together, compose's layers, an image
+  # as a closed package, a volume as a disk, a network as a network — and no
+  # brand: the same drawing whoever made the image.
+  containers = "md-cube_outline";
+  containers-kind-containers = "md-cube_outline";
+  containers-kind-pods = "md-hexagon_multiple_outline";
+  containers-kind-compose = "md-layers_outline";
+  containers-kind-images = "md-package_variant_closed";
+  containers-kind-volumes = "md-harddisk";
+  containers-kind-networks = "md-lan";
+  # THE QUEUE'S ENGINE for a pull, a build or compose — the same box.
+  engine-container = "md-cube_outline";
+
+  # FAST-ACCESS'S STRIPS: the two marks that page a strip of icons when some
+  # are hidden beyond it — the calculator's own arrows, so they draw alike.
+  fast-access-earlier = "md-chevron_left";
+  fast-access-later = "md-chevron_right";
+  # AND THE BOX OF "DO THE SAME FROM NOW ON" under a web video's question:
+  # ticked or empty, the glyph a press turns — the player's suggestion boxes.
+  fast-access-ticked = "md-checkbox_marked_outline";
+  fast-access-unticked = "md-checkbox_blank_outline";
+
+  # THE QUEUE'S LAST THREE ENGINES, one drawing each, so the queue's window
+  # tells them apart as the footer's words do: a program is the software
+  # center's own package, a file sent to VirusTotal a shield being searched,
+  # and the belongings' sync an archive under a lock — they leave encrypted.
+  engine-software = "md-package_variant";
+  engine-scan = "md-shield_search";
+  engine-belongings = "md-archive_lock";
+
 }

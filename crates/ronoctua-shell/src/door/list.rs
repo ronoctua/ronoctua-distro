@@ -142,10 +142,32 @@ pub fn question_pieces(
         asked
     };
     let mut pieces = vec![
-        crate::chrome::Piece::prose(asked),
-        crate::chrome::Piece::said(typed),
-        separator,
+        crate::chrome::Piece::prose(asked.clone()),
+        crate::chrome::Piece::said(typed.clone()),
     ];
+    // WHAT THE QUESTION OFFERS for what is typed, after it — a zone's first
+    // fits (`line::Line::offered`) — in the room the question, the typing
+    // AND THE KEYS leave: the offer is the one piece that gives way, so the
+    // clickable `RET answer` is never the one cut. A click on it is the
+    // `TAB` that takes the first.
+    if let Some(offers) = line.offers_drawn(texts) {
+        let left = usable
+            .saturating_sub(width(&asked))
+            .saturating_sub(width(&typed))
+            .saturating_sub(2)
+            .saturating_sub(width(&separator.text))
+            .saturating_sub(keys.iter().map(|p| width(&p.text)).sum::<u16>());
+        if left > 4 {
+            pieces.push(crate::chrome::Piece {
+                id: Some("line-offer"),
+                press: Some(crate::chrome::Act::Key(ronoctua_keymap::Key::simple(
+                    ronoctua_keymap::Sym::Tab,
+                ))),
+                ..crate::chrome::Piece::prose(format!("  {}", elide_end(&offers, left)))
+            });
+        }
+    }
+    pieces.push(separator);
     pieces.extend(keys);
     pieces
 }
@@ -270,6 +292,9 @@ fn pointer_here<C: Content>(
                     ));
                 } else {
                     hand.row_under_pointer = ui.row_at(e.position.0, e.position.1);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let x = e.position.0 as f32;
+                    hand.x_under_pointer = hand.row_under_pointer.map(|_| x);
                 }
             }
             PointerEventKind::Leave { .. } => {
@@ -280,6 +305,7 @@ fn pointer_here<C: Content>(
                 // wherever the pointer came in.
                 hand.dragging = false;
                 hand.row_under_pointer = None;
+                hand.x_under_pointer = None;
             }
             PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
                 ui.hinted.let_go();

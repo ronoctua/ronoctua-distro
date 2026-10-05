@@ -11,19 +11,40 @@
 //! here, so the unit's variable is read in one place — and the two things the
 //! player lists without downloading: a playlist, flat ([`flat`]), and a search
 //! for what is live now ([`search_lives`]).
+//!
+//! And what a video is CALLED, asked without playing it ([`title`]): the
+//! name a leaf of the player's queue takes when it arrived as an address.
+//!
+//! And a search of YouTube for fast-access's `/y` ([`search`]), with the
+//! person's pass and a stop the next key pulls.
+//!
+//! And what video-metrics asks of YouTube's own pages ([`youtube`]): who a
+//! channel is ([`channel_of`]), a tab listed flat with approximate dates
+//! ([`tab`]), and every field of one video ([`details`]) — each saying, when
+//! it fails, whether yt-dlp met a bot check, a 429 or a video that is gone.
 
 mod address;
 mod listing;
 mod program;
 mod run;
+mod search;
+mod title;
+pub mod youtube;
 
-pub use address::{escape, is_address, listing_address};
+pub use address::{escape, is_address, listing_address, video_id};
+pub use listing::THUMBNAIL_MOST_WIDTH;
 pub use listing::{
     DEADLINE, FLAT_MOST, Flat, FlatEntry, LIVE_FILTER, LIVES_HOST, LIVES_MOST, Live, MOST_BYTES,
     WORDS_MOST, flat, flat_arguments, flat_up_to, lives_address, lives_arguments, parse_flat,
     parse_lives, search_lives,
 };
-pub use program::{VARIABLE, installed, installed_of, program, program_of};
+pub use program::{VARIABLE, installed, installed_of, named, named_of, program, program_of};
+pub use search::{
+    Found, SEARCH_DEADLINE, SEARCH_HOST, SEARCH_MOST, SHORT_MOST_SECONDS, Shorts, Stop,
+    parse_search, search, search_arguments,
+};
+pub use title::{TITLE_MOST_CHARS, parse_title, title, title_arguments, title_by};
+pub use youtube::{channel_of, details, tab};
 
 /// Why a listing did not answer, as a closed set.
 ///
@@ -84,6 +105,22 @@ impl Trouble {
     }
 }
 
+/// The variable naming the minter's server half (`<pot-provider>/server`).
+pub const POT_HOME: &str = "RONOCTUA_POT_HOME";
+
+/// The variable naming the JavaScript runtime the minter runs on, by path.
+pub const POT_DENO: &str = "RONOCTUA_DENO";
+
+/// The variable naming the folder yt-dlp loads the minter's plugin from.
+///
+/// A folder of plugin PACKAGES — the provider's root, `<pot-provider>` —
+/// and not the package itself: yt-dlp's `--plugin-dirs` lists the folder's
+/// children and looks for `yt_dlp_plugins` inside each. Measured with the
+/// pinned yt-dlp (`-v`): `--plugin-dirs <pot-provider>/plugin` says "Plugin
+/// directories: none"; `--plugin-dirs <pot-provider>` finds
+/// `<pot-provider>/plugin/yt_dlp_plugins`.
+pub const POT_PLUGINS: &str = "RONOCTUA_POT_PLUGINS";
+
 /// The PO token minter, when this installation has one.
 ///
 /// # Why this is NOT behind `Identity::Mine`
@@ -101,25 +138,36 @@ impl Trouble {
 /// anonymous request would attach that session to it.
 #[must_use]
 pub fn pot_flags() -> Vec<String> {
+    let var = |name: &str| std::env::var(name).ok();
     pot_flags_of(
-        std::env::var("RONOCTUA_POT_HOME").ok().as_deref(),
-        std::env::var("RONOCTUA_DENO").ok().as_deref(),
+        var(POT_HOME).as_deref(),
+        var(POT_DENO).as_deref(),
+        var(POT_PLUGINS).as_deref(),
     )
 }
 
 /// The same decision, over values a test can hand it.
 ///
-/// BOTH OR NEITHER: the minter is TypeScript and needs the runtime that reads
-/// it, and half of the pair produces a plugin that finds no runtime and says so
-/// once per download.
+/// ALL THREE OR NONE. The minter is TypeScript and needs the runtime that
+/// reads it; and yt-dlp only ASKS it for a token through its plugin, which it
+/// loads from a folder it is told about and from nowhere else. Measured on the
+/// pinned yt-dlp: the extractor arguments and the runtime were passed, the
+/// plugin folder never was, and not one token was minted — for the player or
+/// the queue. Two of the three are a plugin that is never loaded, or one that
+/// finds no runtime and says so once per request; nothing is better than that.
 #[must_use]
-pub fn pot_flags_of(home: Option<&str>, deno: Option<&str>) -> Vec<String> {
-    let home = home.map(str::trim).filter(|v| !v.is_empty());
-    let deno = deno.map(str::trim).filter(|v| !v.is_empty());
-    let (Some(home), Some(deno)) = (home, deno) else {
+pub fn pot_flags_of(home: Option<&str>, deno: Option<&str>, plugins: Option<&str>) -> Vec<String> {
+    fn set(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|v| !v.is_empty())
+    }
+    let (Some(home), Some(deno), Some(plugins)) = (set(home), set(deno), set(plugins)) else {
         return Vec::new();
     };
     vec![
+        // THE PLUGIN FIRST: without it the two below are arguments to a
+        // provider nobody loaded.
+        "--plugin-dirs".to_owned(),
+        plugins.to_owned(),
         // THE PATH AND NOT THE NAME. A systemd unit's `PATH` is minimal, and a
         // runtime looked up by name fails far from the cause — the trap
         // `AGENTS.md` records for every program this project spawns.
@@ -137,25 +185,45 @@ pub fn pot_flags_of(home: Option<&str>, deno: Option<&str>) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// FAILS IF: the minter's plugin folder is not handed to yt-dlp (a
+    /// token is never asked for), any flag goes out while one of the three
+    /// is missing, or the flags stop being pairs (mpv's `ytdl-raw-options`
+    /// reads them two by two).
     #[test]
-    fn the_minter_is_not_gated_on_identity_and_needs_both_halves() {
+    fn the_minter_is_not_gated_on_identity_and_needs_all_three() {
         // A PO token attests the DEVICE, not the person: anonymous downloads
         // need it too, and that is the common case.
+        let flags = pot_flags_of(Some("/x/server"), Some("/y/bin/deno"), Some("/x"));
         assert_eq!(
-            pot_flags_of(Some("/x/server"), Some("/y/bin/deno")),
+            flags,
             [
+                "--plugin-dirs",
+                "/x",
                 "--js-runtimes",
                 "deno:/y/bin/deno",
                 "--extractor-args",
                 "youtubepot-bgutilscript:server_home=/x/server"
             ]
         );
-        // Half a pair is a plugin that finds no runtime and says so once per
-        // download; nothing is better than that.
-        assert!(pot_flags_of(Some("/x/server"), None).is_empty());
-        assert!(pot_flags_of(None, Some("/y/bin/deno")).is_empty());
-        assert!(pot_flags_of(Some(""), Some("")).is_empty());
-        assert!(pot_flags_of(None, None).is_empty());
+        assert_eq!(flags.len() % 2, 0, "every flag has its value");
+        // Two of three is a plugin nobody loads, or one that finds no runtime.
+        let (h, d, p) = (Some("/x/server"), Some("/y/bin/deno"), Some("/x"));
+        for (home, deno, plugins) in [
+            (h, d, None),
+            (h, None, p),
+            (None, d, p),
+            (h, None, None),
+            (None, d, None),
+            (None, None, p),
+            (Some(" "), d, p),
+            (h, d, Some("")),
+            (None, None, None),
+        ] {
+            assert!(
+                pot_flags_of(home, deno, plugins).is_empty(),
+                "{home:?} {deno:?} {plugins:?}"
+            );
+        }
     }
 
     #[test]

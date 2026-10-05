@@ -96,6 +96,7 @@
 # defect reappearing in a new command, with its fix sitting right next to it.
 {
   writeShellApplication,
+  callPackage,
   coreutils,
   gawk,
   gnugrep,
@@ -125,6 +126,8 @@
 }:
 
 let
+  # NOTHING STARTS OVER A BUILD INSIDE THE TREE (`nix/tree-guard.nix`).
+  treeGuard = callPackage ./tree-guard.nix { };
   quoted = lib.concatMapStringsSep " " (n: "\"${n}\"");
   heavyDrvs = lib.concatMapStringsSep " " (
     d: "\"${builtins.unsafeDiscardStringContext d.drvPath}^*\""
@@ -221,6 +224,7 @@ writeShellApplication {
     jq
   ];
   text = ''
+    ${treeGuard}/bin/ronoctua-tree-holds-no-build
     ${lib.optionalString (keepSources != null) keepSources}
     ${lib.optionalString (prefetch != null) ''
       # THE SOURCES NO CACHE HAS COME FIRST.
@@ -475,7 +479,10 @@ writeShellApplication {
       used_cores=$(( used_cores + c ))
       printf -- '-> %s (%s MiB declared, %s of %s MiB in use)\n' \
         "$n" "''${mib[$n]}" "$used_mib" "$vm_budget_mib"
-      nix build --no-link -L --max-jobs 1 "''${drv[$n]}^*" &
+      # AN OUT-LINK IN `$work`, for phase 1's reason: a collection between
+      # here and phase 5 would take a test that passed, and `nix flake check`
+      # would boot its VM again.
+      nix build --out-link "$work/vm-$n" -L --max-jobs 1 "''${drv[$n]}^*" &
       running[$!]=$n
     }
     reap_one() {
@@ -538,7 +545,8 @@ writeShellApplication {
     done
     echo "== 4. the other ''${#rest[@]} checks =="
     if [ "''${#rest[@]}" -gt 0 ]; then
-      if ! nix build --no-link --keep-going -L \
+      # HELD in `$work` too, for the same reason as phase 3's.
+      if ! nix build --out-link "$work/rest" --keep-going -L \
            --max-jobs "$jobs" --cores "$cores" "''${rest[@]}" "$@"; then
         blame_earlyoom
         fail "phase 4 (the failed builds are named above)"

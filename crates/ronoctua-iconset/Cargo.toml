@@ -1,0 +1,28 @@
+[package]
+name = "ronoctua-iconset"
+description = "The icons app's library: the Nerd Fonts, Lucide and Unicode tables read at run time, one search, the copy formats and Lucide's SVG."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO WAYLAND, NO TOKEN, NO DRAWING: tables in, rows and text out. The three
+# JSON files (~9 MB parsed) are read by PATH from `RONOCTUA_ICONSET` when a
+# view opens — never `include_str!`, never `option_env!` — and dropped with
+# the last view that holds them (`shared`).
+[dependencies]
+serde_json.workspace = true
+# A table is read ONE RECORD AT A TIME (`serde::de::Visitor`): the whole array
+# as a JSON tree first would hold ~50 MB more at the peak of a load, in a
+# footer that lives for months.
+serde.workspace = true
+# THE SEARCH LANGUAGE IS INTERFACE: the prefix words (`family:`, `familia:`)
+# and the enumeration values are keys of every language's `.ftl`, read here so
+# that every door parses the same grammar.
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# The one accent folding of the tree (`Cálculo` → `calculo`).
+ronoctua-apps = { path = "../ronoctua-apps" }
+
+[lints]
+workspace = true

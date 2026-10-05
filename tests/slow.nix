@@ -123,10 +123,31 @@
   # same criterion and the same number: the buffers are built once for the
   # `.wasm` every check links, a second time to run their tests, and a third
   # to be read. What it buys is the only lint they have — `cargo clippy
-  # --workspace` cannot reach a buffer, and the three with a baked table
-  # cannot be linted outside Nix at all, which is how a dead function sat in
-  # `buffers/unicode` across releases.
+  # --workspace` cannot reach a buffer, and a buffer with a baked table could
+  # not be linted outside Nix at all, which is how a dead function sat in the
+  # old Unicode browser across releases.
   "buffers-lint"
+
+  # THE HOME GIVEN BACK FROM /persist: two boots and a third, each a
+  # machine coming up — the structural criterion of the reboots above.
+  "persist-home-vm"
+
+  # `security-vm` meets none of the four criteria: three small nodes built
+  # from one module, no installation, no disk, no reboot (the sleep hook is
+  # started, never slept), no TPM, one compilation. It stays in `.#most`; its
+  # time is to be measured the first time the battery runs it.
+
+  # THE RESIZER, IN A COMPOSITOR: a VM of its own for one tool of the
+  # developer's, which the everyday battery has no reason to pay for.
+  "resizer-vm"
+
+  # IT REBOOTS NOW (criterion 2): the extension's id has to survive a boot,
+  # kept in `/persist` — two boots of one machine.
+  "extension-vm"
+
+  # `~/.cache` A SUBVOLUME ACROSS THREE REBOOTS of a machine with a disk of
+  # its own (criterion 2).
+  "cache-subvolume-vm"
 
   # ---------------------------------------------------------------
   # WEIGHED, AND LEFT IN THE EVERYDAY BATTERY
@@ -139,9 +160,9 @@
   # needs anyway and which is data, not an installation (the M1 gate
   # measured 4.2 GB at the peak and 36 s to build it).
   #
-  # `updates-never-ask` changed underneath: its runner now names the software
-  # CLI, which is copied out of the same `workspace` derivation as
-  # `rust.shell`. That is a compilation the battery already pays for, not a
+  # The update's never-asks check (its brain module's, now) changed
+  # underneath: its runner names the software CLI, which is copied out of
+  # the same `workspace` derivation as `rust.shell`. That is a compilation the battery already pays for, not a
   # second one, so criterion 4 does not reach it either.
   #
   # `software-vm` boots ONE machine from a handful of modules — not the

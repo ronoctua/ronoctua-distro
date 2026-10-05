@@ -114,6 +114,16 @@ pub fn without_caps_lock(c: char, caps: bool) -> char {
     }
 }
 
+/// Whether Caps Lock is UNDONE on a key — on a chord always, and on a plain
+/// key unless the door types text where the Lock means capitals. The one
+/// answer the windows ([`as_read`]) and the footer (`Footer::translate`)
+/// read, so a field types the same capitals in every door.
+#[must_use]
+pub const fn lock_undone(mods: Modifiers, types_capitals: bool) -> bool {
+    let chord = mods.ctrl || mods.alt || mods.logo;
+    mods.caps_lock && (chord || !types_capitals)
+}
+
 /// A key as EVERY window reads it, before the window sees it.
 ///
 /// - **Caps Lock is undone**, as the footer undoes it: on a chord always —
@@ -130,8 +140,7 @@ pub fn as_read(event: &KeyEvent, mods: Modifiers, types_capitals: bool) -> (KeyE
     if matches!(read.keysym, Keysym::Delete | Keysym::KP_Delete) {
         read.utf8 = None;
     }
-    let chord = mods.ctrl || mods.alt || mods.logo;
-    if mods.caps_lock && (chord || !types_capitals) {
+    if lock_undone(mods, types_capitals) {
         held.caps_lock = false;
         if let Some(c) = char_of(read.keysym) {
             let undone = without_caps_lock(c, true);

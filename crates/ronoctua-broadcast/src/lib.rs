@@ -18,6 +18,17 @@
 //! [`picks`] (favourites and the recently played) and [`table`] (the
 //! categories of "channels by theme", generated from `assets/channels.nix`).
 //!
+//! # And the local catalogue
+//!
+//! [`catalog`]: every source's categories and items in two SQLite files the
+//! doors read directly (feature `catalog`). [`sources`] says what a pasted
+//! link is and reads each kind of source into it — a person's M3U list, feed,
+//! YouTube channel or archive.org collection, and the default sources: the
+//! three directories above, [`nasa`] (the NASA Image and Video Library),
+//! [`commons`] (Wikimedia Commons) and [`peertube`] (through SepiaSearch).
+//! Every request to a default source's host carries the person's consent
+//! ([`ronoctua_consent::Pass`], through [`Web`]).
+//!
 //! # How it talks
 //!
 //! Every fetch takes the network as a parameter ([`Net`]). The daemon hands
@@ -36,15 +47,21 @@
 use serde::{Deserialize, Serialize};
 
 mod ask;
+mod date;
 mod json;
 mod query;
 
 pub mod archive;
 pub mod cache;
+pub mod catalog;
+pub mod commons;
 pub mod country;
 pub mod iptv;
+pub mod nasa;
+pub mod peertube;
 pub mod picks;
 pub mod radio;
+pub mod sources;
 pub mod table;
 
 #[cfg(feature = "net")]
@@ -53,7 +70,10 @@ pub mod internet;
 #[cfg(test)]
 mod canned;
 
-pub use ask::{MOST_BYTES, Net, Request, answered, why_of_status};
+pub use ask::{
+    Fetch, MOST_BYTES, Net, Request, Web, answered, covered, fetched, fetched_own, host_of,
+    why_of_status,
+};
 pub use country::Code;
 
 /// Who is asking, on every request: radio-browser asks every client for a
@@ -127,11 +147,14 @@ pub enum Why {
     /// A name (a station's id, an item's identifier) is not shaped like one,
     /// and was not sent.
     NotAName,
+    /// The person has not let the directory's host (`consent.json`), and
+    /// nothing was sent.
+    NotLet,
 }
 
 impl Why {
     /// Every refusal, for a test that walks the words.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Unreachable,
         Self::Declined,
         Self::TooManyAsks,
@@ -141,6 +164,7 @@ impl Why {
         Self::NothingPlayable,
         Self::NothingToAsk,
         Self::NotAName,
+        Self::NotLet,
     ];
 
     /// Its kebab-case name, the suffix of the key a door says it with.
@@ -156,6 +180,7 @@ impl Why {
             Self::NothingPlayable => "nothing-playable",
             Self::NothingToAsk => "nothing-to-ask",
             Self::NotAName => "not-a-name",
+            Self::NotLet => "not-let",
         }
     }
 }

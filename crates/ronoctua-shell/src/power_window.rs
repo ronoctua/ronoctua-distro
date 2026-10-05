@@ -142,7 +142,7 @@ impl Power {
             }
             ronoctua_power::Event::Done { order, refused } => {
                 if let Some((why, words)) = refused {
-                    ui.message = Some(crate::power_words::refused(&order, why, &words, &ui.texts));
+                    ui.say(crate::power_words::refused(&order, why, &words, &ui.texts));
                     ui.ask_paint();
                 }
             }
@@ -158,7 +158,10 @@ impl Power {
             // `chrome::information_of`, and `chrome::copied` for the
             // one place the six doors share.
             Errand::Copy(text) => {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             Errand::Close => {
                 ui.quit = true;
@@ -179,7 +182,7 @@ impl Power {
             Errand::Order(order) => match &self.power {
                 Some(h) => h.send(order),
                 None => {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::POWER_NO_DAEMON));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::POWER_NO_DAEMON));
                 }
             },
             // THE ORDER AND THE FILE, as in the footer: a choice made here
@@ -191,13 +194,26 @@ impl Power {
                 match &self.power {
                     Some(h) => h.send(ronoctua_power::Order::SetProfile(profile)),
                     None => {
-                        ui.message = Some(ui.texts.t(ronoctua_i18n::key::POWER_NO_DAEMON));
+                        ui.say(ui.texts.t(ronoctua_i18n::key::POWER_NO_DAEMON));
                     }
                 }
+                // NOT WRITTEN IS SAID, as the footer says it: a profile that
+                // comes back as the old one at the next start is a profile
+                // somebody thinks they chose.
                 if let Some(dir) = ronoctua_power::prefs::home()
                     && let Err(e) = ronoctua_power::prefs::persist(&dir, profile)
                 {
                     tracing::warn!(error = %e, "could not write power.json");
+                    ui.say_for(
+                        ui.texts.t_with(
+                            ronoctua_i18n::key::ECHO_PREFERENCE_NOT_WRITTEN,
+                            &[
+                                ("file", ronoctua_power::prefs::FILE),
+                                ("why", &e.to_string()),
+                            ],
+                        ),
+                        crate::echo::Echo::Long,
+                    );
                 }
             }
         }

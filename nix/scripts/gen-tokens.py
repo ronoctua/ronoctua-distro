@@ -185,6 +185,11 @@ def main() -> int:
         required=True,
         help="category-glyphs.json: an ORDERED list of {category, token}",
     )
+    ap.add_argument(
+        "--brain-marks",
+        type=pathlib.Path,
+        help="brain-marks.json: the icon tokens that are a brain module's glyphs",
+    )
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument(
         "--out-wit",
@@ -198,6 +203,13 @@ def main() -> int:
     typo = json.loads(args.typography.read_text())
     space_raw = json.loads(args.space.read_text())
     icons = json.loads(args.icons.read_text())
+    brain_marks = json.loads(args.brain_marks.read_text()) if args.brain_marks else []
+    strays = sorted(t for t in brain_marks if t not in icons)
+    if strays:
+        # `nix/glyphgen.nix` merges them into the table it measures, so a
+        # token missing here is the two derivations reading different lists.
+        print(f"ERROR: brain module glyphs missing from the icon table: {strays}", file=sys.stderr)
+        return 1
 
     # The names are the FIRST theme's: every theme has the same set (checked
     # in `load_themes`), so the constants, the bridge and the WIT enum come
@@ -474,6 +486,45 @@ def main() -> int:
                 f"Some(({left!r}, {right!r})),"
             )
     A("            _ => None,")
+    A("        }")
+    A("    }")
+    # THE BRAIN'S MARKS, by token NAME.
+    # A mark crosses the brain's socket as the token of its glyph
+    # (`made-up-full`), and the modeline draws it from that. Only a module's
+    # own tokens answer: a name that happened to match a chrome token would be a
+    # module drawing a glyph it never declared.
+    A("")
+    A("    /// A BRAIN MODULE'S GLYPH, by its token name (`<module>-<name>`), and")
+    A("    /// only a module's: a name that is not one of their glyphs is `None`,")
+    A("    /// even when the chrome has a token of that name.")
+    A("    #[must_use]")
+    A("    pub fn brain_mark(token: &str) -> Option<char> {")
+    if brain_marks:
+        A("        match token {")
+        for k in sorted(brain_marks):
+            A(f'            "{k}" => Some({ident(k)}),')
+        A("            _ => None,")
+        A("        }")
+    else:
+        # NO MODULE DECLARES A GLYPH YET, and a `match` with only a wildcard
+        # arm is `clippy::match_single_binding` — `chrome_size`'s reason.
+        A("        let _ = token;")
+        A("        None")
+    A("    }")
+    # AND A TEST OF THE ANSWER, generated with it: every module's token finds
+    # its own glyph, and a CHROME token's name finds nothing — which is the
+    # half that holds, and is proved, while no module declares a glyph yet.
+    chrome = sorted(k for k in icons if k not in brain_marks)
+    A("")
+    A("    #[cfg(test)]")
+    A("    mod brain_mark_answers {")
+    A("        #[test]")
+    A("        fn only_a_modules_own_glyph_answers() {")
+    if chrome:
+        A(f'            assert_eq!(super::brain_mark("{chrome[0]}"), None);')
+    A('            assert_eq!(super::brain_mark(""), None);')
+    for k in sorted(brain_marks):
+        A(f'            assert_eq!(super::brain_mark("{k}"), Some(super::{ident(k)}));')
     A("        }")
     A("    }")
     A("}")

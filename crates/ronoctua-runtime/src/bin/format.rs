@@ -222,7 +222,7 @@ fn main() -> Result<()> {
     // "writing to the disk" on the modeline with nothing being written. The
     // wait happens on the list, where the row is about to change.
     let states: Vec<&str> = d.states.iter().map(|s| s.id.as_str()).collect();
-    if states != ["normal", "choose", "confirm"] {
+    if states != ["normal", "choose", "encrypt", "confirm"] {
         bail!("the buffer's states are {states:?}, outside what was agreed");
     }
     for language in ronoctua_runtime::driven::languages(&i18n)? {
@@ -443,16 +443,41 @@ fn main() -> Result<()> {
     // default.
     inst.event(&Input::Down)?;
 
-    // ---- THE SECOND REFUSAL: THE FIRST `Enter` ON `confirm` GOES BACK ----
+    // ---- THE THIRD QUESTION: ENCRYPTED, AND `no` FIRST ----
+    //
+    // A yes or a no, and nothing typed: the passphrase is the HOST's to ask,
+    // twice, and never crosses into the component.
+    let asked = inst.event(&Input::Confirm)?;
+    if moved_to(&asked) != Some("encrypt") {
+        bail!("Enter on the choice did not lead to the question of encryption: {asked:?}");
+    }
+    let sealing = look(&mut inst)?;
+    if !sealing.names("format-encrypt-no") || !sealing.names("format-tech-encrypt-no") {
+        bail!(
+            "the question of encryption does not start on `no`: {:?}",
+            sealing.keys
+        );
+    }
+    inst.event(&Input::Down)?;
+    let sealed = look(&mut inst)?;
+    if !sealed.names("format-tech-encrypt-yes") {
+        bail!(
+            "the line under the cursor did not follow it to `yes`: {:?}",
+            sealed.keys
+        );
+    }
     let asked = inst.event(&Input::Confirm)?;
     if moved_to(&asked) != Some("confirm") {
-        bail!("Enter on the choice did not lead to the confirmation: {asked:?}");
+        bail!("Enter on the answer did not lead to the confirmation: {asked:?}");
     }
+    println!("question 3: encrypted or not, `no` first, and a yes asks for nothing typed");
+
+    // ---- THE SECOND REFUSAL: THE FIRST `Enter` ON `confirm` GOES BACK ----
     let back = inst.event(&Input::Confirm)?;
     if plan(&back).is_some() {
-        bail!("the fourth Enter in a row formatted the disk: `no` was not the first row");
+        bail!("the fifth Enter in a row formatted the disk: `no` was not the first row");
     }
-    if moved_to(&back) != Some("choose") {
+    if moved_to(&back) != Some("encrypt") {
         bail!("Enter on `no` did not go back a screen: {back:?}");
     }
     println!("refusal 2: an Enter in the rhythm goes back, instead of erasing the disk");
@@ -476,6 +501,12 @@ fn main() -> Result<()> {
         bail!(
             "the confirmation says neither where nor under what name: {:?}",
             sure.data
+        );
+    }
+    if !sure.names("format-encrypted") {
+        bail!(
+            "the confirmation does not say the disk will be encrypted: {:?}",
+            sure.keys
         );
     }
 
@@ -505,6 +536,11 @@ fn main() -> Result<()> {
     // somebody asked to reformat one part of it.
     if p.whole_disk {
         bail!("the plan asked to erase the whole disk starting from a partition");
+    }
+    // AND THE YES CAME THROUGH AS A YES — the plan has no field that could
+    // carry a passphrase, which the WIT itself guarantees.
+    if !p.encrypt {
+        bail!("`yes` to encryption was chosen and the plan writes the disk in the clear");
     }
     // AND IT WENT BACK TO THE LIST, which is where the row being written is.
     if moved_to(&did) != Some("normal") {

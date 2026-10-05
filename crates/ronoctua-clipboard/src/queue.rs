@@ -193,6 +193,17 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// A history made of entries already kept somewhere else, in their order
+    /// — the SECOND SCREEN of one history: the clipboard's window draws what
+    /// the footer holds, and holds nothing of its own. Nothing is filtered or
+    /// moved, because the one that kept them already did.
+    #[must_use]
+    pub fn of_entries(entries: impl IntoIterator<Item = Entry>) -> Self {
+        Self {
+            inputs: entries.into_iter().collect(),
+        }
+    }
+
     /// Records what has just been copied.
     ///
     /// Returns `false` when nothing changed — a secret, empty, or a repeat of

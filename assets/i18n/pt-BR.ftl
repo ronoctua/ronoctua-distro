@@ -6,7 +6,6 @@ cmd-buffer-next = Próximo buffer
 cmd-buffer-switch = Trocar de buffer
 cmd-file-save = Salvar arquivo
 cmd-buffer-close = Fechar buffer
-cmd-glyphs-nerd-fonts = Navegar glifos
 cmd-mx-open = Executar comando…
 cmd-buffer-terminal = Abrir terminal
 cmd-buffer-terminal-external = Abrir terminal externo
@@ -41,18 +40,12 @@ mode-terminal = terminal
 mode-capture = captura de tela
 
 mode-example = exemplo
-buffer-glyphs = glifos
-mode-glyphs = glifos
-buffer-lucide = lucide
-mode-lucide = lucide
 buffer-memory = memória
 mode-memory = memória
 buffer-transfers = transferências
 mode-transfers = transferências
 buffer-format = formatar
 mode-format = formatar
-buffer-unicode = unicode
-mode-unicode = unicode
 buffer-brain = cérebro
 mode-brain = cérebro
 mode-update = atualização
@@ -284,6 +277,7 @@ inst-step-facter = Detectar o hardware
 inst-step-password = Gravar o hash da senha em /persist
 inst-step-install = Construir e instalar o sistema
 inst-step-zone = Definir o fuso horário desta máquina
+inst-step-target = Criar a pasta de configuração do sistema alvo
 
 ## Installer — the interface
 
@@ -310,7 +304,7 @@ echo-cancelled = Cancelado
 echo-no-window = Nenhuma janela em foco
 echo-no-action = { $command } ainda não faz nada
 echo-argument-refused = { $command } não aceita “{ $argument }”
-echo-no-buffer = O navegador de glifos não foi construído
+echo-no-buffer = Essa tela não foi construída neste sistema
 echo-no-opened = Não consegui abrir { $program }
 cmd-window-left = Focar à esquerda
 cmd-window-right = Focar à direita
@@ -707,10 +701,6 @@ cmd-wm-mode-spaces = Arranjos salvos…
 cmd-wm-mode-default = Sair do modo do compositor
 group-workspace-move = levar a janela
 group-icons = ícones
-glyphs-search = Digite para buscar um glifo das Nerd Fonts
-# A palavra que o navegador ESCREVE no campo de busca — ver `unicode-prefix-*`.
-glyphs-prefix-block = bloco
-glyphs-prefix-tag = etiqueta
 expansion-page = CtrlDir ←→
 # THE KEYS THAT WALK THE LINE ONCE IT IS OPEN, and the sentence that teaches
 # them. They are a chord of the RIGHT Ctrl, which is the one family no view
@@ -729,64 +719,6 @@ expansion-page = CtrlDir ←→
 minibuffer-fold-keys = CtrlDir ↑↓
 minibuffer-fold-hint = · { $keys } andam pelo resto desta linha
 about-fold-walk = Anda pelo resto desta linha aberta, uma linha por vez; voltar além da primeira a fecha.
-
-# --- The glyph card (Nerd Fonts browser) -----------------------------------
-glyphs-sheet-codepoint = Codepoint
-glyphs-sheet-decimal = Decimal
-glyphs-sheet-block = Bloco
-glyphs-sheet-set = Conjunto
-glyphs-sheet-token = Token de ícone
-glyphs-sheet-tray = Atribuído a um app
-glyphs-sheet-tags-pt = Tags (pt)
-glyphs-sheet-tags-en = Tags (en)
-glyphs-sheet-help = ↑↓ formato · Enter copia · ←→ outro glifo · Esc volta
-
-# The NINE copy formats. They have been commands since milestone 7 and never
-# had a key — nobody noticed because nothing could reach them.
-glyphs-sheet-copied = ✓ copiado
-glyphs-sheet-copy-failed = ✗ não consegui copiar — veja o log
-cmd-glyphs-copy-name = Nome
-cmd-glyphs-copy-glyph = Glifo
-cmd-glyphs-copy-css = Classe CSS
-cmd-glyphs-copy-hex = Hexadecimal
-cmd-glyphs-copy-utf16 = UTF-16
-cmd-glyphs-copy-escape = Escape Unicode
-cmd-glyphs-copy-html = Entidade HTML
-cmd-glyphs-copy-rust = Literal Rust
-cmd-glyphs-copy-token = Token do design system
-cmd-glyphs-filter-set = Filtrar pelo conjunto
-cmd-glyphs-filter-block = Filtrar pelo bloco
-cmd-glyphs-filter-tag = Filtrar por tag
-cmd-glyphs-filter-token = Só os que são token
-cmd-glyphs-filter-app = Só os atribuídos a um app
-cmd-glyphs-filter-clear = Limpar o filtro
-cmd-glyphs-filter-panel = Escolher o conjunto
-cmd-glyphs-assign = Atribuir a um app id
-
-# --- The source sets, in the filter panel ----------------------------------
-#
-# A brand name is not translated; what describes one is — which is why these
-# are keys and not data. They must be the SAME names the `SETS` table in
-# gen-glyphdb.py turns into search tags: `browser-filters` requires that the
-# label you read here finds, typed into the search, the whole set.
-glyphs-set-all = Todos
-glyphs-set-cod = Codicons
-glyphs-set-custom = Personalizados
-glyphs-set-dev = Devicons
-glyphs-set-extra = Extra
-glyphs-set-fa = Font Awesome
-glyphs-set-fae = Font Awesome Extension
-glyphs-set-iec = Símbolos de energia IEC
-glyphs-set-indent = Indentação
-glyphs-set-indentation = Indentação
-glyphs-set-linux = Logos de distribuições
-glyphs-set-md = Material Design
-glyphs-set-oct = Octicons
-glyphs-set-pl = Powerline
-glyphs-set-ple = Powerline Extra
-glyphs-set-pom = Pomicons
-glyphs-set-seti = Seti-UI
-glyphs-set-weather = Clima
 
 # --- Clipboard ---
 cmd-clipboard-open = Área de transferência
@@ -871,190 +803,6 @@ cmd-apps-remove = Remover este programa, depois de uma pergunta
 apps-remove = remover
 cmd-apps-search-to-install = Procurar o que foi digitado entre os programas para instalar
 apps-search-to-install = Procurar “{ $query }” para instalar
-
-# --- The Unicode symbol browser (LEADER i u) -------------------------------
-cmd-unicode-symbols = Navegar símbolos Unicode
-unicode-search = Digite para buscar um símbolo Unicode
-# As palavras que o navegador ESCREVE no campo de busca. Digitadas, então
-# minúsculas e sem acento; o analisador segue aceitando as de todos os idiomas.
-unicode-prefix-symbols = simbolos
-unicode-prefix-family = familia
-unicode-prefix-block = bloco
-unicode-prefix-name = nome
-unicode-prefix-group = grupo
-unicode-prefix-subgroup = subgrupo
-unicode-prefix-tone = tom
-cmd-unicode-copy-character = Caractere
-cmd-unicode-copy-name = Nome oficial
-cmd-unicode-copy-hex = Hexadecimal
-cmd-unicode-copy-decimal = Decimal
-cmd-unicode-copy-escape = Escape Unicode
-cmd-unicode-copy-html = Entidade HTML
-cmd-unicode-copy-rust = Literal Rust
-cmd-unicode-copy-utf16 = UTF-16
-cmd-unicode-copy-utf8 = Bytes UTF-8
-cmd-unicode-filter-family = Filtrar pela família
-cmd-unicode-filter-block = Filtrar pelo bloco
-cmd-unicode-filter-category = Filtrar pela categoria
-cmd-unicode-filter-symbols = Só os símbolos
-cmd-unicode-filter-clear = Limpar o filtro
-cmd-unicode-filter-panel = Escolher a família
-
-# The seven families in the panel. The names are the SAME ones the generator
-# turns into search tags — `symbols-filters` requires that the label you read
-# finds, typed into the search, the whole family.
-unicode-family-all = Todos
-unicode-family-symbol = Símbolo
-unicode-family-letter = Letra
-unicode-family-number = Número
-unicode-family-mark = Marca
-unicode-family-punctuation = Pontuação
-unicode-family-other = Outro
-
-unicode-sheet-codepoint = Codepoint
-unicode-sheet-decimal = Decimal
-unicode-sheet-family = Família
-unicode-sheet-category = Categoria
-unicode-sheet-block = Bloco
-unicode-sheet-decomposition = Decomposição
-unicode-sheet-aliases = Também chamado
-unicode-sheet-width = Largura
-unicode-width-zero = Marca combinante — o apoio pontilhado não é dela
-unicode-width-double = Ocupa duas células
-unicode-sheet-help = ↑↓ formato · Enter copia · ←→ outro · Esc volta
-unicode-sheet-copied = ✓ copiado
-unicode-sheet-copy-failed = ✗ não consegui copiar — veja o log
-
-# The emoji family and its NINE groups. The groups only show up in the panel
-# when emoji is selected — they are sub-filters of it. The names are the SAME
-# ones the generator turns into search tags.
-unicode-family-emoji = Emoji
-unicode-group-faces = Carinhas e emoções
-unicode-group-people = Pessoas e corpo
-unicode-group-nature = Animais e natureza
-unicode-group-food = Comida e bebida
-unicode-group-travel = Viagem e lugares
-unicode-group-activities = Atividades
-unicode-group-objects = Objetos
-unicode-group-symbols = Símbolos
-unicode-group-flags = Bandeiras
-unicode-sheet-group = Grupo
-unicode-sheet-subgroup = Subgrupo
-cmd-unicode-filter-group = Filtrar pelo grupo
-
-# === Lucide icon browser — `LEADER i l` ====================================
-cmd-lucide-icons = Navegar ícones Lucide
-lucide-search = Digite para buscar um ícone Lucide
-# As palavras que o navegador ESCREVE no campo de busca — ver `unicode-prefix-*`.
-lucide-prefix-category = categoria
-lucide-prefix-name = nome
-
-# The COPY FORMS. The first eight are lucide.dev's tabs, in its
-# order; the rest are what it does not have and this system uses.
-cmd-lucide-copy-svg = SVG
-cmd-lucide-copy-jsx = JSX
-cmd-lucide-copy-vanilla = HTML (lucide.js)
-cmd-lucide-copy-react = React
-cmd-lucide-copy-vue = Vue
-cmd-lucide-copy-svelte = Svelte
-cmd-lucide-copy-preact = Preact
-cmd-lucide-copy-solid = Solid
-cmd-lucide-copy-angular = Angular
-cmd-lucide-copy-font = Fonte de ícones
-cmd-lucide-copy-name = Nome
-cmd-lucide-copy-component = Componente
-cmd-lucide-copy-character = Caractere
-cmd-lucide-copy-hex = Codepoint
-cmd-lucide-copy-path = Traçado
-cmd-lucide-copy-uri = Data URI
-cmd-lucide-copy-base64 = Base64
-cmd-lucide-copy-css = Regra CSS
-cmd-lucide-copy-sprite = Sprite
-cmd-lucide-filter-category = Filtrar pela categoria
-cmd-lucide-filter-clear = Limpar o filtro
-cmd-lucide-filter-panel = Escolher a categoria
-
-# THE CUSTOMISATION. It changes the text that gets COPIED, not the drawing on screen:
-# Lucide publishes a single stroke width, and no font would make it vary.
-lucide-adjust-size = Tamanho
-lucide-adjust-stroke = Espessura
-lucide-adjust-absolute = Traço absoluto
-lucide-adjust-color = Cor
-lucide-adjust-cap = Pontas
-lucide-yes = sim
-lucide-no = não
-lucide-cap-round = redondas
-lucide-cap-straight = retas
-lucide-cap-square = quadradas
-
-lucide-sheet-name = Nome
-lucide-sheet-component = Componente
-lucide-sheet-codepoint = Codepoint
-lucide-sheet-categories = Categorias
-lucide-sheet-aliases = Também chamado
-lucide-sheet-tags = Tags
-lucide-sheet-help = ↑↓ linha · ←→ ajusta onde há a marca, senão troca de ícone · Enter copia · Tab restaura · Esc volta
-lucide-sheet-copied = ✓ copiado
-lucide-sheet-copy-failed = ✗ não consegui copiar — veja o log
-
-# The CATEGORIES. The label is read on screen AND typed into the search: the
-# `lucide-filters` check requires that it find, on its own, the whole category — which is why
-# each one is ONE word, and the same one the lexicon uses to translate the category.
-lucide-category-all = Todas
-lucide-category-accessibility = Acessibilidade
-lucide-category-account = Conta
-lucide-category-animals = Animais
-lucide-category-arrows = Setas
-lucide-category-brands = Marcas
-lucide-category-buildings = Edifícios
-lucide-category-charts = Gráficos
-lucide-category-communication = Comunicação
-lucide-category-connectivity = Conectividade
-lucide-category-cursors = Cursores
-lucide-category-design = Design
-lucide-category-development = Desenvolvimento
-lucide-category-devices = Dispositivos
-lucide-category-emoji = Emoji
-lucide-category-files = Arquivos
-lucide-category-finance = Finanças
-lucide-category-food-beverage = Comida
-lucide-category-gaming = Jogos
-lucide-category-home = Casa
-lucide-category-layout = Layout
-lucide-category-mail = Correio
-lucide-category-math = Matemática
-lucide-category-medical = Médico
-lucide-category-multimedia = Multimídia
-lucide-category-nature = Natureza
-lucide-category-navigation = Navegação
-lucide-category-notifications = Notificações
-lucide-category-people = Pessoas
-lucide-category-photography = Fotografia
-lucide-category-science = Ciência
-lucide-category-seasons = Estações
-lucide-category-security = Segurança
-lucide-category-shapes = Formas
-lucide-category-shopping = Compras
-lucide-category-social = Social
-lucide-category-sports = Esportes
-lucide-category-sustainability = Sustentabilidade
-lucide-category-text = Texto
-lucide-category-time = Tempo
-lucide-category-tools = Ferramentas
-lucide-category-transportation = Transporte
-lucide-category-travel = Viagem
-lucide-category-weather = Clima
-
-# The label of the section that separates the emoji sub-filters from the rest of the panel.
-# Small and dimmed on purpose: it is a caption, not an option.
-unicode-panel-emoji = só emoji
-# The SKIN TONES. Like the families and the groups, the label is read on screen AND
-# typed into the search — the `symbols-filters` check requires that it find the whole tone.
-unicode-tone-light = Pele clara
-unicode-tone-medium-light = Pele clara média
-unicode-tone-medium = Pele média
-unicode-tone-medium-dark = Pele escura média
-unicode-tone-dark = Pele escura
 
 ## Network — Wi-Fi and Ethernet (LEADER s n)
 
@@ -1721,10 +1469,6 @@ files-order-size = tamanho
 files-order-modified = modificado
 files-order-kind = tipo
 
-files-format-zstd = .tar.zst — o que se guarda
-files-format-gzip = .tar.gz — o que se envia para qualquer lugar
-files-format-zip = .zip — o que se envia para quem usa Windows
-
 # As linhas do menu de ações. O id e a chave não podem divergir — um teste
 # compara os dois, porque a linha copiada com o id trocado COMPILA e mostra as
 # palavras da linha vizinha.
@@ -1742,9 +1486,8 @@ files-info = informações
 files-mode = permissões
 files-owner = dono
 files-group = grupo
-files-compress = comprimir
+files-compress = comprimir…
 files-extract = extrair
-files-extract-tar = extrair o tar
 files-trash = mover para a lixeira
 files-delete = apagar de vez
 files-shred = apagar sobrescrevendo
@@ -1836,9 +1579,7 @@ files-ask-application = Abrir com qual aplicativo?
 files-ask-owner = Trocar o DONO para quem?
 files-ask-group = Trocar o GRUPO para qual?
 files-ask-mode = Trocar as PERMISSÕES para qual conjunto?
-files-ask-format = Comprimir em qual formato?
 files-ask-name = Renomear para:
-files-hidden = ocultos
 files-sort = ordenação
 files-sort-reverse = inverter a ordem
 files-mark = marcar
@@ -2000,7 +1741,7 @@ format-tech-nothing = nenhum disco sob o cursor
 # quem quer saber exatamente o que vai acontecer: qual chamada, quais opções, o
 # que dá para desfazer. Aparece na linha de mensagem quando a linha está sob o
 # CURSOR — não só sob o ponteiro, porque o que o mouse faz o teclado faz.
-files-does-open = abre no aplicativo padrão do tipo MIME; pasta entra na listagem
+files-does-open = abre no aplicativo padrão do tipo MIME; pasta e arquivo compactado entram na listagem
 # THE ONE ACTION IN THIS MENU THAT LEAVES THE MACHINE, and the sentence says
 # so before the key is pressed — the same courtesy the glance's two hosts get.
 files-does-open-map = abre no mapa do navegador a coordenada gravada neste arquivo — a coordenada sai desta máquina
@@ -2021,7 +1762,6 @@ files-does-owner = altera o dono com chown(2); pergunta a senha de root
 files-does-group = altera o grupo com chown(2)
 files-does-compress = cria um arquivo compactado pela fila, sem bloquear a listagem
 files-does-extract = extrai para uma pasta com o nome do arquivo
-files-does-extract-tar = extrai o tar aqui mesmo, sem criar pasta
 files-does-restore = devolve ao caminho de origem que a lixeira gravou
 files-does-trash = move para a lixeira XDG; não atravessa sistema de arquivos
 files-does-delete = unlink(2) ou rmdir(2) direto: sem lixeira e sem volta
@@ -2031,7 +1771,7 @@ files-does-shred = sobrescreve antes de apagar; num btrfs com cópia-na-escrita 
 sidebar-does-open = entra na pasta; se for dispositivo desmontado, abre a ficha dele
 sidebar-does-mount = Filesystem.Mount do udisks2 — ele escolhe o ponto e as opções
 sidebar-does-unmount = Filesystem.Unmount sem forçar: recusa se algo ainda estiver aberto ali
-sidebar-does-eject = desmonta e corta a energia do disco (Drive.PowerOff): é o que deixa tirar
+sidebar-does-eject = desmonta, tranca de novo um disco cifrado e corta a energia (Drive.PowerOff): é o que deixa tirar
 sidebar-does-information = rótulo, nó, sistema de arquivos, tamanho e disco
 sidebar-does-unpin = tira a linha; padrão da distro volta oculto, o seu é removido
 sidebar-does-format = abre o buffer de formatar já apontado para este alvo
@@ -2503,92 +2243,6 @@ ext-anonymous = anônimo
 
 
 # ===================================================================
-# ONE CLICK UPDATES EVERYTHING — the sequence in `assets/updates.nix`
-#
-# The sequence is declared once and generated from there: the table, the two
-# runners, and this list of keys. `gen-updates.py` derives `update-<id>` and
-# `update-does-<id>` from every step's id and emits them to `keys.txt`, so a
-# step with no sentence in both languages cannot be written.
-#
-# The order below is the SEQUENCE'S order, which is the declaration's order —
-# there is no `order` field, on purpose, and sorting these alphabetically would
-# put back the second source the table exists to remove.
-# ===================================================================
-cmd-system-update = Atualizar o sistema
-cmd-system-update-rehearsal = Ensaiar a atualização
-
-# EACH STEP'S NAME, and under it the line that reaches the message line when the
-# cursor is on it — the same `{prefix}-does-<id>` shape the file manager and
-# the format buffer use. The name is what it is called; the line under it is
-# what it really runs, and what it costs to be wrong about.
-update-flake-update = buscar as versões novas
-update-does-flake-update = nix flake update em /etc/nixos: adianta os inputs pinados e não mexe em nada além do flake.lock. Precisa de rede, e no ISO o /etc/nixos é só leitura — ali o passo é pulado e diz isso.
-update-system-rebuild = reconstruir o sistema
-update-does-system-rebuild = nixos-rebuild switch, pela unidade que já existe: compila, e pode trazer um kernel que nunca deu boot. A volta é a geração anterior, no menu de boot. Se falhar, a sequência para aqui.
-update-flatpak-system = atualizar os Flatpaks do sistema
-update-does-flatpak-system = flatpak update --system: atualiza o que a instalação Flatpak da própria máquina tem — o remoto do Flathub, e o que a configuração declarar — e não instala nada. Os seus apps estão na sua instalação e andam na sua metade, mais abaixo. Sem essa instalação o passo é pulado e diz isso.
-update-android-images = atualizar a imagem do sistema Android
-update-does-android-images = ronoctua-software upgrade android-system: a atualização do próprio Waydroid da imagem em que os seus apps Android rodam — cerca de um gigabyte, conferido contra a soma de verificação que o canal dele publica. Espera enquanto o Android está rodando, em vez de pará-lo. Vem desligado: ligá-lo é uma linha na configuração desta máquina.
-update-store-collect-garbage = coletar o lixo do store
-update-does-store-collect-garbage = nix-collect-garbage sem --delete-older-than e sem -d: apaga só o que nada referencia — nunca uma geração. Quais gerações saem, quem decidiu foi a aparagem anterior, por contagem.
-update-store-optimise = deduplicar o store
-update-does-store-optimise = nix store optimise: arquivos iguais viram hard link. Roda depois da coleta, senão otimizaria justamente o que estava para ser apagado.
-update-old-generations = aparar as gerações antigas do sistema
-update-does-old-generations = ronoctua-system-generations: saem as gerações do sistema além das mais novas (quantas, diz a configuração desta máquina) — nunca a que está rodando, a do boot, a de onde a última troca saiu, a atual do perfil ou uma que o menu de boot lista, e a volta continua existindo. Só as do sistema: o seu perfil do Nix nunca é tocado. O menu de boot não lista mais do que ela guarda, então toda entrada continua dando boot.
-update-journal-vacuum = aparar o journal
-update-does-journal-vacuum = journalctl --vacuum-size=256M: joga fora o registro mais antigo, inclusive o desta atualização — que é a resposta para "por que o rebuild falhou?". Vem desligado.
-update-font-cache = refazer o cache de fontes
-update-does-font-cache = fc-cache -rf: refaz do zero e ignora as datas, porque um rebuild pode ter mudado as fontes e um cache velho com data nova é exatamente o caso que traz alguém aqui.
-update-tldr-cache = atualizar as páginas do tldr
-update-does-tldr-cache = tldr --update, como você: a unidade semanal as baixa como `nobody`, e o cache vai parar numa pasta que ninguém lê. Precisa de rede; sem ela o passo é pulado, em vez de esperar o timeout e chamar isso de falha.
-update-nix-profile = atualizar os seus programas do Nix
-update-does-nix-profile = ronoctua-software upgrade nix: os programas do seu perfil do Nix, levados ao nixpkgs do qual o sistema acabou de ser reconstruído. Não instala nenhum, e os que você aceitou mesmo não sendo livres seguem com esse mesmo aceite. Sem perfil o passo é pulado e diz isso.
-update-flatpak-user = atualizar os seus Flatpaks
-update-does-flatpak-user = ronoctua-software upgrade flatpak: a sua instalação Flatpak — os apps e os runtimes que eles usam — e o catálogo do Flathub junto. Não instala nenhum. Sem essa instalação o passo é pulado e diz isso.
-update-appimages = atualizar os seus AppImages
-update-does-appimages = ronoctua-software upgrade appimage: cada AppImage em ~/Applications contra os lançamentos do lugar de onde ele veio. O arquivo novo substitui o velho de uma vez só, então um download que falha deixa o velho funcionando. Sem essa pasta o passo é pulado e diz isso.
-update-android-apps = atualizar os seus apps Android
-update-does-android-apps = ronoctua-software upgrade android: os apps dentro do Android que vieram do F-Droid, cada um conferido contra quem o assinou e a soma de verificação que o índice registra. Os que você instalou de dentro do Android são assunto do próprio Android.
-update-rust-toolchains = atualizar os toolchains do Rust
-update-does-rust-toolchains = rustup update: atualiza os canais que já estão em ~/.rustup, e não instala nenhum. Aqui o Rust vem do flake, então essa pasta não existe e o passo é pulado dizendo isso — ele é para a máquina onde você pôs o rustup à mão.
-update-node-global = atualizar os pacotes globais do npm
-update-does-node-global = npm update --global: move o que já está no prefixo global e não instala nada. O node vem do flake; o prefixo global, não — sem essa pasta o passo é pulado e diz isso.
-update-pnpm-global = atualizar os pacotes globais do pnpm
-update-does-pnpm-global = pnpm update --global: o pnpm tem o store global dele, que não é o do npm — por isso são dois passos, e não um. Sem a pasta dele o passo é pulado e diz isso.
-update-python-tools = atualizar as ferramentas do uv
-update-doom-sync = Alinhar os pacotes do Doom Emacs
-update-does-python-tools = uv tool upgrade --all: sobe de versão as ferramentas que estão em $XDG_DATA_HOME/uv/tools, uma venv cada, e não acrescenta nenhuma. O uv vem do flake; elas, não — sem essa pasta o passo é pulado e diz isso.
-update-does-doom-sync = Resolve a lista de pacotes do Doom contra a configuração que o rebuild acabou de escrever, e compila o que mudou. Até isso rodar, o editor ainda carrega a anterior. Pula numa máquina onde o Doom nunca foi instalado.
-update-flatpak-unused = remover os runtimes Flatpak que nada usa
-update-does-flatpak-unused = ronoctua-software tidy flatpak: os runtimes e extensões da sua instalação de que nenhum app seu precisa mais — o que uma atualização deixa para trás. Nenhum app é tocado.
-update-nix-profile-history = esquecer as gerações antigas do perfil do Nix
-update-does-nix-profile-history = ronoctua-software tidy nix: as gerações antigas do seu perfil do Nix, cada uma mantendo no store os programas que tinha. Vem desligado: nada automático apaga a sua volta para um programa que você teve. A vista de programas oferece a mesma limpeza quando você pede, e ligá-lo aqui é uma linha na configuração desta máquina.
-update-appimage-cache = limpar o que os AppImages deixaram para trás
-update-does-appimage-cache = ronoctua-software tidy appimage: o que o appimage-run desempacotou para AppImages que sumiram ou foram substituídos — ele desempacota cada um na primeira vez que abre e nunca limpa depois. Os AppImages em si nunca são tocados.
-
-# WHY A STEP WAS SKIPPED. The path or the name it is about travels beside the
-# sentence as data (`Needs::about()`), which is why none of these names one.
-update-needs-always = nada pode tornar este passo inaplicável
-update-needs-binary = este programa não está no seu PATH
-update-needs-directory = esta pasta não existe
-update-needs-writable-file = este arquivo não existe, ou não dá para escrever nele
-update-needs-network = o NetworkManager diz que esta máquina não está conectada
-
-# WHAT A FAILURE DOES TO THE REST OF THE SEQUENCE. Two answers and no third:
-# this runs from a unit, and there is nobody to ask.
-update-on-failure-stop = se falhar, a sequência para aqui
-update-on-failure-carry-on = se falhar, a sequência segue para o próximo passo
-
-# THE FIVE CLASSES A STEP CAN BE. They decide the order laws, and the view
-# groups by them.
-update-kind-move-inputs = move os inputs pinados
-update-kind-apply-configuration = aplica a configuração
-update-kind-upgrade-software = atualiza programas que você mesmo instalou
-update-kind-refresh-cache = refaz um cache
-update-kind-reclaim-space = recupera espaço em disco
-
-
-# ===================================================================
 # A TELA DO CÉREBRO — LEADER b, e uma janela só dela
 #
 # O que a máquina faz sozinha, quando faz, e no que deu.
@@ -2620,8 +2274,8 @@ cmd-brain-interval = De quanto em quanto
 cmd-brain-window = Mudar o horário
 cmd-brain-switch = Desligar
 cmd-brain-keys = Todas as teclas
-cmd-brain-notice = Fazer o que ele oferece
 cmd-brain-log = Registro ao vivo
+cmd-brain-row-also = A outra ação da linha
 
 # A TELA EM SI.
 brain-title = Brain
@@ -2642,13 +2296,11 @@ brain-do-back = Voltar
 brain-do-pane = Outra metade
 brain-do-change = Alterar isto
 brain-do-keys = Todas as teclas
-brain-do-notice = Fazer
 about-brain-do-open = Abre a tarefa sob o cursor: a agenda, os passos e o que ela fez nas últimas vezes.
 about-brain-do-pane = Leva o teclado para a outra metade da página.
 about-brain-do-change = Muda o ajuste ou o passo sob o cursor.
 about-brain-do-back = Volta à lista de todas as tarefas.
 about-brain-keys = Abre esta linha para ver toda tecla que a página atende, ou a fecha de novo.
-about-brain-do-notice = Faz o que o aviso acima oferece.
 about-brain-run = Roda esta tarefa agora, diga o que disser a agenda dela.
 about-brain-rehearse = Ensaia esta tarefa: cada passo é percorrido e nada na máquina muda.
 about-brain-switch = Desliga esta tarefa, ou a religa; desligada, ela nunca roda sozinha.
@@ -2658,20 +2310,7 @@ about-brain-reset-steps = Devolve todo passo desta tarefa ao que a distro traz.
 about-brain-proceed = Começa agora a tarefa em contagem regressiva, sem esperar a contagem.
 about-brain-abort = Para a tarefa que está rodando ou em contagem regressiva.
 about-brain-log = Mostra o registro do próprio brain enquanto ele é escrito — cada tick, o que ele decidiu, cada aviso e erro — ou volta.
-brain-task-emacs-daemon = Vigiar o daemon do Emacs
-brain-task-emacs-daemon-does = Procura, de poucos em poucos minutos, o servidor do Emacs que segura a sua sessão e a sua configuração — e um Emacs que está rodando SEM ele, que parece a mesma coisa na tela e não é: ele carregou uma cópia própria, os buffers não são os da sessão, e fechar perde eles. Lê a tabela de processos e nada mais, e a única coisa que ele chega a iniciar é o serviço da própria distro.
-emacs-no-daemon = O daemon do Emacs não está rodando. Cada janela do editor vai carregar a configuração inteira de novo, e nenhuma delas compartilha os seus buffers.
-emacs-not-the-client = Este Emacs não está ligado ao daemon: ele carregou uma cópia própria da configuração, e os buffers são só dele. Feche e abra de novo com `e`, ou pelo gerenciador de arquivos.
-cmd-brain-start-emacs = Iniciar
-
-# A VIGIA DO RELÓGIO. Ela não busca a hora — quem busca é o `systemd-timesyncd`,
-# e fazer isso duas vezes seriam duas coisas acertando um relógio só. O que ela
-# faz é manter ligado o acerto automático da máquina e dizer quando ele não está.
-brain-task-clock-sync = Vigiar o relógio
-brain-task-clock-sync-does = Confere, algumas vezes por dia, se alguma coisa está mantendo certo o relógio desta máquina pela internet — e liga de volta quando não há nada. Ela não pergunta a hora a ninguém: quem faz isso continuamente é o cliente de horário do sistema, e um segundo seriam dois relógios discordando. Desligue isto para acertar o relógio à mão.
-clock-not-automatic = Nada está mantendo certo o relógio desta máquina. Ele vai se atrasar, e todo carimbo de hora daqui se atrasa junto.
-clock-not-synchronised = O relógio está sendo cuidado, mas ainda não conseguiu falar com nenhum servidor de horário.
-cmd-brain-clock-automatic = Manter certo
+about-brain-row-also = Faz a outra coisa que a linha sob o cursor oferece: num erro ainda não visto, ignorar o tipo dele daqui em diante.
 
 # AS LINHAS DA AGENDA. Cada uma é o NOME de um campo, então cada uma é um
 # substantivo — e o valor ao lado é a resposta, nunca a metade de uma frase
@@ -2698,14 +2337,6 @@ brain-last-run = Última vez
 # AS TAREFAS. `brain-task-<id>` nomeia uma e `<id>-does` diz o que ela faz — a
 # segunda é um parágrafo no rodapé, então tem espaço para ser uma explicação
 # inteira em vez de uma linha.
-brain-task-system-update = Atualizar o sistema
-brain-task-system-update-does = Move os inputs pinados para a frente, monta o sistema novo como entrada de boot e recupera espaço no store. Nada muda debaixo de uma sessão aberta: o sistema novo passa a valer no próximo boot, que é uma hora que você escolhe.
-brain-task-cache-sweep = Limpar os caches
-brain-task-cache-sweep-does = Apaga pastas inteiras da sua pasta de cache que ninguém abre há um tempo, contando da última vez que cada uma foi USADA. Nunca segue um link para fora dessa pasta, nunca sai do sistema de arquivos onde começou e mantém o que tiver carimbo no futuro. Cache é o que sempre dá para refazer, então o que se perde é tempo e não trabalho.
-brain-task-trash-expire = Esvaziar a lixeira
-brain-task-trash-expire-does = Apaga de vez o que você jogou fora há quatro dias ou mais. O relógio começa quando você põe na lixeira e não quando o arquivo foi escrito, então algo feito anos atrás e apagado hoje de manhã tem quatro dias. É a única coisa aqui que não dá para desfazer, e é por isso que o número é pequeno.
-brain-task-disk-space = Abrir espaço no disco
-brain-task-disk-space-does = Quando o disco que guarda o sistema ou a sua pasta pessoal fica sem espaço, abre espaço na hora, sem esperar a noite nem a máquina ficar quieta: primeiro as compilações de compiladores que ninguém usa e, enquanto todas as compilações do cargo no seu cache pesarem mais do que a parte delas no disco, as compiladas há mais tempo; depois o lixo do store, até o disco voltar para onde deveria estar. Só apaga uma compilação quando nenhum cargo está compilando nela, nunca segue um link, nunca remove o que o Nix conta como raiz nem uma geração, e depois de uma tentativa que não abriu espaço suficiente espera o disco encher mais antes de tentar de novo.
 
 # ONDE UMA TAREFA ESTÁ AGORA. Uma frase curta cada: elas ficam numa coluna de
 # doze células na página inicial.
@@ -2753,7 +2384,6 @@ brain-why-battery = Estava na bateria
 brain-why-busy = Outra coisa estava rodando
 brain-why-network = Não havia rede
 brain-why-asleep = A máquina estava dormindo
-brain-why-when-the-disk-is-short = Quando falta disco
 
 # QUAL PARTE DO DIA uma tarefa pode começar. As horas são os mesmos dígitos em
 # todo idioma; as palavras em volta não.
@@ -2785,44 +2415,17 @@ echo-brain-postponed = Agora não — ela volta na próxima hora dela
 echo-brain-proceeding = Começando agora
 echo-brain-idle = Não há nada para acontecer
 echo-brain-unreachable = O cérebro não está respondendo
-echo-emacs-starting = Iniciando o daemon do Emacs
-echo-emacs-unreachable = Não deu para iniciar o daemon do Emacs; veja: journalctl --user -u emacs
-echo-clock-kept = O relógio desta máquina voltou a ser mantido certo
-echo-clock-refused = Não deu para entregar o relógio; veja: journalctl -u systemd-timedated
 
-# A ATUALIZAÇÃO OLHADA DE PERTO — a marca na modeline e a janela que ela abre.
+# THE UPDATE, WATCHED — the modeline's mark, the leader's group for the view
+# that watches a run, and the countdown's two answers that view teaches too.
 #
-# A marca aparece só enquanto algo roda, e some sozinha. A janela existe
-# separada dela porque uma marca que só se pode clicar é uma marca que o
-# teclado não alcança.
-cmd-update-open = A atualização, no rodapé
-cmd-update-watch = A atualização, numa janela
+# The mark shows only while something runs and goes on its own. The update's
+# commands, its steps and the view's own words are its brain module's texts,
+# in that module's folder.
 group-update = atualização
-update-step-next = próximo passo
-about-update-step-next = Vai para o próximo passo, e diz o que ele é.
-update-step-previous = passo anterior
-about-update-step-previous = Vai para o passo anterior, e diz o que ele é.
-update-output-down = saída abaixo
-about-update-output-down = Desce a saída uma página, rumo ao fim.
-update-output-up = saída acima
-about-update-output-up = Sobe a saída uma página, rumo ao começo.
-update-output-end = o fim
-about-update-output-end = Vai para o fim da saída, onde está a execução em curso.
-system-update = atualizar agora
 brain-abort = parar
 brain-proceed = começar agora
 hint-update-mark = clique para ver a atualização acontecer
-echo-update-queued = Entrou na fila — começa quando a máquina estiver livre
-echo-update-started = A atualização começou
-echo-update-nowhere = Não há nada aqui que consiga começá-la
-update-no-output = ainda não disse nada
-update-verdict-ran = deu certo
-update-verdict-failed = falhou
-update-verdict-off = desligado
-update-verdict-skipped = não se aplica
-update-verdict-rehearsed = só ensaiou
-update-verdict-stopped = parou aqui
-update-verdict-pending = ainda vem
 
 ## The theme chooser — LEADER s t. The themes are listed by id and have no
 ## key; these are the options beside them — the desk under the windows, the
@@ -3083,7 +2686,7 @@ power-refused-authority = não permitido para esta sessão
 power-refused-absent = o daemon não está lá, ou o hardware não consegue
 power-refused-invalid = o valor foi recusado
 power-refused-other = recusado
-echo-power-refused = { $what } { $why } ({ $words })
+echo-power-refused = { $what } { $why }
 echo-power-profile-not-offered = { $wanted } não é oferecido por esta máquina; { $applied } aplicado
 
 # OS TRÊS ALARMES, levantados pelo rodapé quando o nível do UPower muda.
@@ -3155,18 +2758,13 @@ notif-charger-plugged-summary = Carregador conectado
 notif-charger-plugged-body = A energia vem do carregador.
 notif-charger-unplugged-summary = Carregador removido
 notif-charger-unplugged-body = A máquina está na bateria.
-notif-disk-app = disco
-notif-disk-relieved-summary = Espaço aberto no disco: { $freed } liberados
-notif-disk-relieved-body = Agora { $free }% dele está livre.
-notif-disk-still-short-summary = O disco continua sem espaço
-notif-disk-still-short-body = Só { $free }% dele está livre, e nada mais podia sair sem você. O que o ocupa é seu para escolher: arquivos, programas, o histórico do seu próprio perfil ou as gerações antigas do sistema (a Memória do sistema pode apará-las). Isto é dito uma vez, até abrir espaço de novo.
 
 # A SAÍDA — as três marcas, e o que o daemon acredita.
 network-way = a internet
 network-airplane = modo avião
 network-tunnel-drop = RET derruba
 cmd-network-airplane = Modo avião (alterna)
-echo-network-refused = a rede recusou: { $error }
+echo-network-refused = A rede recusou: { $why }
 echo-view-busy = outra vista está com o rodapé: Esc fecha ela primeiro
 hint-net-off = conectado, e nada do outro lado — clique abre a rede
 hint-net-portal = algo está pedindo que você entre — clique abre a rede
@@ -3241,7 +2839,7 @@ network-lan-gateway = o roteador desta rede
 network-lan-this-machine = esta máquina
 network-lan-looking = procurando as outras…
 network-lan-answered = respondeu
-network-lan-refused = esta máquina não pode mandar ping: { $error }
+network-lan-refused = esta máquina não pode mandar ping: o sistema não a deixa abrir o socket
 network-lan-swept = { $answered ->
     [one] uma máquina respondeu de { $asked } perguntadas, { $range }
    *[other] { $answered } máquinas responderam de { $asked } perguntadas, { $range }
@@ -3273,7 +2871,7 @@ network-import-openvpn = OpenVPN
 network-import-endpoint = vai para
 network-import-dns = mudaria seu DNS para
 network-import-everything = tudo o que esta máquina manda passaria por ele
-network-import-asks = vai pedir senha na primeira vez que subir
+network-import-asks = pede usuário e senha assim que for trazida, e os guarda
 network-import-bring = trazer
 network-import-leave = deixar onde está
 network-import-where = Caminho do arquivo .conf ou .ovpn
@@ -3677,7 +3275,7 @@ bluetooth-pairing-service = { $name } quer usar { $service }
 bluetooth-pairing-answer = y aceita · n recusa
 
 # O QUE DEU ERRADO, dito como o nome da porta que fechou.
-echo-bluetooth-refused = { $what }: { $why } ({ $words })
+echo-bluetooth-refused = { $what }: { $why }
 bluetooth-what-connect = a conexão
 bluetooth-what-pair = o pareamento
 bluetooth-what-forget = esquecer o dispositivo
@@ -3802,7 +3400,7 @@ display-left-of = à esquerda de { $other }
 display-right-of = à direita de { $other }
 display-above = acima de { $other }
 display-below = abaixo de { $other }
-display-arrange-how = As setas movem a tela sob o cursor de um lado para o outro.
+display-arrange-how = As setas levam a tela sob o cursor até a próxima borda de uma vizinha — ao lado dela, alinhada com ela — e Shift com ↑ ou ↓ a põe acima ou abaixo.
 
 display-ask = { $what } em { $screen }.
 display-ask-seconds = Volta sozinho em { $seconds }s.
@@ -3810,7 +3408,6 @@ display-ask-forget = Tudo o que foi escolhido para { $screen } volta ao que o co
 display-ask-nothing-yet = Nada mudou ainda.
 display-leave-it = Deixar como está
 display-forget-it = Esquecer tudo
-display-screen-is-dark = o compositor não está desenhando nela
 display-place-and-picture = { $set } (está em { $picture })
 display-scale-and-picture = { $set } (a imagem está em { $picture })
 display-screen-gone = { $screen } não está mais aí; a mudança foi junto.
@@ -3833,7 +3430,6 @@ display-no-light-here = O brilho de nenhuma tela pode ser mudado daqui
 display-refused-not-writable = o arquivo é do root, e a regra que o abre não rodou neste painel
 display-refused-nowhere = não há onde escrever
 display-refused-other = não deu
-echo-display-refused = As telas recusaram: { $why } ({ $words })
 echo-display-refused-plain = As telas recusaram: { $why }
 
 # OS TECLADOS (`LEADER s k`) — quais esta máquina tem, e o que cada tecla de
@@ -4360,7 +3956,6 @@ about-files-menu = Abre a lista de tudo o que se pode fazer com o que está sob 
 about-files-mark = Marca a linha sob o cursor, ou tira a marca dela — o que está marcado é sobre o que a próxima ação age.
 about-files-mark-all = Marca de uma vez todas as entradas desta pasta.
 about-files-unmark-all = Tira a marca de todas as entradas desta pasta.
-about-files-hidden = Mostra ou esconde as entradas cujo nome começa com um ponto.
 about-files-columns = Mostra ou esconde as permissões, o dono, o grupo e a data de modificação em cada linha da listagem.
 about-files-header = Mostra ou esconde a linha que nomeia as colunas da listagem e carrega a seta que diz por qual delas ela está ordenada. Nasce escondida.
 about-files-sort = Muda por qual campo a listagem é ordenada: o nome, o tamanho, a data ou o tipo.
@@ -4445,9 +4040,6 @@ lifeline-logs-opened = o journal está aberto num terminal
 lifeline-restarting = pedi ao systemd para subir de novo
 lifeline-would-not-start = o systemd não subiu; os logs dizem por quê
 lifeline-no-journalctl = o journal não abriu; o journalctl não está nesta máquina
-# DRAWN, AND REFUSING. The owner asked for the option to exist and for its
-# implementation to wait, so it says which of the two it is.
-lifeline-ai-not-yet = essa ainda não existe — está aqui para ter onde nascer
 # THE NESTED LOOP HAS NO UNIT. `nix/footer-single.nix` starts the footer as an
 # ordinary background child, so there is nothing for systemd to restart — and
 # saying so beats answering about a unit it has never heard of.
@@ -4577,7 +4169,7 @@ pointers-is-first = o cursor em que os teclados estão
 # =====================================================================
 # LEADER d — development: tools for whoever builds this distro.
 # =====================================================================
-# The screen resizer (`LEADER d r`, `resizer.rs`): two curtains cut the
+# The screen resizer (`LEADER / r`, `resizer.rs`): two curtains cut the
 # screen, and everything is laid out in the room they leave. Its line on the
 # bottom curtain says the room in pixels and in the grid, and each key's word
 # is short because the line is one line; `about-` is what the pointer reads.
@@ -4761,13 +4353,13 @@ camera-shuttered = A lente está coberta pelo obturador da própria câmera.
 camera-factory = Voltar todos os controles ao de fábrica
 
 camera-heading-effects = Efeitos
-camera-about-effects = O que é feito na imagem da câmera, ao vivo — no app, nas fotos e gravações, e no que os outros programas recebem da câmera virtual.
+camera-about-effects = O que é feito na imagem da câmera, ao vivo — no app, e nas fotos e gravações. A câmera virtual leva este efeito, nenhum ou um próprio: veja a seção dela.
 camera-effect = Efeito
 camera-background = Fundo
 camera-backdrop = Imagem atrás de você
 
 camera-heading-virtual = Câmera virtual
-camera-about-virtual = Outros programas — uma chamada no navegador, uma reunião — podem escolher a câmera “ronoctua” e receber esta imagem, com os efeitos. Ela só envia enquanto está ligada.
+camera-about-virtual = Outros programas — uma chamada no navegador, uma reunião — podem escolher a câmera “ronoctua” e receber esta imagem, com o efeito escolhido para ela abaixo. Ela só envia enquanto está ligada.
 camera-virtual-now = Ligada agora
 camera-virtual-at-start = Ligada a cada início
 camera-virtual-sends = Ela envia
@@ -4885,10 +4477,9 @@ cmd-player-less = O valor um passo atrás
 cmd-player-more = O valor um passo à frente
 cmd-player-enter = O que um clique na linha faz
 cmd-player-remove = Tirar da fila, ou do que toca junto
-cmd-player-browse = Os arquivos do player: música, vídeos e clipes musicais
-cmd-player-add = Pôr o arquivo, ou a pasta como uma playlist, na fila
-cmd-player-parent = A pasta de cima
-cmd-player-play-now = Tocar o arquivo, ou a pasta, agora — logo depois do que toca; a fila fica
+cmd-player-browse = Escolher arquivos para a fila: música, vídeos, tudo o que o player toca
+cmd-player-add = Pôr na fila o que a linha toca — uma rádio, um canal, um filme
+cmd-player-play-now = Tocar agora o que a linha toca — logo depois do que toca; a fila fica
 cmd-player-clear = Tirar tudo da fila
 cmd-player-quieter = O volume um passo abaixo
 cmd-player-louder = O volume um passo acima
@@ -4942,7 +4533,6 @@ about-column-close = Fechar a coluna; o que ela mostra continua
 # The close glyph's own sentence, under the pointer on the control line —
 # as short as the sizes', because the line is a small column's.
 about-column-close-glyph = Fechar
-about-column-widen = Volta ao tamanho que tinha antes da barra
 column-bar-not-offered = Esta coluna ainda não tem nada feito para a barra
 column-no-room = Esta tela não tem espaço para uma coluna mais larga
 # The two refusals again, under the pointer on the control line: the room
@@ -4962,7 +4552,6 @@ player-previous = anterior
 player-remove = remove
 player-browse = arquivos
 player-add = pôr na fila
-player-parent = subir
 player-play-now = tocar já
 player-clear = limpar a fila
 player-quieter = mais baixo
@@ -4997,11 +4586,7 @@ ask-player-enqueue = Pôr na fila (um caminho ou um endereço)
 ask-player-together = Para tocar junto (um caminho ou um endereço)
 ask-player-rename = Um nome novo (vazio: o próprio)
 ask-player-save-set = O nome do conjunto
-ask-player-save-set-folder = A pasta onde salvar o conjunto
 ask-player-save-queue = O nome da fila
-ask-player-save-queue-folder = A pasta onde salvar a fila
-ask-player-open-saved = Um conjunto ou uma fila para abrir (um caminho)
-ask-player-subtitle-file = Um arquivo de legenda para pôr sobre a imagem (um caminho)
 ask-player-lane-start = Começa em (ou +1,5)
 ask-player-lane-until = Toca até (ou +1,5)
 ask-player-lane-title = Nome dela (vazio: o do arquivo)
@@ -5021,7 +4606,6 @@ ask-player-tag-show = Série
 ask-player-tag-season = Temporada
 ask-player-tag-episode = Episódio
 ask-player-tag-director = Direção
-ask-player-cover-file = Uma imagem (um caminho)
 ask-player-tag-name = Nome da etiqueta nova
 ask-player-tag-value = O valor dela
 ask-player-tag-value-all = O valor dela (substitui tudo o que ela tem)
@@ -5289,16 +4873,11 @@ player-feature-save-queue = Salvar fila…
 player-feature-rename = Renomear…
 player-renamed = Agora se chama { $name }.
 player-renamed-back = { $was } voltou ao próprio nome.
-player-save-bad-name = O nome de um arquivo não pode ter “/”, nem ser “.” ou “..”.
-player-save-no-folder = { $folder } não é uma pasta.
-player-ask-overwrite = { $name } já existe em { $folder }. Gravar por cima?
 player-saving = Gravando { $name } em { $folder }.
 player-about-open = Um conjunto toca agora, logo depois do que toca. Uma fila toma o lugar da fila.
 player-ask-replace-queue = Pôr { $name } no lugar da fila? A fila como está agora sai.
 player-queue-opened = { $name } agora é a fila.
 player-open-not-ours = { $name } não é um conjunto (.rset) nem uma fila (.rqueue).
-player-browse-empty-saved = Nenhum conjunto ou fila aqui, e nenhuma pasta.
-player-browse-type = Digitar um caminho ou um endereço…
 player-heading-question = Uma pergunta
 player-answer-no = Não
 player-answer-yes = Sim
@@ -5309,14 +4888,6 @@ player-ask-quit = Fechar o player em todo lugar? O que toca para, e toda janela,
 player-queue-cleared = A fila está vazia agora.
 player-not-installed = O player não está instalado nesta máquina: o perfil dela o deixa de fora (ronoctua.player.enable).
 player-column-refused = A coluna não pôde ser levantada: { $why }
-player-place-music = Música
-player-place-videos = Vídeos
-player-place-music-videos = Clipes musicais
-player-browse-folder = Pasta
-player-browse-play-folder = Tocar esta pasta
-player-browse-enqueue-folder = Pôr esta pasta na fila
-player-browse-empty = Nada aqui que o player toque, e nenhuma pasta.
-player-browse-refused = Esta pasta não pôde ser lida: { $why }
 player-browse-nothing-to-play = Nada nesta pasta é algo que o player toque.
 player-trouble-unplayable = Não foi possível tocar isto: { $why }
 player-trouble-no-decoder = Este formato precisa de { $program }, que não está instalado.
@@ -5394,7 +4965,6 @@ player-trouble-tag-no-room = Não há espaço para a cópia: precisa de { $need 
 player-trouble-tag-unreadable = Não foi possível ler as etiquetas.
 player-trouble-tag-unwritable = A gravação falhou; o arquivo ficou como estava.
 player-trouble-tag-no-writer = Nada aqui grava as etiquetas deste tipo de arquivo ({ $container }).
-player-trouble-tag-no-place = Este arquivo não tem lugar para isso.
 player-trouble-tag-missing = { $program ->
         [mkvextract] O mkvextract não está instalado: arquivos Matroska só são lidos por inteiro e gravados com o perfil de mídia.
         [mkvmerge] O mkvmerge não está instalado: arquivos Matroska só são lidos por inteiro e gravados com o perfil de mídia.
@@ -5529,8 +5099,6 @@ player-page-favourites = Favoritos
 player-page-recent = Tocados há pouco
 player-about-radio = Estações de rádio do mundo inteiro, do radio-browser: por país, por gênero, por língua ou pelo nome.
 player-about-tv = Canais de TV do mundo inteiro, da lista pública do iptv-org: por país ou pelo nome.
-player-about-channels = TV ao vivo, filmes do Internet Archive e o que está ao vivo no YouTube, por tema.
-player-about-theme = Cada fonte é perguntada à parte, a primeira vez só depois que você a permitir.
 player-about-favourites = O que você guardou com a estrela: estações, canais, filmes e lives.
 player-about-recent = As transmissões que tocaram há pouco, como o player se lembra delas.
 player-favourites-none = Nada guardado ainda.
@@ -5541,11 +5109,7 @@ player-radio-language-search = Achar uma língua pelo nome
 player-about-radio-genres = Os gêneros com mais estações. Qualquer outro se acha pelo nome, como o radio-browser o escreve.
 player-about-radio-languages = As línguas com mais estações. Qualquer outra se acha pelo nome, como o radio-browser a escreve — em inglês.
 player-tv-search = Buscar canais pelo nome
-player-archive-search = Buscar filmes pelo título
 player-heading-countries = Países
-player-heading-live-tv = TV ao vivo
-player-heading-archive = Internet Archive
-player-heading-lives = Ao vivo no YouTube
 player-picks-radio = Estações de rádio
 player-picks-tv = Televisão
 player-picks-archive = Filmes do acervo
@@ -5574,14 +5138,6 @@ player-stations-page-of = Página { $page } de { $pages } — { $total } estaç�
 player-stations-page = Página { $page } desta lista — { $most } por página, as mais tocadas primeiro.
 player-stations-more = Mais estações
 player-stations-earlier = Estações anteriores
-player-archive-page = Página { $number } dos { $total } encontrados.
-player-archive-rights = direitos: { $licence }
-player-licence-cc = CC { $kind }
-player-licence-cc-version = CC { $kind } { $version }
-player-archive-more = Mais filmes
-player-archive-earlier = Filmes anteriores
-player-lives-watching = { $count } assistindo
-player-lives-found-by = achado por “{ $words }”
 player-listed-at = Lista de { $date }
 player-listed-updating = Atualizando…
 player-listing-nothing = Nada listado ainda.
@@ -5590,7 +5146,7 @@ player-listing-every = Mostrando { $shown } de { $total }: mostrar todos
 player-searched-title = Com o nome “{ $words }”
 player-favourite-added = Guardado nos favoritos.
 player-favourite-removed = Tirado dos favoritos.
-player-about-internet = Nada aqui chega à internet até você permitir, e cada linha diz a quem pergunta. As duas primeiras perguntam sozinhas; as outras só quando você pressiona uma linha que as nomeia, e pressionar permite.
+player-about-internet = Nada aqui chega à internet até você permitir, e cada linha diz a quem pergunta. As do primeiro título perguntam sozinhas; as outras só quando você pressiona uma linha que as nomeia, e pressionar permite.
 player-heading-on-their-own = Perguntados sozinhos
 player-heading-when-asked = Perguntados ao pressionar
 player-heading-keys = Suas chaves
@@ -5703,7 +5259,6 @@ player-lyrics-into-tag = Gravando a letra em { $name }…
 ask-player-find-words = Buscar
 ask-player-search-radio = Estações com o nome
 ask-player-search-tv = Canais com o nome
-ask-player-search-archive = Filmes com o título
 ask-player-search-genre = Gênero
 ask-player-search-language = Língua (em inglês, como o radio-browser a escreve)
 ask-player-find-language = Língua, pelo nome ou pelo código (japonês, pt-BR)
@@ -5778,7 +5333,6 @@ tongue-ja = Japonês
 tongue-ko = Coreano
 tongue-sw = Suaíli
 tongue-af = Africâner
-player-browse-empty-pictures = Nenhuma imagem aqui.
 player-streams-none = Nenhum fluxo deste arquivo pôde ser lido.
 player-chapters-none = Este arquivo não tem capítulos.
 player-tags-none = Nenhuma ferramenta leu etiqueta deste arquivo.
@@ -5883,7 +5437,7 @@ player-tag-show = Série
 player-tag-season = Temporada
 player-tag-episode = Episódio
 player-tag-director = Direção
-hint-player = { $what }. Um clique toca ou pausa; o botão direito abre a coluna.
+hint-player = { $what }. Um clique toca ou pausa; o botão direito abre a coluna, ou a fecha.
 hint-player-next = A seguir: { $what }. O botão direito abre o player aqui.
 hint-player-next-shuffled = A seguir, na ordem embaralhada: { $what }. O botão direito abre o player aqui.
 hint-player-next-end = Este é o último item da fila: avançar faz o player parar. O botão direito abre o player aqui.
@@ -6317,7 +5871,7 @@ software-shelf-dashboard = Dashboard Icons
 software-shelf-collection = a coleção da distro
 software-shelf-file = um arquivo seu
 software-icon-looking-for = Procurando
-software-icon-typed = Digitar o caminho de uma imagem
+software-icon-typed = Escolher uma imagem nos arquivos
 software-icon-clipboard = Usar a imagem copiada
 software-icon-files = Escolher uma no gerenciador de arquivos
 software-note-drop = Ou solte uma imagem aqui.
@@ -6663,8 +6217,6 @@ kiosk-menu-show-chrome = Mostrar as barras do Chrome
 kiosk-menu-hide-chrome = Esconder as barras do Chrome
 kiosk-menu-address-show = Mostrar a linha de endereço
 kiosk-menu-address-hide = Esconder a linha de endereço
-kiosk-menu-adapt = Adaptar a modeline
-kiosk-menu-plain = Modeline comum
 kiosk-menu-release = Janela comum
 kiosk-heading-pinned = Fixadas
 kiosk-heading-others = As outras
@@ -6712,3 +6264,3128 @@ echo-kiosk-no-extension = Nenhuma extensão com esse id está neste Chrome.
 echo-kiosk-no-nonce = Não foi possível ler um número aleatório para parear um quiosque.
 echo-kiosk-no-tab = O quiosque não tem essa aba.
 echo-modeline-will-not-parse = O modeline.json não é lido, e gravar substituiria o que há nele.
+
+# The core's own words: why a row has no moment, why an action was refused,
+# and why a module's journal is not being followed.
+brain-why-quiet = Só quando pedida
+brain-why-unknown = Não sabe fazer isso
+brain-why-refused = A máquina recusou
+brain-why-rehearsing = Este cérebro só ensaia: não muda nada na máquina
+brain-journal-why-no-program = Este cérebro não recebeu o journal para ler
+brain-journal-why-unstartable = Não foi possível abrir o leitor do journal
+brain-journal-why-unreadable = Não foi possível ler o journal
+brain-journal-why-ended = O journal deixou de ser seguido; vai tentar de novo
+
+# THE BRAIN'S MODULES — what a notice answers to, on the strip under the
+# minibuffer and on the brain's page; the page's notices, a watch, and the
+# activity log folded.
+cmd-brain-act = Fazer o que ele oferece
+cmd-brain-dismiss = Dispensar
+cmd-brain-snooze = Adiar
+about-brain-act = Faz o que o aviso da frente oferece: a primeira ação do módulo que o levantou.
+about-brain-dismiss = Dispensa o aviso da frente. Ele só volta se o módulo dele o levantar de novo.
+about-brain-snooze = Adia o aviso da frente, pelo tempo que o primeiro adiamento dele diz.
+brain-band-dismiss = dispensar
+brain-band-snooze = { $minutes } min
+brain-band-more = +{ $count }
+hint-brain-more = todos os avisos, na página do Brain
+echo-brain-no-notice = O cérebro não tem nada a dizer agora
+echo-brain-not-offered = O aviso não oferece isso
+echo-brain-no-action = Nenhum módulo do cérebro oferece isso
+echo-brain-dismissed = Dispensado
+echo-brain-snoozed = Adiado
+echo-brain-taken = O cérebro aceitou
+echo-brain-refused = O cérebro recusou: { $why }
+brain-outcome-noted = Anotado
+brain-notices = Avisos
+brain-actions = O que ele oferece
+brain-watching = Vigiando
+brain-activity-last = Último:
+brain-activity-first = Primeiro
+brain-activity-times = Vezes
+brain-since = Desde
+
+# ICONS — the library the icons app and fast-access share (`ronoctua-iconset`).
+# The words a person TYPES before a colon to narrow a search: the search
+# language is interface, so every language's word is accepted.
+icons-prefix-block = bloco
+icons-prefix-tag = etiqueta
+icons-prefix-token = token
+icons-prefix-app = app
+icons-prefix-symbols = simbolos
+icons-prefix-family = familia
+icons-prefix-category = categoria
+icons-prefix-cat = cat
+icons-prefix-name = nome
+icons-prefix-group = grupo
+icons-prefix-subgroup = subgrupo
+icons-prefix-tone = tom
+# The value words of the enumeration filters (`family:letter`), typed after
+# the prefix. One word each, without accents: they are typed, not read.
+icons-value-family-symbol = simbolo
+icons-value-family-letter = letra
+icons-value-family-number = numero
+icons-value-family-mark = marca
+icons-value-family-punctuation = pontuacao
+icons-value-family-other = outro
+icons-value-family-emoji = emoji
+icons-value-group-faces = carinhas
+icons-value-group-people = pessoas
+icons-value-group-nature = natureza
+icons-value-group-food = comida
+icons-value-group-travel = viagem
+icons-value-group-activities = atividades
+icons-value-group-objects = objetos
+icons-value-group-symbols = simbolos
+icons-value-group-flags = bandeiras
+icons-value-tone-light = claro
+icons-value-tone-medium-light = medio-claro
+icons-value-tone-medium = medio
+icons-value-tone-medium-dark = medio-escuro
+icons-value-tone-dark = escuro
+# The panels' labels. Typed into the search, each finds its whole category —
+# the generators put the same words into the tags.
+icons-set-all = Todos os conjuntos
+icons-set-cod = Codicons
+icons-set-custom = Personalizados
+icons-set-dev = Devicons
+icons-set-extra = Extra
+icons-set-fa = Font Awesome
+icons-set-fae = Font Awesome Extension
+icons-set-iec = Símbolos de energia IEC
+icons-set-indent = Indentação
+icons-set-indentation = Indentação
+icons-set-linux = Logos de distribuições
+icons-set-md = Material Design
+icons-set-oct = Octicons
+icons-set-pl = Powerline
+icons-set-ple = Powerline Extra
+icons-set-pom = Pomicons
+icons-set-seti = Seti-UI
+icons-set-weather = Clima
+icons-category-all = Todas as categorias
+icons-category-accessibility = Acessibilidade
+icons-category-account = Conta
+icons-category-animals = Animais
+icons-category-arrows = Setas
+icons-category-brands = Marcas
+icons-category-buildings = Edifícios
+icons-category-charts = Gráficos
+icons-category-communication = Comunicação
+icons-category-connectivity = Conectividade
+icons-category-cursors = Cursores
+icons-category-design = Design
+icons-category-development = Desenvolvimento
+icons-category-devices = Dispositivos
+icons-category-emoji = Emoji
+icons-category-files = Arquivos
+icons-category-finance = Finanças
+icons-category-food-beverage = Comida
+icons-category-gaming = Jogos
+icons-category-home = Casa
+icons-category-layout = Layout
+icons-category-mail = Correio
+icons-category-math = Matemática
+icons-category-medical = Médico
+icons-category-multimedia = Multimídia
+icons-category-nature = Natureza
+icons-category-navigation = Navegação
+icons-category-notifications = Notificações
+icons-category-people = Pessoas
+icons-category-photography = Fotografia
+icons-category-science = Ciência
+icons-category-seasons = Estações
+icons-category-security = Segurança
+icons-category-shapes = Formas
+icons-category-shopping = Compras
+icons-category-social = Social
+icons-category-sports = Esportes
+icons-category-sustainability = Sustentabilidade
+icons-category-text = Texto
+icons-category-time = Tempo
+icons-category-tools = Ferramentas
+icons-category-transportation = Transporte
+icons-category-travel = Viagem
+icons-category-weather = Clima
+icons-family-all = Todas as famílias
+icons-family-symbol = Símbolo
+icons-family-letter = Letra
+icons-family-number = Número
+icons-family-mark = Marca
+icons-family-punctuation = Pontuação
+icons-family-other = Outro
+icons-family-emoji = Emoji
+icons-group-faces = Carinhas e emoções
+icons-group-people = Pessoas e corpo
+icons-group-nature = Animais e natureza
+icons-group-food = Comida e bebida
+icons-group-travel = Viagem e lugares
+icons-group-activities = Atividades
+icons-group-objects = Objetos
+icons-group-symbols = Símbolos
+icons-group-flags = Bandeiras
+icons-tone-light = Pele clara
+icons-tone-medium-light = Pele clara média
+icons-tone-medium = Pele média
+icons-tone-medium-dark = Pele escura média
+icons-tone-dark = Pele escura
+# Why there are no icons to show.
+icons-why-no-variable = As tabelas de ícones não foram entregues a este programa (RONOCTUA_ICONSET não está definida).
+icons-why-unreadable = Uma tabela de ícones falta ou não pode ser lida: { $file }.
+icons-why-garbled = Uma tabela de ícones não está no formato que o gerador escreve: { $file }.
+# THE CALCULATOR'S ENGINE (`ronoctua-calc`): why an expression has no value,
+# the converter's categories, the shapes of a quick answer, and every unit's
+# name — chosen by the number (`$count`, a number), as `assets/units.nix` declares.
+calc-why-empty = Não há nada para calcular.
+calc-why-unexpected = Algo aqui está fora do lugar.
+calc-why-unbalanced = Um parêntese foi aberto e não fechado, ou fechado sem ter sido aberto.
+calc-why-unknown-word = Uma palavra que não é unidade, moeda, função nem fuso horário.
+calc-why-incompatible = São grandezas de tipos diferentes e não se combinam.
+calc-why-divide-by-zero = Uma divisão por zero.
+calc-why-too-large = O resultado é grande demais para caber.
+calc-why-domain = A função não tem valor aí.
+calc-why-no-rates = Converter entre moedas precisa das cotações, e ainda não há nenhuma.
+calc-why-unknown-currency = As cotações não trazem esta moeda.
+calc-why-unknown-zone = Nenhum fuso horário tem esse nome.
+calc-why-bad-date = Essa data não existe.
+calc-why-bad-roman = Isso não é um número romano (de 1 a 3999, na forma usual).
+calc-why-bad-digit = Um algarismo que a base do número não tem.
+calc-rates-why-wrong-pass = A permissão dada é para outro site, não o do Banco Central Europeu.
+calc-rates-why-unreachable = Não foi possível alcançar o Banco Central Europeu.
+calc-rates-why-failed = O Banco Central Europeu respondeu com uma falha.
+calc-rates-why-garbled = O que voltou não é o arquivo de cotações do Banco Central Europeu.
+calc-category-length = Comprimento
+calc-category-mass = Massa
+calc-category-volume = Volume
+calc-category-area = Área
+calc-category-temperature = Temperatura
+calc-category-time = Tempo
+calc-category-speed = Velocidade
+calc-category-data = Dados
+calc-category-energy = Energia
+calc-category-power = Potência
+calc-category-pressure = Pressão
+calc-category-angle = Ângulo
+calc-category-frequency = Frequência
+calc-category-fuel-economy = Consumo de combustível
+calc-category-cooking = Culinária
+calc-shape-arithmetic = Aritmética
+calc-shape-conversion = Conversão
+calc-shape-percentage = Porcentagem
+calc-shape-base = Base numérica
+calc-shape-roman = Números romanos
+calc-shape-date = Data
+calc-shape-zone = Fuso horário
+calc-shape-currency = Moeda
+unit-metre = { $count ->
+        [one] metro
+       *[other] metros
+    }
+unit-kilometre = { $count ->
+        [one] quilômetro
+       *[other] quilômetros
+    }
+unit-centimetre = { $count ->
+        [one] centímetro
+       *[other] centímetros
+    }
+unit-millimetre = { $count ->
+        [one] milímetro
+       *[other] milímetros
+    }
+unit-micrometre = { $count ->
+        [one] micrômetro
+       *[other] micrômetros
+    }
+unit-nanometre = { $count ->
+        [one] nanômetro
+       *[other] nanômetros
+    }
+unit-mile = { $count ->
+        [one] milha
+       *[other] milhas
+    }
+unit-yard = { $count ->
+        [one] jarda
+       *[other] jardas
+    }
+unit-foot = { $count ->
+        [one] pé
+       *[other] pés
+    }
+unit-inch = { $count ->
+        [one] polegada
+       *[other] polegadas
+    }
+unit-nautical-mile = { $count ->
+        [one] milha náutica
+       *[other] milhas náuticas
+    }
+unit-astronomical-unit = { $count ->
+        [one] unidade astronômica
+       *[other] unidades astronômicas
+    }
+unit-light-year = { $count ->
+        [one] ano-luz
+       *[other] anos-luz
+    }
+unit-kilogram = { $count ->
+        [one] quilograma
+       *[other] quilogramas
+    }
+unit-gram = { $count ->
+        [one] grama
+       *[other] gramas
+    }
+unit-milligram = { $count ->
+        [one] miligrama
+       *[other] miligramas
+    }
+unit-microgram = { $count ->
+        [one] micrograma
+       *[other] microgramas
+    }
+unit-tonne = { $count ->
+        [one] tonelada
+       *[other] toneladas
+    }
+unit-pound = { $count ->
+        [one] libra
+       *[other] libras
+    }
+unit-ounce = { $count ->
+        [one] onça
+       *[other] onças
+    }
+unit-stone = { $count ->
+        [one] stone
+       *[other] stones
+    }
+unit-carat = { $count ->
+        [one] quilate
+       *[other] quilates
+    }
+unit-short-ton = { $count ->
+        [one] tonelada curta
+       *[other] toneladas curtas
+    }
+unit-long-ton = { $count ->
+        [one] tonelada longa
+       *[other] toneladas longas
+    }
+unit-cubic-metre = { $count ->
+        [one] metro cúbico
+       *[other] metros cúbicos
+    }
+unit-litre = { $count ->
+        [one] litro
+       *[other] litros
+    }
+unit-decilitre = { $count ->
+        [one] decilitro
+       *[other] decilitros
+    }
+unit-centilitre = { $count ->
+        [one] centilitro
+       *[other] centilitros
+    }
+unit-millilitre = { $count ->
+        [one] mililitro
+       *[other] mililitros
+    }
+unit-cubic-centimetre = { $count ->
+        [one] centímetro cúbico
+       *[other] centímetros cúbicos
+    }
+unit-gallon = { $count ->
+        [one] galão
+       *[other] galões
+    }
+unit-imperial-gallon = { $count ->
+        [one] galão imperial
+       *[other] galões imperiais
+    }
+unit-quart = { $count ->
+        [one] quarto de galão
+       *[other] quartos de galão
+    }
+unit-pint = { $count ->
+        [one] pinta
+       *[other] pintas
+    }
+unit-fluid-ounce = { $count ->
+        [one] onça líquida
+       *[other] onças líquidas
+    }
+unit-cubic-foot = { $count ->
+        [one] pé cúbico
+       *[other] pés cúbicos
+    }
+unit-cubic-inch = { $count ->
+        [one] polegada cúbica
+       *[other] polegadas cúbicas
+    }
+unit-square-metre = { $count ->
+        [one] metro quadrado
+       *[other] metros quadrados
+    }
+unit-square-kilometre = { $count ->
+        [one] quilômetro quadrado
+       *[other] quilômetros quadrados
+    }
+unit-square-centimetre = { $count ->
+        [one] centímetro quadrado
+       *[other] centímetros quadrados
+    }
+unit-square-millimetre = { $count ->
+        [one] milímetro quadrado
+       *[other] milímetros quadrados
+    }
+unit-hectare = { $count ->
+        [one] hectare
+       *[other] hectares
+    }
+unit-acre = { $count ->
+        [one] acre
+       *[other] acres
+    }
+unit-square-foot = { $count ->
+        [one] pé quadrado
+       *[other] pés quadrados
+    }
+unit-square-inch = { $count ->
+        [one] polegada quadrada
+       *[other] polegadas quadradas
+    }
+unit-square-yard = { $count ->
+        [one] jarda quadrada
+       *[other] jardas quadradas
+    }
+unit-square-mile = { $count ->
+        [one] milha quadrada
+       *[other] milhas quadradas
+    }
+unit-kelvin = { $count ->
+        [one] kelvin
+       *[other] kelvins
+    }
+unit-celsius = { $count ->
+        [one] grau Celsius
+       *[other] graus Celsius
+    }
+unit-fahrenheit = { $count ->
+        [one] grau Fahrenheit
+       *[other] graus Fahrenheit
+    }
+unit-rankine = { $count ->
+        [one] grau Rankine
+       *[other] graus Rankine
+    }
+unit-second = { $count ->
+        [one] segundo
+       *[other] segundos
+    }
+unit-millisecond = { $count ->
+        [one] milissegundo
+       *[other] milissegundos
+    }
+unit-microsecond = { $count ->
+        [one] microssegundo
+       *[other] microssegundos
+    }
+unit-nanosecond = { $count ->
+        [one] nanossegundo
+       *[other] nanossegundos
+    }
+unit-minute = { $count ->
+        [one] minuto
+       *[other] minutos
+    }
+unit-hour = { $count ->
+        [one] hora
+       *[other] horas
+    }
+unit-day = { $count ->
+        [one] dia
+       *[other] dias
+    }
+unit-week = { $count ->
+        [one] semana
+       *[other] semanas
+    }
+unit-month = { $count ->
+        [one] mês
+       *[other] meses
+    }
+unit-year = { $count ->
+        [one] ano
+       *[other] anos
+    }
+unit-metre-per-second = { $count ->
+        [one] metro por segundo
+       *[other] metros por segundo
+    }
+unit-kilometre-per-hour = { $count ->
+        [one] quilômetro por hora
+       *[other] quilômetros por hora
+    }
+unit-mile-per-hour = { $count ->
+        [one] milha por hora
+       *[other] milhas por hora
+    }
+unit-knot = { $count ->
+        [one] nó
+       *[other] nós
+    }
+unit-foot-per-second = { $count ->
+        [one] pé por segundo
+       *[other] pés por segundo
+    }
+unit-bit = { $count ->
+        [one] bit
+       *[other] bits
+    }
+unit-byte = { $count ->
+        [one] byte
+       *[other] bytes
+    }
+unit-kilobit = { $count ->
+        [one] quilobit
+       *[other] quilobits
+    }
+unit-megabit = { $count ->
+        [one] megabit
+       *[other] megabits
+    }
+unit-gigabit = { $count ->
+        [one] gigabit
+       *[other] gigabits
+    }
+unit-kibibit = { $count ->
+        [one] kibibit
+       *[other] kibibits
+    }
+unit-mebibit = { $count ->
+        [one] mebibit
+       *[other] mebibits
+    }
+unit-kilobyte = { $count ->
+        [one] quilobyte
+       *[other] quilobytes
+    }
+unit-megabyte = { $count ->
+        [one] megabyte
+       *[other] megabytes
+    }
+unit-gigabyte = { $count ->
+        [one] gigabyte
+       *[other] gigabytes
+    }
+unit-terabyte = { $count ->
+        [one] terabyte
+       *[other] terabytes
+    }
+unit-petabyte = { $count ->
+        [one] petabyte
+       *[other] petabytes
+    }
+unit-kibibyte = { $count ->
+        [one] kibibyte
+       *[other] kibibytes
+    }
+unit-mebibyte = { $count ->
+        [one] mebibyte
+       *[other] mebibytes
+    }
+unit-gibibyte = { $count ->
+        [one] gibibyte
+       *[other] gibibytes
+    }
+unit-tebibyte = { $count ->
+        [one] tebibyte
+       *[other] tebibytes
+    }
+unit-pebibyte = { $count ->
+        [one] pebibyte
+       *[other] pebibytes
+    }
+unit-joule = { $count ->
+        [one] joule
+       *[other] joules
+    }
+unit-kilojoule = { $count ->
+        [one] quilojoule
+       *[other] quilojoules
+    }
+unit-megajoule = { $count ->
+        [one] megajoule
+       *[other] megajoules
+    }
+unit-calorie = { $count ->
+        [one] caloria
+       *[other] calorias
+    }
+unit-kilocalorie = { $count ->
+        [one] quilocaloria
+       *[other] quilocalorias
+    }
+unit-watt-hour = { $count ->
+        [one] watt-hora
+       *[other] watts-hora
+    }
+unit-kilowatt-hour = { $count ->
+        [one] quilowatt-hora
+       *[other] quilowatts-hora
+    }
+unit-electronvolt = { $count ->
+        [one] elétron-volt
+       *[other] elétrons-volt
+    }
+unit-british-thermal-unit = { $count ->
+        [one] unidade térmica britânica
+       *[other] unidades térmicas britânicas
+    }
+unit-watt = { $count ->
+        [one] watt
+       *[other] watts
+    }
+unit-kilowatt = { $count ->
+        [one] quilowatt
+       *[other] quilowatts
+    }
+unit-megawatt = { $count ->
+        [one] megawatt
+       *[other] megawatts
+    }
+unit-horsepower = horsepower
+unit-metric-horsepower = { $count ->
+        [one] cavalo-vapor
+       *[other] cavalos-vapor
+    }
+unit-pascal = { $count ->
+        [one] pascal
+       *[other] pascals
+    }
+unit-hectopascal = { $count ->
+        [one] hectopascal
+       *[other] hectopascals
+    }
+unit-kilopascal = { $count ->
+        [one] quilopascal
+       *[other] quilopascals
+    }
+unit-megapascal = { $count ->
+        [one] megapascal
+       *[other] megapascals
+    }
+unit-bar = { $count ->
+        [one] bar
+       *[other] bares
+    }
+unit-millibar = { $count ->
+        [one] milibar
+       *[other] milibares
+    }
+unit-atmosphere = { $count ->
+        [one] atmosfera
+       *[other] atmosferas
+    }
+unit-pound-per-square-inch = { $count ->
+        [one] libra por polegada quadrada
+       *[other] libras por polegada quadrada
+    }
+unit-millimetre-of-mercury = { $count ->
+        [one] milímetro de mercúrio
+       *[other] milímetros de mercúrio
+    }
+unit-torr = { $count ->
+        [one] torr
+       *[other] torrs
+    }
+unit-radian = { $count ->
+        [one] radiano
+       *[other] radianos
+    }
+unit-degree = { $count ->
+        [one] grau
+       *[other] graus
+    }
+unit-gradian = { $count ->
+        [one] grado
+       *[other] grados
+    }
+unit-arcminute = { $count ->
+        [one] minuto de arco
+       *[other] minutos de arco
+    }
+unit-arcsecond = { $count ->
+        [one] segundo de arco
+       *[other] segundos de arco
+    }
+unit-turn = { $count ->
+        [one] volta
+       *[other] voltas
+    }
+unit-hertz = hertz
+unit-kilohertz = quilohertz
+unit-megahertz = megahertz
+unit-gigahertz = gigahertz
+unit-revolution-per-minute = { $count ->
+        [one] rotação por minuto
+       *[other] rotações por minuto
+    }
+unit-litre-per-100-km = { $count ->
+        [one] litro por 100 quilômetros
+       *[other] litros por 100 quilômetros
+    }
+unit-kilometre-per-litre = { $count ->
+        [one] quilômetro por litro
+       *[other] quilômetros por litro
+    }
+unit-mile-per-gallon = { $count ->
+        [one] milha por galão
+       *[other] milhas por galão
+    }
+unit-mile-per-imperial-gallon = { $count ->
+        [one] milha por galão imperial
+       *[other] milhas por galão imperial
+    }
+unit-cup = { $count ->
+        [one] xícara
+       *[other] xícaras
+    }
+unit-customary-cup = { $count ->
+        [one] xícara americana
+       *[other] xícaras americanas
+    }
+unit-metric-cup = { $count ->
+        [one] xícara métrica
+       *[other] xícaras métricas
+    }
+unit-tablespoon = { $count ->
+        [one] colher de sopa
+       *[other] colheres de sopa
+    }
+unit-customary-tablespoon = { $count ->
+        [one] colher de sopa americana
+       *[other] colheres de sopa americanas
+    }
+unit-teaspoon = { $count ->
+        [one] colher de chá
+       *[other] colheres de chá
+    }
+unit-customary-teaspoon = { $count ->
+        [one] colher de chá americana
+       *[other] colheres de chá americanas
+    }
+
+# As recusas do player que o protocolo 3 trouxe.
+player-trouble-already-queued = Isto já está na fila: { $name }.
+player-trouble-changed-on-disk = O arquivo da fila mudou no disco desde que foi aberto ou salvo: { $path }
+player-trouble-no-origin = Esta fila nunca foi aberta de um arquivo nem salva como um, então não há onde salvá-la de novo.
+player-trouble-no-sound = Este arquivo não tem som para tocar.
+player-trouble-not-yet = O player ainda não faz isto.
+player-trouble-said = { $program } disse: { $text }
+# Um texto de várias linhas, editado no lugar (as duas portas).
+text-area-keep = guardar
+about-text-area-keep = Guardar o que está escrito aqui.
+text-area-discard = sair
+about-text-area-discard = Sair do texto; se ele mudou e não foi guardado, você é perguntado antes.
+ask-text-area-discard = Jogar fora o que foi escrito e não foi guardado?
+text-area-no = Não, continuar escrevendo
+text-area-yes = Sim, jogar fora
+about-text-area = Um texto de várias linhas, digitado e mudado aqui.
+text-area-not-kept = Nada guarda este texto aqui ainda; ele continua aberto como foi escrito.
+
+# THE LEADER'S SETS AND THE BARS' MODES (2026-09-30): the leader pressed again
+# walks the sets, and a tap of Ctrl at the root walks the bars' three modes.
+leader-set-default = padrão
+cmd-leader-set-default = As teclas como são, cada uma abrindo o seu app no rodapé
+cmd-footer-bars-cycle = O próximo dos três modos das barras: à mostra, escondidas empurrando as janelas, escondidas por cima delas
+cmd-leader-close = Fechar a lista da leader, como o Esc dela faz
+echo-bars-shown = Modeline e minibuffer à mostra
+echo-bars-push = Modeline e minibuffer escondidos; o que abre empurra as janelas
+echo-bars-cover = Modeline e minibuffer escondidos; o que abre fica por cima das janelas
+# THE MINIBUFFER'S DRAWER by name, and the compositor's transient keys for it.
+cmd-minibuffer-fold-open = Abrir a linha do minibuffer para ler o resto, ou descer por ela
+cmd-minibuffer-fold-close = Subir pela linha aberta do minibuffer, ou fechá-la
+cmd-wm-fold-keys-hold = Deixar Ctrl com as setas andar pela linha do minibuffer enquanto uma dica longa demais para ela está nela
+cmd-wm-fold-keys-free = Devolver Ctrl com as setas às janelas
+# THE MAXIMUM ALERT BAR (alert.rs). The title is drawn in capitals.
+alert-battery-low = Bateria fraca!!!
+alert-battery-low-body = Restam { $percent }%, na bateria, e o carregador não está ligado.
+hint-alert-close = Fecha este alerta; ele volta se a bateria cair mais um degrau
+cmd-alert-dismiss = Fechar a barra de alerta; ela volta se o que a causou piorar
+# A PREFERENCE THAT COULD NOT BE SAVED is said, never only logged.
+echo-preference-not-written = Não foi possível gravar { $file } ({ $why }): o que você mudou vale só até o rodapé reiniciar.
+# In a window the change is not in force anywhere: the file is the only road.
+echo-setting-not-written = Não foi possível gravar { $file } ({ $why }), e nada mudou.
+# THE FOOTER'S SETTINGS (LEADER s r, footer_settings.rs).
+group-footer-settings = rodapé
+# The modeline's name for its window (`br.ronoctua.footer-settings`).
+mode-footer-settings = ajustes do rodapé
+footer-settings-title = Rodapé
+cmd-footer-settings-open = Os ajustes do rodapé: as barras, o minibuffer livre e o quiosque
+cmd-footer-settings-window = Os ajustes do rodapé, numa janela
+cmd-footer-settings-up = Linha anterior
+cmd-footer-settings-down = Próxima linha
+cmd-footer-settings-enter = Mudar o ajuste sob o cursor
+footer-settings-up = cima
+footer-settings-down = baixo
+footer-settings-enter = mudar
+cmd-footer-hours = Mostrar as horas no minibuffer livre, ou parar de mostrar
+footer-settings-bars = As barras
+footer-settings-bars-mode = Modeline e minibuffer
+footer-settings-bars-shown = à mostra
+footer-settings-bars-push = escondidos, empurrando
+footer-settings-bars-cover = escondidos, por cima
+footer-settings-bars-note = Escondidas, as barras voltam na borda de baixo da tela; empurrando, o que abre afasta as janelas, e por cima, fica sobre elas. Um toque de { $keys } na raiz da leader passa ao próximo dos três.
+footer-settings-free = O minibuffer livre
+footer-settings-hours = Horas
+footer-settings-hours-note = A hora, à direita do minibuffer, enquanto nada mais é dito nele.
+footer-settings-kiosk = Quiosque
+footer-settings-kiosk-adapt = Adaptar a modeline a um quiosque
+footer-settings-on = ligado
+footer-settings-off = desligado
+
+player-channels-education = Educação
+player-channels-space = Espaço
+player-channels-history = História
+player-channels-nature = Natureza e animais
+player-channels-art = Arte e dança
+player-channels-gaming = Jogos
+player-channels-audiobooks = Audiolivros
+player-channels-source-iptv = Canais de TV do iptv-org
+player-channels-source-archive = Internet Archive
+player-channels-source-lives = Ao vivo no YouTube
+player-channels-source-nasa = Biblioteca de imagens e vídeos da NASA
+player-channels-source-commons = Wikimedia Commons
+player-channels-source-peertube = PeerTube, pelo SepiaSearch
+
+# A MODULE THE SYSTEM SWITCHED OFF (`ronoctua.brain.modules.<id>.enable =
+# false`): its row's reason, and what every ask about it is refused with — a
+# row's reason sits in a column sixteen cells wide.
+brain-why-system-off = Sistema desligou
+# And the date-and-time page's line under the clock watch's switch, when the
+# system switched that watch off.
+locale-watched-system-off = A configuração do sistema desligou esta vigia, então ela não liga daqui; é a configuração que a liga de volta.
+
+## file picker — the one picker of a file, a folder or a name to save under
+file-picker-filter-any = Todo arquivo
+file-picker-filter-images = Imagens
+file-picker-filter-media = O que o player toca
+file-picker-filter-lanes = O que toca junto
+file-picker-filter-saved = Conjuntos e filas
+file-picker-filter-subtitles = Legendas
+file-picker-filter-packages = Programas para instalar
+file-picker-filter-tunnels = Túneis (.conf, .ovpn)
+file-picker-row-play-folder = Tocar esta pasta
+file-picker-row-enqueue-folder = Pôr esta pasta na fila
+file-picker-ask-overwrite = { $name } já existe em { $folder }. Gravar por cima?
+file-picker-answer-no = Não
+file-picker-answer-yes = Sim, gravar por cima
+file-picker-type-note = Digite para estreitar a pasta; comece com / ou ~ para digitar um caminho.
+file-picker-places = Lugares
+file-picker-refused = Esta pasta não pôde ser lida: { $why }
+file-picker-empty = Nada aqui para escolher, e nenhuma pasta.
+file-picker-no-match = Nada aqui contém “{ $typed }”.
+file-picker-name = Nome
+file-picker-typed = Digitado
+file-picker-shows = Mostra
+file-picker-here = Escolher esta pasta
+file-picker-take = { $count ->
+    [one] Levar o arquivo marcado
+   *[other] Levar os { $count } arquivos marcados
+  }
+file-picker-home = Pasta pessoal
+file-picker-no-address = Esta página não aceita um endereço da web.
+file-picker-nothing-there = Não há nada em { $typed }.
+file-picker-no-name = Digite um nome antes.
+file-picker-bad-name = “{ $name }” não pode ser o nome de um arquivo.
+file-picker-is-a-folder = { $name } é uma pasta.
+file-picker-down = descer
+file-picker-up = subir
+file-picker-left = esquerda
+file-picker-right = direita
+file-picker-enter = abrir ou escolher
+file-picker-play-now = tocar já
+file-picker-mark = marcar
+file-picker-erase = apagar
+file-picker-parent = pasta de cima
+file-picker-filter = o que mostra
+file-picker-play-folder = tocar a pasta
+file-picker-enqueue-folder = pasta na fila
+file-picker-paste = colar
+file-picker-hidden = ocultos
+about-file-picker-down = A próxima linha — numa grade, a célula abaixo desta
+about-file-picker-up = A linha anterior — numa grade, a célula acima desta
+about-file-picker-left = A célula anterior, numa grade
+about-file-picker-right = A próxima célula, numa grade
+about-file-picker-enter = Abrir a pasta, ou escolher o arquivo, sob o cursor
+about-file-picker-play-now = Escolher para tocar agora, logo depois do que toca; a fila fica
+about-file-picker-mark = Marcar o arquivo sob o cursor, ou desmarcar, para levar vários de uma vez
+about-file-picker-erase = Tirar a última letra do que foi digitado
+about-file-picker-parent = Subir para a pasta de cima
+about-file-picker-filter = Trocar o que a pasta mostra: os arquivos da página, ou todo arquivo
+about-file-picker-play-folder = Tocar a pasta aberta, tudo o que há nela
+about-file-picker-enqueue-folder = Pôr a pasta aberta na fila, tudo o que há nela
+about-file-picker-paste = Digitar o que foi copiado — um caminho, ou um endereço file://
+about-file-picker-hidden = Mostrar os arquivos ocultos, ou escondê-los de novo
+player-page-pick-save-set = Salvar o que toca como conjunto
+player-page-pick-save-queue = Salvar a fila
+player-added-several = { $count } arquivos postos na fila.
+player-playing-several = Tocando { $count } arquivos agora.
+syncthing-pick-folder = Uma pasta desta máquina
+network-pick-tunnel = Um túnel para trazer
+software-pick-package = Um arquivo para instalar — um AppImage, um APK ou uma referência Flatpak
+camera-pick-backdrops = Imagens para trás de você: as setas passam pelas escolhidas
+
+## file info editing — everything the info panel can change
+files-detail-name = nome
+files-fact-edits = { $label }: { $value } — pressione para mudar
+files-fact-takes-place-out = { $label }: { $value } — pressione para tirar o lugar do arquivo
+files-meta-title = título
+files-meta-author = autoria
+files-meta-description = descrição
+files-meta-keywords = palavras-chave
+files-meta-copyright = direitos autorais
+files-meta-taken = feito em
+files-fact-tags = etiquetas
+files-fact-details = detalhes
+files-tags-absent = o leitor de etiquetas não está instalado aqui
+files-tags-stopped = o leitor de etiquetas parou antes de responder
+files-tag-cannot = { $label } não pode ser mudado aqui: { $why }
+files-tag-several-lines = { $label } tem várias linhas; ele é editado no editor do player, não numa linha só
+files-ask-modified = Modificado em (ano-mês-dia hora:minuto:segundo):
+files-modified-bad = Isso não é uma data que eu consiga ler. Escreva assim: 2026-09-30 14:05, os segundos são opcionais.
+files-ask-tag = { $field }:
+files-ask-meta = { $detail }:
+files-ask-location = { $n ->
+        [one] Tirar o lugar de { $name }? Isso reescreve o arquivo e não se desfaz.
+       *[other] Tirar o lugar destes { $n } arquivos? Isso reescreve cada um e não se desfaz.
+    }
+files-location-copy = escrever uma cópia sem o lugar, ao lado
+files-location-overwrite = tirar do próprio arquivo — não se desfaz
+files-location-copied = { $n ->
+        [one] Uma cópia sem o lugar: { $name }
+       *[other] { $n } cópias sem o lugar, cada uma ao lado do original
+    }
+files-location-removed = { $n ->
+        [one] O lugar saiu de { $name }.
+       *[other] O lugar saiu de { $n } arquivos.
+    }
+files-amend-too-long = Isso é mais longo do que um detalhe pode ser ({ $most } bytes); nada foi escrito.
+files-amend-bad-date = Isso não é uma data: escreva assim: 2026-09-30 14:05. Nada foi escrito.
+files-amend-not-written = O exiftool não escreveu nada: este arquivo não aceita isso aqui. Ele continua como estava.
+files-amend-taken = Já existe um arquivo com o nome da cópia; nada foi escrito.
+files-remove-location = tirar o lugar onde foi feito
+files-does-remove-location = pergunta antes; depois reescreve o arquivo — ou escreve uma cópia ao lado — sem a coordenada de GPS. Tirado do próprio arquivo, não se desfaz
+files-trash-on-volume = Indo para a lixeira do próprio { $volume }, não para a da pasta pessoal: o espaço continua ocupado em { $volume } até essa lixeira o liberar — o que ela faz sozinha, como a da pasta pessoal, enquanto o disco está conectado.
+files-trash-left-on-volume = { $volume } saiu com arquivos na própria lixeira ({ $n }): o espaço deles continua ocupado nele até essa lixeira os liberar, o que só acontece enquanto ele está conectado.
+
+# A LINHA DO GIT sob o caminho do gerenciador de arquivos, e o navegador git
+# que o `C-h` abre (`git_line.rs`, `git_browser.rs`). O que vem entre aspas é
+# dado: um ramo, um assunto, um caminho.
+files-git = histórico
+# A janela do navegador na modeline (`br.ronoctua.git`, `daemon::mode_label`).
+mode-git = histórico do git
+about-files-git = Abre o histórico do repositório: as mudanças, os commits, os ramos, os stashes e os remotos, ao lado do que cada um mudou.
+files-git-title = Histórico de { $name }
+files-git-detached = solto em { $id }
+files-git-unborn = { $branch }, ainda sem commits
+files-git-changed = { $n ->
+        [one] 1 mudado
+       *[other] { $n } mudados
+    }
+files-git-staged = { $n ->
+        [one] 1 preparado
+       *[other] { $n } preparados
+    }
+files-git-untracked = { $n ->
+        [one] 1 não rastreado
+       *[other] { $n } não rastreados
+    }
+files-git-conflicted = { $n ->
+        [one] 1 em conflito
+       *[other] { $n } em conflito
+    }
+files-git-clean = nada mudou
+files-git-list-item = { $item },
+files-git-subject = “{ $subject }”
+files-git-line-explain = Em { $branch }: { $changed } mudados, { $staged } preparados, { $untracked } não rastreados. { $keys } ou um clique abre o histórico.
+files-git-line-refused = Esta pasta está num repositório que o git não quis ler. { $keys } abre o histórico, que diz por quê.
+files-git-age-now = agora mesmo
+files-git-age-minutes = { $n ->
+        [one] há um minuto
+       *[other] há { $n } minutos
+    }
+files-git-age-hours = { $n ->
+        [one] há uma hora
+       *[other] há { $n } horas
+    }
+files-git-age-days = { $n ->
+        [one] ontem
+       *[other] há { $n } dias
+    }
+files-git-age-months = { $n ->
+        [one] há um mês
+       *[other] há { $n } meses
+    }
+files-git-age-years = { $n ->
+        [one] há um ano
+       *[other] há { $n } anos
+    }
+# Por que o git não respondeu (`ronoctua_git::Why`), uma por motivo.
+files-git-why-no-git = Esta sessão não recebeu o git, então o repositório não pode ser lido.
+files-git-why-no-ssh = Este remoto é alcançado por SSH e esta sessão não recebeu o ssh.
+files-git-why-no-askpass = Este remoto pede um token e falta o ajudante que o entrega.
+files-git-why-not-a-repo = Esta pasta não está num repositório.
+files-git-why-unstartable = O git não pôde ser iniciado.
+files-git-why-failed = O git não conseguiu ler isto.
+files-git-why-garbled = O git respondeu algo que este navegador não entende.
+files-git-why-needs-credentials = O remoto pede um nome e uma senha ou uma chave, e buscar nunca pede nenhum dos dois.
+files-git-why-refused = O remoto recusou as credenciais que recebeu.
+files-git-why-unreachable = O remoto não pôde ser alcançado.
+files-git-why-too-large = É maior do que uma vista mostra.
+# As colunas do navegador.
+files-git-kind-changes = Mudanças
+files-git-kind-history = Histórico
+files-git-kind-refs = Ramos e etiquetas
+files-git-kind-stashes = Stashes
+files-git-kind-remotes = Remotos
+files-git-kind-count = { $kind } { $n }
+files-git-file-history-title = Histórico de { $path }
+files-git-reading = Lendo…
+files-git-empty-changes = Nada mudou na árvore de trabalho.
+files-git-empty-history = Ainda não há commits.
+files-git-empty-refs = Nenhum ramo e nenhuma etiqueta.
+files-git-empty-stashes = Nada guardado no stash.
+files-git-empty-remotes = Nenhum remoto.
+files-git-empty-file = Nenhum commit mexeu neste arquivo.
+files-git-pick-item = Escolha algo à esquerda para ver aqui.
+files-git-pick-file = Escolha um arquivo para ver o que mudou nele.
+files-git-diff-no-files = Um remoto não muda arquivo nenhum.
+files-git-diff-nothing = O conteúdo não mudou.
+files-git-diff-staged = Preparado
+files-git-diff-unstaged = Não preparado
+files-git-diff-untracked = Ainda fora do repositório
+files-git-diff-binary = Não é texto: não há o que mostrar linha a linha.
+files-git-diff-no-content = Só os detalhes do arquivo mudaram, não o que há nele.
+files-git-diff-link = Um link simbólico, e para onde ele aponta:
+files-git-diff-special = Não é um arquivo — é um pipe, um socket ou um dispositivo —, então nada nele é lido.
+files-git-blame-title = Quem escreveu cada linha de { $path }
+files-git-files = { $n ->
+        [one] 1 arquivo mudado
+       *[other] { $n } arquivos mudados
+    }
+files-git-remote-branches = Os ramos dele, da última busca
+files-git-no-remote-branches = Nenhum buscado ainda.
+files-git-fact-path = arquivo
+files-git-fact-state = estado
+files-git-fact-from = renomeado de
+files-git-fact-name = nome
+files-git-fact-kind = tipo
+files-git-fact-upstream = segue
+files-git-fact-fetch = busca de
+files-git-fact-push = envia para
+files-git-fact-stash = stash
+files-git-fact-commit = commit
+files-git-fact-author = autoria
+files-git-fact-date = data
+files-git-fact-parents = pais
+files-git-ref-branch = um ramo
+files-git-ref-remote = um ramo de remoto
+files-git-ref-tag = uma etiqueta
+files-git-mark-branch = ramo
+files-git-mark-remote = remoto
+files-git-mark-tag = etiqueta
+files-git-change-added = acrescentado
+files-git-change-modified = mudado
+files-git-change-deleted = apagado
+files-git-change-renamed = renomeado
+files-git-change-copied = copiado
+files-git-change-type = mudou de tipo
+files-git-change-unmerged = não mesclado
+files-git-state-untracked = ainda fora do repositório
+files-git-state-conflicted = em conflito
+files-git-state-staged = preparado: { $what }
+files-git-state-unstaged = não preparado: { $what }
+# O que o navegador diz depois de uma ação.
+files-git-fetched = Buscado: os ramos dos remotos estão em dia.
+files-git-fetch-refused = Nada foi buscado. { $why }
+files-git-fetching = Já há uma busca em andamento.
+files-git-no-file = Não há arquivo sob o cursor.
+files-git-blame-gone = O arquivo não está mais na árvore de trabalho, então ninguém escreveu as linhas dele ali.
+files-git-nothing-to-copy = Não há commit sob o cursor.
+files-git-no-version = Não há versão anterior deste arquivo para abrir.
+files-git-kept = Aberto { $path } como { $id } o tem — uma cópia que não pode ser mudada.
+files-git-keep-failed = A cópia não pôde ser feita: { $why }
+files-git-keep-why-disk = O disco não a aceitou: está cheio, ou o cache não pode ser escrito ali.
+# As teclas do navegador: a palavra que a linha de atalhos mostra, e o que o
+# ponteiro parado sobre ela ouve.
+files-git-down = descer
+files-git-up = subir
+files-git-enter = abrir
+files-git-next = próxima coluna
+files-git-previous = coluna anterior
+files-git-page-down = página abaixo
+files-git-page-up = página acima
+files-git-changes = mudanças
+files-git-history = histórico
+files-git-refs = ramos
+files-git-stashes = stashes
+files-git-remotes = remotos
+files-git-file-history = histórico do arquivo
+files-git-blame = quem escreveu
+files-git-copy = copiar id
+files-git-open-version = abrir esta versão
+files-git-fetch = buscar
+files-git-terminal = terminal
+files-git-left = esquerda
+files-git-right = direita
+about-files-git-down = Desce o cursor uma linha; no diff, move o texto uma linha.
+about-files-git-up = Sobe o cursor uma linha; no diff, move o texto uma linha.
+about-files-git-enter = Entra uma coluna: de um item para o que ele é, de um arquivo para o que mudou nele.
+about-files-git-next = Dá o teclado à coluna da direita.
+about-files-git-previous = Dá o teclado à coluna da esquerda.
+about-files-git-page-down = Desce uma tela inteira na coluna que está com o teclado.
+about-files-git-page-up = Sobe uma tela inteira na coluna que está com o teclado.
+about-files-git-changes = Lista o que a árvore de trabalho tem que o último commit não tem.
+about-files-git-history = Lista os commits, do mais novo ao mais antigo.
+about-files-git-refs = Lista os ramos, os ramos dos remotos e as etiquetas.
+about-files-git-stashes = Lista o que foi guardado no stash.
+about-files-git-remotes = Lista os remotos e onde cada um está.
+about-files-git-file-history = Lista só os commits que mudaram o arquivo sob o cursor, atravessando as renomeações.
+about-files-git-blame = Mostra quem escreveu por último cada linha do arquivo como a árvore de trabalho o tem; a mesma tecla volta ao diff.
+about-files-git-copy = Copia o id do commit sob o cursor.
+about-files-git-open-version = Abre o arquivo como o commit o tinha, numa cópia que não pode ser mudada.
+about-files-git-fetch = Traz para cá os commits novos dos remotos, sem mudar nenhum dos seus. Nunca pede senha.
+about-files-git-terminal = Abre um terminal na pasta de cima do repositório.
+about-files-git-left = Move o texto do diff para a esquerda.
+about-files-git-right = Move o texto do diff para a direita, para ler uma linha longa.
+
+# The archive rows of the file manager's menu (`ronoctua_files::menu`).
+files-archive-test = testar o arquivo compactado
+files-archive-convert = converter para outro formato…
+files-archive-add = pôr o que foi copiado neste arquivo compactado
+files-archive-extract = extrair aqui, ao lado do arquivo compactado
+files-archive-remove = tirar do arquivo compactado
+files-does-archive-test = lê cada membro e confere com as somas (7zz t, unrar t, bsdtar -t), pela fila
+files-does-archive-convert = extrai numa pasta oculta ao lado e compacta de novo no formato escolhido na ficha
+files-does-archive-add = 7zz a: o que foi copiado entra no topo do arquivo, cifrado com a senha dele quando tem uma
+files-does-archive-extract = tira os membros escolhidos para a pasta do próprio arquivo; nada lá é substituído
+files-does-archive-remove = 7zz d: reescreve o arquivo sem eles — não tem volta
+# An archive's formats and levels, by `ronoctua_archive::Format::id` and `Level::id`.
+files-archive-zip = zip
+files-archive-7z = 7z
+files-archive-tar = tar
+files-archive-tar-gz = tar.gz
+files-archive-tar-xz = tar.xz
+files-archive-tar-zst = tar.zst
+files-archive-tar-bz2 = tar.bz2
+files-archive-tar-lz4 = tar.lz4
+files-archive-rar = RAR
+files-archive-iso = imagem ISO
+files-archive-other = outro formato
+files-archive-level-store = sem compressão
+files-archive-level-fastest = o mais rápido
+files-archive-level-normal = normal
+files-archive-level-maximum = máximo
+files-archive-level-ultra = ultra
+# Why an archive's work did not happen (`ronoctua_archive::Why`).
+files-archive-why-no-tool = { $name }: esta sessão não recebeu o programa de que este arquivo precisa
+files-archive-why-unsupported = { $name }: este formato não faz isso — um tar não tem senha e só muda convertendo
+files-archive-why-needs-password = { $name } é cifrado e precisa da senha
+files-archive-why-wrong-password = Essa senha não abre { $name }
+files-archive-why-corrupt = { $name } está danificado, ou não é um arquivo compactado
+files-archive-why-exists = { $name } já existe; nada foi substituído
+files-archive-why-unstartable = o programa para { $name } não pôde ser iniciado
+files-archive-why-failed = o trabalho em { $name } não terminou
+files-archive-why-stopped = o trabalho em { $name } foi parado, e o que ele tinha escrito foi apagado
+# The sheet `compress` and `convert` open.
+files-compress-title = Comprimir { $what }
+files-convert-title = Converter { $name }
+files-sheet-format = formato
+files-sheet-level = nível
+files-sheet-password = senha
+files-sheet-password-none = nenhuma
+files-sheet-password-set = definida, AES-256
+files-sheet-hide = esconder também os nomes
+files-sheet-split = dividir em volumes
+files-sheet-split-none = não
+files-sheet-yes = sim
+files-sheet-no = não
+files-sheet-go = comprimir em { $name }
+files-sheet-convert-go = converter em { $name }
+# Walking into an archive, and the passwords it asks.
+files-archive-reading = lendo { $name }…
+files-archive-opening = tirando { $name } para abrir…
+files-archive-add-top = os membros entram no topo do arquivo — suba até ele para adicionar
+files-archive-passwords-differ = as duas senhas são diferentes; nada foi definido
+files-archive-nothing-chosen = nada escolhido para tirar
+# The panels inside an archive: what its listing says of a member, and why
+# nothing is previewed.
+files-archive-fact-packed = compactado
+files-archive-fact-encrypted = cifrado
+files-archive-preview = um membro é mostrado quando é aberto, depois de sair do arquivo compactado
+ask-files-archive-password = A senha do arquivo compactado
+ask-files-archive-password-wrong = Não era essa — a senha do arquivo compactado
+ask-files-archive-password-new = Uma senha para o novo arquivo compactado
+ask-files-archive-password-again = A mesma senha de novo
+transfers-work-archive-add = pôr no arquivo compactado
+transfers-work-archive-remove = tirar do arquivo compactado
+transfers-work-archive-test = testar o arquivo compactado
+transfers-work-archive-convert = converter o arquivo compactado
+# An encrypted disk (LUKS) in the sidebar.
+files-encrypted-locked = { $name } é cifrado e está trancado — montar pede a frase-senha
+files-encrypted-unlocked = { $name } está destrancado; ejetar tranca de novo antes de cortar a energia
+files-encrypted-fact = cifra
+files-encrypted-fact-locked = trancado — LUKS
+files-encrypted-fact-unlocked = destrancado — LUKS
+files-unlock-working = destrancando { $name }…
+files-unlock-wrong = essa frase-senha não abre { $name }
+files-unlock-failed = { $name } não pôde ser destrancado: { $why }
+files-unlock-locked = { $name } foi trancado de novo
+ask-files-unlock = A frase-senha que destranca este disco
+sidebar-lock = trancar
+sidebar-does-lock = desmonta o que saiu dele e tranca o contêiner (Encrypted.Lock); a energia continua ligada
+# Formatting with encryption (the format buffer, and its host).
+# The format buffer's third question, as the modeline names its state.
+state-encrypt = cifra
+format-encrypt-title = Cifrar?
+format-encrypt-no = não — quem tiver o disco na mão consegue ler
+format-encrypt-yes = sim — só abre com uma frase-senha
+format-tech-encrypt-no = o sistema de arquivos é escrito às claras
+format-tech-encrypt-yes = LUKS2 · a frase-senha é pedida duas vezes, na linha desta janela
+format-encrypt-differ = as duas frases-senha são diferentes; nada foi escrito
+format-encrypt-let-go = nenhuma frase-senha foi dada; nada foi escrito
+format-encrypted = cifrado
+ask-format-encrypt-passphrase = Uma frase-senha para o disco
+ask-format-encrypt-again = A mesma frase-senha de novo
+
+# THE ICONS APP (`LEADER m i`) — `crate::icons`, `crate::icons_page`,
+# `crate::icons_window`. One app for the three collections the three buffers
+# used to be: Nerd Fonts, Lucide and Unicode.
+cmd-icons-open = Ícones
+cmd-icons-window = Ícones, numa janela
+cmd-icons-nerd-fonts = Navegar pelos glifos das Nerd Fonts
+cmd-icons-lucide = Navegar pelos ícones Lucide
+cmd-icons-unicode = Navegar pelos caracteres Unicode
+cmd-icons-colour = A cor do ícone Lucide
+ask-icons-colour = A cor do traço (uma cor CSS, ou currentColor)
+# What the modeline names the app's window (`br.ronoctua.icons`).
+mode-icons = ícones
+icons-title = Ícones
+# The three screens, as their tabs read.
+icons-screen-nerd-fonts = Nerd Fonts
+icons-screen-lucide = Lucide
+icons-screen-unicode = Unicode
+about-icons-tab-nerd-fonts = Mostra os glifos das Nerd Fonts
+about-icons-tab-lucide = Mostra os ícones Lucide
+about-icons-tab-unicode = Mostra os caracteres Unicode e os emoji
+# What the tab line says where nothing is typed yet, per screen.
+icons-search-nerd-fonts = digite para buscar um glifo
+icons-search-lucide = digite para buscar um ícone
+icons-search-unicode = digite para buscar um caractere
+icons-count = { $shown } de { $total }
+icons-loading = Lendo as tabelas de ícones…
+icons-none = Nada aqui corresponde a “{ $query }”.
+# The grid's keys, and the page's.
+icons-page = abrir
+about-icons-page = Abre a página do ícone sob o cursor: o que ele é, o tamanho e todas as formas de copiá-lo
+icons-copy = copiar
+about-icons-copy = Copia o ícone sob o cursor, como ele é desenhado
+icons-less = menos
+about-icons-less = Diminui o ajuste sob o cursor, ou mostra o ícone anterior
+icons-more = mais
+about-icons-more = Aumenta o ajuste sob o cursor, ou mostra o próximo ícone
+icons-enter = copiar
+about-icons-enter = Copia no formato sob o cursor, ou muda o ajuste sob ele
+icons-reset = restaurar
+about-icons-reset = Devolve todos os ajustes ao que eram
+icons-filters = filtros
+about-icons-filters = Abre ou fecha o painel de filtros: os conjuntos, as categorias e as famílias, cada escolha escrita na busca
+icons-choose = escolher
+about-icons-choose = Filtra pela escolha sob o cursor, mantendo as palavras digitadas
+icons-change = mudar
+about-icons-change = Aumenta o ajuste sob o cursor — do máximo, volta ao mínimo
+# O título da segunda seção do painel: filtros que só os emoji têm.
+icons-panel-emoji = Só emoji
+icons-colour-closed = A cor do Lucide é do app de ícones: abra-o com { $keys } e depois a página de um ícone Lucide.
+# The icon's page: its sections, its facts and its settings.
+icons-heading-facts = O que é
+icons-heading-adjust = Ajustes
+icons-heading-copy = Copiar como
+icons-fact-name = Nome
+icons-fact-codepoint = Codepoint
+icons-fact-set = Conjunto
+icons-fact-token = Token de ícone
+icons-fact-tray = Atribuído a um app
+# One row of tags per language, the key completed with its subtag —
+# `buffer-tag-rows-have-text` asks for one per declared language.
+icons-sheet-tags-en = Tags (en)
+icons-sheet-tags-pt = Tags (pt)
+icons-fact-component = Componente
+icons-fact-categories = Categorias
+icons-fact-aliases = Também chamado
+icons-fact-family = Família
+icons-fact-category = Categoria
+icons-fact-block = Bloco
+icons-fact-decomposition = Decomposição
+icons-fact-width = Largura
+icons-fact-group = Grupo
+icons-fact-subgroup = Subgrupo
+icons-fact-tone = Tom de pele
+icons-width-zero = Marca combinante — o apoio pontilhado não é dela
+icons-width-one = Uma célula
+icons-width-double = Ocupa duas células
+icons-yes = sim
+icons-no = não
+icons-adjust-size = Tamanho
+icons-adjust-stroke = Espessura
+icons-adjust-absolute = Traço absoluto
+icons-adjust-colour = Cor
+icons-adjust-cap = Pontas
+icons-size-px = { $px } px
+icons-cap-round = redondas
+icons-cap-butt = retas
+icons-cap-square = quadradas
+# The copy formats, per collection (`ronoctua_iconset::copy`).
+icons-copy-nerd-fonts-name = Nome
+icons-copy-nerd-fonts-glyph = Glifo
+icons-copy-nerd-fonts-css = Classe CSS
+icons-copy-nerd-fonts-hex = Hexadecimal
+icons-copy-nerd-fonts-utf16 = UTF-16
+icons-copy-nerd-fonts-escape = Escape Unicode
+icons-copy-nerd-fonts-html = Entidade HTML
+icons-copy-nerd-fonts-rust = Literal Rust
+icons-copy-nerd-fonts-token = Token do design system
+icons-copy-unicode-character = Caractere
+icons-copy-unicode-name = Nome oficial
+icons-copy-unicode-hex = Hexadecimal
+icons-copy-unicode-decimal = Decimal
+icons-copy-unicode-escape = Escape Unicode
+icons-copy-unicode-html = Entidade HTML
+icons-copy-unicode-rust = Literal Rust
+icons-copy-unicode-utf16 = UTF-16
+icons-copy-unicode-utf8 = Bytes UTF-8
+icons-copy-lucide-svg = SVG
+icons-copy-lucide-jsx = JSX
+icons-copy-lucide-vanilla = HTML (lucide.js)
+icons-copy-lucide-react = React
+icons-copy-lucide-vue = Vue
+icons-copy-lucide-svelte = Svelte
+icons-copy-lucide-preact = Preact
+icons-copy-lucide-solid = Solid
+icons-copy-lucide-angular = Angular
+icons-copy-lucide-font = Fonte de ícones
+icons-copy-lucide-name = Nome
+icons-copy-lucide-component = Componente
+icons-copy-lucide-character = Caractere
+icons-copy-lucide-hex = Codepoint
+icons-copy-lucide-path = Traçado
+icons-copy-lucide-uri = Data URI
+icons-copy-lucide-base64 = Base64
+icons-copy-lucide-css = Regra CSS
+icons-copy-lucide-sprite = Sprite
+
+# THE CALCULATOR (`LEADER =`, `crate::calc`): the leader's group and its two
+# doors, the window's name and the modeline's name for it.
+group-calc = calculadora
+cmd-calc-open = A calculadora, no rodapé
+cmd-calc-window = A calculadora, numa janela própria
+calc-title = Calculadora
+# The modeline's name for its window (`br.ronoctua.calc`).
+mode-calc = calculadora
+calc-mode-basic = Básica
+calc-mode-scientific = Científica
+calc-mode-convert = Conversão
+calc-sum = Conta
+calc-amount = Quantia
+calc-empty = digite uma conta, ou use as teclas
+calc-equals-exact = = { $value }
+calc-equals-approx = ≈ { $value }
+calc-history-title = Histórico
+calc-history-empty = Nenhum resultado guardado ainda: { $keys } guarda um.
+calc-from = De
+calc-to = Para
+calc-find = Procurar unidade — { $side }:
+calc-find-none = Nenhuma unidade desta categoria tem esse nome.
+calc-category-currency = Moeda
+calc-rates-for = Converter moedas precisa das cotações do dia do Banco Central Europeu.
+calc-rates-asking = Perguntando a { $host } as cotações do dia…
+calc-rates-of = Cotações de { $date }, do Banco Central Europeu.
+calc-unkept-unparsed = { $file } não pode ser lido, então este resultado não foi guardado; o arquivo ficou como estava.
+calc-unkept = Este resultado não pôde ser guardado em { $file }: { $why }
+calc-float-unreached = O compositor não pôde ser chamado para mover esta janela.
+# The header's words, and what each one does under the pointer.
+calc-equals = guardar
+about-calc-equals = Guarda o resultado no histórico e continua a partir dele; num resultado escolhido no histórico, traz a conta dele de volta.
+calc-mode = modo
+about-calc-mode = Vai para o próximo modo, em volta dos três: básica, científica, conversão.
+calc-clear = limpar
+about-calc-clear = Esvazia a conta.
+calc-copy = copiar
+about-calc-copy = Copia o resultado — o escolhido no histórico, ou o que está na linha.
+calc-history = histórico
+about-calc-history = Escolhe um resultado do histórico, um mais antigo a cada vez.
+calc-take = escolher
+about-calc-take = Escolhe a unidade sob o cursor para o lado que está sendo escolhido.
+calc-ring-next = próxima categoria
+about-calc-ring-next = Vai para a próxima categoria de unidades.
+calc-ring-previous = categoria anterior
+about-calc-ring-previous = Vai para a categoria de unidades anterior.
+about-calc-from = Escolhe a unidade da quantia: o que for digitado em seguida a procura.
+about-calc-to = Escolhe a unidade para a qual a quantia é convertida: o que for digitado em seguida a procura.
+calc-swap = trocar
+about-calc-swap = Troca as duas unidades: o que era convertido de passa a ser convertido para.
+calc-float = compacta ou normal
+about-calc-float = Deixa a janela compacta, flutuando sobre as outras — ou a devolve ao layout entre elas.
+calc-keys-narrow = As teclas das funções precisam de mais espaço que este. Digite-as pelo nome: sen, cos, √, ln…
+# The keypad's legends: what is not a digit or the decimal mark.
+calc-key-add = +
+calc-key-subtract = −
+calc-key-multiply = ×
+calc-key-divide = ÷
+calc-key-open = (
+calc-key-close = )
+calc-key-percent = %
+calc-key-power = xʸ
+calc-key-square = x²
+calc-key-reciprocal = x⁻¹
+calc-key-factorial = n!
+calc-key-degree = °
+calc-key-sin = sen
+calc-key-cos = cos
+calc-key-tan = tg
+calc-key-asin = arcsen
+calc-key-acos = arccos
+calc-key-atan = arctg
+calc-key-ln = ln
+calc-key-log = log
+calc-key-sqrt = √
+calc-key-cbrt = ∛
+calc-key-exp = exp
+calc-key-pi = π
+calc-key-e = e
+calc-key-clear = C
+calc-key-equals = =
+
+# Why a file's tags cannot be written, said precisely (`ronoctua_tags::Why`).
+player-tag-format-id3v2 = Uma etiqueta ID3v2
+player-tag-format-id3v1 = Uma etiqueta ID3v1
+player-tag-format-ape = Uma etiqueta APEv2
+player-tag-format-vorbis = Um comentário Vorbis
+player-tag-format-mp4 = Uma etiqueta MP4
+player-tag-format-riff-info = Uma lista RIFF INFO
+player-tag-format-aiff-text = Um bloco de texto AIFF
+player-trouble-tag-no-field-in = { $format } não tem lugar para { $field }.
+player-trouble-tag-no-pictures-in = { $format } não guarda imagens: a capa deste arquivo não pode ser posta nem tirada.
+player-trouble-tag-streams-only-matroska = O idioma, o nome e as marcas de uma faixa só são gravados em Matroska, e este arquivo é { $container }.
+player-trouble-tag-attachment = Um anexo — uma imagem, uma fonte — fica guardado no arquivo e não toca: não tem idioma nem nome de faixa para mudar.
+player-trouble-tag-read-only = { $format }: aqui só se lê, e nunca se muda à parte.
+player-trouble-tag-only-the-front-cover = Aqui só a capa da frente é trocada ou tirada; as outras imagens do arquivo ficam como estão.
+# Why the lyrics were not translated (`ronoctua_words::Why`).
+player-trouble-translation = A letra não foi traduzida: { $why }
+player-trouble-translation-empty = não há palavras para traduzir.
+player-trouble-translation-too-long = a música é maior do que o tradutor aceita de uma vez.
+player-trouble-translation-unknown-tongue = o tradutor não conhece esse idioma.
+player-trouble-translation-wrong-pass = o consentimento dado é para outro endereço que não o do tradutor.
+player-trouble-translation-no-key = o tradutor precisa de uma chave, e nenhuma foi guardada.
+player-trouble-translation-key-refused = o tradutor recusou a chave.
+player-trouble-translation-quota = a cota de hoje do tradutor acabou.
+player-trouble-translation-paced = pedido vezes demais; tente de novo daqui a pouco.
+player-trouble-translation-not-found = o tradutor não achou nada para isso.
+player-trouble-translation-no-dictionary = não há dicionário para este idioma.
+player-trouble-translation-unreachable = não foi possível alcançar o tradutor.
+player-trouble-translation-failed = o tradutor respondeu com uma falha.
+player-trouble-translation-garbled = o tradutor respondeu algo que não é uma tradução.
+# Why a press was not kept in the consent file (`ronoctua_consent::Unkept`).
+player-consent-unkept-no-home = Não há pasta pessoal onde guardar o consentimento.
+player-consent-unkept-unparseable = O arquivo de consentimento (consent.json) não pôde ser lido; ficou como estava, e nada foi permitido.
+player-consent-unkept-unwritable = O arquivo de consentimento não pôde ser gravado; nada foi permitido.
+
+player-lyrics-unsynced = Traduzida inteira, não verso a verso:
+# AS PORTAS DO PLAYER (2026-09-30). O arquivo da fila no título dela.
+player-queue-unsaved = { $name } · não salva
+player-queue-new-unsaved = nova, não salva
+player-save-queue-again = salvar de novo
+cmd-player-save-queue-again = Salvar a fila de novo no arquivo de onde ela veio
+player-saved-again = A fila foi salva de novo em { $name }.
+ask-player-already-queued = { $name } já está na fila como { $number }. Pôr de novo?
+ask-player-already-queued-somewhere = { $name } já está na fila. Pôr de novo?
+ask-player-queue-changed-on-disk = { $path } mudou no disco desde que a fila foi aberta ou salva. Gravar por cima?
+# Os saltos ao lado do relógio, e um clique duplo num lado da imagem.
+player-rewind = voltar
+player-forward = avançar
+cmd-player-rewind = Voltar dez segundos
+cmd-player-forward = Avançar dez segundos
+player-seeked-back = −{ $seconds } s
+player-seeked-ahead = +{ $seconds } s
+# A imagem recolhida, no título "Agora".
+player-picture-fold = recolher a imagem
+cmd-player-picture-fold = Recolher a imagem e dar as linhas dela às linhas de baixo, ou mostrá-la de novo
+player-no-picture-to-fold = Não há imagem aqui para recolher.
+# Um vídeo de um site: página própria.
+player-page-website = Vídeo de um site
+player-about-website = Um vídeo ou uma música do YouTube, ou de um dos muitos outros sites que o yt-dlp conhece, toca pelo endereço da página, digitado ou colado na linha.
+player-website-play = Tocar agora…
+player-website-enqueue = Pôr na fila…
+ask-player-website-play = Tocar agora (o endereço de uma página)
+ask-player-website-enqueue = Pôr na fila (o endereço de uma página)
+cmd-player-website = Um vídeo de um site: tocar agora ou pôr na fila, pelo endereço
+player-website-recent = Endereços tocados há pouco
+player-website-none = Nenhum endereço tocado daqui ainda.
+player-website-not-an-address = “{ $typed }” não é o endereço de uma página.
+player-website-forgotten = Esquecido: { $address }
+player-file-no-home = não há pasta pessoal onde guardá-lo
+player-file-unparseable = ele existe e não pôde ser lido, então ficou como estava
+player-file-unwritable = não foi possível gravá-lo
+# Um campo de várias linhas mudado aqui, nesta porta.
+player-field-edit-here = Editar aqui
+# Os países de uma página do mundo: os com mais primeiro, ou de A a Z.
+player-countries-order = ordem
+cmd-player-countries-order = Os países de A a Z pelo nome, ou os com mais primeiro
+player-countries-by-count = Os países com mais primeiro.
+player-countries-by-name = Os países de A a Z, pelo nome.
+# A letra traduzida sob os versos.
+player-lyrics-translate = traduzir
+cmd-player-lyrics-translate = Traduzir a letra sob os versos, ou parar
+player-lyrics-translate-to = Traduzir para
+player-lyrics-translating = Traduzindo…
+player-lyrics-translated-by = Traduzida por
+player-lyrics-none-to-translate = Não há letra para traduzir.
+player-lyrics-let = Deixar { $host } traduzi-la
+player-consent-translation = Traduzir a letra
+
+# CANAIS POR TEMA, no catálogo local (`player_catalog`): uma fonte por vez,
+# seus temas e categorias, e a listagem que uma linha deles abre.
+player-about-catalog = Os canais, filmes e vídeos de cada fonte, lidos para esta máquina e filtrados na hora. Uma fonte é lida de novo quando aparece depois do prazo dela.
+player-page-catalog = Listagem
+player-page-sources = Fontes
+player-catalog-source = Canais de
+player-catalog-ingesting = Lendo esta fonte…
+player-catalog-stale = Lida { $date }; é hora de ler de novo.
+player-catalog-never = Ainda não lida.
+player-catalog-read-again = Ler esta fonte de novo
+player-catalog-reading-now = Lendo { $name }…
+player-catalog-search = Buscar pelo título
+player-catalog-searched = “{ $words }”
+player-catalog-searching = Buscando “{ $words }” no arquivo…
+player-catalog-search-archive = Buscar “{ $words }” no arquivo inteiro
+player-catalog-themes = Temas
+player-catalog-categories = Categorias
+player-catalog-everything = Tudo
+player-catalog-ungrouped = Sem categoria
+player-catalog-empty = Ainda não há nada aqui.
+player-catalog-nothing-found = Nada corresponde.
+player-catalog-adult = Só para adultos
+player-catalog-letter = Inicial
+player-catalog-letter-all = Todas
+player-catalog-page = Página
+player-catalog-page-of = { $page } de { $pages }
+player-catalog-page-not-a-number = “{ $said }” não é um número de página.
+player-catalog-per-page = Por página
+player-catalog-sort = Ordem
+player-catalog-sort-title = Pelo título
+player-catalog-sort-popular = Mais vistos primeiro
+player-catalog-sort-newest = Mais novos primeiro
+player-catalog-sort-oldest = Mais antigos primeiro
+player-catalog-country = País
+player-catalog-country-all = Todos os países
+player-catalog-language = Língua
+player-catalog-language-all = Todas as línguas
+player-catalog-quality = Altura da imagem
+player-catalog-quality-any = Qualquer altura
+player-catalog-quality-lines = { $lines } linhas ou mais
+player-catalog-layout = Exibição
+player-catalog-layout-list = Lista
+player-catalog-layout-lines = Duas linhas
+player-catalog-layout-columns = Colunas
+player-catalog-layout-posters = Capas
+player-catalog-layout-big = Capas grandes
+player-catalog-scope-in = Buscar em
+player-catalog-scope-category = Esta lista
+player-catalog-scope-every-category = Toda a fonte
+player-catalog-scope-from = De
+player-catalog-scope-source = Esta fonte
+player-catalog-scope-every-source = Todas as fontes
+player-catalog-shown = { $from }–{ $to } de { $total }
+player-catalog-kind-live = ao vivo
+player-catalog-kind-audio = áudio
+player-catalog-item-gone = Não está mais no catálogo.
+ask-player-catalog-letter = Inicial
+ask-player-catalog-page = Número da página
+ask-player-catalog-search = Títulos com
+# O CATÁLOGO ADULTO, atrás da senha do sistema da própria pessoa.
+player-adult-locked = Trancado: a sua senha do sistema abre
+player-adult-checking = conferindo…
+ask-player-adult-password = A sua senha do sistema
+player-adult-open = O catálogo adulto fica aberto até passarem 15 minutos sem tecla e sem clique.
+player-adult-lock = Trancar agora
+player-adult-locked-again = O catálogo adulto está trancado.
+player-adult-wrong = Essa não é a sua senha.
+player-adult-no-service = Este sistema não tem o serviço ronoctua-unlock: o catálogo adulto fica fechado.
+player-adult-shut = Trancado
+player-adult-unavailable = Não foi possível conferir a senha.
+player-adult-honest = Uma tranca nestas portas, não uma cifra: a lista é um arquivo neste disco como qualquer outro.
+# AS FONTES DO CATÁLOGO (`player_sources`).
+player-about-sources = Cole o link de uma lista IPTV, de um feed de podcast ou de vídeos, de um canal ou playlist do YouTube, ou de uma coleção do archive.org. O endereço fica privado nesta máquina e aparece só pelo host.
+player-source-add = Adicionar uma fonte…
+ask-player-source-url = Link de uma lista, um feed, um canal ou uma coleção
+player-source-add-adult = Adicionar uma fonte ao catálogo adulto…
+ask-player-adult-source-url = Link de uma lista para o catálogo adulto
+player-source-adding = Lendo { $name }…
+player-source-address = Endereço
+player-source-plain = Sem criptografia: este endereço é http, e o que ele responde — a lista, a conta no endereço dela e as capas que ela guarda nesse mesmo site — atravessa a rede às claras.
+player-source-kind = Tipo
+player-source-kind-iptv-org = Índice de TV do iptv-org
+player-source-kind-archive = Coleções do Internet Archive
+player-source-kind-youtube-lives = Buscas de lives no YouTube
+player-source-kind-nasa = Biblioteca da NASA
+player-source-kind-commons = Categorias do Wikimedia Commons
+player-source-kind-peertube = Vídeos do PeerTube
+player-source-kind-playlist = Lista IPTV (M3U)
+player-source-kind-feed = Feed (RSS ou Atom)
+player-source-kind-youtube = Canal ou playlist do YouTube
+player-source-kind-collection = Coleção do archive.org
+player-source-posters = Buscar as capas
+player-source-hosts = de { $hosts }
+player-source-hosts-any = de onde a lista disser
+player-source-posters-on = As capas dela serão buscadas.
+player-source-posters-off = As capas dela não serão buscadas.
+player-source-adult = No catálogo adulto
+player-source-adult-on = Ela vai para o catálogo adulto.
+player-source-adult-off = Ela sai do catálogo adulto.
+player-source-adult-hidden = Fontes do catálogo adulto
+player-source-remove = Remover…
+ask-player-source-remove = Remover { $name } e tudo o que ela trouxe?
+player-source-removed = { $name } foi removida.
+# POR QUE UMA FONTE NÃO DEU NADA (`ronoctua_broadcast::sources::Refused`).
+player-trouble-source-not-an-address = Isso não é um endereço da web.
+player-trouble-source-not-a-list = Isso é um vídeo ou uma transmissão, não uma lista deles.
+player-trouble-source-unknown = Isso não é nenhuma das fontes lidas aqui: uma lista M3U, um feed RSS ou Atom, um canal ou playlist do YouTube, uma coleção do archive.org.
+player-trouble-source-not-let = O host dela ainda não foi permitido.
+player-trouble-source-plain-http = Ela foi mandada de um endereço criptografado para um que não é, o que nunca é seguido.
+player-trouble-source-unreachable = Não foi possível alcançar o host dela.
+player-trouble-source-declined = O host dela recusou a pergunta.
+player-trouble-source-too-many-asks = O host dela pediu para ser perguntado menos.
+player-trouble-source-nothing-found = Não há nada nesse endereço.
+player-trouble-source-malformed = A resposta dela não é o que isto lê.
+player-trouble-source-too-large = A resposta dela é maior do que o que é lido.
+player-trouble-source-nothing-playable = Ela foi lida, e nada nela toca.
+player-trouble-source-no-yt-dlp = Esta instalação não tem o yt-dlp para listá-la.
+player-trouble-source-listing-failed = O yt-dlp não conseguiu listá-la.
+# OS ARQUIVOS DO CATÁLOGO (`ronoctua_broadcast::catalog::Trouble`).
+player-trouble-catalog-no-home = Não há pasta de cache para guardar o catálogo.
+player-trouble-catalog-absent = Nada foi lido para o catálogo ainda.
+player-trouble-catalog-other-schema = O catálogo é de outra versão e está sendo refeito.
+player-trouble-catalog-unreadable = Não foi possível ler o catálogo.
+player-trouble-catalog-unwritable = Não foi possível gravar o catálogo.
+player-trouble-catalog-too-large = Isso passaria do teto do catálogo, então nada mudou.
+player-trouble-sources-no-home = Não há pasta de configuração para guardar as suas fontes.
+player-trouble-sources-unreadable = Não foi possível ler o arquivo das suas fontes.
+player-trouble-sources-unparseable = O arquivo das suas fontes não é um que isto lê; ele fica como está, e nada é acrescentado a ele.
+player-trouble-sources-unwritable = Não foi possível gravar o arquivo das suas fontes.
+player-trouble-no-such-source = Essa fonte não existe.
+# AS TECLAS DE UMA LISTAGEM.
+cmd-player-listing-earlier = A página anterior da listagem
+cmd-player-listing-later = A página seguinte da listagem
+cmd-player-listing-first = A primeira página da listagem
+cmd-player-listing-last = A última página da listagem
+cmd-player-listing-full = A listagem sozinha na tela inteira
+cmd-player-listing-layout = A próxima disposição da listagem
+cmd-player-listing-source = A próxima fonte do catálogo
+cmd-player-listing-letter = Uma inicial da listagem, digitada
+cmd-player-listing-order = A próxima ordem da listagem
+# AS TECLAS DE UMA LISTAGEM, COMO A LINHA DE DICAS AS DIZ.
+player-listing-earlier = página anterior
+player-listing-later = página seguinte
+player-listing-first = primeira página
+player-listing-last = última página
+player-listing-full = tela inteira
+player-listing-layout = exibição
+player-listing-source = próxima fonte
+player-listing-letter = inicial
+player-listing-order = ordem
+
+# THE VIDEO CATALOGUE (LEADER v, video_metrics.rs and its window).
+group-video-metrics = vídeos
+mode-video-metrics = métricas de vídeo
+video-metrics-title = Métricas de vídeo
+cmd-video-metrics-open = Métricas de vídeo: seus canais do YouTube, os vídeos pontuados
+cmd-video-metrics-window = Métricas de vídeo, numa janela
+cmd-video-metrics-scan = Varrer agora todos os canais atrás de vídeos novos
+cmd-video-metrics-up = Linha anterior
+cmd-video-metrics-down = Próxima linha
+cmd-video-metrics-less = O valor sob o cursor um passo abaixo, ou o vídeo anterior na grade
+cmd-video-metrics-more = O valor sob o cursor um passo acima, ou o vídeo seguinte na grade
+cmd-video-metrics-enter = Abrir ou mudar o que está sob o cursor
+cmd-video-metrics-page-back = A página de vídeos anterior
+cmd-video-metrics-page-on = A página de vídeos seguinte
+cmd-video-metrics-layout = Os vídeos em lista, ou numa grade de miniaturas
+cmd-video-metrics-search = Buscar nas palavras dos vídeos — títulos, descrições, etiquetas e as suas
+cmd-video-metrics-player = Abrir no player
+cmd-video-metrics-kiosk = Abrir no Chrome, como quiosque
+cmd-video-metrics-download = Baixar, pela fila de transferências
+cmd-video-metrics-hide = Ocultar das listas, ou mostrar de novo
+cmd-video-metrics-delete = Apagar de vez: ele nunca volta
+cmd-video-metrics-add-channel = Acrescentar um canal do YouTube, pelo endereço ou pelo @handle
+cmd-video-metrics-channel-score = Digitar a pontuação de um canal
+cmd-video-metrics-points = Digitar os pontos de uma regra
+cmd-video-metrics-days = Digitar em quantos dias a novidade se apaga
+cmd-video-metrics-band = Digitar uma faixa de duração
+cmd-video-metrics-words = Digitar as palavras que uma regra procura
+cmd-video-metrics-second-tags = Digitar as suas etiquetas de um vídeo
+cmd-video-metrics-weight = Digitar o peso de uma nota
+video-metrics-up = acima
+video-metrics-down = abaixo
+video-metrics-less = menos
+video-metrics-more = mais
+video-metrics-enter = abrir
+video-metrics-page-back = página anterior
+video-metrics-page-on = próxima página
+video-metrics-layout = lista ou grade
+video-metrics-search = buscar
+video-metrics-player = player
+video-metrics-kiosk = Chrome
+video-metrics-download = baixar
+video-metrics-hide = ocultar
+video-metrics-delete = apagar
+ask-video-metrics-add-channel = Endereço ou @handle do canal
+ask-video-metrics-channel-score = Pontuação, de 0 a 10 000
+ask-video-metrics-points = Pontos
+ask-video-metrics-days = Apaga-se em quantos dias
+ask-video-metrics-band = De quanto a quanto (4:00-20:00)
+ask-video-metrics-words = Palavras a procurar
+ask-video-metrics-search = Buscar nos vídeos
+ask-video-metrics-second-tags = Suas etiquetas, separadas por vírgulas
+ask-video-metrics-weight = Pontos para esta nota
+video-metrics-heading-scan = Varredura
+video-metrics-last-scan = Última varredura
+video-metrics-never = nunca
+video-metrics-scan-running = varrendo desde { $when }
+video-metrics-scan-cut = parou antes de terminar ({ $when })
+video-metrics-scan-added = Vídeos novos
+video-metrics-scan-failed = Canais que falharam
+video-metrics-failed-of = { $failed } de { $channels }
+video-metrics-pending = { $pending ->
+        [1] Um vídeo espera os detalhes: a próxima varredura pergunta por ele.
+       *[other] { $pending } vídeos esperam os detalhes: as próximas varreduras perguntam por eles, poucos de cada vez.
+    }
+video-metrics-scan-now = Varrer agora
+video-metrics-ask-youtube = Perguntar ao YouTube
+about-video-metrics-ask-youtube = Se uma varredura pode perguntar ao YouTube: desligado, nada é perguntado até você ligar de novo.
+video-metrics-ask-youtube-note = Acrescentar um canal deixa { $hosts } serem perguntados — feeds e miniaturas, nada mais. A permissão é desta máquina, endereço por endereço: desligada aqui, nada nela pergunta a eles, nem as fontes do YouTube do player.
+video-metrics-on = ligado
+video-metrics-off = desligado
+video-metrics-heading-catalogue = O catálogo
+video-metrics-videos = Vídeos
+video-metrics-channels = Canais
+video-metrics-rules = Regras
+video-metrics-weights = Pesos das notas
+video-metrics-heading-left-out = Deixados de fora
+video-metrics-skip-before-reference = Mais antigos que a última varredura do canal
+video-metrics-skip-first-scan = Além da primeira varredura de um canal
+video-metrics-skip-blocked-short = Shorts, enquanto estão bloqueados
+video-metrics-skip-unavailable = Privados, removidos ou sumidos
+video-metrics-skip-deleted = Apagados por você
+video-metrics-reading = Lendo o catálogo…
+video-metrics-why-not-yet = Isto ainda não tem resposta.
+video-metrics-why-no-database = Esta compilação não tem catálogo de vídeos.
+video-metrics-why-not-there = Nada foi catalogado ainda: acrescente um canal, e a próxima varredura preenche.
+video-metrics-why-unreadable = O catálogo de vídeos está lá e não pode ser lido.
+video-metrics-why-other-schema = O catálogo de vídeos foi escrito por uma versão mais nova; ele fica como está.
+video-metrics-why-busy = Uma varredura está segurando o catálogo agora; tente de novo daqui a pouco.
+video-metrics-why-not-found = Isto não está mais no catálogo.
+video-metrics-why-failed = O catálogo não pôde ser escrito.
+video-metrics-why-invalid = O catálogo não pode guardar isso: uma regra precisa de palavras ou de uma faixa que termine depois de começar, e a novidade precisa de pelo menos um dia e de pontos não negativos.
+video-metrics-stop-bot-check = O YouTube perguntou se isto é um robô, e a varredura parou; a próxima tenta de novo.
+video-metrics-stop-too-many-requests = O YouTube disse que foram pedidos demais, e a varredura parou; a próxima tenta de novo.
+video-metrics-stop-offline = Não havia rede, e a varredura parou.
+video-metrics-stop-not-let = Perguntar ao YouTube está desligado, e a varredura não perguntou nada.
+video-metrics-add-a-channel = Acrescentar um canal…
+video-metrics-no-channels = Nenhum canal ainda: acrescente um pelo endereço ou pelo @handle.
+video-metrics-channel-row = { $score } · { $videos ->
+        [1] um vídeo
+       *[other] { $videos } vídeos
+    } · varrido { $when }
+video-metrics-channel-added = { $name } foi acrescentado: os vídeos mais novos chegam na próxima varredura.
+video-metrics-channel-removed = O canal e os vídeos dele foram removidos.
+video-metrics-add-absent = Esta instalação não tem yt-dlp, que diz de quem é o canal de um endereço.
+video-metrics-add-unstartable = O yt-dlp não pôde ser iniciado.
+video-metrics-add-slow = O yt-dlp demorou demais para dizer de quem é o canal.
+video-metrics-add-failed = O yt-dlp não conseguiu dizer de quem é o canal.
+video-metrics-add-garbled = O yt-dlp respondeu algo que não nomeia canal nenhum.
+video-metrics-add-not-an-address = Isso não é um endereço do YouTube, um @handle nem uma id de canal.
+video-metrics-add-gone = O YouTube não tem canal ali.
+video-metrics-not-let-no-home = O canal entrou, e não há uma pasta pessoal onde guardar o consentimento para perguntar ao YouTube: uma varredura não vai perguntar.
+video-metrics-not-let-unparseable = O canal entrou, e o arquivo de consentimento não é legível, então ficou como está: uma varredura não vai perguntar ao YouTube.
+video-metrics-not-let-unwritable = O canal entrou, e o consentimento para perguntar ao YouTube não pôde ser gravado: uma varredura não vai perguntar.
+video-metrics-address = Endereço
+video-metrics-handle = Handle
+video-metrics-added = Acrescentado
+video-metrics-reference = Varrido até
+video-metrics-reference-none = ainda não
+video-metrics-last-error = Último erro
+video-metrics-its-videos = Os vídeos dele
+video-metrics-score = Pontuação
+about-video-metrics-score = A pontuação de um canal, de 0 a 10 000, entra em todo vídeo dele: as setas movem de cem em cem, e o RET digita.
+video-metrics-its-shorts = Os Shorts dele
+video-metrics-shorts-follow = como em todo lugar
+video-metrics-shorts-blocked = bloqueados
+video-metrics-shorts-allowed = permitidos
+video-metrics-its-rules = As regras dele
+video-metrics-heading-remove = Remover
+video-metrics-remove-channel = Remover este canal
+ask-video-metrics-remove-channel = Remover { $name }? Os vídeos dele vão junto, e nenhum volta.
+video-metrics-keep-channel = Não, manter o canal
+video-metrics-remove-channel-it = Sim, remover o canal e os vídeos
+video-metrics-block-shorts = Bloquear os Shorts do YouTube
+video-metrics-block-shorts-note = Shorts bloqueados nunca são catalogados, e os que já estão ficam ocultos; um canal pode escolher outra coisa na página dele.
+video-metrics-heading-score = Como um vídeo é pontuado
+video-metrics-rule-term = Palavras a procurar
+video-metrics-rule-band = Faixa de duração
+video-metrics-rule-preferred = Duração preferida
+video-metrics-rule-short = Penalidade de Short
+video-metrics-rule-recency = Novidade
+video-metrics-rule-live = Ao vivo ou estreia
+video-metrics-none = não há
+video-metrics-points-value = { $points ->
+        [1] { $points } ponto
+       *[other] { $points } pontos
+    }
+video-metrics-days-value = { $days ->
+        [1] um dia
+       *[other] { $days } dias
+    }
+video-metrics-recency-value = { $points }, somem em { $days }
+video-metrics-rule-in = { $value } · { $scope }
+video-metrics-scope-own = deste canal
+video-metrics-scope-everywhere = em todo lugar
+video-metrics-band-value = { $from } a { $to }
+video-metrics-band-joiner = a
+video-metrics-band-row = Duração de { $band }
+video-metrics-preferred-row = Duração preferida: { $band }
+video-metrics-term-row = “{ $words }”
+video-metrics-add-band = Acrescentar uma faixa de duração…
+video-metrics-add-band-here = Acrescentar uma faixa de duração para este canal…
+video-metrics-bands-note = Estas faixas são as de todo lugar; uma faixa acrescentada aqui começa a lista própria deste canal, e as de todo lugar deixam de contar para ele.
+video-metrics-add-term = Acrescentar palavras…
+video-metrics-add-term-here = Acrescentar palavras para este canal…
+video-metrics-rule-inherited-note = Esta é a regra de todo lugar; mudar aqui cria uma só para { $name }.
+video-metrics-rule-own-note = Esta é a regra própria de { $name }: ela conta no lugar da de todo lugar.
+video-metrics-rule-own-off-note = Esta é a regra própria de { $name }, desligada: nada deste tipo conta para { $name }, nem a regra de todo lugar. Remover a regra traz a de todo lugar de volta.
+video-metrics-recency-points = Pontos hoje
+video-metrics-recency-days = Apaga-se em
+video-metrics-rule-points = Pontos
+about-video-metrics-points = Os pontos que ela soma — negativos subtraem: as setas movem de cem em cem, e o RET digita.
+video-metrics-rule-length = Duração
+video-metrics-term-words = Palavras
+video-metrics-term-match = Casamento
+video-metrics-match-word = palavras inteiras
+video-metrics-match-phrase = as palavras em ordem
+video-metrics-match-prefix = palavras que começam assim
+video-metrics-field-title = No título
+video-metrics-field-description = Na descrição
+video-metrics-field-tags = Nas etiquetas
+video-metrics-field-second-description = Na sua descrição
+video-metrics-field-second-tags = Nas suas etiquetas
+video-metrics-rule-on = Em vigor
+video-metrics-remove-rule = Remover esta regra
+ask-video-metrics-remove-rule = Remover esta regra? Ela não pode ser trazida de volta.
+video-metrics-keep-rule = Não, manter a regra
+video-metrics-remove-rule-it = Sim, remover a regra
+video-metrics-weights-note = O que uma nota sua soma à pontuação de um vídeo, em todos os canais.
+video-metrics-rating-very-negative = Muito negativa
+video-metrics-rating-negative = Negativa
+video-metrics-rating-positive = Positiva
+video-metrics-rating-very-positive = Muito positiva
+video-metrics-channel = Canal
+video-metrics-every-channel = todos os canais
+video-metrics-filter-shorts = Shorts
+video-metrics-shorts-any = com e sem
+video-metrics-shorts-only = só Shorts
+video-metrics-shorts-without = sem Shorts
+video-metrics-rating = Sua nota
+video-metrics-rating-any = qualquer
+video-metrics-rating-none = sem nota
+video-metrics-filter-hidden = Ocultos
+video-metrics-hidden-without = não aparecem
+video-metrics-hidden-only = só os ocultos
+video-metrics-hidden-any = aparecem também
+video-metrics-filter-text = Busca
+video-metrics-search-none = nada
+video-metrics-published = Publicado
+video-metrics-since-any = a qualquer hora
+video-metrics-since-day = no último dia
+video-metrics-since-week = na última semana
+video-metrics-since-month = nos últimos 30 dias
+video-metrics-since-year = no último ano
+video-metrics-filter-layout = Disposição
+video-metrics-layout-list = lista
+video-metrics-layout-grid = miniaturas
+video-metrics-page = Página
+video-metrics-page-of = { $page } de { $pages } · { $videos ->
+        [1] um vídeo
+       *[other] { $videos } vídeos
+    }
+video-metrics-by-score = Por pontuação
+video-metrics-no-videos = Nenhum vídeo corresponde.
+video-metrics-video-row = { $score } · { $channel } · { $age }
+video-metrics-age = { $days ->
+        [0] hoje
+        [1] ontem
+       *[other] há { $days } dias
+    }
+video-metrics-the-video = O vídeo
+video-metrics-duration = Duração do vídeo
+video-metrics-kind = Tipo
+video-metrics-kind-short = um Short
+video-metrics-kind-long = um vídeo
+video-metrics-kind-live = ao vivo ou uma estreia
+video-metrics-its-points = Os pontos dele
+video-metrics-size = Imagem
+video-metrics-size-value = { $width } × { $height }
+video-metrics-languages = Línguas
+video-metrics-age-limit = Idade mínima
+video-metrics-captions = Legendas
+video-metrics-categories = Categorias
+video-metrics-chapters = Capítulos
+video-metrics-views = Visualizações
+video-metrics-first-seen = Visto pela primeira vez
+video-metrics-tags = Etiquetas do YouTube
+video-metrics-description = Descrição do YouTube
+about-video-metrics-copy = O RET põe este valor na área de transferência.
+video-metrics-yours = O que é seu
+video-metrics-your-tags = Suas etiquetas
+video-metrics-your-description = Sua descrição
+about-video-metrics-second-description = Uma descrição sua, editada aqui: C-s guarda, e uma regra pode procurar as palavras dela.
+video-metrics-description-kept = Sua descrição foi guardada.
+video-metrics-with-it = Com ele
+video-metrics-hide-row = Nas listas
+video-metrics-shown = aparece
+video-metrics-hidden = oculto
+ask-video-metrics-hide = Ocultar { $title }? Ele continua no catálogo, e "Ocultos: aparecem também" encontra.
+video-metrics-leave-shown = Não, deixar aparecendo
+video-metrics-hide-it = Sim, ocultar
+ask-video-metrics-delete = Apagar { $title } de vez? Ele nunca volta, nem na próxima varredura.
+video-metrics-keep-video = Não, manter o vídeo
+video-metrics-delete-it = Sim, apagar de vez
+video-metrics-deleted = O vídeo foi apagado, e nunca volta.
+ask-video-metrics-again = Ele já está na fila como { $name }. Acrescentar de novo?
+video-metrics-not-again = Não, uma vez basta
+video-metrics-again = Sim, acrescentar de novo
+video-metrics-player-unreachable = O player não respondeu; nada foi acrescentado.
+video-metrics-downloading = Baixando { $title }: a fila mostra ({ $keys }).
+video-metrics-scan-asked = Uma varredura foi pedida; a modeline marca enquanto ela roda.
+video-metrics-scan-started = O cérebro não a assumiu, então a varredura começou direto.
+video-metrics-scan-nowhere = Nada aqui pode começar uma varredura: nem o cérebro nem o systemd responderam.
+video-metrics-scan-saver = A economia de energia está ligada, e nenhuma varredura começa enquanto ela estiver: nada foi pedido.
+video-metrics-scan-other-instance = Esta é uma segunda cópia do sistema: o cérebro dela só ensaia, e a unidade da varredura é a da sessão instalada, então nada foi pedido aqui.
+video-metrics-typed-not-a-number = Isso não é um número inteiro.
+video-metrics-typed-not-days = Isso não é um número inteiro de dias, um ou mais.
+video-metrics-typed-not-a-band = Escreva uma faixa como duas durações, como 4-20 ou 0:30-3:00.
+video-metrics-typed-no-words = Não há palavras nisso para procurar.
+video-metrics-typed-no-row = Não há linha aqui para isso: ponha o cursor no que isso muda e digite lá.
+brain-why-saver = A economia de energia estava ligada
+
+mode-security = central de segurança
+# The file manager's menu row that checks a file with VirusTotal.
+files-virustotal = checar no VirusTotal
+files-does-virustotal = manda a impressão digital (SHA-256) ao VirusTotal, na janela da central de segurança; o arquivo em si só se você disser sim
+# The security centre's refusals (`ronoctua_security::Why`), one per reason.
+security-refusal-no-helper = Esta sessão não recebeu o ajudante de segurança, então nada aqui pode agir como administrador.
+security-refusal-wrong-password = Essa não é a sua senha.
+security-refusal-needs-password = Isto precisa da sua senha.
+security-refusal-not-allowed = A sua conta não pode agir como administrador.
+security-refusal-unstartable = Um programa de que isto precisa não pôde ser iniciado.
+security-refusal-failed = Não funcionou; o log do sistema diz por quê.
+security-refusal-invalid = O que foi pedido não é algo que a central de segurança aceite.
+security-refusal-no-reader = Não há leitor de digitais.
+security-refusal-unreadable = Não foi possível ler.
+security-refusal-busy = Outro programa está usando o leitor de digitais.
+security-refusal-timed-out = Nada tocou o leitor a tempo.
+# The view's keys, as the hint line names them (`security::OF_THE_VIEW`).
+security-down = desce
+security-up = sobe
+security-enter = faz
+security-left = dedo anterior
+security-right = próximo dedo
+security-relax = sem senha
+security-shields = escudos
+security-rule-add = nova regra
+security-rule-delete = remove
+security-enrol = cadastra
+# THE SECURITY CENTRE (`LEADER s e`, `crate::security`): its leader group,
+# its commands, its view's keys and questions, and its page.
+group-security = segurança
+cmd-security-open = Abrir a central de segurança
+cmd-security-window = Abrir a central de segurança numa janela
+cmd-security-relax = Deixar o administrador agir sem senha por um tempo, ou encerrar isso agora
+cmd-security-shields = Recusar toda conexão de entrada, ou parar de recusar
+cmd-security-firewall = Ligar ou desligar seu firewall
+cmd-security-check-password = Ver se uma senha está em vazamentos conhecidos
+cmd-security-check-email = Ver se um endereço de e-mail está em vazamentos conhecidos
+cmd-security-check-file = Checar um arquivo no VirusTotal
+cmd-security-down = Próxima linha da central de segurança
+cmd-security-up = Linha anterior da central de segurança
+cmd-security-enter = Fazer o que a linha sob o cursor oferece
+cmd-security-left = O dedo anterior a cadastrar
+cmd-security-right = O próximo dedo a cadastrar
+cmd-security-rule-add = Acrescentar uma regra de firewall
+cmd-security-rule-delete = Tirar a regra ou o dedo sob o cursor
+cmd-security-enrol = Cadastrar o dedo escolhido
+cmd-security-password = Sua senha, para o administrador
+cmd-security-rule = Uma regra de firewall, em palavras
+cmd-security-vt-key = Guardar sua chave do VirusTotal
+cmd-security-vt-forget = Esquecer sua chave do VirusTotal
+cmd-security-home = Tratar como de casa a rede que acabou de se conectar
+ask-security-password = Sua senha
+ask-security-rule = Regra (permitir tcp 8080 de 192.168.1.0/24 em wlan0 casa)
+ask-security-vt-key = Sua chave de API do VirusTotal
+# As mudanças do gerenciador de arquivos que só o administrador faz (dono,
+# grupo, permissões), pela mesma porta do sudo.
+ask-files-root-password = Sua senha, para o que só o administrador pode mudar
+ask-security-check-password = Senha a checar (só cinco caracteres da impressão dela saem desta máquina)
+ask-security-check-email = Endereço de e-mail a checar (ele vai para o XposedOrNot)
+ask-security-check-file = Arquivo a checar (a impressão dele vai para o VirusTotal)
+hint-security-until = O administrador não pede senha até { $time }; um clique abre onde isso se encerra
+transfers-engine-scan = VirusTotal
+transfers-work-scan = enviar um arquivo ao VirusTotal
+echo-security-checking = Checando…
+echo-security-file-checked = { $file }: { $verdict }
+echo-security-finger-enrolled = Dedo cadastrado.
+echo-security-finger-removed = Dedo removido.
+echo-security-finger-sudo-changed = Os dedos para o administrador mudaram.
+echo-security-firewall-applied = O firewall está como você pediu.
+echo-security-key-forgotten = A chave do VirusTotal foi esquecida.
+echo-security-key-kept = A chave do VirusTotal está guardada.
+echo-security-key-not-a-key = Isso não é uma chave que o VirusTotal aceite.
+echo-security-key-not-kept = A chave não pôde ser guardada na sua pasta.
+echo-security-nothing-to-delete = Não há regra nem dedo sob o cursor.
+echo-security-no-new-network = Nenhuma rede que se conectou espera ser classificada.
+# A ação ao lado do "uma rede nova é tratada como pública" do vigia.
+notif-action-treat-as-home = Tratar como de casa
+echo-security-relaxed = O administrador não pede senha até a hora que está na modeline.
+echo-security-relax-ended = O administrador volta a pedir a senha.
+echo-security-rule-not-understood = Isso não é uma regra: permitir ou negar, depois tcp ou udp, as portas e, se quiser, de, em e casa, pública ou tudo.
+echo-security-shields-up = Toda conexão de entrada é recusada agora.
+echo-security-upload-queued = { $file } está a caminho do VirusTotal; a lista de transferências mostra quanto falta.
+security-title = Segurança
+security-on = ligado
+security-off = desligado
+security-unknown = desconhecido
+security-answer-no = Não
+security-answer-yes = Sim
+security-busy = Pedindo ao administrador…
+security-busy-enrol = Toque o leitor quando ele pedir.
+security-heading-now = Agora
+security-heading-firewall = Firewall
+security-heading-admin = Administrador
+security-heading-finger = Digital
+security-heading-device = Esta máquina
+security-heading-privacy = Privacidade de rede
+security-heading-online = Checagens online
+security-heading-suggest = Sugestões
+security-now-nothing = Nada fora do esperado.
+security-now-reading = Lendo…
+security-now-firewall-failed = O firewall falhou
+security-now-settings-unreadable = As configurações do firewall não podem ser lidas
+security-now-firewall-off = Seu firewall está desligado
+security-now-sudo-open = Sem senha de administrador até
+security-now-shields = Toda conexão de entrada é recusada
+security-now-refused = { $count ->
+    [one] Uma conexão recusada há pouco
+   *[other] { $count } conexões recusadas há pouco
+  }
+security-fw-switch = Seu firewall
+security-fw-network = Rede em { $iface }
+security-fw-profile-home = casa: confiável
+security-fw-profile-public = pública: estranhos por perto
+security-fw-served = esta máquina a serve
+security-fw-treat-as-home = Tratar esta rede como casa
+security-fw-shields = Recusar toda conexão de entrada
+security-fw-shields-note = Erguer é na hora; baixar pede sua senha, como todo afrouxamento.
+security-fw-log = Conexões recusadas no registro
+security-fw-log-off = não registradas
+security-fw-log-quiet = algumas por minuto
+security-fw-log-chatty = muitas por minuto
+security-fw-rule-add = Acrescentar uma regra
+security-fw-blocked = Recusadas há pouco:
+security-fw-blocked-row = { $proto } { $port } de { $source } em { $iface } ({ $count ->
+    [one] uma vez
+   *[other] { $count } vezes
+  })
+security-fw-watch-silent = O cérebro não está respondendo, então as conexões recusadas há pouco não podem ser mostradas.
+security-fw-ports = Onde esta máquina responde:
+security-fw-port-row = { $who }: { $proto } { $port }
+security-fw-port-unknown = um programa de outro usuário
+security-fw-port-container = container { $name }
+security-fw-verdict-open = aberta: o firewall está desligado
+security-fw-verdict-allowed = permitida pela sua regra
+security-fw-verdict-partly = permitida só em algumas redes, ou de alguns endereços
+security-fw-verdict-refused = recusada, a não ser que o sistema a abra
+security-fw-verdict-shielded = recusada: todas estão
+security-sudo-password = A senha do administrador
+security-sudo-asked = pedida toda vez
+security-sudo-not-asked-until = não pedida até { $time }
+security-sudo-end = Voltar a pedir agora
+security-sudo-open-for = Não pedir por { $minutes } minutos
+security-sudo-note = Pede sua senha antes, e se encerra sozinha na hora escolhida, quando a máquina dorme e na próxima partida.
+security-sudo-recent = Nesta semana:
+security-finger-reader = Leitor
+security-finger-enrolled = cadastrado
+security-finger-enrol = Cadastrar
+security-finger-ring-note = As setas para os lados escolhem o dedo; pede sua senha antes, depois alguns toques.
+security-finger-sudo = Dedos para o administrador num terminal
+security-finger-sudo-note = Só num terminal: aqui, e em qualquer outro lugar, é a sua senha.
+security-finger-ask-remove = Remover seu { $finger }? Ele não poderá ser usado até ser cadastrado de novo.
+security-finger-left-thumb = polegar esquerdo
+security-finger-left-index-finger = indicador esquerdo
+security-finger-left-middle-finger = médio esquerdo
+security-finger-left-ring-finger = anelar esquerdo
+security-finger-left-little-finger = mínimo esquerdo
+security-finger-right-thumb = polegar direito
+security-finger-right-index-finger = indicador direito
+security-finger-right-middle-finger = médio direito
+security-finger-right-ring-finger = anelar direito
+security-finger-right-little-finger = mínimo direito
+security-finger-step-completed = Cadastrado.
+security-finger-step-stage-passed = Bom. Toque o leitor de novo.
+security-finger-step-retry-scan = Toque o leitor de novo.
+security-finger-step-swipe-too-short = Curto demais; toque de novo, por mais tempo.
+security-finger-step-not-centred = Fora do centro; toque de novo, centralizado.
+security-finger-step-remove-and-retry = Levante o dedo e toque de novo.
+security-finger-step-too-fast = Rápido demais; toque de novo, mais devagar.
+security-finger-step-duplicate = Este dedo já está cadastrado.
+security-finger-step-data-full = O leitor não guarda mais dedos.
+security-finger-step-failed = O leitor não conseguiu cadastrar.
+security-finger-step-disconnected = O leitor sumiu.
+security-finger-step-unknown = O leitor disse algo inesperado.
+security-device-secure-boot = Secure Boot
+security-device-secure-boot-enabled = ligado
+security-device-secure-boot-disabled = desligado
+security-device-secure-boot-setup-mode = em modo de configuração: as chaves podem mudar
+security-device-secure-boot-unsupported = não é uma partida UEFI
+security-device-tpm = Chip de segurança (TPM)
+security-device-tpm-absent = nenhum
+security-device-tpm-present = versão { $version }
+security-device-encryption = O disco do sistema
+security-device-encrypted = cifrado
+security-device-not-encrypted = não cifrado
+security-device-hsi = Nível de segurança do firmware
+security-device-firmware-updates = Atualizações de firmware
+security-device-firmware-updates-count = { $count ->
+    [0] nenhuma conhecida
+    [one] uma disponível
+   *[other] { $count } disponíveis
+  }
+security-device-firmware-note = Só leitura: firmware não é instalado daqui.
+security-device-updates = Atualizações automáticas
+security-device-lock = Bloqueio de tela
+security-device-lock-none = nenhum: este sistema não tem tela de bloqueio
+security-device-autologin = A partida da máquina
+security-device-autologin-gate = a senha do disco é a única porta
+security-privacy-mac = Endereço de hardware em { $name }
+security-privacy-mac-permanent = o do próprio aparelho: as redes podem seguir você
+security-privacy-mac-preserve = como o aparelho tem
+security-privacy-mac-random = novo a cada vez
+security-privacy-mac-stable = próprio para esta rede
+security-privacy-mac-explicit = um que você escolheu
+security-privacy-mac-default = a escolha do sistema
+security-privacy-dns = DNS cifrado em { $name }
+security-privacy-dns-yes = sempre
+security-privacy-dns-opportunistic = quando o servidor oferece
+security-privacy-dns-no = nunca
+security-privacy-dns-default = a escolha do sistema
+security-privacy-none = Nenhuma rede está ativa.
+security-privacy-ssh = Servidor SSH
+security-privacy-ssh-on = algo responde na porta 22
+security-privacy-note = Isto é lido, não mudado aqui: as configurações de cada conexão são da rede.
+security-online-vt-key = Chave do VirusTotal
+security-online-key-kept = guardada
+security-online-key-none = nenhuma: cole uma da sua conta do VirusTotal
+security-online-vt-forget = Esquecer a chave do VirusTotal
+security-online-check-file = Checar um arquivo
+security-online-file-note = Só a impressão dele (SHA-256) vai para o VirusTotal. Um arquivo que ele nunca viu só é enviado se você disser sim.
+security-online-check-email = Checar um endereço de e-mail
+security-online-email-note = O próprio endereço vai para o XposedOrNot.
+security-online-email-clean = { $address } não está em nenhum vazamento conhecido.
+security-online-email-found = { $address } está em { $count ->
+    [one] um vazamento
+   *[other] { $count } vazamentos
+  }: { $names }
+security-online-check-password = Checar uma senha
+security-online-password-note = Só cinco caracteres da impressão dela (SHA-1) saem desta máquina; o resto é comparado aqui.
+security-online-password-clean = Essa senha não está em nenhum vazamento conhecido.
+security-online-password-found = Essa senha foi encontrada { $count ->
+    [one] uma vez
+   *[other] { $count } vezes
+  } em vazamentos: não a use.
+security-online-refusal-no-key = { $service } precisa da sua chave: cole-a na linha dele.
+security-online-refusal-key-refused = { $service } recusou a chave.
+security-online-refusal-too-many-asks = { $service } pede para perguntar mais devagar; tente de novo em um minuto.
+security-online-refusal-nothing-found = { $service } não achou nada.
+security-online-refusal-nothing-to-ask = Isso não é algo que se pergunte ao { $service }.
+security-online-refusal-unreachable = Não foi possível falar com { $service }.
+security-online-refusal-malformed = { $service } respondeu algo que isto não lê.
+security-online-refusal-too-large = Grande demais para { $service }.
+security-online-refusal-unreadable = O arquivo não pôde ser lido.
+security-online-refusal-not-let = { $service } não pode ser perguntado: o endereço dele não está liberado.
+security-service-virustotal = VirusTotal
+security-service-xposedornot = XposedOrNot
+security-service-pwnedpasswords = Pwned Passwords
+security-vt-ask-upload = O VirusTotal nunca viu { $file }. Enviar o próprio arquivo?
+security-vt-upload-warning = Um arquivo enviado ao VirusTotal é compartilhado com os parceiros dele e pode ser baixado pelos assinantes pagos. Não envie nada privado.
+security-vt-state-asking = perguntando…
+security-vt-state-unknown = nunca visto, não enviado
+security-vt-state-sending = enviando, { $percent }%
+security-vt-state-pending = enviado; esperando a análise
+security-vt-verdict-clean = limpo: nenhum de { $engines } motores achou nada
+security-vt-verdict-suspicious = suspeito: { $found } de { $engines } motores
+security-vt-verdict-malicious = malicioso: { $found } de { $engines } motores
+security-rule-word-allow = permitir
+security-rule-word-deny = negar
+security-rule-word-from = de
+security-rule-word-on = em
+security-rule-word-home = casa
+security-rule-word-public = pública
+security-rule-word-everywhere = tudo
+security-rule-word-any = qualquer
+security-about-show = Vai até onde isto está
+security-about-profile = Casa ou pública: uma rede pública não deixa entrar o que suas regras de casa deixariam
+security-about-log = Quantas conexões recusadas vão para o registro
+security-about-rule = Mudar esta regra, em palavras; a tecla de apagar a tira
+security-about-allow-home = Permite esta porta nas redes de casa, com sua senha
+security-about-allow-public = Permite esta porta também nas redes públicas, com sua senha
+security-about-finger = Remove este dedo, depois de uma pergunta
+security-about-finger-sudo = Deixa um dedo responder ao administrador num terminal, com sua senha
+security-about-report = Abre o relatório do arquivo na página do VirusTotal
+security-about-url = Abre a página no seu navegador
+security-about-answer = Responde à pergunta
+security-suggest-vpn = Usar uma VPN: importe o arquivo dela na vista de rede
+security-suggest-tor = Passar pelo Tor
+security-suggest-tailnet = Chegar às suas máquinas pela sua tailnet
+security-suggest-hibp = Have I Been Pwned, no seu navegador (nenhum endereço vai junto)
+
+# THE PERSON'S CONTAINERS (LEADER s o) — `containers.rs`, its words
+# (`containers_words.rs`), its threads and its window. A status line, a name
+# and a log line are podman's own words and are drawn as they came; a key is
+# never text here: every sequence arrives as `{ $keys }`.
+containers-title = Containers
+group-containers = containers
+mode-containers = containers
+cmd-containers-open = Seus containers: pods, compose, imagens, volumes e redes
+cmd-containers-window = Seus containers, numa janela
+containers-down = descer
+containers-up = subir
+containers-enter = abrir
+containers-left = esquerda
+containers-right = direita
+containers-next-kind = próximo tipo
+containers-previous-kind = tipo anterior
+containers-next-tab = próxima aba
+containers-previous-tab = aba anterior
+containers-start-stop = iniciar/parar
+containers-restart = reiniciar
+containers-remove = remover
+containers-logs = log
+containers-shell = shell
+containers-inspect = inspecionar
+containers-pull = baixar
+containers-build = construir
+containers-login = entrar
+containers-prune = limpar
+containers-reveal = mostrar valores
+cmd-containers-down = A próxima linha
+cmd-containers-up = A linha de cima
+cmd-containers-enter = Abrir a linha; num fato, copiá-lo
+cmd-containers-left = A coluna à esquerda, ou voltar do detalhe
+cmd-containers-right = A coluna à direita, ou o detalhe da linha
+cmd-containers-next-kind = O próximo tipo: containers, pods, compose, imagens, volumes, redes
+cmd-containers-previous-kind = O tipo anterior
+cmd-containers-next-tab = A próxima aba do detalhe
+cmd-containers-previous-tab = A aba anterior do detalhe
+cmd-containers-start-stop = Iniciar ou parar; um projeto compose sobe, ou desce depois de uma pergunta
+cmd-containers-restart = Reiniciar
+cmd-containers-remove = Remover, depois de uma pergunta
+cmd-containers-logs = O log, enquanto cresce
+cmd-containers-shell = Um shell dentro dele, no terminal
+cmd-containers-inspect = Tudo o que o podman sabe dele, realçado
+cmd-containers-pull = Baixar uma imagem, pela fila
+ask-containers-pull = Imagem a baixar
+cmd-containers-build = Construir uma imagem a partir de uma pasta, pela fila
+ask-containers-build = Pasta a construir
+cmd-containers-login = Entrar num registro: o nome dele e o seu usuário, depois a senha numa linha oculta
+ask-containers-login = Registro e usuário (quay.io alice)
+cmd-containers-login-password = A senha do login no registro que está sendo digitado, numa linha oculta
+ask-containers-login-password = A senha do registro
+cmd-containers-prune = Remover o que nada usa, depois de uma pergunta
+cmd-containers-reveal = Mostrar os valores do ambiente, ou escondê-los de novo
+containers-kind-containers = Containers
+containers-kind-pods = Pods
+containers-kind-compose = Compose
+containers-kind-images = Imagens
+containers-kind-volumes = Volumes
+containers-kind-networks = Redes
+containers-empty-containers = Nenhum container. Baixar põe uma imagem aqui, e o `podman run` ou o compose faz um.
+containers-empty-pods = Nenhum pod.
+containers-empty-compose = Nenhum projeto compose. Um aparece quando o compose faz os containers dele.
+containers-empty-images = Nenhuma imagem.
+containers-empty-volumes = Nenhum volume.
+containers-empty-networks = Nenhuma rede.
+containers-tab-overview = Visão geral
+containers-tab-logs = Log
+containers-tab-stats = Uso
+containers-tab-inspect = Inspeção
+containers-tab-ports = Portas
+containers-tab-mounts = Montagens
+containers-tab-env = Ambiente
+containers-state-created = criado
+containers-state-running = rodando
+containers-state-paused = pausado
+containers-state-exited = parado
+containers-state-stopping = parando
+containers-state-unknown = num estado que o podman não nomeou
+containers-why-no-podman = Containers não fazem parte desta instalação: o podman não está aqui.
+containers-why-unstartable = Não foi possível iniciar o podman.
+containers-why-failed = O podman não conseguiu; o log do sistema diz por quê.
+containers-why-garbled = O podman respondeu algo que não é o que foi pedido.
+containers-why-not-found = Não está mais lá.
+containers-why-refused = O registro recusou o login.
+containers-why-too-large = A resposta do podman é grande demais para mostrar.
+containers-reading = Perguntando ao podman…
+containers-working = { $what } { $name }: { $stage }
+containers-pod-value = { $status } · { $count }
+containers-project-value = { $count ->
+        [one] { $up } de 1 rodando
+       *[other] { $up } de { $count } rodando
+    }
+containers-image-unnamed = sem nome ({ $id })
+containers-heading-members = Os containers dele
+containers-row-name = Nome
+containers-row-image = Imagem
+containers-row-state = Estado
+containers-row-status = O podman diz
+containers-row-created = Feito em
+containers-row-started = Iniciado em
+containers-row-finished = Terminou em
+containers-row-exit = Terminou com
+containers-row-command = Roda
+containers-row-restart = Reinício
+containers-row-restarts = Reiniciado
+containers-row-network = Rede
+containers-row-pod = Pod
+containers-row-project = Projeto compose
+containers-row-service = Serviço
+containers-row-id = Id
+containers-row-folder = Pasta
+containers-row-file = Arquivo compose
+containers-row-size = Tamanho
+containers-row-used-by = Usada por
+containers-row-platform = Feita para
+containers-row-driver = Driver
+containers-row-mountpoint = Guardado em
+containers-row-subnet = Endereços
+containers-row-dns = Nomes dentro dela
+containers-used-by = { $count ->
+        [0] nenhum container
+        [one] um container
+       *[other] { $count } containers
+    }
+containers-network-value = { $network }: { $address }
+containers-on = ligado
+containers-off = desligado
+containers-open = abrir
+containers-logs-waiting = Esperando o log…
+containers-logs-empty = Ele não escreveu nada.
+containers-logs-ended = O log termina aqui: o podman parou de acompanhá-lo.
+containers-stats-waiting = Esperando a primeira contagem do podman…
+containers-stats-not-running = Só um container rodando usa a máquina.
+containers-stats-every = Contado de novo a cada { $seconds } segundos, enquanto isto aparece.
+containers-stat-cpu = Processador
+containers-stat-memory = Memória
+containers-stat-memory-share = Do limite de memória dele
+containers-stat-network = Rede entrando / saindo
+containers-stat-disk = Disco lendo / escrevendo
+containers-stat-pids = Processos
+containers-ports-none = Ele não publica porta nenhuma: nada fora dele o alcança.
+containers-port-label = { $published } para { $inside }
+containers-port-local = só esta máquina
+containers-port-open = aberta: o firewall está desligado
+containers-port-allowed = liberada
+containers-port-home-only = liberada só em casa
+containers-port-shields = recusada: escudos erguidos
+containers-port-refused = recusada pelo firewall
+containers-port-unknown = regras ilegíveis
+containers-port-firewall = As regras do firewall
+containers-ports-blocked = Quem está em outra máquina não alcança uma porta que o firewall recusa; só esta máquina alcança. Uma regra sua a libera.
+containers-ports-unknown = Não foi possível ler as regras do firewall, então não se sabe o que alcança estas portas.
+containers-port-narrowed = liberada só para alguns endereços
+containers-ports-shields = Os escudos estão erguidos: o firewall descarta toda conexão nova vinda de outra máquina, digam o que disserem as regras, até que sejam baixados.
+containers-ports-narrowed = Uma regra sua libera só os endereços ou a conexão que ela nomeia; quem mais tentar não alcança estas portas.
+containers-ports-open = O firewall está desligado: qualquer um numa rede em que esta máquina está alcança estas portas.
+containers-inspect-env = Valores do ambiente
+containers-row-nth = { $label } { $n }
+containers-mounts-none = Ele não monta nada desta máquina.
+containers-mount-value = { $source } · { $how } · { $kind }
+containers-mount-writable = pode escrever
+containers-mount-read-only = só leitura
+containers-env-none = O ambiente dele está vazio.
+containers-env-values = Valores
+containers-env-hidden = escondidos
+containers-env-shown = à mostra
+containers-env-mask = ••••••
+containers-ask-remove = Remover { $name }?
+containers-ask-remove-running = Ele está rodando: é parado antes.
+containers-ask-remove-pod = Os containers dele são removidos junto.
+containers-ask-remove-used = Os containers feitos a partir dela são removidos junto.
+containers-ask-prune-system = Remover todo container e todo pod parados, toda rede que nenhum container usa, toda imagem sem nome e o cache de construção?
+containers-ask-prune-images = Remover toda imagem sem nome?
+containers-ask-prune-volumes = Remover todo volume que nenhum container usa — e o que há dentro deles?
+containers-ask-down = Derrubar { $name }? Os containers dele são parados e removidos; os volumes ficam.
+containers-answer-no = Não
+containers-answer-yes = Sim
+containers-did-start = Iniciando
+containers-did-stop = Parando
+containers-did-restart = Reiniciando
+containers-did-pause = Pausando
+containers-did-unpause = Retomando
+containers-did-remove = Removendo
+containers-did-prune = Limpando
+containers-echo-asked = { $what } { $name }…
+containers-echo-done = { $what } { $name }: pronto.
+containers-echo-refused = { $what } { $name }: { $why }
+containers-echo-queued = { $what } { $name } foi para a fila — { $keys } a mostra.
+containers-no-queue = A fila de transferências não responde, então nada foi para a fila.
+containers-refused-not-here = Isso não é algo que se faça com { $kind }.
+containers-refused-not-running = Só um container rodando tem um shell para abrir.
+containers-refused-no-file = O compose não disse onde está o arquivo deste projeto.
+containers-refused-no-folder = { $path } não é uma pasta.
+containers-refused-no-containerfile = { $path } não tem um Containerfile nem um Dockerfile para construir.
+containers-refused-login-words = Digite o registro e o seu usuário nele, com um espaço entre eles: quay.io alice.
+containers-refused-no-login = Nenhum login espera uma senha: comece pelo registro e pelo usuário.
+containers-echo-logging-in = Entrando em { $registry } como { $user }…
+containers-echo-logged-in = Entrou em { $registry } como { $user }.
+containers-echo-login-refused = O login em { $registry } não deu certo: { $why }
+# The queue's words for the containers' jobs (`ronoctua-transfers`).
+transfers-engine-container = containers
+transfers-work-container-pull = baixar a imagem
+transfers-work-container-build = construir a imagem
+transfers-work-container-compose-up = subir o projeto
+transfers-work-container-compose-down = derrubar o projeto
+transfers-work-container-compose-pull = baixar as imagens do projeto
+
+# OS PERTENCES (`LEADER s v`, `crate::belongings`): a configuração da
+# pessoa, guardada cifrada num repositório privado que ela indica.
+group-belongings = pertences
+# O nome da janela na modeline (`br.ronoctua.belongings`).
+mode-belongings = pertences
+belongings-title = Pertences
+cmd-belongings-open = Pertences: a configuração guardada no seu próprio repositório
+cmd-belongings-window = Pertences, numa janela
+cmd-belongings-sync = Sincronizar os pertences agora: pede a senha
+cmd-belongings-up = Linha anterior
+cmd-belongings-down = Próxima linha
+cmd-belongings-less = O valor anterior da linha
+cmd-belongings-more = O próximo valor da linha
+cmd-belongings-enter = O que a linha sob o cursor faz
+cmd-belongings-keep-local = Manter o lado desta máquina no conflito: ele vai por cima do do repositório
+cmd-belongings-take-remote = Levar o lado do repositório no conflito: o desta máquina fica guardado à parte
+cmd-belongings-keep-both = Manter os dois lados: o do repositório fica ao lado deste, com o nome da outra máquina
+cmd-belongings-apply = Aplicar as decisões e terminar a sincronização
+cmd-belongings-abandon = Desistir da sincronização preparada: nada é escrito, e a senha é esquecida
+cmd-belongings-all-local = Todos os conflitos: manter o lado desta máquina
+cmd-belongings-all-remote = Todos os conflitos: levar o lado do repositório
+cmd-belongings-repository = Definir o endereço do repositório
+cmd-belongings-add = Guardar outro arquivo ou pasta da sua home
+cmd-belongings-auth = Chegar ao repositório por uma chave SSH de implantação, ou por um token
+cmd-belongings-keygen = Gerar a chave SSH de implantação desta máquina
+cmd-belongings-copy-key = Copiar a metade pública da chave de implantação, para entregá-la ao repositório
+cmd-belongings-token = Guardar um token do repositório, legível só por você
+cmd-belongings-user = O nome de usuário que o servidor do repositório pede
+cmd-belongings-passphrase = Trocar a senha: pede a atual e depois a nova duas vezes
+cmd-belongings-period = De quanto em quanto tempo lembrar de sincronizar
+belongings-up = subir
+belongings-down = descer
+belongings-less = menos
+belongings-more = mais
+belongings-enter = fazer
+belongings-keep-local = manter o meu
+belongings-take-remote = levar o deles
+belongings-keep-both = manter os dois
+belongings-sync = sincronizar
+ask-belongings-sync = Senha dos pertences
+ask-belongings-repository = O endereço do repositório: git@servidor:caminho, ssh://… ou https://…
+ask-belongings-add = Um arquivo ou pasta da sua home para guardar
+ask-belongings-token = O token, como o servidor do repositório o deu
+ask-belongings-user = O nome de usuário que o servidor pede
+ask-belongings-passphrase = A senha em uso
+ask-belongings-passphrase-new = A senha nova
+ask-belongings-passphrase-again = A senha nova de novo
+ask-belongings-sync-again = A senha de novo — um repositório novo fica com ela para sempre
+about-belongings-conflict = Mostra o que difere entre os dois lados, quando os dois são texto
+about-belongings-rule = Tira isto do que é guardado em todas as máquinas que você sincroniza
+about-belongings-kept = Deixa de guardar isto: o arquivo fica onde está
+about-belongings-excluded = Volta a guardar isto
+about-belongings-never = Guarda mesmo assim: vai para todas as máquinas que você sincroniza
+belongings-status = Estado
+belongings-repository = Repositório
+belongings-none-yet = nenhum ainda
+belongings-last-sync = Última sincronização
+belongings-never-here = nunca nesta máquina
+belongings-next = Próximo lembrete
+belongings-due-now = agora
+belongings-no-reminder = sem lembretes
+belongings-kept-now = Guardado agora
+belongings-files-weigh = { $n ->
+    [one] um arquivo, { $size }
+   *[other] { $n } arquivos, { $size }
+    }
+belongings-last-run = Última execução
+belongings-first-run = Esta máquina ainda não sincronizou com este repositório. A primeira sincronização restaura o que o repositório guarda; onde um arquivo daqui difere, o lado do repositório já vem escolhido.
+belongings-prefs-refused = O belongings.json não se lê como configuração, então nada é escrito por cima dele: corrija à mão, ou apague.
+belongings-no-places = Esta sessão não tem home ou diretório de runtime, e os pertences não têm onde morar.
+belongings-outcome-synced = Em dia: { $pulled } escritos aqui, { $pushed } enviados, { $deleted } apagados.
+belongings-outcome-waiting = { $n ->
+    [one] Esperando sua decisão sobre um conflito.
+   *[other] Esperando suas decisões sobre { $n } conflitos.
+    }
+belongings-outcome-abandoned = A sincronização preparada foi abandonada.
+belongings-prepared-gone = Uma sincronização foi preparada aqui e se perdeu — a sessão terminou desde então —, então nada espera por você: sincronize de novo.
+belongings-outcome-keyed = Uma chave de implantação foi gerada.
+belongings-outcome-rekeyed = A senha foi trocada.
+belongings-large = { $name } pesa { $size }: toda sincronização o carrega.
+belongings-unreadable = { $n ->
+    [one] Um arquivo daqui não pôde ser lido e ficou como estava dos dois lados.
+   *[other] { $n } arquivos daqui não puderam ser lidos e ficaram como estavam dos dois lados.
+    }
+belongings-unwritten = { $n ->
+    [one] Um arquivo do repositório não pôde ser escrito aqui; a próxima sincronização tenta de novo.
+   *[other] { $n } arquivos do repositório não puderam ser escritos aqui; a próxima sincronização tenta de novo.
+    }
+belongings-sync-heading = Sincronizar
+belongings-sync-now = Sincronizar agora
+belongings-apply = Aplicar as decisões
+belongings-decided-of = { $n } de { $of } decididos
+belongings-abandon = Desistir desta sincronização
+belongings-waiting-note = A sincronização está preparada e espera você: nada foi escrito aqui ainda.
+belongings-plan-waits = Uma sincronização está preparada e espera as suas decisões: aplique-a ou desista dela antes.
+belongings-conflicts = { $n ->
+    [one] Um conflito
+   *[other] { $n } conflitos
+    }
+belongings-conflicts-note = Mudou aqui e no repositório desde a última sincronização. Decida cada um: manter o desta máquina, levar o do repositório ou — no que você acrescentou — manter os dois.
+belongings-all-keep-local = Todos: manter o desta máquina
+belongings-all-take-remote = Todos: levar o do repositório
+belongings-undecided-left = { $n ->
+    [one] Um conflito ainda está sem decisão.
+   *[other] { $n } conflitos ainda estão sem decisão.
+    }
+belongings-undecided = sem decisão
+belongings-chosen = escolhido
+belongings-sides = aqui: { $here } · repositório: { $there }, mudou em { $machine }
+belongings-side = { $size }, { $when }
+belongings-side-deleted = apagado
+belongings-decided-keep-local = manter o desta máquina
+belongings-decided-take-remote = levar o do repositório
+belongings-decided-keep-both = manter os dois
+belongings-decide-keep-local = Manter o desta máquina
+belongings-decide-take-remote = Levar o do repositório
+belongings-decide-keep-both = Manter os dois
+belongings-diff-title = Diferença em { $name }
+belongings-diff-note = As linhas que começam com - são desta máquina; as que começam com + são do repositório.
+belongings-kept = O que é guardado
+belongings-what-leaks = Tudo é cifrado com a sua senha antes de sair desta máquina. O repositório mostra quantos arquivos há, os tamanhos e quando cada sincronização aconteceu; nunca os nomes, os lugares ou o conteúdo.
+belongings-added-by-you = acrescentado por você
+belongings-added-elsewhere = acrescentado em outra máquina
+belongings-taken-out = tirado por você
+belongings-add = Guardar mais alguma coisa
+belongings-large-note = O que você acrescenta é guardado inteiro, pastas e links inclusive. Acima de { $size }, a página avisa: toda sincronização o carrega.
+belongings-never = Nunca guardado
+belongings-auth-ssh = uma chave SSH de implantação
+belongings-auth-token = um token HTTPS
+belongings-access = Acesso
+belongings-auth = Chega por
+belongings-deploy-key = Chave de implantação
+belongings-copy-it = copiar a chave pública
+belongings-make-it = gerar uma
+belongings-deploy-note = Dê a esta chave pública acesso de escrita ao repositório, como chave de implantação. A metade privada fica nesta máquina, legível só por você, e nunca é guardada nos pertences.
+belongings-keygen-note = Esta máquina ainda não tem chave de implantação. Gerar uma leva um instante na fila; depois a metade pública aparece aqui para copiar.
+belongings-token = Token
+belongings-token-is-kept = guardado, legível só por você
+belongings-user = Nome de usuário
+belongings-token-note = O token fica num arquivo que só você lê, e chega ao git só pelo caminho — nunca numa linha de comando.
+belongings-passphrase = Senha
+belongings-change-passphrase = Trocar a senha
+belongings-passphrase-note = A senha abre um arquivo pequeno, e esse arquivo abre o resto: trocá-la cifra de novo esse arquivo, em todas as máquinas de uma vez. Nada recupera uma senha perdida.
+belongings-period = Lembrete
+belongings-remind-every = Lembrar de sincronizar
+belongings-period-days = { $n ->
+    [one] todo dia
+   *[other] a cada { $n } dias
+    }
+belongings-period-never = nunca
+belongings-needs-key = Ainda não há chave de implantação: gere uma em Acesso e dê a ela acesso de escrita ao repositório.
+belongings-needs-token = Ainda não há token: guarde um em Acesso.
+belongings-nothing-prepared = Não há sincronização preparada.
+belongings-no-conflict-here = O cursor não está num conflito.
+belongings-both-only-added = Os dois lados só podem ser mantidos no que você mesmo acrescentou.
+belongings-no-difference = A diferença deste arquivo não está mais aqui; sincronize de novo para vê-la.
+belongings-not-text = Este arquivo não é texto, então não há diferença para mostrar: decida pelo tamanho e pela hora.
+belongings-key-already = Esta máquina já tem uma chave de implantação.
+belongings-no-key-yet = Ainda não há chave de implantação.
+belongings-passphrase-first = A primeira sincronização define a senha: ainda não há nenhuma para trocar.
+belongings-empty-secret = Nada foi digitado.
+belongings-token-kept = O token está guardado.
+belongings-passphrases-differ = As duas senhas novas diferem, então nada mudou.
+belongings-first-passphrases-differ = As duas senhas diferem, então nada foi enviado.
+belongings-not-written = Um arquivo dos pertences não pôde ser escrito; o log do sistema diz por quê.
+belongings-never-kept = Isso nunca é guardado: é como esta máquina chega ao repositório.
+belongings-outside-home = Só o que está na sua home pode ser guardado.
+belongings-now-kept = { $name } agora é guardado nos pertences.
+belongings-stopped-keeping = { $name } não é mais guardado nos pertences; ele fica onde está.
+belongings-queued = Enviado para a fila: { $what }.
+belongings-op-prepare = a sincronização
+belongings-op-apply = a sincronização, com as suas decisões
+belongings-op-abandon = desistir da sincronização
+belongings-op-keygen = gerar a chave de implantação
+belongings-op-rekey = a senha nova
+belongings-invalid-empty = Nada foi digitado.
+belongings-invalid-credentials-in-address = O endereço traz usuário e senha: dê só o endereço, e a chave ou o token em Acesso.
+belongings-invalid-plain-http = Um endereço http:// manda o acesso às claras: use https:// ou SSH.
+belongings-invalid-not-remote = Um caminho local ou file:// não é um repositório remoto.
+belongings-invalid-unknown = O endereço é git@servidor:caminho, ssh://… ou https://….
+belongings-refused-no-repository = Nenhum repositório definido: dê o endereço em Estado.
+belongings-refused-no-passphrase = A senha não estava lá, ou outra pessoa podia ler o arquivo dela; ela não foi usada.
+belongings-refused-wrong-passphrase = Essa senha não abre estes pertences.
+belongings-refused-needs-access = O repositório quer um acesso que esta máquina não recebeu: uma chave de implantação ou um token, em Acesso.
+belongings-refused-refused = O repositório recusou a chave ou o token desta máquina.
+belongings-refused-unreachable = Não foi possível chegar ao repositório.
+belongings-refused-raced = Outra máquina continuou sincronizando enquanto esta sincronizava; tente de novo.
+belongings-refused-not-ours = Esse repositório não é de pertences, ou é de uma versão mais nova.
+belongings-refused-empty = O repositório está vazio: a primeira sincronização define a senha.
+belongings-refused-corrupt = Algo no repositório não se decifra ou não se lê.
+belongings-refused-undecided = Um conflito ainda está sem decisão.
+belongings-refused-no-session = Não há sincronização preparada para aplicar.
+belongings-refused-no-tools = Esta instalação não tem git ou ssh-keygen.
+belongings-refused-failed = Um arquivo daqui não pôde ser lido ou escrito; o log do sistema diz qual.
+belongings-refused-busy = Outra execução dos pertences está em andamento: espere ela terminar.
+belongings-reason-preference = as suas configurações
+belongings-reason-programs = os programas que você instalou
+belongings-reason-draft = um rascunho, ou o número de um programa rodando
+belongings-reason-generated = refeito das suas configurações em cada máquina
+belongings-reason-access = como esta máquina chega ao repositório
+belongings-reason-own-state = o que os pertences guardam sobre si mesmos
+belongings-reason-identity = a identidade da própria máquina: duas iguais colidiriam
+belongings-reason-machine = o estado desta máquina
+belongings-reason-history = um histórico desta máquina
+belongings-reason-cache = um cache, refeito quando preciso
+# A linha do menu do gerenciador (`C-m`, `k`).
+files-belongings = guardar nos pertences, ou deixar de guardar
+files-does-belongings = acrescenta ao que os pertences guardam no seu repositório e devolvem numa máquina nova; quando já é guardado, tira — o arquivo fica onde está
+# As palavras da fila para uma sincronização.
+transfers-engine-belongings = pertences
+transfers-work-belongings = pertences
+# A décima quinta pergunta do instalador.
+inst-belongings = Repositório dos pertences
+inst-belongings-help = Opcional. O repositório privado em que sua configuração fica guardada, cifrada: git@servidor:caminho, ssh://… ou https://…, nunca com senha dentro. A primeira sincronização depois da instalação devolve as suas configurações.
+inst-step-belongings = Escrever o repositório dos pertences na sua home
+
+# A lookup or a directory whose host consent.json does not let: nothing
+# was sent. The engine says it as the consent row (`Trouble::Off`); this is
+# the sentence of the refusal itself, where it is said apart from that row.
+player-trouble-lookup-not-let = Nada perguntado a { $service }: endereço não permitido.
+player-trouble-directory-not-let = Nada perguntado a { $source }: endereço não permitido.
+# A web app's page whose host consent.json would not let (`Refusal::NotLet`).
+software-refusal-not-let = O host dele não foi permitido, então nada foi enviado: um catálogo se permite pela linha dele em Fontes, o endereço de um web app ao digitá-lo.
+software-consent-flathub = A busca do Flathub, as páginas dos programas dele e as figuras.
+software-consent-fdroid = O índice do F-Droid, os ícones dele e os pacotes que ele serve.
+software-consent-appimagehub = O catálogo de AppImages, e os lançamentos do GitHub para onde ele aponta.
+software-consent-dashboard = O índice de ícones de onde sai a figura de um web app.
+
+# THE ROW THAT ASKS FOR A HOST (`consent_rows.rs`), the same in every app:
+# what pressing it does, what it is for, and why a press was not kept
+# (`ronoctua_consent::Unkept`).
+consent-ask = Perguntar a { $hosts }
+consent-hosts-and = { $hosts } e { $last }
+consent-note = { $what } Pressionar permite.
+consent-allow = permitir
+about-consent-allow = Deixa perguntar aos sites que a linha nomeia — o mesmo que pressionar a linha. Fica guardado no consent.json, para todo app.
+consent-unkept-no-home = Não há pasta pessoal onde guardar a permissão para perguntar a { $hosts }.
+consent-unkept-unparseable = O arquivo das permissões (consent.json) não se lê; ficou como estava, e { $hosts } não foi permitido.
+consent-unkept-unwritable = A permissão para perguntar a { $hosts } não pôde ser gravada.
+# THE WORDS OF `ronoctua-words`, for every door that translates or looks a
+# word up: why it answered nothing, the parts of speech, who translated it
+# and where a meaning came from.
+words-why-empty = Não há nada para traduzir ou procurar.
+words-why-too-long = O texto é mais longo do que o tradutor aceita de uma vez.
+words-why-unknown-tongue = O tradutor não conhece essa língua.
+words-why-wrong-pass = A permissão dada é para outro site, não o que isto perguntaria.
+words-why-no-key = O tradutor precisa de uma chave, e nenhuma está guardada.
+words-why-key-refused = O tradutor recusou a chave.
+words-why-quota = A cota de hoje do tradutor acabou.
+words-why-paced = Perguntado vezes demais; ele responde daqui a pouco.
+words-why-not-found = A palavra não está no dicionário.
+words-why-no-dictionary = Não há dicionário desta língua nesta máquina, e perguntar ao Wiktionary não foi permitido.
+words-why-unreachable = O site não pôde ser alcançado.
+words-why-failed = O site respondeu com uma falha.
+words-why-garbled = O que voltou não é o que foi pedido.
+words-part-noun = substantivo
+words-part-proper-noun = nome próprio
+words-part-verb = verbo
+words-part-adjective = adjetivo
+words-part-adverb = advérbio
+words-part-pronoun = pronome
+words-part-preposition = preposição
+words-part-conjunction = conjunção
+words-part-interjection = interjeição
+words-part-numeral = numeral
+words-part-determiner = determinante
+words-part-phrase = expressão
+words-part-affix = afixo
+words-part-other = outro
+words-provider-mymemory = MyMemory
+words-provider-deepl = DeepL
+words-provider-libretranslate = LibreTranslate
+words-source-wordnet = Open English WordNet, nesta máquina
+words-source-wiktionary = Wiktionary
+words-translated-by = Traduzido por { $provider }
+# FAST-ACCESS (`LEADER d`, `crate::fast_access`): the search of everything.
+fast-access-title = Busca
+# What the modeline names the search's windows (`br.ronoctua.fast-access`,
+# and the one over everything).
+mode-fast-access = busca
+mode-fast-access-float = busca
+group-fast-access = busca
+cmd-fast-access-open = Buscar em tudo, no rodapé
+cmd-fast-access-window = Buscar em tudo, numa janela
+cmd-fast-access-column = Buscar em tudo, na coluna da direita
+cmd-fast-access-float = Buscar em tudo, sobre a tela inteira
+cmd-fast-access-launch = Abrir um aplicativo pelo id
+cmd-fast-access-open-path = Abrir um arquivo com o que o abre
+cmd-fast-access-reveal = Mostrar um arquivo no gerenciador de arquivos
+cmd-fast-access-man = Ler uma página de manual num terminal
+fast-access-placeholder = digite para buscar · { $slash } lista como estreitar a busca
+fast-access-empty = Seus aplicativos, comandos, arquivos e o que eles dizem, páginas de manual, programas para instalar, ícones e contas — digite uma palavra. Uma barra e uma letra estreitam a busca.
+fast-access-nothing = Nada encontrado para “{ $words }”.
+fast-access-searching = Buscando…
+fast-access-reading-icons = Lendo as tabelas de ícones…
+fast-access-icons-refused = As tabelas de ícones não puderam ser lidas.
+# The scopes a slash and a letter narrow to (`fast_access::Scope`): a noun,
+# and what it searches.
+fast-access-scope-all = tudo
+fast-access-scope-audio = áudio
+fast-access-scope-audio-does = arquivos de áudio, pelo nome e pelo que está escrito neles
+fast-access-scope-video = vídeos
+fast-access-scope-video-does = arquivos de vídeo nesta máquina
+fast-access-scope-youtube = YouTube
+fast-access-scope-youtube-does = seu catálogo de vídeos, e o próprio YouTube depois de uma pausa
+fast-access-scope-images = imagens
+fast-access-scope-images-does = imagens nesta máquina
+fast-access-scope-documents = documentos
+fast-access-scope-documents-does = documentos, livros e textos
+fast-access-scope-names = nomes
+fast-access-scope-names-does = arquivos e pastas só pelo nome
+fast-access-scope-contents = conteúdo
+fast-access-scope-contents-does = o que está escrito dentro dos arquivos
+fast-access-scope-manuals = manuais
+fast-access-scope-manuals-does = as páginas de manual do sistema e dos seus programas
+fast-access-scope-programs = programas
+fast-access-scope-programs-does = programas que dá para instalar
+fast-access-scope-commands = comandos
+fast-access-scope-commands-does = os comandos desta área de trabalho, com as teclas
+fast-access-scope-web = web
+fast-access-scope-web-does = Wikipedia e DuckDuckGo, depois de uma pausa
+fast-access-scope-dictionary = dicionário
+fast-access-scope-dictionary-does = o que uma palavra quer dizer
+fast-access-scope-synonyms = sinônimos
+fast-access-scope-synonyms-does = outras palavras para uma palavra
+fast-access-scope-translate = traduzir
+fast-access-scope-translate-does = uma tradução — um código de língua primeiro manda para ela ({ $prefix } en …)
+fast-access-scope-icons = ícones
+fast-access-scope-icons-does = glifos do Nerd Fonts, figuras do Lucide e caracteres Unicode
+fast-access-scope-math = contas
+fast-access-scope-math-does = contas, unidades, bases, datas e fusos — “2+2” funciona sem isso
+fast-access-scope-currency = moedas
+fast-access-scope-currency-does = dinheiro de uma moeda para outra, nas cotações de hoje
+fast-access-scope-zones = fusos horários
+fast-access-scope-zones-does = que horas são em outro lugar
+fast-access-scope-recent = recentes
+fast-access-scope-recent-does = o que você abriu daqui, o mais usado primeiro
+fast-access-scope-prefixes = estreitar
+fast-access-scope-prefixes-does = todos os jeitos de estreitar uma busca
+# The sections of the results (`fast_access::SectionId`).
+fast-access-section-prefixes = Estreitar a busca
+fast-access-section-math = Conta
+fast-access-section-currency = Moeda
+fast-access-section-zones = Fusos horários
+fast-access-section-words = Palavras
+fast-access-section-recent = Recentes
+fast-access-section-apps = Aplicativos
+fast-access-section-commands = Comandos
+fast-access-section-icons = Ícones
+fast-access-section-files = Arquivos
+fast-access-section-folders = Pastas
+fast-access-section-contents = O que os arquivos dizem
+fast-access-section-videos = Vídeos
+fast-access-section-youtube = YouTube
+fast-access-section-web = A web
+fast-access-section-manuals = Páginas de manual
+fast-access-section-packages = Programas para instalar
+fast-access-section-settings = Esta busca
+fast-access-strip-nerd-fonts = Nerd Fonts
+fast-access-strip-lucide = Lucide
+fast-access-strip-unicode = Unicode
+fast-access-strip-none = { $collection }: nada corresponde
+fast-access-strip-about = { $collection } · { $name }
+fast-access-strip-earlier = { $collection }: a página anterior
+fast-access-strip-later = { $collection }: a próxima página
+# What the index answered nothing for (`ronoctua_index::Why`).
+fast-access-index-why-no-engine = Esta compilação não tem índice.
+fast-access-index-why-not-built = O índice ainda não foi montado; os arquivos aparecem à medida que ele percorre suas pastas.
+fast-access-index-why-unreadable = O índice não pôde ser lido.
+fast-access-index-why-other-format = O índice é de outra versão; está sendo montado de novo.
+fast-access-index-why-busy = O índice está ocupado.
+fast-access-index-why-full = O índice está cheio.
+fast-access-index-why-failed = O índice não conseguiu responder isso.
+# The web (`ronoctua_websearch`).
+fast-access-web-wikipedia = Wikipedia
+fast-access-web-duckduckgo = DuckDuckGo
+fast-access-web-searxng = SearXNG
+fast-access-web-brave = Brave Search
+fast-access-web-kiosk = Buscar “{ $words }” na web, no Chrome
+fast-access-web-for = Uma busca na web pelo que você digitou.
+fast-access-web-why-empty = Não há palavras para buscar.
+fast-access-web-why-wrong-pass = A permissão dada é para outro site.
+fast-access-web-why-no-key = O Brave Search precisa de uma chave, e nenhuma está guardada.
+fast-access-web-why-key-refused = O Brave Search recusou a chave.
+fast-access-web-why-paced = Perguntado vezes demais; ele responde daqui a pouco.
+fast-access-web-why-unreachable = O site não pôde ser alcançado.
+fast-access-web-why-failed = O site respondeu com uma falha.
+fast-access-web-why-garbled = O que voltou não é uma lista de resultados.
+# YouTube (`/y`).
+fast-access-youtube-for = Uma busca no YouTube pelo que você digitou.
+fast-access-thumbs-for = As imagens dos vídeos encontrados.
+fast-access-youtube-local = no seu catálogo
+fast-access-youtube-online = no YouTube
+fast-access-shorts-shown = Shorts: mostrados
+fast-access-shorts-hidden = Shorts: deixados de fora
+fast-access-youtube-why-absent = Esta instalação não tem yt-dlp.
+fast-access-youtube-why-unstartable = O yt-dlp não pôde ser iniciado.
+fast-access-youtube-why-slow = O YouTube demorou demais para responder.
+fast-access-youtube-why-failed = O YouTube não respondeu à busca.
+fast-access-youtube-why-garbled = O que voltou não é uma lista de vídeos.
+fast-access-youtube-why-too-large = A resposta era grande demais.
+fast-access-youtube-why-not-an-address = Isso não é um endereço.
+fast-access-youtube-why-not-a-list = Isso é um vídeo, não uma lista.
+fast-access-youtube-why-nothing-to-ask = Não há palavras para buscar.
+fast-access-views = { $n ->
+        [one] { $n } visualização
+       *[other] { $n } visualizações
+    }
+# Words (`/d`, `/s`, `/t`).
+fast-access-words-for = Procurando a palavra no Wiktionary.
+fast-access-translate-for = Uma tradução do que você digitou.
+fast-access-translate-into = Para { $tongue }
+fast-access-synonyms-none = Nenhuma outra palavra para ela.
+# Sums, currencies and zones.
+fast-access-math-also = O mesmo, em outras unidades
+fast-access-zone-none = Nenhum fuso horário tem esse nome.
+# The detail pane (`fast_access_detail`).
+fast-access-detail-name = Nome
+fast-access-detail-address = Endereço
+fast-access-detail-channel = Canal
+fast-access-detail-duration = Duração
+fast-access-detail-views = Visto
+fast-access-detail-from = Encontrado
+fast-access-detail-keys = Teclas
+fast-access-detail-command = Comando
+fast-access-detail-program = Programa
+fast-access-detail-section = Seção
+fast-access-detail-description = Sobre
+fast-access-detail-source = De
+fast-access-detail-zone = Fuso
+fast-access-detail-time = Agora lá
+fast-access-detail-scope = Busca
+fast-access-detail-short = Um Short
+fast-access-detail-version = Versão
+fast-access-detail-licence = Licença
+fast-access-detail-site = Site
+fast-access-detail-runs = Executa
+fast-access-detail-download = Download
+fast-access-act-open = Abrir
+fast-access-act-run = Executar
+fast-access-act-copy = Copiar
+fast-access-act-copy-address = Copiar o endereço
+fast-access-act-play-player = Tocar no player
+fast-access-act-play-kiosk = Abrir no quiosque do Chrome
+fast-access-act-install = Instalar, pela fila
+fast-access-act-centre = Mostrar na central de programas
+fast-access-act-terminal = Ler num terminal
+fast-access-act-narrow = Estreitar a busca a isto
+fast-access-act-kiosk = Abrir no quiosque do Chrome
+fast-access-no-shell = Este shell não sabe qual é o próprio programa, então não consegue abrir uma janela.
+fast-access-unopened = Nada abre { $what }.
+# The question a web video asks (`fast_access::Question::PlayIn`).
+fast-access-play-in = Tocar “{ $title }” no:
+fast-access-play-player = player
+fast-access-play-kiosk = quiosque do Chrome
+fast-access-play-remember = e fazer o mesmo daqui em diante
+# The settings of the search, at the foot of the empty page.
+fast-access-setting-park = Deixar a janela pronta depois de fechar
+fast-access-setting-door = Vídeos da web tocam no
+fast-access-door-ask = perguntado toda vez
+fast-access-setting-searxng = Seu SearXNG, consultado junto dos outros
+fast-access-searxng-none = nenhum
+fast-access-searxng-bad = “{ $address }” não é um endereço https com um host.
+fast-access-setting-brave = Sua chave do Brave Search
+fast-access-brave-none = nenhuma
+fast-access-brave-kept-short = guardada
+fast-access-brave-kept = A chave do Brave Search está guardada, legível só por você.
+fast-access-brave-forgotten = A chave do Brave Search foi esquecida.
+fast-access-web-key-no-home = Não há pasta pessoal onde guardar a chave.
+fast-access-web-key-empty = Nada foi digitado.
+fast-access-web-key-malformed = A chave tem uma quebra de linha ou um caractere de controle.
+fast-access-web-key-unwritable = Não foi possível gravar a chave.
+fast-access-yes = sim
+fast-access-no = não
+fast-access-unkept = As configurações da busca (fast-access.json) não puderam ser gravadas: { $why }
+ask-fast-access-tag = O novo valor da etiqueta
+ask-fast-access-meta = O novo valor do detalhe
+ask-fast-access-searxng = O endereço do seu SearXNG (https://…), vazio para nenhum
+ask-fast-access-brave = Sua chave do Brave Search, vazio para esquecê-la
+fast-access-recent-none = Nada foi aberto daqui ainda.
+# The keys the header teaches (`fast_access::OF_THE_VIEW`).
+fast-access-enter = abrir
+about-fast-access-enter = Faz aquilo para que serve a linha do cursor: abre, executa, toca ou copia — e a busca fecha, menos na coluna.
+fast-access-secondary = o outro jeito
+about-fast-access-secondary = Faz a segunda coisa que a linha oferece: mostra um arquivo no gerenciador, um vídeo no outro player, a página de um programa.
+fast-access-copy = copiar
+about-fast-access-copy = Copia o que a linha é: um caminho, um endereço, uma resposta, um caractere.
+fast-access-detail = detalhe
+about-fast-access-detail = Leva as teclas para o detalhe ao lado dos resultados, e de volta.
+fast-access-whole = inteiro
+about-fast-access-whole = Dá ao detalhe a área inteira, e devolve.
+fast-access-shorts = Shorts
+about-fast-access-shorts = Mostra os Shorts do YouTube entre os vídeos encontrados, ou os deixa de fora.
+fast-access-clear = limpar
+about-fast-access-clear = Esvazia o que foi digitado.
+fast-access-page = página
+about-fast-access-page = Mostra os próximos ícones de uma faixa — ou os anteriores.
+
+# THE RANKING OF THE VIDEO CATALOGUE, a page of the player (LEADER p k,
+# player_ranking.rs). Titles and channel names are data.
+player-page-ranking = Vídeos por pontuação
+player-page-ranked-video = Este vídeo
+cmd-player-ranking = Vídeos por pontuação: os melhores do catálogo de vídeos primeiro, a um clique da fila
+player-ranking-reading = Lendo o catálogo de vídeos…
+player-ranking-none = Nada pontuado ainda: o catálogo de vídeos ({ $keys }) adiciona os seus canais, e as varreduras dele enchem esta lista.
+player-ranking-empty = Nenhum vídeo pontuado ainda: as varreduras não acharam nenhum, ou todos estão ocultos.
+player-ranking-layout-grid = Miniaturas
+player-ranking-added = Adicionado: { $title }
+player-ranking-title = Título do vídeo
+player-ranking-channel = Canal
+player-ranking-score = Pontuação
+player-ranking-length = Tempo de vídeo
+player-ranking-published = Publicado
+player-ranking-actions = Com este vídeo
+player-ranking-play-now = Tocar agora
+player-ranking-add = Pôr na fila
+player-ranking-kiosk = Assistir no Chrome
+player-ranking-download = Baixar
+player-ranking-hide = Ocultar do ranking
+player-ranking-delete = Apagar do catálogo
+ask-player-ranking-delete = Apagar “{ $title }” do catálogo de vídeos para sempre? Ele não volta, nem numa varredura.
+player-ranking-hidden = Oculto: { $title }. Os vídeos ocultos do catálogo de vídeos o trazem de volta.
+player-ranking-deleted = Apagado para sempre: { $title }
+player-ranking-not-changed = { $title } não mudou: { $why }
+player-ranking-downloading = Baixando { $title }; { $keys } mostra as transferências.
+player-ranking-downloading-plain = Baixando { $title }.
+player-ranking-not-downloaded = A fila de transferências não aceitou { $title }: ela não está rodando.
+# THE RANKING'S KEYS.
+cmd-player-ranking-more = A página deste vídeo: tocar, pôr na fila, Chrome, baixar, ocultar, apagar
+cmd-player-ranking-earlier = A página anterior do ranking
+cmd-player-ranking-later = A página seguinte do ranking
+cmd-player-ranking-first = A primeira página do ranking
+cmd-player-ranking-last = A última página do ranking
+cmd-player-ranking-layout = O ranking em lista, ou em miniaturas
+# THE RANKING'S KEYS, AS THE HINT LINE SAYS THEM.
+player-ranking-more = mais
+player-ranking-earlier = página anterior
+player-ranking-later = página seguinte
+player-ranking-first = primeira página
+player-ranking-last = última página
+player-ranking-layout = lista ou miniaturas
+
+mode-clipboard = clipboard
+
+# Os tamanhos prontos do redimensionador e a memória dele (`resizer.rs`).
+resizer-preset = tamanho pronto
+about-resizer-preset = O próximo tamanho pronto de uma tela comum que cabe nesta.
+resizer-preset-back = menor
+about-resizer-preset-back = O tamanho pronto anterior a este.
+resizer-no-preset = nenhum tamanho pronto cabe nesta tela
+echo-capture-outside-the-room = Nada foi capturado: o retângulo ficou inteiro sob as cortinas do redimensionador, fora do espaço que elas deixam.
+
+# As telas (`display.rs`): o arranjo vertical, a profundidade de cor, os
+# valores gravados de uma tela apagada, e toda recusa com nome.
+display-rise = pôr acima
+display-sink = pôr abaixo
+cmd-display-rise = A tela sob o cursor para cima, acima da vizinha
+cmd-display-sink = A tela sob o cursor para baixo, abaixo da vizinha
+display-depth = Profundidade de cor
+display-depth-bits = { $bits } bits por cor
+display-depth-asked = Profundidade pedida
+display-dark-shows-filed = O compositor não está desenhando nesta tela: cada linha mostra o que está gravado para ela, e volta quando ela acender.
+display-refused-compositor = o compositor respondeu com um erro
+display-refused-unreadable = o arquivo das telas não abre, e gravar o substituiria — conserte ou apague
+display-refused-panel = o painel não aceitou o brilho
+display-refused-monitor = o monitor não respondeu
+
+# As recusas de energia e de Bluetooth que não tinham nome, com nome: as
+# palavras do daemon vão para o journal, nunca para a linha.
+power-refused-timed-out = não teve resposta a tempo
+power-refused-failed = não pôde ser feito
+power-refused-no-bus = não alcançou o barramento do sistema
+bluetooth-refused-timed-out = não teve resposta a tempo
+bluetooth-refused-no-bus = o barramento do sistema não respondeu
+
+# As recusas da rede e dos túneis, cada uma pelo nome: as palavras dos
+# daemons vão para o journal, nunca para a linha.
+network-refused-authority = esta sessão não tem permissão
+network-refused-absent = o NetworkManager não está lá, ou a conexão sumiu
+network-refused-invalid = um ajuste não foi aceito
+network-refused-secrets = nenhuma senha foi dada, ou ela foi recusada
+network-refused-failed = a conexão não pôde ser feita
+network-refused-timed-out = não houve resposta a tempo
+network-refused-no-bus = o barramento do sistema não respondeu
+network-refused-no-radio = esta máquina não tem rádio Wi-Fi
+network-refused-out-of-range = essa rede não está mais ao alcance
+network-refused-no-device = não há dispositivo desse tipo
+network-refused-no-profile = não há perfil salvo com esse nome
+network-refused-import = o arquivo não é um túnel que o NetworkManager importe
+network-refused-vault = o TPM não guardou nem devolveu a senha
+network-refused-other = não funcionou
+tunnel-refused-no-daemon = o daemon dele não está rodando
+tunnel-refused-authority = o socket dele não é desta sessão
+tunnel-refused-unit = o serviço dele não quis subir nem descer
+tunnel-refused-not-written = o arquivo não pôde ser gravado
+tunnel-refused-config = o Tor não leu a configuração
+tunnel-refused-daemon = o daemon disse não
+tunnel-refused-other = não funcionou
+echo-tunnel-refused-line = O Tor não leu esta linha: { $line }
+
+# O estado do gerenciador de arquivos na modeline: uma pergunta sobre quem
+# pode mexer num arquivo, em alerta.
+state-permission = permissão
+
+# A janela do clipboard: a segunda tela do histórico do rodapé, seguido
+# pelo socket de controle.
+group-clipboard = clipboard
+cmd-clipboard-window = O histórico do clipboard numa janela
+clipboard-window-waiting = O histórico é do rodapé, e está a caminho.
+clipboard-window-no-footer = O rodapé não está rodando, e o histórico fica nele: nada a mostrar.
+clipboard-no-room = Não sobra espaço na tela para desenhá-lo: role de volta para cima, ou dê mais linhas à lista.
+clipboard-act-stale = O histórico mudou antes de a tecla chegar, e nada foi feito: confira e aperte de novo.
+
+# O "pedir a uma IA" da linha de vida, pelo Claude Code: o que sairia é
+# juntado, mostrado num terminal, e perguntado com o "não" primeiro.
+lifeline-ai-gathering = juntando o que iria: a unidade, como terminou, o journal e o core dump
+lifeline-ai-no-report = o relatório não pôde ser escrito, e nada saiu desta máquina
+lifeline-ai-shown = o que iria para o Claude Code está aberto num terminal; nada saiu ainda — enviar?
+lifeline-ai-no = não, fica aqui
+lifeline-ai-yes = sim, perguntar ao Claude Code
+lifeline-ai-kept = nada saiu desta máquina, e o relatório foi apagado
+lifeline-ai-opened = o Claude Code está aberto num terminal, com o relatório
+lifeline-ai-no-claude = o Claude Code não está nesta máquina; ele vem com os agentes do perfil de desenvolvimento
+lifeline-ai-prompt = A interface do meu computador (a unidade de usuário do systemd { $unit }) falhou. O arquivo { $path } tem a unidade, como ela terminou, as últimas linhas do journal e o core dump. Leia, me diga o que provavelmente aconteceu e o que eu posso fazer.
+lifeline-report-title = O que aconteceu com a interface
+lifeline-report-unit = Unidade
+lifeline-report-result = Como terminou
+lifeline-report-journal = As últimas linhas do journal
+lifeline-report-core = O core dump
+lifeline-report-nothing = (nada)
+
+example-code = Um trecho de código
+# A vista da rede: a ida e volta até o roteador, medida quando se pede.
+network-latency = ida e volta até o roteador
+network-latency-measure = medir
+network-latency-measuring = medindo…
+network-latency-ms = de { $fastest } a { $slowest } ms ({ $answered } de { $asked })
+network-latency-silent = sem resposta
+network-latency-refused = não deu para medir: { $error }
+# Os nomes das máquinas da rede, pelo systemd-resolved.
+network-lan-names-refused = os nomes não são conhecidos: { $why }
+lan-resolve-why-no-bus = o barramento do sistema não respondeu
+lan-resolve-why-no-resolved = o systemd-resolved não está rodando
+lan-resolve-why-failed = o systemd-resolved não soube responder
+# Uma VPN cujo arquivo pede usuário e senha.
+ask-network-vpn-user = Usuário desta VPN
+ask-network-vpn-password = Senha desta VPN
+echo-network-vpn-stored = { $network } vai subir sem perguntar
+echo-network-vpn-store-failed = a senha da VPN não foi guardada: { $reason }
+# A internet de um celular, pelo Bluetooth.
+bluetooth-fact-internet = usa a internet dele
+bluetooth-about-internet = O celular compartilha a conexão pelo Bluetooth. A ligação é do NetworkManager, e a vista da rede também a mostra, com a mesma interface.
+bluetooth-internet-through = sim, por { $interface }
+echo-bluetooth-internet-on = saindo por { $device } agora
+echo-bluetooth-internet-off = não sai mais por { $device }
+echo-bluetooth-internet-failed = não deu para usar a internet de { $device }: { $reason }
+# As moedas de um lugar, escolhidas na tela.
+locale-currency = Moeda
+locale-currency-pair = { $from } em { $into }
+locale-currency-none = nenhuma escolhida
+locale-not-a-currency-pair = Isso não são duas moedas que as cotações conhecem, de três letras cada, como EUR BRL.
+ask-locale-currency = A moeda dele e a moeda em que vale, como EUR BRL
+# Uma pergunta que oferece respostas para o que se digita.
+line-offers = { $keys }: { $offers }
+about-line-offer = Toma a primeira resposta oferecida para o que foi digitado.
+studio-trouble-no-face = Um texto da cena não tem tipo de letra com que ser desenhado.
+studio-trouble-rehearsal = Este é o estúdio do laço de desenvolvimento: ele ensaia, e não grava foto, gravação nem transmissão.
+camera-virtual-effect = Ela passa por
+camera-virtual-effect-preview = o efeito da prévia
+# O enlace de um celular na vista da rede, e as recusas do próprio crate da rede.
+network-fact-phone = celular
+network-refusal-no-phone = o NetworkManager não tem um dispositivo Bluetooth para este celular: ele não está pareado, ou não compartilha a conexão
+network-refusal-no-vpn = não existe mais uma VPN com esse nome
+network-refusal-not-vpn = esse perfil não é de uma VPN
+
+player-page-queue = A fila inteira
+player-queue-entries = { $count ->
+        [one] um item
+       *[other] { $count } itens
+    }
+player-lane-language = Língua mostrada
+player-lane-switched-off-length = desligada · { $length }
+player-translator = Tradutor
+player-translator-mymemory = MyMemory
+player-translator-deepl = DeepL
+player-translator-libretranslate = LibreTranslate
+player-translator-address = Endereço do servidor
+player-translator-not-an-address = “{ $typed }” não é um endereço https:// com um host: nada poderia ser perguntado ali.
+player-key-deepl = Chave do DeepL
+player-key-libretranslate = Chave do servidor
+player-key-words-deepl = a chave do DeepL
+player-key-words-libretranslate = a chave do servidor LibreTranslate
+player-key-kept-said = Guardada: { $what }.
+ask-player-translator-address = Endereço do servidor LibreTranslate (https://…)
+ask-player-key-deepl = Chave de autenticação do DeepL
+ask-player-key-libretranslate = Chave do servidor LibreTranslate
+player-host-let = { $host } está permitido agora. Ponha de novo o que foi recusado.
+player-stream-language-row = Língua do fluxo
+player-stream-title-row = Nome do fluxo
+player-stream-default-row = Marcado como padrão
+player-stream-forced-row = Marcado como forçado
+player-stream-language-of = a língua do fluxo { $index }
+player-stream-title-of = o nome do fluxo { $index }
+player-chapter-title-of = o título do capítulo em { $at }
+ask-player-stream-language = A língua do fluxo, como código (en, pt-BR, por)
+ask-player-stream-title = O nome do fluxo
+ask-player-chapter-title = O título do capítulo
+player-trouble-tag-chapters-only-matroska = O título de um capítulo só é gravado em Matroska, e este arquivo é { $container }.
+player-trouble-tag-remux-would-drop = Este arquivo é grande demais para ser gravado no lugar, e a cópia que o grava perderia itens que ele guarda além destes campos. Os campos ficam como estão.
+player-origin-matroska-track-of = Etiquetas Matroska do fluxo { $index } · { $kind }
+player-origin-matroska-track-lang = Etiquetas Matroska do fluxo { $index } · { $kind } · { $lang }
+player-origin-matroska-track-uid = Etiquetas Matroska da trilha de UID { $uid }

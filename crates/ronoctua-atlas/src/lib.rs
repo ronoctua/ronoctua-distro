@@ -47,7 +47,10 @@ pub use globe::{
     Drawing, Ink, MARKS_CEILING, Mark, Marks, Placed, Pose, Shape, VERTEX_CEILING, framing, placed,
     project, tier,
 };
-pub use lookup::{address, anchor_of, country_at, country_name, lakes, place_near, region_at};
+pub use lookup::{
+    address, anchor_of, country_at, country_name, folded, in_country, lakes, place_named,
+    place_near, places, region_at,
+};
 
 /// A coordinate, in signed decimal degrees.
 ///

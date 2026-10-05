@@ -78,11 +78,26 @@ impl Container {
     ///
     /// # Errors
     ///
-    /// [`Why::NoPlace`] everywhere else.
+    /// [`Why::StreamsOnlyInMatroska`] everywhere else.
     pub const fn streams_writer(self) -> Result<Writer, Why> {
         match self {
             Self::Matroska | Self::WebM => Ok(Writer::Matroska),
-            _ => Err(Why::NoPlace),
+            _ => Err(Why::StreamsOnlyInMatroska { container: self }),
+        }
+    }
+
+    /// Who writes a chapter's title, or why nobody does.
+    ///
+    /// Matroska only: `mkvpropedit --chapters` hands its chapters back
+    /// whole; lofty has none, and a remux would rebuild the file.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::ChaptersOnlyInMatroska`] everywhere else.
+    pub const fn chapters_writer(self) -> Result<Writer, Why> {
+        match self {
+            Self::Matroska | Self::WebM => Ok(Writer::Matroska),
+            _ => Err(Why::ChaptersOnlyInMatroska { container: self }),
         }
     }
 
@@ -190,6 +205,7 @@ mod tests {
         for c in EVERY_CONTAINER {
             let streams = c.streams_writer().is_ok();
             assert_eq!(streams, c.matroska(), "{c:?}");
+            assert_eq!(c.chapters_writer().is_ok(), c.matroska(), "{c:?}");
             if c.matroska() {
                 assert_eq!(c.fields_writer(), Ok(Writer::Matroska));
                 assert_eq!(c.cover_writer(), Ok(Writer::Matroska));

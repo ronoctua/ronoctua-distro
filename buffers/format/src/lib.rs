@@ -1,12 +1,20 @@
-//! Formatting a disk, in three questions — `LEADER s f`.
+//! Formatting a disk, in four questions — `LEADER s f`.
 //!
 //! # Why this is three lists and never a form
 //!
 //! Every other way of formatting a disk asks somebody to know things: what a
 //! partition table is, which of nine filesystems, what `-F 32` means. This asks
-//! three questions, each answered by moving a cursor and pressing `Enter`:
-//! **which disk**, **what for**, and **are you sure**. There is exactly one
-//! place to type, and it is the disk's name.
+//! four questions, each answered by moving a cursor and pressing `Enter`:
+//! **which disk**, **what for**, **encrypted or not**, and **are you sure**.
+//! There is exactly one place to type, and it is the disk's name.
+//!
+//! # The passphrase is not asked here
+//!
+//! "Encrypt it?" is a yes or a no, and `no` is first. A yes travels in the
+//! plan as a bool (`encrypt`) and nothing more: the passphrase is asked by the
+//! HOST, twice, on its own line, and written into the call to udisks. It never
+//! crosses into this component — a buffer holds no secret it could draw, keep
+//! or send.
 //!
 //! The words are the point. A row says *"opens on every computer — pendrive,
 //! camera, television"*, not *"FAT32"*. Somebody who knows it is FAT32 loses
@@ -87,6 +95,13 @@ mod key {
     pub const NAME: &str = "format-name";
     pub const NAME_LIMIT: &str = "format-name-limit";
 
+    pub const ENCRYPT_TITLE: &str = "format-encrypt-title";
+    pub const ENCRYPT_NO: &str = "format-encrypt-no";
+    pub const ENCRYPT_YES: &str = "format-encrypt-yes";
+    pub const ENCRYPTED: &str = "format-encrypted";
+    pub const TECH_ENCRYPT_NO: &str = "format-tech-encrypt-no";
+    pub const TECH_ENCRYPT_YES: &str = "format-tech-encrypt-yes";
+
     pub const CONFIRM_TITLE: &str = "format-confirm-title";
     pub const CONFIRM_WHOLE: &str = "format-confirm-whole";
     pub const CONFIRM_PART: &str = "format-confirm-part";
@@ -131,6 +146,7 @@ mod key {
 const STATES: &[(&str, char, Tone)] = &[
     ("normal", 'n', Tone::Standard),
     ("choose", 'c', Tone::Accent),
+    ("encrypt", 'e', Tone::Accent),
     ("confirm", 'y', Tone::Warning),
 ];
 
@@ -172,6 +188,8 @@ enum Question {
     List,
     /// Five filesystems and a name. What for?
     Choose,
+    /// Two rows, and `no` is the first. Encrypted?
+    Encrypt,
     /// Two rows, and `no` is the first. Are you sure?
     Confirm,
 }
@@ -230,6 +248,12 @@ struct State {
     recipe: usize,
     /// `false` for "no, go back", which is where the cursor starts.
     yes: bool,
+    /// Whether the filesystem goes inside a LUKS2 container — the answer to
+    /// the third question, where `no` is first and the cursor starts.
+    encrypt: bool,
+    /// The line the third question's two answers start on, so a click finds
+    /// them.
+    encrypt_top: Option<u16>,
     /// What to call it. Empty is ordinary and means no name.
     name: String,
     /// The device the question is about, once one has been chosen.
@@ -256,6 +280,8 @@ impl State {
             on: None,
             recipe: 0,
             yes: false,
+            encrypt: false,
+            encrypt_top: None,
             name: String::new(),
             target: None,
             said: None,
@@ -268,7 +294,8 @@ impl State {
         match self.screen {
             Question::List => STATES[0].0,
             Question::Choose => STATES[1].0,
-            Question::Confirm => STATES[2].0,
+            Question::Encrypt => STATES[2].0,
+            Question::Confirm => STATES[3].0,
         }
         .to_owned()
     }
@@ -894,6 +921,29 @@ impl State {
         foot(draw, key::HINT_CHOOSE, None, &self.detail());
     }
 
+    /// Two rows, and `no` is the first. *Encrypted?*
+    fn encrypted(&mut self, draw: &mut Draw) {
+        draw.screen.heading(Icon::Disk, key::ENCRYPT_TITLE);
+        if let Some(t) = self.target.as_ref()
+            && draw.has_room()
+        {
+            draw.screen.line(Run::datum(&told(t)).playing(Role::Body));
+            draw.screen.skip(AIR);
+        }
+        self.encrypt_top = Some(draw.screen.row());
+        // NO IS FIRST, as on the last question: the cursor starts on the
+        // answer that asks for nothing more.
+        for (n, text) in [key::ENCRYPT_NO, key::ENCRYPT_YES].into_iter().enumerate() {
+            if !draw.has_room() {
+                break;
+            }
+            let at = draw.screen.row();
+            mark(draw, at, self.encrypt == (n == 1));
+            draw.screen.line(Run::label(text).playing(Role::Title));
+        }
+        foot(draw, key::HINT_CONFIRM, None, &self.detail());
+    }
+
     /// Two rows, and `no` is the first. *Are you sure?*
     fn confirm(&self, draw: &mut Draw) {
         draw.screen.heading(Icon::Warning, key::CONFIRM_TITLE);
@@ -911,6 +961,13 @@ impl State {
                 key::CONFIRM_PART
             };
             draw.tinted(Run::label(scope), Color::StateWarning);
+            // AND THAT IT GOES INSIDE A CONTAINER, which is the one thing on
+            // this screen that changes what the disk will ask of whoever
+            // plugs it in next.
+            if self.encrypt && draw.has_room() {
+                draw.screen
+                    .line(Run::label(key::ENCRYPTED).playing(Role::Body));
+            }
             draw.screen.skip(AIR);
         }
 
@@ -951,6 +1008,7 @@ impl State {
         match self.screen {
             Question::List => self.list(draw),
             Question::Choose => self.choose(draw),
+            Question::Encrypt => self.encrypted(draw),
             Question::Confirm => self.confirm(draw),
         }
     }
@@ -1003,6 +1061,20 @@ impl State {
             // arrow key apart.
             Question::Choose => Detail {
                 said: self.tech(),
+                facts: self
+                    .target
+                    .as_ref()
+                    .map(|t| t.node.clone())
+                    .unwrap_or_default(),
+            },
+            // WHAT THE ANSWER UNDER THE CURSOR DOES, in the words of somebody
+            // who knows what LUKS2 is — and where the passphrase is asked.
+            Question::Encrypt => Detail {
+                said: if self.encrypt {
+                    key::TECH_ENCRYPT_YES
+                } else {
+                    key::TECH_ENCRYPT_NO
+                },
                 facts: self
                     .target
                     .as_ref()
@@ -1080,6 +1152,7 @@ impl State {
             // TWO ROWS, SO EITHER ARROW SWAPS THEM. Clamping instead would make
             // `up` on the first row do nothing, and a key that does nothing on
             // a two-row list reads as a key that did not arrive.
+            Question::Encrypt => self.encrypt = !self.encrypt,
             Question::Confirm => self.yes = !self.yes,
         }
     }
@@ -1113,13 +1186,21 @@ impl State {
                 if RECIPES.get(self.recipe).is_none() {
                     return vec![];
                 }
+                // `NO` FIRST: the cursor starts on the answer that writes the
+                // disk in the clear, which is what it was before this question
+                // existed.
+                self.encrypt = false;
+                self.screen = Question::Encrypt;
+                vec![Effect::Redraw]
+            }
+            Question::Encrypt => {
                 self.yes = false;
                 self.screen = Question::Confirm;
                 vec![Effect::Redraw]
             }
             Question::Confirm => {
                 if !self.yes {
-                    self.screen = Question::Choose;
+                    self.screen = Question::Encrypt;
                     return vec![Effect::Redraw];
                 }
                 let Some(t) = self.target.as_ref() else {
@@ -1147,6 +1228,8 @@ impl State {
                     // question, because it is a fact about the device and not a
                     // preference.
                     whole_disk: t.whole,
+                    // A YES AND NOTHING MORE: the host asks the passphrase.
+                    encrypt: self.encrypt,
                 };
                 // BACK TO THE LIST, AND NOT TO A SCREEN OF ITS OWN. The row
                 // being written is on that list and is about to change; a
@@ -1170,8 +1253,12 @@ impl State {
                 self.target = None;
                 vec![Effect::Redraw]
             }
-            Question::Confirm => {
+            Question::Encrypt => {
                 self.screen = Question::Choose;
+                vec![Effect::Redraw]
+            }
+            Question::Confirm => {
+                self.screen = Question::Encrypt;
                 vec![Effect::Redraw]
             }
         }
@@ -1257,6 +1344,7 @@ impl State {
         let to = match id {
             "normal" => Question::List,
             "choose" => Question::Choose,
+            "encrypt" => Question::Encrypt,
             "confirm" => Question::Confirm,
             // AN ID THIS BUFFER DID NOT DECLARE. The host only ever sends one
             // it was told, so this is a defect on the other side rather than a
@@ -1270,12 +1358,33 @@ impl State {
         if to == Question::Confirm {
             self.yes = false;
         }
+        if to == Question::Encrypt {
+            self.encrypt = false;
+        }
         self.screen = to;
         vec![Effect::Redraw]
     }
 
     /// A click does what the key on that row does, and nothing else.
     fn clicked(&mut self, line: u16) -> Vec<Effect> {
+        // THE THIRD QUESTION'S TWO ANSWERS: the first click chooses, the
+        // second on the chosen one is `Enter` — the rule every list of this
+        // system keeps.
+        if self.screen == Question::Encrypt {
+            let Some(top) = self.encrypt_top else {
+                return vec![];
+            };
+            let yes = match line.checked_sub(top) {
+                Some(0) => false,
+                Some(1) => true,
+                _ => return vec![],
+            };
+            if self.encrypt == yes {
+                return self.forward();
+            }
+            self.encrypt = yes;
+            return vec![Effect::Redraw];
+        }
         let Some(top) = self.list_top else {
             return vec![];
         };
@@ -1332,6 +1441,7 @@ impl State {
             | Input::Queue(_)
             | Input::Mind(_)
             | Input::Log(_)
+            | Input::ModuleScreen(_)
             | Input::Hover { .. }
             | Input::Unhover(_)
             | Input::KeyboardSeat(_)
@@ -1504,7 +1614,12 @@ mod tests {
     fn every_question_survives_the_hosts_two_questions() {
         for columns in WIDTHS {
             for lines in 7..=40u16 {
-                for question in [Question::List, Question::Choose, Question::Confirm] {
+                for question in [
+                    Question::List,
+                    Question::Choose,
+                    Question::Encrypt,
+                    Question::Confirm,
+                ] {
                     for said in [
                         None,
                         Some(Said::Working),
@@ -1538,7 +1653,12 @@ mod tests {
     /// opinion about how much.
     #[test]
     fn the_heading_is_a_glyph_and_a_title_and_no_rule() {
-        for question in [Question::List, Question::Choose, Question::Confirm] {
+        for question in [
+            Question::List,
+            Question::Choose,
+            Question::Encrypt,
+            Question::Confirm,
+        ] {
             for columns in WIDTHS {
                 let mut s = ready(question);
                 let out = frame(&mut s, columns, 24);
@@ -1570,7 +1690,12 @@ mod tests {
     /// the window does not have.
     #[test]
     fn no_field_ends_past_the_columns() {
-        for question in [Question::List, Question::Choose, Question::Confirm] {
+        for question in [
+            Question::List,
+            Question::Choose,
+            Question::Encrypt,
+            Question::Confirm,
+        ] {
             for columns in WIDTHS {
                 let mut s = ready(question);
                 s.name = "PENDRIVE".into();
@@ -1613,7 +1738,12 @@ mod tests {
     /// host had already indented. Every row now begins at cell zero.
     #[test]
     fn the_left_edge_is_cell_zero() {
-        for question in [Question::List, Question::Choose, Question::Confirm] {
+        for question in [
+            Question::List,
+            Question::Choose,
+            Question::Encrypt,
+            Question::Confirm,
+        ] {
             let mut s = ready(question);
             let out = frame(&mut s, 80, 24);
             let leftmost = out
@@ -1663,7 +1793,7 @@ mod tests {
         let mut s = ready(Question::Confirm);
         assert!(!s.yes, "the cursor starts on `no`");
         let out = s.forward();
-        assert_eq!(s.screen, Question::Choose, "it went ahead");
+        assert_eq!(s.screen, Question::Encrypt, "it went ahead");
         assert!(
             !out.iter().any(|e| matches!(e, Effect::Format(_))),
             "a disk was ordered erased by the first Enter"
@@ -1681,6 +1811,71 @@ mod tests {
             )),
             "`yes` lost its colour"
         );
+    }
+
+    /// THE THIRD QUESTION: `no` first, the cursor on it, a yes carried as a
+    /// bool — and the plan holds no passphrase to carry.
+    #[test]
+    fn encrypting_is_a_yes_or_a_no_and_no_comes_first() {
+        let mut s = ready(Question::Choose);
+        s.name = "COFRE".into();
+        let _ = s.forward();
+        assert_eq!(s.screen, Question::Encrypt);
+        assert!(!s.encrypt, "the cursor starts on `no`");
+        // THE STRAIGHT WAY THROUGH is in the clear, as it always was.
+        s.forward();
+        assert_eq!(s.screen, Question::Confirm);
+        s.yes = true;
+        let plain = s.forward();
+        assert!(
+            plain
+                .iter()
+                .any(|e| matches!(e, Effect::Format(p) if !p.encrypt && p.label == "COFRE")),
+            "{plain:?}"
+        );
+        // AND A YES, CHOSEN, travels as a yes.
+        let mut s = ready(Question::Choose);
+        s.forward();
+        s.move_by(true);
+        assert!(s.encrypt);
+        s.forward();
+        s.yes = true;
+        let sealed = s.forward();
+        assert!(
+            sealed
+                .iter()
+                .any(|e| matches!(e, Effect::Format(p) if p.encrypt)),
+            "{sealed:?}"
+        );
+        // `Esc` walks back through it, and `no` on the last question too.
+        let mut s = ready(Question::Confirm);
+        s.forward();
+        assert_eq!(s.screen, Question::Encrypt);
+        s.back();
+        assert_eq!(s.screen, Question::Choose);
+        // A CLICK chooses, and a second one on the chosen answer goes on.
+        let mut s = ready(Question::Encrypt);
+        let _ = frame(&mut s, 80, 24);
+        let top = s.encrypt_top.expect("the answers were drawn");
+        s.clicked(top + 1);
+        assert!(
+            s.encrypt && s.screen == Question::Encrypt,
+            "the first click went on"
+        );
+        s.clicked(top + 1);
+        assert_eq!(
+            s.screen,
+            Question::Confirm,
+            "the second click did not go on"
+        );
+        // AND THE CONFIRMATION SAYS IT.
+        let mut s = ready(Question::Confirm);
+        s.encrypt = true;
+        let out = frame(&mut s, 80, 24);
+        assert!(out.iter().any(|c| matches!(
+            c,
+            Command::Text(t) if matches!(&t.content, Text::Key(k) if k == key::ENCRYPTED)
+        )));
     }
 
     /// THE THIRD REFUSAL: the row naming a filesystem this build cannot write

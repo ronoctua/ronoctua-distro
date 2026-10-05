@@ -8,8 +8,9 @@
 //! (`min-free`, `nix/modules/store.nix`) makes room only while something BUILDS,
 //! and only in the store; a disk filled by anything else — cargo, above all,
 //! which can put hundreds of gigabytes under one directory of a cache — stays
-//! full until somebody notices. The brain notices (`tasks/space.rs`: the disk
-//! under its floor, read on the heartbeat it already has) and starts this.
+//! full until somebody notices. The brain notices (its module for the disk:
+//! the disk under its floor, read on the heartbeat it already has) and starts
+//! this.
 //!
 //! # Two steps, and the order is the argument
 //!
@@ -40,8 +41,9 @@
 //!
 //! # What it is told, and what it decides
 //!
-//! Every number arrives as an argument, from `assets/cache.nix` through
-//! `nix/modules/space.nix` — the same table the brain's floor comes from. What
+//! Every number arrives as an argument, from `assets/cache.nix` through the
+//! unit the brain's module for the disk declares — the same table the brain's
+//! floor comes from. What
 //! it decides is only what its steps find.
 //!
 //! # It rehearses unless told otherwise
@@ -320,8 +322,8 @@ fn store_garbage(told: &Told) -> StepSheet {
 }
 
 /// The goal on a filesystem of `total` bytes: `goal_percent` of it, and never
-/// more than `cap_gib` — the brain's floor has the same shape
-/// (`tasks/space.rs`), and so has Nix's (`nix/modules/store.nix`).
+/// more than `cap_gib` — the brain's floor has the same shape (its module for
+/// the disk), and so has Nix's (`nix/modules/store.nix`).
 fn goal_of(total: u64, goal_percent: u8, cap_gib: u32) -> u64 {
     (total / 100 * u64::from(goal_percent)).min(u64::from(cap_gib).saturating_mul(GIB))
 }

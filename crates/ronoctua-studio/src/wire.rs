@@ -199,6 +199,11 @@ pub enum Trouble {
     CameraSilent,
     /// The segmentation model is not installed; background effects refuse.
     NoModel,
+    /// A text source has no face to be drawn with: the build named none.
+    NoFace,
+    /// This is a second copy of the system (the development loop): it
+    /// rehearses, and writes no photo, recording or stream.
+    Rehearsal,
     /// The hand models are not installed; gestures refuse.
     NoHandModel,
     /// A replaced background has no picture chosen.
@@ -373,10 +378,17 @@ pub struct SeenHand {
     pub right: bool,
 }
 
-/// One JSON object and a newline.
+/// One JSON object and a newline, in ONE write.
+///
+/// Made whole first: serialised straight into a socket, every token is a
+/// write of its own, and a reader that pauses for a moment has a line cut in
+/// the middle by the writer's deadline — the player's daemon measured exactly
+/// that (`ronoctua_player::wire::write_line`), and `a-line-is-one-write`
+/// holds every daemon to it.
 pub fn write_line<T: Serialize>(out: &mut impl Write, value: &T) -> Result<()> {
-    serde_json::to_writer(&mut *out, value)?;
-    out.write_all(b"\n")?;
+    let mut line = serde_json::to_vec(value)?;
+    line.push(b'\n');
+    out.write_all(&line)?;
     out.flush()?;
     Ok(())
 }
@@ -395,6 +407,46 @@ pub fn read_line<T: DeserializeOwned>(input: &mut impl BufRead) -> Result<Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A writer that counts the writes it was handed, as a socket would.
+    struct Counted {
+        writes: usize,
+        bytes: Vec<u8>,
+    }
+
+    impl Write for Counted {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            self.bytes.extend_from_slice(b);
+            Ok(b.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_line_is_one_write() {
+        // THE DEFECT THIS CATCHES: serialising into the socket, a write per
+        // token — a reader that pauses gets half a line.
+        let mut out = Counted {
+            writes: 0,
+            bytes: Vec::new(),
+        };
+        let hands = Seen {
+            aspect: 1.5,
+            at: 7,
+            hands: vec![SeenHand {
+                points: vec![[0.5, 0.25, 0.0]; 21],
+                right: true,
+            }],
+        };
+        write_line(&mut out, &hands).expect("writes");
+        assert_eq!(out.writes, 1, "one write for the whole line");
+        assert_eq!(out.bytes.last(), Some(&b'\n'));
+        assert_eq!(out.bytes.iter().filter(|b| **b == b'\n').count(), 1);
+    }
 
     #[test]
     fn an_ask_reads_back_as_itself() {

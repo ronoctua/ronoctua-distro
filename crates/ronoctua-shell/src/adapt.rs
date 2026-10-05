@@ -451,6 +451,12 @@ pub struct Prefs {
     /// quietly turning the bars back on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<Hidden>,
+    /// Whether the FREE minibuffer — nothing said on it, nothing open —
+    /// shows the hours at its right end (`LEADER s r`, `crate::footer_settings`).
+    /// ABSENT IS OFF: the owner's word (2026-09-30), a clock the person asks
+    /// for and not one the footer puts up.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hours: bool,
 }
 
 /// The two hidden modes of the modeline and the minibuffer.
@@ -461,11 +467,11 @@ pub struct Prefs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Hidden {
-    /// `LEADER LEADER`: what opens PUSHES the windows away and stands on the
-    /// desk they moved off — the desk's colour, opaque, worn as the desk's
-    /// page (`crate::hidden::Shape::page`).
+    /// One tap of `Ctrl` at the leader's root: what opens PUSHES the windows
+    /// away and stands on the desk they moved off — the desk's colour,
+    /// opaque, worn as the desk's page (`crate::hidden::Shape::page`).
     Push,
-    /// `LEADER ALT LEADER`: everything lies OVER the windows, on a veil.
+    /// The second tap: everything lies OVER the windows, on a veil.
     Cover,
 }
 

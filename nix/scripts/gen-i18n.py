@@ -16,11 +16,35 @@ the column-0 lines with `=`. Continuations (indented lines), comments and
 blank lines are ignored.
 
 Usage:
-    gen-i18n.py <ftl-dir> <output.rs> <language>...
+    gen-i18n.py <ftl-dir> <output.rs> <language>... [--module <id>=<dir> ...]
+                [--prefixes <id>=<prefix>,<prefix> ...]
+
+# The brain's modules (brain.md §3)
+
+A brain module carries its own texts, `modules/<id>/i18n/<lang>.ftl`, and
+`--module` hands one such folder in. Its keys join the registry and the
+bundle — this writes the MERGED `<lang>.ftl`, the base followed by every
+fragment, beside `<output.rs>` — and three things are refused on the way,
+because a key's owner has to be readable from the key:
+
+- a module key that is also a base key, or another module's;
+- a module key outside its namespace: `(cmd-|notif-|echo-|about-|ask-)?`
+  followed by one of its prefixes (`--prefixes`, its id by default), alone or
+  with more after a `-`, or `brain-task-<id>` and `brain-task-<id>-does`;
+- two modules whose prefixes overlap (`made` and `made-up`): two owners of
+  one name.
+
+A BASE key inside a module's namespace is NOT refused here. The shell's own
+screens may speak in a module's words by design — a page of the same name
+beside the module — and whether a file outside the folder may name the module
+is `brain-modules-are-sealed`'s question (step 5), where the module's
+`namedBy` can answer it. This generator has no such list, so refusing here
+would stop every build over a decision the module already wrote down.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -77,30 +101,157 @@ def const_de(key: str) -> str:
     return key.upper().replace("-", "_")
 
 
+# The words that open a key belonging to a command, a notification, the
+# minibuffer, a hint and a question — each may come before a module's prefix.
+OPENERS = ("cmd-", "notif-", "echo-", "about-", "ask-")
+# Prefixes no module may own: an opener itself, and the brain's own texts.
+RESERVED = {"cmd", "notif", "echo", "about", "ask", "brain"}
+
+
+def in_namespace(key: str, ident: str, prefixes: list[str]) -> bool:
+    """Whether a key is a module's to declare. See the header."""
+    if key in (f"brain-task-{ident}", f"brain-task-{ident}-does"):
+        return True
+    for opener in ("",) + OPENERS:
+        if not key.startswith(opener):
+            continue
+        rest = key[len(opener) :]
+        if any(rest == p or rest.startswith(p + "-") for p in prefixes):
+            return True
+    return False
+
+
+def pairs(values: list[str], flag: str) -> dict[str, str]:
+    """`id=value` arguments, each id once."""
+    out: dict[str, str] = {}
+    for v in values:
+        ident, sep, rest = v.partition("=")
+        if not sep or not ident or not rest:
+            print(f"ERROR: {flag} {v!r} is not `<id>=<value>`", file=sys.stderr)
+            raise SystemExit(2)
+        if ident in out:
+            print(f"ERROR: {flag} names `{ident}` twice", file=sys.stderr)
+            raise SystemExit(2)
+        out[ident] = rest
+    return out
+
+
 def main() -> int:
-    if len(sys.argv) < 4:
-        print(__doc__, file=sys.stderr)
-        return 2
-    source, out_path = Path(sys.argv[1]), Path(sys.argv[2])
+    ap = argparse.ArgumentParser(description="The text key registry, from the .ftl files.")
+    ap.add_argument("source", type=Path, help="the base .ftl directory")
+    ap.add_argument("out", type=Path, help="the keys.rs to write; the merged .ftl go beside it")
+    ap.add_argument("languages", nargs="+", help="the declared languages, the base first")
+    ap.add_argument("--module", action="append", default=[], help="<id>=<dir>: a brain module's texts")
+    ap.add_argument(
+        "--prefixes", action="append", default=[], help="<id>=<p>,<p>: a module's key prefixes (default: its id)"
+    )
+    args = ap.parse_args()
+    source, out_path = args.source, args.out
     # MANDATORY languages, and they come from `assets/i18n/languages.nix`
     # rather than from a constant here. Naming one forces its file to exist and
     # to be complete — which is the point, and which is why this is a declared
     # list and not a glob of the directory.
-    languages = tuple(sys.argv[3:])
+    languages = tuple(args.languages)
+    modules = pairs(args.module, "--module")
+    # THE ID IS ALWAYS A PREFIX: `cmd-<id>-<action>` and `<id>-why-<word>` are
+    # built from it, whatever else a module claims.
+    prefixes = {i: list(dict.fromkeys([i] + p.split(","))) for i, p in pairs(args.prefixes, "--prefixes").items()}
+    for ident in prefixes:
+        if ident not in modules:
+            print(f"ERROR: --prefixes names `{ident}`, which no --module hands in", file=sys.stderr)
+            return 2
+    for ident in modules:
+        prefixes.setdefault(ident, [ident])
+
+    # NOT OVER THE BASE: the merged `.ftl` go beside `<output.rs>`, and there
+    # they would replace the files they were read from. Refused before a byte
+    # is written.
+    if out_path.parent.resolve() == source.resolve():
+        print("ERROR: the merged .ftl would overwrite the base; write keys.rs elsewhere", file=sys.stderr)
+        return 1
 
     tables: dict[str, dict[str, str]] = {}
+    texts: dict[str, str] = {}
     for language in languages:
         path_of = source / f"{language}.ftl"
         if not path_of.exists():
             print(f"ERROR: {path_of} is missing", file=sys.stderr)
             return 1
         tables[language] = keys(path_of)
+        texts[language] = path_of.read_text(encoding="utf-8")
+
+    failed = False
+
+    # THE MODULES' FRAGMENTS, each checked on its own first, so a message
+    # names the module's file and not the merged one nobody wrote.
+    fragments: dict[str, dict[str, dict[str, str]]] = {}
+    fragment_texts: dict[str, dict[str, str]] = {}
+    for ident in sorted(modules):
+        for p in prefixes[ident]:
+            if p in RESERVED or p.startswith("brain-"):
+                print(f"ERROR: module `{ident}` claims the prefix `{p}`, which is not a module's to own", file=sys.stderr)
+                failed = True
+        fragments[ident], fragment_texts[ident] = {}, {}
+        for language in languages:
+            path_of = Path(modules[ident]) / f"{language}.ftl"
+            if not path_of.exists():
+                print(f"ERROR: module `{ident}` has no {language}.ftl ({path_of})", file=sys.stderr)
+                failed = True
+                continue
+            fragments[ident][language] = keys(path_of)
+            fragment_texts[ident][language] = path_of.read_text(encoding="utf-8")
+    if failed:
+        return 1
+
+    # PREFIXES THAT OVERLAP are two owners of one name: `made-up-x` would be
+    # both `made`'s and `made-up`'s.
+    owners = sorted((p, ident) for ident in modules for p in prefixes[ident])
+    for i, (p, a) in enumerate(owners):
+        for q, b in owners[i + 1 :]:
+            if a != b and (p == q or q.startswith(p + "-") or p.startswith(q + "-")):
+                print(f"ERROR: the prefixes `{p}` ({a}) and `{q}` ({b}) overlap", file=sys.stderr)
+                failed = True
+
+    base_language = languages[0]
+    for ident in sorted(fragments):
+        mine = fragments[ident].get(base_language, {})
+        for language in languages[1:]:
+            theirs = fragments[ident].get(language, {})
+            for c in sorted(set(mine) - set(theirs)):
+                print(f"ERROR: module `{ident}`: `{c}` exists in {base_language} and is missing from {language}", file=sys.stderr)
+                failed = True
+            for c in sorted(set(theirs) - set(mine)):
+                print(f"ERROR: module `{ident}`: `{c}` exists in {language} and is missing from {base_language}", file=sys.stderr)
+                failed = True
+        for c in sorted(mine):
+            if not in_namespace(c, ident, prefixes[ident]):
+                print(
+                    f"ERROR: module `{ident}`: `{c}` is outside its namespace "
+                    f"({', '.join(prefixes[ident])}, with cmd-/notif-/echo-/about-/ask-, "
+                    f"or brain-task-{ident})",
+                    file=sys.stderr,
+                )
+                failed = True
+            if c in tables[base_language]:
+                print(f"ERROR: module `{ident}`: `{c}` is also a base key", file=sys.stderr)
+                failed = True
+            for other in sorted(fragments):
+                if other < ident and c in fragments[other].get(base_language, {}):
+                    print(f"ERROR: `{c}` is declared by both `{other}` and `{ident}`", file=sys.stderr)
+                    failed = True
+    if failed:
+        return 1
+
+    # ONE TABLE PER LANGUAGE from here on: every rule below holds for the
+    # module keys exactly as for the base's.
+    for ident in sorted(fragments):
+        for language in languages:
+            tables[language].update(fragments[ident][language])
 
     # The comparison runs BOTH ways. Only checking "every en-GB key
     # exists in pt-BR" would let an orphan translation through, which is dead
     # translation piling up in the file.
     base, *resto = languages
-    failed = False
     for language in resto:
         missing = sorted(set(tables[base]) - set(tables[language]))
         extra = sorted(set(tables[language]) - set(tables[base]))
@@ -218,7 +369,24 @@ def main() -> int:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"OK: {len(every)} keys in {len(languages)} languages -> {out_path}")
+
+    # THE MERGED BUNDLE, beside the registry: `face()` embeds `<lang>.ftl`
+    # from this directory, so the keys above and the texts the binary carries
+    # come out of one run and cannot disagree. The base comes first, whole and
+    # untouched — with no module the file IS the base, byte for byte.
+    for language in languages:
+        merged = texts[language]
+        if merged and not merged.endswith("\n"):
+            merged += "\n"
+        for ident in sorted(fragment_texts):
+            merged += f"\n# ── brain module: {ident} ──\n\n" + fragment_texts[ident][language]
+            if not merged.endswith("\n"):
+                merged += "\n"
+        (out_path.parent / f"{language}.ftl").write_text(merged, encoding="utf-8")
+
+    moved = sum(len(f[base]) for f in fragments.values())
+    beside = f" ({moved} of them from the brain's modules: {', '.join(sorted(fragments))})" if fragments else ""
+    print(f"OK: {len(every)} keys in {len(languages)} languages -> {out_path}{beside}")
     return 0
 
 

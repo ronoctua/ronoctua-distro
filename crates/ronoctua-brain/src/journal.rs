@@ -112,7 +112,7 @@ impl Journal {
         self.runs
             .iter()
             .rev()
-            .find(|r| r.task == task && r.kind != crate::task::OutcomeKind::Held)
+            .find(|r| r.task == task && schedules(r))
             .map(|r| r.began)
     }
 
@@ -173,16 +173,36 @@ impl Journal {
     /// exists, and everything above that is first-in-first-out. The list can
     /// therefore be longer than [`HISTORY`] — by at most `RECENT` per task,
     /// which is a handful of records and the price of the row being honest.
+    ///
+    /// # And a task's last RUN is never dropped
+    ///
+    /// Because the floor counts records of every kind, and a watcher's notes
+    /// are records: a module that runs weekly and notes what it hears would
+    /// have its run pushed out by its own eleventh note, and [`Self::last`]
+    /// would answer "never" — a module that comes due as if it had never run.
+    /// The newest record the schedule counts from stays, whatever is above it.
     pub fn put(&mut self, record: RunRecord) {
         self.runs.push(record);
         while self.runs.len() > HISTORY {
             // THE OLDEST THAT CAN GO. Walking from the front, the first record
-            // whose task would still have more than `RECENT` left behind it.
-            let Some(at) = self
-                .runs
-                .iter()
-                .position(|r| self.runs.iter().filter(|o| o.task == r.task).count() > RECENT)
-            else {
+            // whose task would still have more than `RECENT` left behind it,
+            // and which is not that task's last run.
+            let at = {
+                let mut count: std::collections::HashMap<&str, usize> =
+                    std::collections::HashMap::new();
+                let mut last_run: std::collections::HashMap<&str, usize> =
+                    std::collections::HashMap::new();
+                for (i, r) in self.runs.iter().enumerate() {
+                    *count.entry(r.task.as_str()).or_default() += 1;
+                    if schedules(r) {
+                        last_run.insert(r.task.as_str(), i);
+                    }
+                }
+                self.runs.iter().enumerate().position(|(i, r)| {
+                    count[r.task.as_str()] > RECENT && last_run.get(r.task.as_str()) != Some(&i)
+                })
+            };
+            let Some(at) = at else {
                 // Every task is down to its floor. The list stays longer than
                 // the ceiling, which is the trade this floor exists to make.
                 break;
@@ -234,10 +254,122 @@ impl Journal {
     }
 }
 
+/// Whether the schedule counts from this record: a run that worked, failed or
+/// was put off — never a hold (the machine was busy) and never a note (a
+/// module wrote down what it noticed).
+fn schedules(r: &RunRecord) -> bool {
+    !matches!(
+        r.kind,
+        crate::task::OutcomeKind::Held | crate::task::OutcomeKind::Noted
+    )
+}
+
+/// Consecutive records that say the same thing, folded into one row of the
+/// activity log.
+///
+/// # Why the log folds at all
+///
+/// Because a watch writes the same line as often as the thing it watches
+/// happens, and a hold is written once per episode but an episode can come back
+/// every night. Forty rows of "RAM is busy" bury the one row that says the
+/// update failed. Folded, they are one row — "Last: <when>", how many times,
+/// and the first of them — that opens into all of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    /// The newest of them: what the row draws.
+    pub newest: RunRecord,
+    /// How many records the row folds; `1` is one that stands alone.
+    pub repeats: u32,
+    /// When the OLDEST of them began.
+    pub first: Moment,
+    /// All of them, NEWEST FIRST, `newest` included — what the row opens into.
+    pub members: Vec<RunRecord>,
+}
+
+/// The records, NEWEST FIRST, with every run of consecutive ones that say the
+/// same thing folded into one [`Group`].
+///
+/// `runs` is OLDEST FIRST, as the journal keeps it. "The same thing" is the
+/// same task, kind, step, word and sentence — not the same trouble text, which
+/// carries a machine's numbers and would split every fold in two. PURE: the
+/// daemon and the footer fold the same list the same way, and the cut is the
+/// caller's.
+#[must_use]
+pub fn grouped(runs: &[RunRecord]) -> Vec<Group> {
+    let same = |a: &RunRecord, b: &RunRecord| {
+        a.task == b.task && a.kind == b.kind && a.at == b.at && a.why == b.why && a.says == b.says
+    };
+    let mut out: Vec<Group> = Vec::new();
+    for r in runs.iter().rev() {
+        match out.last_mut() {
+            Some(g) if same(&g.newest, r) => {
+                g.repeats = g.repeats.saturating_add(1);
+                g.first = r.began;
+                g.members.push(r.clone());
+            }
+            _ => out.push(Group {
+                newest: r.clone(),
+                repeats: 1,
+                first: r.began,
+                members: vec![r.clone()],
+            }),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::task::OutcomeKind;
+
+    #[test]
+    fn a_note_does_not_move_the_schedule() {
+        // A WATCH WRITING WHAT IT NOTICED is not the task running: counted
+        // here, every note would push its module a whole interval away.
+        let mut j = Journal::fresh();
+        j.put(ran("fixture", 100, OutcomeKind::Done));
+        j.put(ran("fixture", 200, OutcomeKind::Noted));
+        j.put(ran("fixture", 300, OutcomeKind::Held));
+        assert_eq!(j.last("fixture"), Some(100));
+        assert_eq!(j.latest("fixture").map(|r| r.began), Some(300));
+    }
+
+    #[test]
+    fn what_says_the_same_thing_in_a_row_is_one_row() {
+        let held = |at: Moment| {
+            let mut r = ran("fixture", at, OutcomeKind::Held);
+            r.why = "ram".to_owned();
+            r
+        };
+        let runs = vec![
+            ran("fixture", 10, OutcomeKind::Done),
+            held(20),
+            held(30),
+            held(40),
+            ran("other", 50, OutcomeKind::Done),
+            held(60),
+        ];
+        let rows = grouped(&runs);
+        // NEWEST FIRST, and a fold never crosses another task's record: the
+        // hold after `other` is its own row, not a fourth repeat.
+        assert_eq!(rows.len(), 4);
+        assert_eq!((rows[0].newest.began, rows[0].repeats), (60, 1));
+        assert_eq!(rows[1].newest.task, "other");
+        assert_eq!((rows[2].newest.began, rows[2].repeats), (40, 3));
+        assert_eq!(rows[2].first, 20, "the fold forgot where it began");
+        assert_eq!(
+            rows[2].members.iter().map(|r| r.began).collect::<Vec<_>>(),
+            vec![40, 30, 20]
+        );
+        assert_eq!((rows[3].newest.began, rows[3].repeats), (10, 1));
+        // A DIFFERENT WORD IS A DIFFERENT ROW, however alike the rest is.
+        let mut other_word = held(70);
+        other_word.why = "cpu".to_owned();
+        let rows = grouped(&[held(60), other_word]);
+        assert_eq!(rows.len(), 2);
+        assert!(grouped(&[]).is_empty());
+    }
 
     fn ran(task: &str, at: Moment, kind: OutcomeKind) -> RunRecord {
         RunRecord {
@@ -257,24 +389,24 @@ mod tests {
         // closed. What is NOT in here is a hold: the runner never writes one,
         // and its own test says so.
         let mut j = Journal::fresh();
-        j.put(ran("system-update", 100, OutcomeKind::Done));
-        j.put(ran("system-update", 200, OutcomeKind::Skipped));
-        assert_eq!(j.last("system-update"), Some(200));
-        assert_eq!(j.latest("system-update").map(|r| r.began), Some(200));
+        j.put(ran("made-up", 100, OutcomeKind::Done));
+        j.put(ran("made-up", 200, OutcomeKind::Skipped));
+        assert_eq!(j.last("made-up"), Some(200));
+        assert_eq!(j.latest("made-up").map(|r| r.began), Some(200));
     }
 
     #[test]
     fn a_failed_run_counts_so_it_does_not_retry_every_half_minute() {
         let mut j = Journal::fresh();
-        j.put(ran("system-update", 100, OutcomeKind::Done));
-        j.put(ran("system-update", 300, OutcomeKind::Failed));
-        assert_eq!(j.last("system-update"), Some(300));
+        j.put(ran("made-up", 100, OutcomeKind::Done));
+        j.put(ran("made-up", 300, OutcomeKind::Failed));
+        assert_eq!(j.last("made-up"), Some(300));
     }
 
     #[test]
     fn the_tasks_do_not_read_each_others_history() {
         let mut j = Journal::fresh();
-        j.put(ran("system-update", 100, OutcomeKind::Done));
+        j.put(ran("made-up", 100, OutcomeKind::Done));
         assert_eq!(j.last("something-else"), None);
     }
 
@@ -285,7 +417,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut j = Journal::fresh();
         for n in 0..(HISTORY + 10) {
-            j.put(ran("system-update", n as Moment, OutcomeKind::Done));
+            j.put(ran("made-up", n as Moment, OutcomeKind::Done));
         }
         assert_eq!(j.runs.len(), HISTORY);
         assert_eq!(
@@ -295,6 +427,30 @@ mod tests {
         j.write_to(&dir).expect("write");
         assert_eq!(Journal::read_from(&dir), j);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_task_keeps_its_last_run_however_much_it_notes() {
+        // THE DEFECT THIS CATCHES: the floor counts records of every kind, so
+        // a weekly module that noted what it heard lost its run to its own
+        // eleventh note, and came due as if it had never run.
+        let mut j = Journal::fresh();
+        j.put(ran("watcher", 100, OutcomeKind::Done));
+        for n in 0..(HISTORY + RECENT + 5) {
+            j.put(ran("watcher", 200 + n as Moment, OutcomeKind::Noted));
+        }
+        assert_eq!(j.last("watcher"), Some(100), "the run was pruned");
+        assert!(j.runs.len() <= HISTORY, "the ceiling stopped holding");
+        // AND ONLY THE LAST ONE is kept above the ceiling: an older run of
+        // the same task goes, first-in-first-out.
+        let mut j = Journal::fresh();
+        j.put(ran("watcher", 50, OutcomeKind::Done));
+        j.put(ran("watcher", 100, OutcomeKind::Failed));
+        for n in 0..HISTORY {
+            j.put(ran("watcher", 200 + n as Moment, OutcomeKind::Noted));
+        }
+        assert_eq!(j.last("watcher"), Some(100));
+        assert!(!j.runs.iter().any(|r| r.began == 50));
     }
 
     #[test]

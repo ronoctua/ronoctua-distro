@@ -68,60 +68,6 @@ pub const APP_ID_MONITOR: &str = "br.ronoctua.monitor";
 /// with the log cut off.
 pub const APP_ID_RESCUE: &str = "br.ronoctua.rescue";
 
-/// The rule that makes the monitor window float.
-///
-/// # Why it is generated from here, and not written in the two configs
-///
-/// The `app_id` above and the rule's regex have to be the same string, and it
-/// would exist in THREE places — this file, `nix/modules/scroll.nix` and
-/// `nix/dev.nix`. A string that crosses a border needs a check (`AGENTS.md`),
-/// and generating it is the check that cannot go stale: `export-window-rules`
-/// prints this, and both configs take it in — the same arrangement as the
-/// chords in `nix/compositor-binds.nix`.
-///
-/// `r#"…"#` and not plain quotes: the criterion's value is a regex with a
-/// backslash in it (`^br\.ronoctua\.monitor$`), and writing it in a raw string
-/// is what keeps Rust's escapes out of a string the compositor parses.
-///
-/// The proportions are the compositor's geometry, like `gaps` and the border's
-/// width in the same file — invariant 9's tokens are the design system's, and
-/// no component of it draws this window.
-#[must_use]
-pub fn floating_rules() -> String {
-    // The rescue console is WIDER, and that is the only difference: it is read
-    // while something is wrong, and a list with the log cut off is a diagnosis
-    // one has to scroll for.
-    //
-    // AND THE CAMERA APP floats too, at 60%: it is a picture of a face the
-    // owner asked to see in a window of its own over the work, not a tile in
-    // the strip that would push every other window aside.
-    [
-        (APP_ID_MONITOR, 70),
-        (APP_ID_RESCUE, 90),
-        (crate::camera::APP_ID, 60),
-    ]
-    .into_iter()
-    .map(|(app_id, percent)| {
-        let regex = app_id.replace('.', r"\.");
-        // `ppt` IS NOT OPTIONAL: a floating container is sized in PIXELS
-        // unless the unit says otherwise, so `resize set width 70` would
-        // make a seventy-pixel window — which reads as the monitor having
-        // failed to open rather than as a unit that was left out.
-        //
-        // And `move position center`, because a new floating window is
-        // not centred on its own. There is no equivalent of asking for it
-        // to open focused; one does, and that is the compositor's own
-        // behaviour rather than something to spell.
-        format!(
-            "for_window [app_id=\"^{regex}$\"] \
-                 floating enable, \
-                 resize set width {percent} ppt height {percent} ppt, \
-                 move position center\n"
-        )
-    })
-    .collect()
-}
-
 /// The prefix of the `app_id` Chrome gives a window it opens with `--app=`.
 ///
 /// `chrome-<host>_<path>-<profile>`, which is what a web app's `.desktop`
@@ -137,7 +83,7 @@ pub const CHROME_APP_PREFIX: &str = "chrome-";
 /// remember to include.
 #[must_use]
 pub fn window_rules() -> String {
-    floating_rules() + &inhibitor_rules()
+    crate::floating::rules() + &inhibitor_rules()
 }
 
 /// The rule that keeps a web app from swallowing the leader.
@@ -209,7 +155,10 @@ fn host_as(
         // `SIGWINCH` corrects the program; being born with a size is better
         // than being born without, because a 0x0 pty makes the shell print
         // wrong once.
-        let (columns, lines) = (80u16, 24u16);
+        let (columns, lines) = (
+            tokens::space::TERMINAL_COLUMNS,
+            tokens::space::TERMINAL_LINES,
+        );
         let program = program.map_or_else(ronoctua_term::pty::default_program, ToOwned::to_owned);
         let pty = Arc::new(
             Pty::open(&program, args, columns, lines).with_context(|| format!("open {program}"))?,
@@ -307,6 +256,34 @@ fn cells_that_fit(width: u32, height: u32) -> (u16, u16) {
         .saturating_sub(u32::from(tokens::space::CONTENT_INSETY) * 2)
         .clamp(1, u32::from(u16::MAX)) as u16;
     (columns, lines)
+}
+
+/// The window that holds a grid of `columns` × `lines` at the size of the
+/// text now — the inverse of [`cells_that_fit`], insets included: the
+/// smallest size whose count is exactly that grid. The terminal declares its
+/// first size in the unit it thinks in (`space.terminal`), and the pixels are
+/// arithmetic on it.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn size_of_cells(columns: u16, lines: u16) -> (u32, u32) {
+    let cell_width_px = tokens::text::size() * tokens::font::CELL_WIDTH_EM;
+    let cell_height_px = tokens::text::size() * tokens::font::LINE_HEIGHT;
+    let across = u32::from(columns) + u32::from(tokens::space::CONTENT_INSET) * 2;
+    let down = u32::from(lines) + u32::from(tokens::space::CONTENT_INSETY) * 2;
+    let mut width = (across as f32 * cell_width_px).ceil() as u32;
+    let mut height = (down as f32 * cell_height_px).ceil() as u32;
+    // THE SAME DIVISION IS ASKED, not trusted: the product can land a hair
+    // under the boundary, and the grid is whatever `cells_that_fit` says.
+    while cells_that_fit(width, height).0 < columns {
+        width += 1;
+    }
+    while cells_that_fit(width, height).1 < lines {
+        height += 1;
+    }
+    (width, height)
 }
 
 /// The terminal's window.
@@ -472,6 +449,15 @@ impl Content for TerminalWindow {
         false
     }
 
+    /// `space.terminal` CELLS, not pixels: the grid every program assumes
+    /// until a `SIGWINCH` says otherwise, at the size of the text now.
+    fn default_size(&self) -> (u32, u32) {
+        size_of_cells(
+            tokens::space::TERMINAL_COLUMNS,
+            tokens::space::TERMINAL_LINES,
+        )
+    }
+
     /// NOTHING UNDER THE POINTER ANSWERS IT: the grid is the program's, and
     /// the standard list's pointer would light rows and a header this window
     /// never draws.
@@ -519,31 +505,9 @@ impl Content for TerminalWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::{grid_list, key_bytes};
+    use super::{cells_that_fit, grid_list, key_bytes, size_of_cells};
     use ronoctua_tokens as tokens;
     use smithay_client_toolkit::seat::keyboard::Keysym;
-
-    #[test]
-    fn the_rule_matches_the_app_id_the_window_actually_sets() {
-        // THE RULE AND THE WINDOW ARE ONE STRING. Written apart, an `app_id`
-        // renamed here would give a rule that matches nothing — and the symptom
-        // is the monitor opening TILED, which looks like the shortcut working.
-        let rule = super::floating_rules();
-        assert!(
-            rule.contains(&super::APP_ID_MONITOR.replace('.', r"\.")),
-            "the rule does not name the window's app id:\n{rule}"
-        );
-        // The dots are escaped: `br.ronoctua.monitor` as a regex would also
-        // match `brXronoctuaYmonitor`, and — worse — is not what one reads.
-        assert!(rule.contains(r"^br\.ronoctua\.monitor$"), "{rule}");
-        assert!(rule.contains("floating enable"), "{rule}");
-        // `ppt` IS NOT OPTIONAL. A floating container is sized in PIXELS
-        // unless the unit says so, and a seventy-pixel window reads as the
-        // monitor having failed to open rather than as a missing unit.
-        assert!(rule.contains("ppt"), "the size has no unit:\n{rule}");
-        // AND IT IS CENTRED, because a new floating window is not.
-        assert!(rule.contains("move position center"), "{rule}");
-    }
 
     /// A web app never takes the leader: the rule is exactly the compositor's
     /// grammar, it names the app windows by their prefix, and it reaches the
@@ -566,7 +530,7 @@ mod tests {
             "the export lost the inhibitor rule:\n{all}"
         );
         assert!(
-            all.contains(&super::floating_rules()),
+            all.contains(&crate::floating::rules()),
             "the export lost the floating rules:\n{all}"
         );
         // One rule per line: the compositor reads the file line by line.
@@ -666,5 +630,24 @@ mod tests {
         // waiting inside the engine.
         let (columns, lines) = super::cells_that_fit(1, 1);
         assert!(columns >= 1 && lines >= 1, "the grid cannot be empty");
+    }
+
+    /// The first size holds EXACTLY the declared grid: the terminal is born
+    /// 80 × 24 in cells, not in a guess of pixels that rounds to 79.
+    #[test]
+    fn the_first_size_is_the_declared_grid() {
+        for (c, l) in [
+            (
+                tokens::space::TERMINAL_COLUMNS,
+                tokens::space::TERMINAL_LINES,
+            ),
+            (2, 2),
+            (132, 43),
+        ] {
+            let (w, h) = size_of_cells(c, l);
+            assert_eq!(cells_that_fit(w, h), (c, l), "{w}x{h}");
+            assert_eq!(cells_that_fit(w - 1, h).0, c - 1, "smallest width");
+            assert_eq!(cells_that_fit(w, h - 1).1, l - 1, "smallest height");
+        }
     }
 }

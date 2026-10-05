@@ -1,4 +1,7 @@
-//! The person's keys: `$XDG_CONFIG_HOME/ronoctua/player-keys/`, one file each.
+//! The person's keys: `$XDG_CONFIG_HOME/ronoctua/player-keys/`, one file each
+//! — the player's, and the security centre's VirusTotal key, in the same
+//! folder (it keeps its name: renaming it would lose every key kept) and told
+//! apart by [`Key::scope`].
 //!
 //! # Private from the first byte
 //!
@@ -23,10 +26,18 @@
 //!
 //! The folder is under [`ronoctua_xdg::config_dir`], so the `.#dev` loop keeps
 //! keys of its own and never reads the installed session's.
+//!
+//! # Where the private files live now
+//!
+//! [`Secret`], [`write_private_file`] and the `0700` folder ([`Dir`]) were
+//! written here first; they moved to `ronoctua_consent::keys` so every crate
+//! with a key keeps it the same way, and are re-exported here so the player's
+//! paths still name them. What stays is the player's own: its [`Key`]s, their
+//! checks and their refusals.
 
-use std::io::Write as _;
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
+
+pub use ronoctua_consent::keys::{Dir, Secret, write_private_file};
 
 use serde::{Deserialize, Serialize};
 
@@ -39,40 +50,6 @@ pub const DIR: &str = "player-keys";
 /// are 32 characters and TMDB's read token about 250; four kibibytes is a
 /// bound and not a guess.
 pub const MOST_BYTES: usize = 4096;
-
-/// Text that must never be printed: a key, a token, a password.
-///
-/// `Debug` names the type and nothing else; there is no `Display` and no
-/// `Serialize`. Read it with [`Secret::expose`], at the one place it is put
-/// into a header.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Secret(String);
-
-impl Secret {
-    /// Text to keep secret.
-    #[must_use]
-    pub fn new(text: impl Into<String>) -> Self {
-        Self(text.into())
-    }
-
-    /// The text itself — for the header it goes into, and nowhere else.
-    #[must_use]
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-
-    /// Whether it is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl std::fmt::Debug for Secret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Secret(<redacted>)")
-    }
-}
 
 /// One of the person's keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -90,16 +67,27 @@ pub enum Key {
     /// SubDL's API key.
     #[serde(rename = "subdl")]
     SubDl,
+    /// VirusTotal's API key (`x-apikey`) — the security centre's.
+    #[serde(rename = "virustotal")]
+    VirusTotal,
 }
 
 impl Key {
-    /// Every key, in the order the Internet page lists them.
-    pub const ALL: [Self; 4] = [
+    /// Every key, the player's in the order its Internet page lists them,
+    /// then the security centre's. A page lists its own ([`Key::scope`]).
+    pub const ALL: [Self; 5] = [
         Self::OpenSubtitles,
         Self::OpenSubtitlesAccount,
         Self::Tmdb,
         Self::SubDl,
+        Self::VirusTotal,
     ];
+
+    /// Whose it is — which page lists it.
+    #[must_use]
+    pub const fn scope(self) -> crate::Scope {
+        self.service().scope()
+    }
 
     /// Its file's name in [`DIR`] — and its id.
     #[must_use]
@@ -109,6 +97,7 @@ impl Key {
             Self::OpenSubtitlesAccount => "opensubtitles-account",
             Self::Tmdb => "tmdb",
             Self::SubDl => "subdl",
+            Self::VirusTotal => "virustotal",
         }
     }
 
@@ -119,6 +108,7 @@ impl Key {
             Self::OpenSubtitles | Self::OpenSubtitlesAccount => crate::Service::OpenSubtitles,
             Self::Tmdb => crate::Service::Tmdb,
             Self::SubDl => crate::Service::SubDl,
+            Self::VirusTotal => crate::Service::VirusTotal,
         }
     }
 }
@@ -336,44 +326,12 @@ fn keep_account_in(dir: &Path, account: &Account) -> Result<(), KeyTrouble> {
     write_private(dir, Key::OpenSubtitlesAccount.file(), text.as_bytes())
 }
 
-/// The folder, `0700`: created so, or tightened to it when it was there.
+/// The folder, `0700`: created so, or tightened to it when it was there
+/// ([`Dir::make`]).
 fn private_dir(dir: &Path) -> Result<(), KeyTrouble> {
-    if let Some(parent) = dir.parent() {
-        std::fs::create_dir_all(parent).map_err(|_| KeyTrouble::Unwritable)?;
-    }
-    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(_) => return Err(KeyTrouble::Unwritable),
-    }
-    // THE MODE IS SET EVEN WHEN IT WAS THERE: `mode` applies to a creation
-    // (and the umask narrows it further), and a folder somebody made by hand
-    // may be `0755`.
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    Dir::at(dir.to_path_buf())
+        .make()
         .map_err(|_| KeyTrouble::Unwritable)
-}
-
-/// A draft beside `file`, created `0600` — before its first byte.
-fn open_draft(dir: &Path, file: &str) -> std::io::Result<(PathBuf, std::fs::File)> {
-    let draft = dir.join(format!(".{file}.{}.draft", std::process::id()));
-    let open = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&draft)
-    };
-    let handle = match open() {
-        Ok(f) => f,
-        // A draft left by a process that died with this pid: it is ours to
-        // replace, and `create_new` still refuses to write into it.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            std::fs::remove_file(&draft)?;
-            open()?
-        }
-        Err(e) => return Err(e),
-    };
-    Ok((draft, handle))
 }
 
 /// `bytes` into `dir/file`, private from its first byte: the folder `0700`,
@@ -383,42 +341,9 @@ fn write_private(dir: &Path, file: &str, bytes: &[u8]) -> Result<(), KeyTrouble>
     write_private_file(&dir.join(file), bytes).map_err(|_| KeyTrouble::Unwritable)
 }
 
-/// `bytes` into the file at `path`, private from its FIRST byte: a draft
-/// beside it opened `0600` (the mode on the creation, never a `chmod` after
-/// the bytes are in), written, synced and renamed over it. A reader sees the
-/// whole old file or the whole new one, and a file somebody left readable is
-/// replaced by one that never was.
-///
-/// For any file that holds a secret — the person's keys here, the paired
-/// machines' keys of the player (`ronoctua_player::remote::keep`). The folder
-/// must exist, and its mode is its own.
-///
-/// # Errors
-///
-/// The draft could not be created, written, synced or renamed; no draft is
-/// left behind.
-pub fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let (Some(dir), Some(file)) = (path.parent(), path.file_name().and_then(|f| f.to_str())) else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "not a file's path",
-        ));
-    };
-    let (draft, mut handle) = open_draft(dir, file)?;
-    let written = handle
-        .write_all(bytes)
-        .and_then(|()| handle.sync_all())
-        .and_then(|()| std::fs::rename(&draft, path));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&draft);
-        return Err(e);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::MetadataExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     use super::*;
 
@@ -455,19 +380,6 @@ mod tests {
         forget_in(&dir, Key::Tmdb).unwrap();
         assert!(!has_in(&dir, Key::Tmdb));
         forget_in(&dir, Key::Tmdb).expect("forgetting twice is not a failure");
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
-    }
-
-    #[test]
-    fn a_draft_is_private_before_its_first_byte() {
-        // THE DEFECT THIS PREVENTS: writing and then chmodding, which leaves
-        // the key in a readable file between the two calls.
-        let dir = scratch("draft");
-        private_dir(&dir).unwrap();
-        let (draft, handle) = open_draft(&dir, "tmdb").unwrap();
-        assert_eq!(handle.metadata().unwrap().len(), 0, "nothing written yet");
-        assert_eq!(mode(&draft), 0o600, "and already private");
-        drop(handle);
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
@@ -526,28 +438,6 @@ mod tests {
             Err(KeyTrouble::Malformed),
             "an account goes through keep_account"
         );
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
-    }
-
-    /// FAILS IF: a file written through the public writer is readable by
-    /// anyone for a moment — or stays readable when it replaced one that
-    /// was.
-    #[test]
-    fn a_private_file_is_private_from_its_first_byte_and_replaces_a_readable_one() {
-        let dir = scratch("public");
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("peers.json");
-        std::fs::write(&file, "old").unwrap();
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        write_private_file(&file, b"{\"hosts\":[]}").unwrap();
-        assert_eq!(mode(&file), 0o600);
-        assert_eq!(std::fs::read(&file).unwrap(), b"{\"hosts\":[]}");
-        let left: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(left, ["peers.json"], "no draft is left");
-        assert!(write_private_file(Path::new("/"), b"x").is_err());
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 

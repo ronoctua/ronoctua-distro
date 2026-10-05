@@ -82,7 +82,78 @@ pub struct StepState {
     /// work out. It travels because the screen wants to say what a step was
     /// changed FROM, and because the host has to know what flipping one means.
     pub on_by_default: bool,
+    /// The text key of its name ([`crate::task::Step::name_key`]). Empty until
+    /// its module declares one, and then no screen builds a key out of the id.
+    #[serde(default)]
+    pub name_key: String,
+    /// The text key of the line under the cursor. Empty for the same reason.
+    #[serde(default)]
+    pub does_key: String,
 }
+
+/// Something a person can ask of a module by name, as the screen offers it.
+///
+/// The owned twin of [`crate::module::Action`]: the manifest's declaration is
+/// `&'static`, and this is what crosses the socket.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ActionState {
+    /// Its id inside the module — what `Ask::Act` hands back.
+    pub id: String,
+    /// The key of its label: `cmd-<module>-<action>`.
+    pub label: String,
+    /// Whether it acts on one row of the module's screen.
+    pub row: bool,
+    /// The key of the question it asks first, when it asks one.
+    pub asks: Option<String>,
+}
+
+impl From<&crate::module::Action> for ActionState {
+    fn from(a: &crate::module::Action) -> Self {
+        Self {
+            id: a.id.to_owned(),
+            label: a.label.to_owned(),
+            row: a.row,
+            asks: a.asks.map(str::to_owned),
+        }
+    }
+}
+
+/// Something a module published, and whose it is.
+///
+/// A record and not a pair: `{"module": …, "what": …}` reads in `socat`, and a
+/// field added later has somewhere to go.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Posted<T> {
+    /// The module's id.
+    pub module: String,
+    /// What it published.
+    pub what: T,
+}
+
+/// One thing a module told the footer, numbered so it is said once.
+///
+/// The footer says an event when its `seq` is past the last one it saw; the
+/// first mind a footer sees is its baseline, so what was told before it
+/// started is not news. It replaces `relieved`, which was this for one module.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Said {
+    /// Counted from the daemon's start; only ever grows.
+    pub seq: u64,
+    /// The event's tag: `<module>-<event>`.
+    pub tag: crate::module::Word,
+    /// The sentence's values, formatted by the footer.
+    pub args: crate::module::Args,
+}
+
+/// How many told events the mind keeps: a ring, the oldest dropped first.
+///
+/// Enough to cover every module telling something between two minds; a footer
+/// that missed more than this was not listening, and its baseline is the next
+/// mind.
+pub const SAID_KEPT: usize = 32;
 
 /// One task, as everybody draws it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +199,37 @@ pub struct TaskState {
     pub history: Vec<RunRecord>,
     /// What it runs, in order.
     pub steps: Vec<StepState>,
+    /// Whether it keeps a calendar (`Schedule::calendar`). A page draws the
+    /// cadence and the window only when it does: a relief that comes due when
+    /// the disk is short has neither, and drawing "every 7 days, afternoon"
+    /// about it would be a lie. `true` in a mind that did not say.
+    #[serde(default = "calendar_unless_said")]
+    pub calendar: bool,
+    /// The text key of its name (`Manifest::name_key`), so no screen builds a
+    /// key out of the id. Empty only in a mind from before modules.
+    #[serde(default)]
+    pub name_key: String,
+    /// The text key of the line under the cursor (`Manifest::does_key`).
+    #[serde(default)]
+    pub does_key: String,
+    /// The text key of [`TaskState::why_not`]: `brain-why-<word>` for a core
+    /// word, `<module>-why-<word>` for one of the module's. Empty when there
+    /// is no reason.
+    #[serde(default)]
+    pub why_key: String,
+    /// The generation of the module's screen (`Face::screen`): when it moves,
+    /// a page that shows the screen asks for it again (`Ask::Screen`).
+    #[serde(default)]
+    pub screen_generation: u64,
+    /// What a person can ask of it by name, in the manifest's order.
+    #[serde(default)]
+    pub actions: Vec<ActionState>,
+}
+
+/// What `calendar` is when a mind did not say: every task before modules
+/// kept one.
+const fn calendar_unless_said() -> bool {
+    true
 }
 
 /// The warning that something is about to happen.
@@ -174,7 +276,8 @@ pub struct Mind {
     pub running: String,
     /// The warning in flight, if any.
     pub announcement: Option<Announcement>,
-    /// The person's preferences, whole — what `Ask::Tune` sends back changed.
+    /// The person's preferences, whole — what they chose, and only that: the
+    /// rows carry what each module resolves them to (`Prefs::of_module`).
     pub prefs: Prefs,
     /// The task whose NEXT run is a rehearsal, if somebody asked for one.
     ///
@@ -210,25 +313,22 @@ pub struct Mind {
     /// [`crate::journal::ACTIVITY`], so the copy is bounded however long the
     /// machine has been running.
     pub journal: Vec<crate::task::RunRecord>,
-    /// Something the brain wants said, without anybody having asked.
+    /// Every notice every module raised, in the order the strip ranks them:
+    /// something the brain wants said, without anybody having asked.
     ///
-    /// It is the brain's line under the minibuffer — the one the countdown
-    /// already uses. A watch's whole output is a sentence, and a sentence that
-    /// only appeared on a screen somebody had to open would be a watch nobody
-    /// hears.
-    ///
-    /// ONE at a time, like the announcement beside it: the line is one line,
-    /// and a queue of notices on it would be a second notification system next
-    /// to the one this repository already has (invariant 14).
-    pub notice: Option<crate::task::Notice>,
-    /// The last relief of the disk that ran for real, if any since the brain
-    /// started.
-    ///
-    /// A FACT AND NOT A MESSAGE: the footer turns a new one into the line
-    /// under the minibuffer, in the person's language, and a rehearsal never
-    /// lands here — it changed nothing, and "room made" about it would be a
-    /// lie.
-    pub relieved: Option<crate::task::Relieved>,
+    /// The strip under the minibuffer shows the first, on the line the
+    /// countdown already uses: one line is still one line (invariant 14), and
+    /// the list is what the `+N` beside it opens.
+    pub notices: Vec<Posted<crate::module::Notice>>,
+    /// Every mark every module put on the modeline. Empty at rest.
+    pub marks: Vec<Posted<crate::module::Mark>>,
+    /// What modules told the footer, oldest first: a ring of at most
+    /// [`SAID_KEPT`]. It replaced a field that carried this for one module
+    /// alone — the disk's relief, which now tells its two events here like any
+    /// other.
+    pub events: Vec<Said>,
+    /// Every one-shot row every module has (`Kind::Once`).
+    pub items: Vec<Posted<crate::module::Item>>,
 }
 
 impl Mind {
@@ -289,6 +389,13 @@ impl Shared {
     pub fn snapshot(&self) -> (Mind, u64) {
         let state = self.locked();
         (state.mind.clone(), state.version)
+    }
+
+    /// Reads the mind through the lock, without copying it — for a question
+    /// asked often (which modules are switched on, per journal line) whose
+    /// answer is small.
+    pub fn with<T>(&self, read: impl FnOnce(&Mind) -> T) -> T {
+        read(&self.locked().mind)
     }
 
     /// Blocks until the mind is past `seen`, or until `patience` runs out.
@@ -383,7 +490,7 @@ impl Shared {
     /// task the gate is holding: a nightly sweep waiting for the memory to
     /// calm down. Queued behind it, a relief of the disk would be held by the
     /// same busy machine it exists to rescue. Only a task the gate may not
-    /// hold comes in this way (`Task::gated`), so it jumps nothing that was
+    /// hold comes in this way (`gated` false in its manifest), so it jumps nothing that was
     /// ready to run.
     pub fn queue_first(&self, task: &str) {
         let mut state = self.locked();
@@ -488,6 +595,12 @@ mod tests {
             history: Vec::new(),
             last: None,
             steps: Vec::new(),
+            calendar: true,
+            name_key: String::new(),
+            does_key: String::new(),
+            why_key: String::new(),
+            screen_generation: 0,
+            actions: Vec::new(),
         }
     }
 

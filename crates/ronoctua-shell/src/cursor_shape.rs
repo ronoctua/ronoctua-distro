@@ -34,12 +34,53 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 };
 use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
 
+/// What a surface of ours wants the pointer to look like — OUR word for it,
+/// so no other file names the protocol (`one-cursor-shape`).
+///
+/// Only the shapes a surface of ours has a reason to ask for: the arrow
+/// everywhere, and the three resize arrows over the resizer's grips (a
+/// control that resizes says so under the hand, as every border does).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Look {
+    /// The ordinary arrow.
+    #[default]
+    Arrow,
+    /// Resizing left and right: a vertical edge.
+    Across,
+    /// Resizing up and down: a horizontal edge.
+    UpDown,
+    /// Resizing both, from a bottom-right corner.
+    Corner,
+}
+
+impl Look {
+    /// The protocol's shape for it.
+    const fn shape(self) -> Shape {
+        match self {
+            Self::Arrow => Shape::Default,
+            Self::Across => Shape::EwResize,
+            Self::UpDown => Shape::NsResize,
+            Self::Corner => Shape::NwseResize,
+        }
+    }
+}
+
+/// One seat's pointer: its device, the serial of its last enter — the one
+/// the compositor accepts a shape with — and the look it was last given.
+#[derive(Debug)]
+struct Worn {
+    seat: WlSeat,
+    device: WpCursorShapeDeviceV1,
+    serial: Option<u32>,
+    look: Look,
+}
+
 /// The manager, when the compositor offers one, and one device per seat's
 /// pointer.
 #[derive(Debug, Default)]
 pub struct Shapes {
     manager: Option<CursorShapeManager>,
-    devices: Vec<(WlSeat, WpCursorShapeDeviceV1)>,
+    devices: Vec<Worn>,
 }
 
 impl Shapes {
@@ -67,17 +108,21 @@ impl Shapes {
     {
         self.lost(seat);
         if let Some(m) = self.manager.as_ref() {
-            self.devices
-                .push((seat.clone(), m.get_shape_device(pointer, qh)));
+            self.devices.push(Worn {
+                seat: seat.clone(),
+                device: m.get_shape_device(pointer, qh),
+                serial: None,
+                look: Look::Arrow,
+            });
         }
     }
 
     /// A seat's pointer went away.
     pub fn lost(&mut self, seat: &WlSeat) {
-        self.devices.retain(|(s, d)| {
-            let keep = s != seat;
+        self.devices.retain(|w| {
+            let keep = &w.seat != seat;
             if !keep {
-                d.destroy();
+                w.device.destroy();
             }
             keep
         });
@@ -85,12 +130,31 @@ impl Shapes {
 
     /// A pointer of this seat entered one of our surfaces: the plain arrow,
     /// with the serial of that enter — the compositor refuses any other.
-    pub fn entered(&self, seat: Option<&WlSeat>, serial: u32) {
+    pub fn entered(&mut self, seat: Option<&WlSeat>, serial: u32) {
         let Some(seat) = seat else {
             return;
         };
-        if let Some((_, d)) = self.devices.iter().find(|(s, _)| s == seat) {
-            d.set_shape(serial, Shape::Default);
+        if let Some(w) = self.devices.iter_mut().find(|w| &w.seat == seat) {
+            w.device.set_shape(serial, Shape::Default);
+            w.serial = Some(serial);
+            w.look = Look::Arrow;
+        }
+    }
+
+    /// The surface under this seat's pointer wants `look` where the pointer
+    /// is now: asked only when it CHANGES, with the serial of the enter that
+    /// brought the pointer in. Before any enter there is no serial, and
+    /// nothing is asked.
+    pub fn wear(&mut self, seat: Option<&WlSeat>, look: Look) {
+        let Some(seat) = seat else {
+            return;
+        };
+        if let Some(w) = self.devices.iter_mut().find(|w| &w.seat == seat)
+            && w.look != look
+            && let Some(serial) = w.serial
+        {
+            w.device.set_shape(serial, look.shape());
+            w.look = look;
         }
     }
 }

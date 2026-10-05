@@ -25,12 +25,13 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    depender de um WM externo.
 
    Exceções aprovadas pelo dono, uma a uma. São protocolos Wayland padrão (nunca patch), e cada um é
-   usado por um arquivo só (todos em `ronoctua-shell`, menos o da captura):
+   usado por um arquivo só (todos em `ronoctua-shell`, menos os dois da captura):
 
    | Protocolo | Para quê | Arquivo | Check |
    |---|---|---|---|
    | `wl_data_device` | arrastar e soltar | `carry.rs` (recebem: `surface.rs`, o rodapé; `files_window.rs`; `software_window.rs`) | — |
    | `ext-image-copy-capture-v1` | captura de tela do estúdio | `ronoctua-studio`, `screen.rs` | — |
+   | `zwlr_screencopy_v1` | a mesma captura, quando falta o de cima (2026-10-04) | `ronoctua-studio`, `screen.rs` | — |
    | `zwp_virtual_keyboard_v1` | teclado na tela (2026-09-25) | `virtual_keys.rs` | `one-virtual-keyboard` |
    | `zwlr_virtual_pointer_v1` | gestos com as mãos (2026-09-25) | `virtual_pointer.rs` | `one-virtual-pointer` |
    | `wp_cursor_shape_v1` | a seta do ponteiro (2026-09-25) | `cursor_shape.rs` | `one-cursor-shape` |
@@ -51,11 +52,17 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    `/var/lib/waydroid`) e o store, escrito pelo daemon do Nix. O suporte (Flatpak, nix-flatpak,
    AppImage, Waydroid, o índice de busca) é declarado no flake, e a sequência de atualização
    continua sem instalar nada.
+   Exceção aprovada no mesmo molde (2026-09-30): **as regras e a janela de segurança da pessoa, e os
+   containers dela**. O firewall base continua declarado; as regras que a pessoa cria ficam em
+   `/var/lib/ronoctua-security` e uma unidade declarada as aplica numa tabela nossa (`inet
+   ronoctua`); a janela de sudo sem senha é uma linha em `/run` que expira sozinha; imagens,
+   containers e volumes do Podman ficam só na home.
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
-   declarados. Exceção aprovada (2026-09-25): a linha do log do brain é dado, como o conteúdo de um
-   arquivo; a moldura em volta dela continua em chaves.
+   declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa
+   digita num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04) são
+   dado, como o conteúdo de um arquivo; a moldura em volta deles continua em chaves.
 9. **Zero valor visual escrito à mão** — cor, fonte, tamanho, espaçamento, codepoint: tudo por
    token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.)
 10. **Ícone de interface é glifo de fonte.** O superpacote de ícones é só fallback de pixmap para
@@ -71,11 +78,12 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
     espaço o muda de lugar. A coluna vai do topo até o rodapé e não o estreita: modeline, minibuffer
     e faixa de notificação ficam com a largura toda. Em qualquer tamanho, barra inclusive, ela é um
     inquilino desenhado numa faixa, nunca dock nem taskbar: não lista nem lança programas. Não
-    existe barra de cima, relógio, taskbar, menu iniciar, dock, ícone de desktop nem popup
-    flutuante; tray, notificação e expansão são a mesma superfície crescendo. Três exceções
+    existe barra de cima, taskbar, menu iniciar, dock, ícone de desktop nem popup flutuante; tray,
+    notificação e expansão são a mesma superfície crescendo, e a barra de alerta máximo (bateria
+    fraca) toma o lugar da faixa de notificação enquanto existe. Três exceções
     aprovadas: a sobreposição da captura (layer `overlay` que só existe enquanto se escolhe o que
     capturar e some antes de o arquivo ser escrito — `capture.rs`, 2026-09-26); as cortinas do
-    redimensionador de tela, ferramenta de desenvolvimento (`LEADER d r`): duas superfícies na
+    redimensionador de tela, ferramenta de desenvolvimento (`LEADER / r`): duas superfícies na
     layer `overlay`, à direita e embaixo, que só existem enquanto ele está ligado e cobrem só o que
     ele cortou (`resizer.rs`, 2026-09-27); e a linha de vida, que ocupa o lugar do rodapé só
     enquanto ele está morto.
@@ -90,7 +98,8 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 18. **Nome, comentário, mensagem e commit são em inglês** — arquivo, comando, check, chave,
     `[[bin]]`, identificador (inclusive `let`, `fn` e parâmetro), `//`, `#`, docstring, `assert`,
     `bail!`, `.context`, saída de check e ajuda de linha de comando (cobra `english-names`). pt-BR
-    só onde o valor existe em todos os idiomas: os seis documentos, o valor das chaves nos `.ftl`,
+    só onde o valor existe em todos os idiomas: os seis documentos e o `why.md` de cada módulo do
+    brain, o valor das chaves nos `.ftl`,
     as tags de busca e o léxico. Onde cabe um idioma só, ele é o inglês: descrição de unidade,
     `.desktop`, manifesto da extensão, alias do shell, `Job::trouble`.
 19. **Tudo responde ao ponteiro.** O que o teclado alcança, o ponteiro alcança: selecionar, abrir,
@@ -118,7 +127,7 @@ nix fmt                      formata a árvore (Nix e Rust); nix fmt -- --check 
 ```
 
 Tudo é app do flake — nunca justfile nem Makefile. Um passo que precise de instrução escrita
-deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~22,8 GiB) ou
+deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~26,7 GiB) ou
 `"minimal"` (~6,9 GiB), com a tabela em `nix/modules/profile.nix`.
 
 ## Como o sistema é montado
@@ -130,7 +139,7 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
 - **`ronoctua-shell`**: o rodapé (`surface.rs`, tipo `Footer`) e todas as janelas do sistema. É
   também a linha de comando (`ronoctua-shell leader`, `command <id>`, `capture`, `lifeline`…).
 - **Daemons de usuário**, para o que tem de sobreviver ao rodapé: `ronoctua-transfers` (a fila),
-  `ronoctua-brain` (decide quando a máquina se mantém: atualização, limpeza de cache, vigias),
+  `ronoctua-brain` (o que a máquina faz sozinha, em módulos — veja abaixo),
   `ronoctua-player` e `ronoctua-studio` (a câmera). Falam com o shell por socket, um JSON por linha,
   e nunca um delta: cada mensagem vai inteira (o player manda duas, o estado e o contorno da fila).
   O que é grande e quase ninguém mostra — a folha de um arquivo, a página de uma busca — nunca vai no
@@ -164,9 +173,10 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   conteúdo vira recursão — a shell já morreu duas vezes assim, de stack overflow e sem diagnóstico.
   O que a região sabe de si é guardado onde foi medido (cobra `the-footer-does-not-ask-itself`, que
   também recusa ciclos novos entre métodos do `Footer`).
-- **Dois modos ocultos** (`hidden.rs`, gravados em `modeline.json`): `LEADER LEADER` esconde
-  modeline e minibuffer e faz o que abre empurrar as janelas; `LEADER Alt LEADER` põe tudo por
-  cima delas; o mesmo gesto as devolve. O que empurra veste a página da mesa e fica sobre a cor
+- **Dois modos ocultos** (`hidden.rs`, gravados em `modeline.json`): um toque de `Ctrl` na raiz da
+  leader gira normal → empurra → cobre (`hidden::next_mode`, `footer-bars-cycle`). Empurrando,
+  modeline e minibuffer somem e o que abre empurra as janelas; cobrindo, tudo vai por cima delas.
+  O que empurra veste a página da mesa e fica sobre a cor
   dela, opaca (texto sobre alfa 0 sai com franja branca); o que sobrepõe leva o véu da página
   (`surface.veil`); faixa, cérebro e teclado ficam com o deles. A última linha de pixels da tela
   revela as barras, o minibuffer aparece sempre que tem o que dizer, e a lista da leader aberta por
@@ -197,8 +207,8 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   desenham as mesmas linhas. Na árvore da leader, a sequência dobrada abre no rodapé e a terminada
   em `w` abre na janela (`s n n` / `s n w`), e o código lê essa convenção: o grupo que tem as duas
   vira uma tecla só (`leader::folds`), que no conjunto padrão abre o rodapé (`LEADER s n`) e no
-  `LEADER Alt` a janela; o `LEADER Ctrl` é a árvore inteira. O `the_collapsed_groups_are_these`
-  fixa os grupos que dobram.
+  `LEADER LEADER` a janela; o `LEADER LEADER LEADER` é a árvore inteira. O
+  `the_collapsed_groups_are_these` fixa os grupos que dobram.
 - **As duas portas fazem as mesmas coisas** (regra do dono, 2026-09-27): tudo o que a janela
   suporta o rodapé suporta, e vice-versa — cada nível, cada tecla, colar, soltar arquivo e
   **digitar** (buscar, responder uma pergunta, senha, caminho, nome). Nenhuma porta manda a pessoa
@@ -206,7 +216,9 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   falha) é dito nela. Uma janela pergunta com `Ui::ask` (a `line::Line` do minibuffer, no
   cabeçalho; a resposta chega em `Content::answered`), cola com `Ui::paste` e abre um programa com
   `Ui::launch`/`Ui::launch_entry`, tudo fora do laço; as duas portas colam a seleção viva
-  (`pasting.rs`), nunca o histórico.
+  (`pasting.rs`), nunca o histórico. Uma mensagem sai como no rodapé, com o prazo da classe dela
+  (`Ui::say`, `Ui::say_for`; `Ui::hold` só para um estado que continua verdadeiro), nunca escrita
+  direto em `Ui::message` (cobra `door-messages-expire`).
 - Toda porta ouve todos os assentos e todos os teclados (`PerSeat` e `Seats::switch_to` em
   `seats.rs`; cobram `every-door-hears-every-seat` e `every-door-hears-every-keyboard`), segue a
   escala da tela em que está (`hidpi.rs`; cobra `every-window-knows-its-scale`) e repete teclas
@@ -220,6 +232,20 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   <espaço>`): quem toma um espaço encerra quem estava nele, e um inquilino aberto em outro espaço
   sai de onde estava. Fora da tela a coluna fica estacionada (`Shell::Parked`): o processo e o
   estado ficam, a superfície não.
+
+### Módulos do brain
+
+- Uma funcionalidade do brain é uma pasta, `crates/ronoctua-brain/modules/<id>/`: `manifest.nix`
+  (o que é, agenda, unidades, prefixos de chave, glifos, marcas, avisos, ações, eventos, `uses`,
+  `namedBy`), `module.rs` (`pub fn new(birth) -> impl Module`), `module.nix`, `i18n/<idioma>.ftl`,
+  `checks.nix` e `why.md`, e opcionalmente `tables.nix`. O id é o nome da pasta, e o
+  `nix/brain-modules.nix` recusa pasta incompleta e campo desconhecido.
+- Núcleo, shell e buffer desenham marcas, avisos, páginas, ações e eventos de qualquer módulo sem
+  nomeá-lo; nenhum arquivo de fora cita o id, uma chave, um glifo, uma unidade ou uma ação de um
+  módulo, salvo o que o `namedBy` dele lista (cobra `brain-modules-are-sealed`).
+- Uma marca abre um comando de um jeito só: `MarkId::opening(<comando>)`.
+- Preferência se resolve sobre o que o módulo declarou (`Prefs::of_module`), e toda mudança é um
+  `Ask::Set` aplicado pelo núcleo.
 
 ### A fronteira com o compositor
 
@@ -338,6 +364,20 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | arquivos de preferência | `ronoctua-store`, sobre o `ronoctua-xdg` |
 | perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`) | `ronoctua-software` (cobra `one-software-boundary`) |
 | o Chrome em execução: a extensão, o native messaging, o `Preferences` de um perfil e as janelas quiosque | `ronoctua-browser` |
+| o consentimento por host (`consent.json`) e o `Pass` de toda requisição | `ronoctua-consent` (cobram `the-network-waits-for-consent` e `network-asks-with-a-pass`) |
+| MyMemory, DeepL, LibreTranslate, o WordNet offline e o Wiktionary | `ronoctua-words` (cobra `words-ask-with-a-pass`) |
+| Wikipedia, DuckDuckGo, SearXNG e Brave Search | `ronoctua-websearch` |
+| o super-índice do fast-access (tantivy) | `ronoctua-index` |
+| o journal do systemd (`journalctl --follow`) | `ronoctua-journal` |
+| podman | `ronoctua-containers` (cobra `one-podman-boundary`) |
+| PAM | `ronoctua-pam` (cobra `one-pam-boundary`) |
+| systemd-resolved (`resolve1`) | `ronoctua-resolve` (cobra `one-resolve-boundary`) |
+| git | `ronoctua-git` (cobra `one-git-driver`) |
+| 7zz, bsdtar e unrar | `ronoctua-archive` (cobra `one-archive-driver`) |
+| `sudo` (a porta do sudo), o firewall da pessoa e as checagens online da segurança | `ronoctua-security` (cobra `sudo-door-is-one`) |
+| o repositório cifrado da configuração da pessoa | `ronoctua-belongings` |
+| o YouTube por HTTP simples (feeds e miniaturas) e o catálogo SQLite | `ronoctua-video-metrics` (cobra `one-sqlite-boundary`) |
+| as taxas de câmbio do BCE | `ronoctua-calc` (`rates.rs`; cobra `rates-ask-with-a-pass`) |
 
 ## Regras de interface
 
@@ -373,12 +413,16 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   `ValueSetting` (cobra `labels-say-what-they-are`).
 - O cursor é uma cor (`text.here.*`): o rótulo leva o acento e o valor continua dizendo se a linha
   age. `Row::focused` não é lido por porta nenhuma — preenchê-lo não desenha cursor (cobra
-  `the-cursor-is-a-colour`). A única exceção é o gerenciador de arquivos, cujo cursor é a faixa
-  `surface.selection` mais a régua acesa (`chrome::divider_lit`).
+  `the-cursor-is-a-colour`). A exceção é o gerenciador de arquivos, cujo cursor é a faixa
+  `surface.selection` mais a régua acesa (`chrome::divider_lit`), estendida a toda GRADE: a célula
+  sob o ponteiro acende sozinha, e a célula do cursor veste `surface.selection`
+  (`chrome::cell_selection`) — a cor de um emoji está dentro do glifo. Qual célula está sob o
+  ponteiro é uma conta só, lida pela pintura e pelo clique: `chrome::in_cell` numa linha de células,
+  `chrome::Shelves` numa grade de figuras (cobra `a-grid-cell-is-lit-alone`).
 - Rótulo e valor têm uma aritmética só (`chrome::field_pair`): o valor começa na coluna
   `space.view.labelCells`, limitada à metade da linha. Uma seção escrita inteira (as páginas do
-  player) alinha os valores dela depois do rótulo mais largo e quebra o rótulo que não cabe
-  (`chrome::section_column`, `chrome::aligned_pair`).
+  player) alinha os valores dela depois do rótulo mais largo e quebra o rótulo e o valor que não
+  cabem (`chrome::section_column`, `chrome::aligned_pair`).
 - Título de seção usa `text.heading`; `text.group` é só o submenu da leader (cobra
   `a-heading-is-not-a-submenu`). Título tem o tamanho do corpo: hierarquia é cor e ar
   (`chrome::AIR` antes de todo título), nunca tamanho.
@@ -396,7 +440,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 
 - **Um controle é pego onde é desenhado.** Uma função diz onde ele ficou, e a pintura e o acerto do
   ponteiro leem a mesma resposta (`paint::bar_box`; cobram `a-bar-is-grabbed-where-it-is-drawn` e
-  `the-pointer-lights-what-the-click-takes`).
+  `the-pointer-lights-what-the-click-takes`). Numa linha de várias linhas, o controle é pego só na
+  linha em que foi desenhado (`player_rows::controls_under`).
 - A coluna da barra é dela enquanto ela é desenhada: toda pintura de barra anota a trilha
   (`canvas.bar` nas portas, `bars_drawn.record` no rodapé), o ponteiro sobre a trilha sai das linhas
   e as faixas param onde a trilha começa (`bars.rs`; cobra `a-bar-owns-its-column`).
@@ -427,7 +472,14 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   iguais.
 - Opção que ainda não faz nada diz isso na tela, em vez de parecer funcionar.
 - Nada que o sistema faça sozinho pode perguntar: não há agente polkit na sessão, toda chamada leva
-  `auth.no_user_interaction`, e nenhuma ação automática usa `sudo` ou `pkexec`.
+  `auth.no_user_interaction`, e nenhuma ação automática usa `sudo` ou `pkexec`. Um gesto da pessoa
+  que precisa de root passa pela porta do sudo, e só por ela: a senha digitada na nossa pergunta
+  secreta vai pelo stdin a `sudo -S` com o helper do store (`ronoctua_security::authority::run`,
+  feature `authority`, só do shell; cobra `sudo-door-is-one`).
+- **Nada fala com a rede antes de a pessoa permitir o host.** Toda requisição leva um `Pass` que só
+  o `ronoctua-consent` cunha, a partir do `consent.json`; sem ele, a porta desenha a linha de
+  consentimento (`consent_rows`) e não pergunta. Uma fonte que a pessoa configurou é o próprio
+  consentimento, e é gravada lá como qualquer outro.
 - Um evento do sistema (privacidade, Bluetooth e redes, carregador, programa instalado) é dito no
   minibuffer (`events.rs`), e nem a primeira leitura de cada fonte nem uma leitura que não respondeu
   é evento. Ele vira notificação só quando a linha está ocupada ou a fila dela já tem quatro
@@ -439,16 +491,21 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - Todo comando tem id `kebab-case` e chave `cmd-<id>`; o registro recusa os dois divergirem. Os
   feitos do compositor são `wm-<nome>`. Uma sequência não pode ser comando e prefixo ao mesmo tempo
   (`keymap-no-collision` derruba o build). `LEADER :` alcança qualquer comando pelo nome.
-- Grupos da leader: `s` é o sistema (`s q`, as saídas), `w` é janela e buffer (são a mesma coisa,
-  inv. 4), `m` é miscelânea — o que não pertence a outro grupo, e é isso que deixa `c` ser o
-  clipboard sozinho —, `d` é desenvolvimento (ferramentas para quem constrói a distro; hoje só
-  `d r`, o redimensionador de tela) e `,` é o grupo do buffer em foco. O relance (`world-glance`) é
-  `g`. Numa janela de buffer, a tecla local `, r` é o acorde `C-r`; letra sozinha é texto.
-- **Três conjuntos**, escolhidos por um toque (apertar e soltar sozinho) logo depois da leader, só
-  na raiz: nada é o padrão, `Alt` o das janelas e `Ctrl` a árvore inteira (`leader::Set`,
-  `leader::Tap`), também pelo teclado na tela; botão, roda ou dedo no meio fazem acorde. A frase que ensina uma sequência a tira de `leader::taught_keys`, que parte do
-  padrão (`t`, `ALT .`, `CTRL s b y`). A constante ao lado do binding é da árvore inteira: colada
-  depois de `crate::leader()`, ela ensina, sob um grupo dobrado, uma tecla que faz outra coisa.
+- Grupos da leader: `s` é o sistema (`s q` as saídas, `s e` a segurança, `s o` os containers, `s v`
+  os pertences, `s r` o rodapé), `w` é janela e buffer (são a mesma coisa, inv. 4), `m` é
+  miscelânea — o que não pertence a outro grupo (`m i`, os ícones) —, `c` é o clipboard (`c c`,
+  `c w`), `d` é o acesso rápido (`LEADER SPC` o abre flutuando), `=` a calculadora, `v` o
+  video-metrics, `/` é desenvolvimento (ferramentas para quem constrói a distro; hoje só `/ r`, o
+  redimensionador de tela) e `,` é o grupo do buffer em foco. O relance (`world-glance`) é `g`.
+  Numa janela de buffer, a tecla local `, r` é o acorde `C-r`; letra sozinha é texto.
+- **Três conjuntos**, e a LEADER repetida na raiz anda por eles: `LEADER` é o padrão, `LEADER
+  LEADER` o das janelas e `LEADER LEADER LEADER` a árvore inteira, e a seguinte volta ao padrão
+  (`leader::Set::next`). Um toque de `Ctrl` (apertar e soltar sozinho, `leader::Tap`) na raiz gira
+  os modos das barras; `Alt` não escolhe nada. Botão, roda ou dedo no meio fazem acorde. A frase
+  que ensina uma sequência a tira de `leader::taught_keys`, que parte do padrão (`LEADER t`,
+  `LEADER LEADER .`, `LEADER LEADER LEADER s b y`). A constante ao lado do binding é da árvore
+  inteira: colada depois de `crate::leader()`, ela ensina, sob um grupo dobrado, uma tecla que faz
+  outra coisa.
 - Comando de uma vista usa `C-`, nunca `M-`: `M-` é a família dos acordes do compositor e não chega
   à janela.
 - O layout de teclado mora num lugar só (`nix/keyboard-xkb.nix`). O xkb não recusa layout que não
@@ -488,6 +545,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   legível entre as duas chamadas (cobra `stream-key-is-never-an-argument`).
 - Processo filho que segura um dispositivo (microfone, câmera) roda sob `setpriv --pdeathsig KILL`,
   além da guarda de `Drop`.
+- Todo filho que o rodapé sobe (um programa, uma porta, uma coluna) passa por
+  `watchdog::unshared`: nasce sem as variáveis do watchdog do rodapé, que o `NotifyAccess=main`
+  recusaria.
 - Grandeza que cruza uma fronteira leva a unidade no nome ou no tipo.
 - Fallback silencioso precisa de check: valor desconhecido é recusado, não vira um padrão plausível.
 - Toda regra polkit nossa é estreita — uma ação, os verbos, uma unidade, um usuário — e tem check
@@ -721,8 +781,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   disparar uma bateria, porque o Nix a fotografa na avaliação. Diga no relatório o que rodou e o
   que não rodou.
 - **Clippy nos buffers é à mão**, porque o `cargo clippy --workspace` não os alcança:
-  `cd buffers/<id> && cargo clippy --all-targets --target wasm32-wasip2 -- -D warnings`. `glyphs`,
-  `lucide` e `unicode` precisam de variáveis de build e falham fora do Nix; isso não é lint.
+  `cd buffers/<id> && cargo clippy --all-targets --target wasm32-wasip2 -- -D warnings`.
 - O perfil `[profile.loop]` do `Cargo.toml` é o do laço (`.#dev`, `rust.tests`, `rust.clippy`) e
   troca o LTO por velocidade: uma linha editada no `ronoctua-shell` custa 19 s, contra 148 s em
   `release`.
@@ -744,7 +803,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 ```
 assets/          o que é declarado à mão: tokens/, i18n/ (languages.nix + um .ftl por idioma),
                  themes/ (as sementes), icons/, lexicon/, e as tabelas de cada feature
-                 (compositor-deeds.nix, notifications.nix, updates.nix, cache.nix, world.nix…)
+                 (compositor-deeds.nix, notifications.nix, cache.nix, world.nix…)
 crates/          o workspace Rust (grafo: docs/ARCHITECTURE.md, seção "Grafo de crates")
 buffers/         os componentes wasip2, um workspace Cargo próprio cada
 extension/       a extensão do navegador
@@ -757,13 +816,15 @@ docs/            ARCHITECTURE, PENDING, DEVELOPMENT, INSTALL
 
 ## Documentação
 
-Seis documentos, em pt-BR; todo o resto do repositório é em inglês (inv. 18).
+Seis documentos, em pt-BR, mais o `why.md` de cada módulo do brain, que viaja com a pasta dele;
+todo o resto do repositório é em inglês (inv. 18).
 
 - `AGENTS.md` — este, o único arquivo de instruções para agentes (não existe `CLAUDE.md`). Guarda só
   o que vale para qualquer trabalho: invariantes, estrutura, regras transversais, armadilhas e modo
   de trabalhar. O detalhe de uma feature vai para o `docs/ARCHITECTURE.md`. Corte antes de
   acrescentar.
-- `docs/ARCHITECTURE.md` — o porquê de cada decisão, para ninguém refazê-la. Não é changelog.
+- `docs/ARCHITECTURE.md` — o porquê de cada decisão, para ninguém refazê-la. Não é changelog. O de
+  um módulo do brain mora no `why.md` dele, e o `ARCHITECTURE.md` aponta para lá.
 - `docs/PENDING.md` — o que falta. Ao concluir um item, remova-o; se ele mudou como o sistema
   funciona, registre isso no `ARCHITECTURE.md` (ou aqui, se for regra para todo trabalho).
 - `docs/DEVELOPMENT.md` (ambiente) e `docs/INSTALL.md` (disco) — não listam atalhos: a leader os

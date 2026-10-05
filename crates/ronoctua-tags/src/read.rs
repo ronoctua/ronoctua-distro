@@ -170,8 +170,26 @@ pub(crate) fn matroska_tags(location: &Path, tools: &Tools) -> Result<matroska::
     matroska::parse_tags(&text)
 }
 
-fn matroska_view(location: &Path, tools: &Tools) -> MatroskaView {
-    let identified = run(
+/// `mkvextract`'s chapters of a file, as the XML `mkvpropedit --chapters`
+/// takes back — empty for a file with none.
+pub(crate) fn matroska_chapters(location: &Path, tools: &Tools) -> Result<String, Why> {
+    tools.path(Program::Mkvextract)?;
+    let scratch = crate::run::Scratch::new()?;
+    let xml = scratch.path("chapters.xml");
+    let mut args: Vec<OsString> = vec![location.as_os_str().to_owned(), OsString::from("chapters")];
+    args.push(xml.as_os_str().to_owned());
+    run(tools, Program::Mkvextract, &args, Limits::READ, None, None)?
+        .ok(Program::Mkvextract, &[0, 1])?;
+    match std::fs::read(&xml) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| Why::Unreadable),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(_) => Err(Why::Unreadable),
+    }
+}
+
+/// `mkvmerge -J`'s view of a file: its title, attachments and tracks.
+pub(crate) fn identified(location: &Path, tools: &Tools) -> Result<matroska::Identified, Why> {
+    run(
         tools,
         Program::Mkvmerge,
         &[OsString::from("-J"), location.as_os_str().to_owned()],
@@ -181,7 +199,10 @@ fn matroska_view(location: &Path, tools: &Tools) -> MatroskaView {
     )
     .and_then(|o| o.ok(Program::Mkvmerge, &[0, 1]))
     .and_then(|bytes| matroska::parse_identified(&bytes))
-    .ok();
+}
+
+fn matroska_view(location: &Path, tools: &Tools) -> MatroskaView {
+    let identified = identified(location, tools).ok();
     MatroskaView {
         tags: matroska_tags(location, tools),
         identified,
@@ -223,6 +244,13 @@ pub(crate) fn writer_can(writer: Result<Writer, Why>, tools: &Tools) -> Can {
 /// [`Why::Gone`] and [`Why::NotAFile`]. Every other failure is an
 /// [`Unread`] on the sheet.
 pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
+    sheet_within(path, tools, LOFTY_MOST_BYTES)
+}
+
+/// [`sheet`], with lofty trusted with files up to `lofty_most` bytes —
+/// [`LOFTY_MOST_BYTES`] but in a test, which cannot make a file of half a
+/// gibibyte to see what is offered past it.
+pub(crate) fn sheet_within(path: &Path, tools: &Tools, lofty_most: u64) -> Result<Sheet, Why> {
     let (location, meta) = located(path)?;
     let stamp = Stamp::of(&meta);
     let mut unread = Vec::new();
@@ -291,19 +319,30 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
     // ---- who may write what -------------------------------------------
     let mut fields_can = writer_can(container.fields_writer(), tools);
     let mut cover_can = writer_can(container.cover_writer(), tools);
+    let too_big = Why::TooBig {
+        bytes: meta.len(),
+        most_bytes: lofty_most,
+    };
+    // AN MP4 PAST LOFTY'S CEILING: its fields go through the remux
+    // (`write::big_mp4_by_remux`) — the ones its muxer keeps — and its
+    // cover and its tags by their own names stay what the ceiling says.
+    let big_mp4 = container == Container::Mp4 && opened.is_some() && meta.len() > lofty_most;
     if container.lofty() {
         let refusal = if opened.is_none() {
             Some(Why::Unreadable)
-        } else if meta.len() > LOFTY_MOST_BYTES {
-            Some(Why::TooBig {
-                bytes: meta.len(),
-                most_bytes: LOFTY_MOST_BYTES,
-            })
+        } else if meta.len() > lofty_most {
+            Some(too_big.clone())
         } else {
             None
         };
         if let Some(why) = refusal {
-            fields_can = Can::No(why.clone());
+            fields_can = if big_mp4 && opened.as_ref().is_some_and(native::mp4_remux_drops) {
+                Can::No(Why::RemuxWouldDrop)
+            } else if big_mp4 {
+                writer_can(Ok(Writer::Remux), tools)
+            } else {
+                Can::No(why.clone())
+            };
             cover_can = Can::No(why);
         }
     }
@@ -332,7 +371,7 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
                 | crate::sheet::TagFormat::Mp4
         )
     {
-        cover_can = Can::No(Why::NoPlace);
+        cover_can = Can::No(Why::NoPicturesIn { format });
     }
 
     // ---- fields ------------------------------------------------------------
@@ -372,7 +411,12 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
     let can_of = |field: Field| -> Can {
         match (&fields_can, primary) {
             (Can::Yes(Writer::Lofty), Some(format)) if !native::has_place(format, field) => {
-                Can::No(Why::NoPlace)
+                Can::No(Why::NoFieldIn { field, format })
+            }
+            (Can::Yes(Writer::Remux), Some(format))
+                if big_mp4 && !crate::write::remux_keeps_in_mp4(field) =>
+            {
+                Can::No(Why::NoFieldIn { field, format })
             }
             (can, _) => can.clone(),
         }
@@ -405,7 +449,9 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
             let can = if writable {
                 cover_can.clone()
             } else {
-                Can::No(Why::NoPlace)
+                Can::No(Why::TagReadOnly {
+                    format: tag.format(),
+                })
             };
             covers.extend(native::covers(tag, &can));
         }
@@ -460,7 +506,7 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
                 can: if front || !container.matroska() {
                     cover_can.clone()
                 } else {
-                    Can::No(Why::NoPlace)
+                    Can::No(Why::OnlyTheFrontCover)
                 },
             });
         }
@@ -469,22 +515,30 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
     // ---- the rest ----------------------------------------------------------
     let technical = probed.as_ref().map(probe::technical).unwrap_or_default();
     let streams_can = writer_can(container.streams_writer(), tools);
-    let streams = probed
+    let mut streams = probed
         .as_ref()
         .map(|p| {
             probe::streams(p, |s| {
                 if s.kind == Some(StreamKind::Attachment) || s.attached {
-                    Can::No(Why::NoPlace)
+                    Can::No(Why::AttachmentIsNotAStream)
                 } else {
                     streams_can.clone()
                 }
             })
         })
         .unwrap_or_default();
+    if let Some(uids) = mkv
+        .as_ref()
+        .and_then(|m| m.identified.as_ref())
+        .map(|i| i.tracks.as_slice())
+    {
+        matroska::name_tracks(&mut streams, uids);
+    }
     let chapters = probed
         .as_ref()
         .map(|p| p.chapters.clone())
         .unwrap_or_default();
+    let chapters_can = writer_can(container.chapters_writer(), tools);
 
     let mut other: Vec<Tag> = Vec::new();
     if let Some(o) = &opened {
@@ -493,13 +547,21 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
         for t in tags {
             let writable = o.file_type.tag_support(t.tag_type()).is_writable();
             let mut rows = native::listing(t);
-            if !writable || !fields_can.can() {
+            // A BIG MP4'S ATOMS by their own names are lofty's to write, and
+            // lofty does not take a file that size.
+            if big_mp4 {
+                for r in &mut rows {
+                    if r.can.can() {
+                        r.can = Can::No(too_big.clone());
+                    }
+                }
+            } else if !writable || !fields_can.can() {
                 for r in &mut rows {
                     if r.can.can() {
                         r.can = if writable {
                             fields_can.clone()
                         } else {
-                            Can::No(Why::NoPlace)
+                            Can::No(Why::TagReadOnly { format: t.format() })
                         };
                     }
                 }
@@ -508,7 +570,16 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
         }
     }
     if let Some(MatroskaView { tags: Ok(tags), .. }) = &mkv {
-        other.extend(matroska::listing(tags, &fields_can));
+        // A TRACK'S TAG is aimed at its track by the UID `mkvmerge -J`
+        // names it by.
+        let track_can = if fields_can.can() && !tools.has(Program::Mkvmerge) {
+            Can::No(Why::Missing {
+                program: Program::Mkvmerge,
+            })
+        } else {
+            fields_can.clone()
+        };
+        other.extend(matroska::listing(tags, &fields_can, &track_can));
     }
     // FFPROBE'S AND EXIFTOOL'S ROWS say why they are not written, in the
     // file's own terms: where a remux writes the container, ffprobe's rows
@@ -545,7 +616,9 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
     let adding = match container.fields_writer() {
         Ok(Writer::Lofty) => Adding {
             origin: primary.map(|format| Origin::Lofty { format }),
-            can: if primary.is_some() {
+            can: if big_mp4 {
+                Can::No(too_big)
+            } else if primary.is_some() {
                 fields_can.clone()
             } else {
                 Can::No(fields_can_or(&fields_can, Why::Unreadable))
@@ -554,6 +627,7 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
         Ok(Writer::Matroska) => Adding {
             origin: Some(Origin::Matroska {
                 target: crate::sheet::Target::Global,
+                track: None,
             }),
             can: fields_can.clone(),
         },
@@ -578,6 +652,7 @@ pub fn sheet(path: &Path, tools: &Tools) -> Result<Sheet, Why> {
         technical,
         streams,
         chapters,
+        chapters_can: Some(chapters_can),
         other,
         unread,
         cover_file: None,

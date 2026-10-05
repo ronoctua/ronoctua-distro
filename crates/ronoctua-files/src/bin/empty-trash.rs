@@ -36,6 +36,7 @@ fn main() -> std::process::ExitCode {
     let mut report: Option<PathBuf> = None;
     let mut days = policy::TRASH_DAYS;
     let mut home: Option<PathBuf> = None;
+    let mut media: Option<PathBuf> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -45,6 +46,7 @@ fn main() -> std::process::ExitCode {
             "--execute" => execute = true,
             "--report" => report = args.next().map(PathBuf::from),
             "--data-home" => home = args.next().map(PathBuf::from),
+            "--media" => media = args.next().map(PathBuf::from),
             "--days" => {
                 let Some(n) = args.next().and_then(|n| n.parse::<u16>().ok()) else {
                     eprintln!("ronoctua-empty-trash: --days wants a whole number of days");
@@ -66,6 +68,14 @@ fn main() -> std::process::ExitCode {
     // THE ROOTS COME FROM THE ENVIRONMENT ONLY WHEN NOBODY NAMED ONE, which is
     // `ronoctua_xdg`'s rule: a program that finds `$XDG_DATA_HOME` on its own is
     // one a test cannot stop from emptying the trash of whoever ran it.
+    //
+    // AND THE SAME RULE FOR THE DRIVES: a run that named its data home is a
+    // run that names its drives too, or has none.
+    let media = media.or_else(|| {
+        home.is_none()
+            .then(|| std::env::var_os("USER").map(|u| Path::new("/run/media").join(u)))
+            .flatten()
+    });
     let data_home = home.or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from));
     let home_dir = std::env::var_os("HOME").map(PathBuf::from);
     let Some(bin) = Bin::of_home(data_home.as_deref(), home_dir.as_deref()) else {
@@ -84,23 +94,45 @@ fn main() -> std::process::ExitCode {
     let now = began
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
-    // A REHEARSAL COUNTS AND TAKES NOTHING, down ONE path, so it cannot answer
-    // differently from the run.
-    let took = bin.expire(now, days, &zone, execute);
+    // EVERY MOUNTED DRIVE'S OWN TRASH TOO, by the same number. A file thrown
+    // away on a stick went back ONTO the stick (`Bin::of_volume`), and its
+    // space is only free once that trash lets it go; the manager says so, and
+    // this is what makes the sentence true. Only a bin that is THERE: a drive
+    // nobody threw anything away on is not given one.
+    let uid = rustix::process::getuid().as_raw();
+    let bins: Vec<Bin> = std::iter::once(bin)
+        .chain(
+            media
+                .as_deref()
+                .map(ronoctua_files::trash::volumes_under)
+                .unwrap_or_default()
+                .iter()
+                .map(|top| Bin::of_volume(top, uid))
+                .filter(|b| b.root.is_dir()),
+        )
+        .collect();
+    for bin in &bins {
+        // A REHEARSAL COUNTS AND TAKES NOTHING, down ONE path, so it cannot
+        // answer differently from the run.
+        let took = bin.expire(now, days, &zone, execute);
+        println!(
+            "{} {} entries ({}), kept {}, {} unanswerable — {}",
+            if execute { "took" } else { "would take" },
+            took.taken,
+            in_units(took.bytes),
+            took.kept,
+            took.refused,
+            bin.files().display()
+        );
+    }
     let ended = SystemTime::now();
-
     println!(
-        "{} {} entries ({}), kept {}, {} unanswerable, in {:.1}s — {}",
-        if execute { "took" } else { "would take" },
-        took.taken,
-        in_units(took.bytes),
-        took.kept,
-        took.refused,
+        "{} trash folders in {:.1}s",
+        bins.len(),
         ended
             .duration_since(began)
             .unwrap_or_default()
             .as_secs_f64(),
-        bin.files().display()
     );
     if let Some(at) = &report {
         write_sheet(at, began, Some(ended));
@@ -113,6 +145,8 @@ ronoctua-empty-trash — throw away what has been in the trash long enough
 
   --days <n>        how long is long enough (default: from assets/cache.nix)
   --data-home <dir> where the trash is (default: $XDG_DATA_HOME)
+  --media <dir>     where drives are mounted, each with its own trash
+                    (default: /run/media/$USER, unless --data-home is given)
   --execute         actually delete; without it, count and take nothing
   --report <file>   write the brain's JSON sheet here
   --help

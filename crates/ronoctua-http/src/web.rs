@@ -38,10 +38,24 @@
 //! compressed body where it expects JSON — and every other coding is refused
 //! ([`Kind::Coding`]) rather than passed on as if it were the body.
 //!
+//! # A request carries the person's consent
+//!
+//! Nothing in this distro asks a host before the person let it
+//! (`ronoctua-consent`). [`request_let`] takes the proof — a
+//! [`ronoctua_consent::Pass`], which only that crate mints — and refuses a
+//! first address on any other host; its redirects follow the rule below, as
+//! any request's do. [`request`], which takes none, is kept for the callers
+//! that were asking before the rule existed (the person's programs, the
+//! queue, the player's lookups and directories, which carry their own consent
+//! or ask an address the person typed); `network-asks-with-a-pass` refuses a
+//! new one.
+//!
 //! # Every function that sends blocks
 //!
 //! On the network, for up to [`crate::tls::PATIENCE`] per hop. Call it on a
-//! THREAD, never on a drawing one.
+//! THREAD, never on a drawing one — and hand it an [`Abort`] when a person
+//! may be done with the answer before it comes: aborting shuts the socket,
+//! and the blocked read ends at once.
 
 use std::borrow::Cow;
 use std::io::Read as _;
@@ -50,6 +64,8 @@ use std::time::Duration;
 use url::Url;
 
 use crate::{Call, Reply};
+
+pub use crate::tls::Abort;
 
 /// How many redirects a request may follow when its caller does not say.
 ///
@@ -194,6 +210,8 @@ pub struct Ask<'a> {
     pub patience: Duration,
     /// How many redirects may be followed.
     pub hops: usize,
+    /// What stops it from another thread, when anything may ([`Abort`]).
+    pub abort: Option<&'a Abort>,
 }
 
 impl<'a> Ask<'a> {
@@ -211,7 +229,16 @@ impl<'a> Ask<'a> {
             most: crate::tls::MOST,
             patience: crate::tls::PATIENCE,
             hops: MOST_HOPS,
+            abort: None,
         }
+    }
+
+    /// The same, stopped when `abort` is: its socket is shut, and the request
+    /// answers [`Kind::Failed`].
+    #[must_use]
+    pub const fn abortable(mut self, abort: &'a Abort) -> Self {
+        self.abort = Some(abort);
+        self
     }
 
     /// The same, carrying these headers.
@@ -275,6 +302,7 @@ impl std::fmt::Debug for Ask<'_> {
             .field("coding", &self.coding)
             .field("most", &self.most)
             .field("hops", &self.hops)
+            .field("abortable", &self.abort.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -317,8 +345,395 @@ pub struct Got {
 pub fn request(ask: &Ask<'_>) -> Result<Got, Error> {
     let most = ask.most.min(crate::tls::MOST_EVER);
     walk(ask, &mut |target, call| {
-        crate::tls::fetch(&target.host, target.port, call, most)
+        crate::tls::fetch_abortable(&target.host, target.port, call, most, ask.abort)
     })
+}
+
+/// [`request`], asking a host the person let: `pass` must be for the host of
+/// the FIRST address ([`upgraded`] first, as the walk does). The redirects
+/// after it follow [`next_hop`]'s rule — a pass lets the question, and where
+/// the host sends it is the host's answer.
+///
+/// # What leaves the pass's host
+///
+/// Only the address the host itself named. The caller's headers (a key in
+/// `Authorization`, most often) are sent to the pass's host and to no other,
+/// and a body — which carries the person's text, and sometimes a key — is
+/// never carried to another host: a 307 or 308 that would take it there is
+/// refused ([`Kind::Invalid`]) rather than followed. The person let one
+/// host; a redirect is not consent for the next.
+///
+/// # Errors
+///
+/// [`Kind::Invalid`] when the first address is not on the pass's host (or has
+/// none) — nothing is sent — or when a redirect would carry the body to
+/// another host; and every error of [`request`].
+pub fn request_let(pass: &ronoctua_consent::Pass, ask: &Ask<'_>) -> Result<Got, Error> {
+    let most = ask.most.min(crate::tls::MOST_EVER);
+    request_let_over(pass, ask, &mut |target, call| {
+        crate::tls::fetch_abortable(&target.host, target.port, call, most, ask.abort)
+    })
+}
+
+/// A file a PAGE NAMED — a manifest, an icon — asked on the pass of the host
+/// the page was read from (`page`), wherever the page put the file: the
+/// page's answer, as a redirect is. The person let the page's host; nobody
+/// could let the host of a file the page had not named yet, and a page that
+/// keeps its icons on a CDN is still the page the person asked for.
+///
+/// # What leaves
+///
+/// Nothing of the caller's: the ask must carry no headers and no body, so
+/// what reaches the named host is a bare GET of the address the page wrote,
+/// our User-Agent and nothing else.
+///
+/// # Errors
+///
+/// [`Kind::Invalid`] when `page` is not on the pass's host, or the ask
+/// carries headers or a body — nothing is sent; and every error of
+/// [`request`].
+pub fn request_named(
+    pass: &ronoctua_consent::Pass,
+    page: &str,
+    ask: &Ask<'_>,
+) -> Result<Got, Error> {
+    let most = ask.most.min(crate::tls::MOST_EVER);
+    request_named_over(pass, page, ask, &mut |target, call| {
+        crate::tls::fetch_abortable(&target.host, target.port, call, most, ask.abort)
+    })
+}
+
+/// [`request_let`], to a host under `domain` — the domain of the party the
+/// pass's host belongs to.
+///
+/// For the hosts a party the person let names at run time under its own
+/// domain: radio-browser's servers under `radio-browser.info` (the name its
+/// consent row lets), the session and download hosts OpenSubtitles hands out
+/// under `opensubtitles.com` (whose consent row lets
+/// `api.opensubtitles.com`). A pass names one host, and nobody can let
+/// `de2.api.radio-browser.info` before the directory says it exists; what
+/// the person let is that party, and a host it names under its own domain
+/// is its answer, as a redirect is. So BOTH must be under `domain`: the
+/// pass's host (the party the person let is that domain's) and the first
+/// address's. A host BESIDE the domain (`evil-radio-browser.info`) or above
+/// it (`info`) is not under it, and a domain of one label is refused. `domain`
+/// is the caller's constant, never a name an answer gave.
+///
+/// What leaves is what leaves [`request_let`]: the caller's headers and body
+/// go to the first host alone.
+///
+/// # Errors
+///
+/// [`Kind::Invalid`] when the pass's host or the first address is not under
+/// `domain` — nothing is sent — and every error of [`request_let`].
+pub fn request_under(
+    pass: &ronoctua_consent::Pass,
+    domain: &str,
+    ask: &Ask<'_>,
+) -> Result<Got, Error> {
+    let most = ask.most.min(crate::tls::MOST_EVER);
+    request_under_over(pass, domain, ask, &mut |target, call| {
+        crate::tls::fetch_abortable(&target.host, target.port, call, most, ask.abort)
+    })
+}
+
+/// Whether `host` is `domain` or a name below it. Both are compared as the
+/// web writes them (ASCII lower case, no trailing dot); an empty label never
+/// counts. Pure.
+#[must_use]
+pub fn is_under(host: &str, domain: &str) -> bool {
+    let fold = |h: &str| h.trim().trim_end_matches('.').to_ascii_lowercase();
+    let (host, domain) = (fold(host), fold(domain));
+    if domain.is_empty() || host.is_empty() {
+        return false;
+    }
+    host == domain
+        || host
+            .strip_suffix(&domain)
+            .and_then(|head| head.strip_suffix('.'))
+            .is_some_and(|head| !head.split('.').any(str::is_empty))
+}
+
+/// The check of [`request_under`], before [`walk`], over any transport.
+fn request_under_over(
+    pass: &ronoctua_consent::Pass,
+    domain: &str,
+    ask: &Ask<'_>,
+    send: &mut dyn FnMut(&Target, &Call<'_>) -> anyhow::Result<Reply>,
+) -> Result<Got, Error> {
+    let first = transport_of(&upgraded(ask.url))?;
+    let host = first.host_str().unwrap_or_default();
+    // A DOMAIN OF ONE LABEL (`info`) is a registry's, never a party's.
+    let a_party = domain.trim_end_matches('.').contains('.');
+    if !a_party || !is_under(pass.host(), domain) || !is_under(host, domain) {
+        return Err(Error::new(
+            Kind::Invalid,
+            format!(
+                "{}: the pass lets {} under {domain}, not this host",
+                without_query(ask.url),
+                pass.host()
+            ),
+        ));
+    }
+    walk_carrying(ask, Carry::ToItsHost, send)
+}
+
+/// A FILE sent to a host the person let, as a one-part
+/// `multipart/form-data` POST — everything of an [`Ask`] but its body.
+#[derive(Clone, Copy)]
+pub struct Upload<'a> {
+    /// The address, `https`, on the pass's host.
+    pub url: &'a str,
+    /// The caller's headers, after ours (a key in a header, most often).
+    pub headers: &'a [(&'a str, &'a str)],
+    /// Who is sending.
+    pub user_agent: &'a str,
+    /// The most bytes of the ANSWER.
+    pub most: u64,
+    /// How long the connection and each read and write may wait.
+    pub patience: Duration,
+    /// What stops it from another thread.
+    pub abort: Option<&'a Abort>,
+}
+
+impl std::fmt::Debug for Upload<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| *n).collect();
+        f.debug_struct("Upload")
+            .field("url", &without_query(self.url))
+            .field("headers", &names)
+            .field("most", &self.most)
+            .field("abortable", &self.abort.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Sends `sending`'s file to `upload.url`, a host `pass` lets, streamed from
+/// its reader and never held ([`crate::multipart`]). ONE HOP: a redirect is
+/// refused ([`Kind::Invalid`]) rather than followed, because following it
+/// would send the file a second time, to an address the person never let.
+/// The reply is returned whatever its status.
+///
+/// # Errors
+///
+/// [`Kind::Invalid`] when the address is not on the pass's host, or the host
+/// answered with a redirect; a header that is not sent ([`headers`]); the
+/// transport's failure, the file's ([`crate::multipart::Unsent`]) included.
+pub fn upload_let(
+    pass: &ronoctua_consent::Pass,
+    upload: &Upload<'_>,
+    sending: crate::multipart::Sending<'_>,
+) -> Result<Got, Error> {
+    let most = upload.most.min(crate::tls::MOST_EVER);
+    upload_let_over(pass, upload, sending, &mut |target, call, sending| {
+        crate::tls::upload_abortable(&target.host, target.port, call, sending, most, upload.abort)
+    })
+}
+
+/// The check and the answer of [`upload_let`], over any transport.
+fn upload_let_over(
+    pass: &ronoctua_consent::Pass,
+    upload: &Upload<'_>,
+    sending: crate::multipart::Sending<'_>,
+    send: &mut dyn FnMut(
+        &Target,
+        &Call<'_>,
+        crate::multipart::Sending<'_>,
+    ) -> anyhow::Result<Reply>,
+) -> Result<Got, Error> {
+    let at = transport_of(upload.url)?;
+    let host = at.host_str().unwrap_or_default();
+    if !pass.covers(host) {
+        return Err(Error::new(
+            Kind::Invalid,
+            format!(
+                "{}: the pass lets {}, not this host",
+                without_query(upload.url),
+                pass.host()
+            ),
+        ));
+    }
+    if upload.abort.is_some_and(Abort::is_aborted) {
+        return Err(Error::new(
+            Kind::Failed,
+            format!("{}: aborted by its caller", without_query(upload.url)),
+        ));
+    }
+    let target = Target::of(&at)?;
+    let headers = headers(
+        upload.user_agent,
+        crate::JSON,
+        Coding::Identity,
+        upload.headers,
+    )?;
+    let call = Call::new("POST", &target.path, &target.host_header)
+        .with_headers(&headers)
+        .waiting(upload.patience);
+    let reply = send(&target, &call, sending).map_err(|e| {
+        Error::new(
+            kind_of_error(&e),
+            format!("{}: {e:#}", without_query(upload.url)),
+        )
+    })?;
+    if redirect_of(&reply).is_some() {
+        return Err(Error::new(
+            Kind::Invalid,
+            format!(
+                "{} answered an upload with a redirect, which is not followed",
+                without_query(upload.url)
+            ),
+        ));
+    }
+    let answered = (200..300).contains(&reply.status);
+    let reply = match decoded(reply.clone(), upload.most.min(crate::tls::MOST_EVER)) {
+        Ok(reply) => reply,
+        Err(_) if !answered => Reply {
+            status: reply.status,
+            headers: without_coding(&reply.headers),
+            body: Vec::new(),
+        },
+        Err(e) => return Err(e),
+    };
+    Ok(Got {
+        url: at.to_string(),
+        reply,
+    })
+}
+
+/// [`request`] of an address a PERSON PASTED, which may be plain `http`: a
+/// first address `http` or `https`, and redirects `http` to `http`, `http` to
+/// `https` and `https` to `https` — never `https` down to `http`
+/// ([`next_hop_plain`]). Each `http` hop crosses the network NOT ENCRYPTED,
+/// over TCP; each `https` one over TLS, as [`request`]'s.
+///
+/// # Why, and for whom only
+///
+/// An IPTV provider's list is `http` more often than not, and the person's
+/// account rides in its address. The owner's decision (2026-09-30): such a
+/// list is taken — only as a source the person added themselves, with a
+/// sentence beside it saying it is not encrypted — and never as one of this
+/// system's own sources, every one of which is `https`. So this takes no
+/// [`ronoctua_consent::Pass`] (the address is the person's own, and their
+/// consent), and its one caller is the catalogue's fetch of a person's
+/// source (`ronoctua-broadcast`, `Internet::get_own`).
+///
+/// # Where a hop in the clear may go
+///
+/// The host the person pasted is theirs to name, wherever it is — a box on
+/// their own network may serve their list. Every OTHER host a redirect sends
+/// the walk to in the clear must be on the public internet
+/// ([`fence_of`], `tls::Fence::Public`): the list's server does not get to
+/// make this machine ask its neighbours, with no certificate in the way.
+///
+/// # Errors
+///
+/// As [`request`], with an `http` first address and `http` hops allowed —
+/// and a plain hop to another host refused when it resolves to this machine
+/// or a network of its own.
+pub fn request_unencrypted(ask: &Ask<'_>) -> Result<Got, Error> {
+    let most = ask.most.min(crate::tls::MOST_EVER);
+    let pasted = Target::of(&transport_plain_of(&upgraded(ask.url))?)?.host;
+    walk_under(
+        ask,
+        Carry::Everywhere,
+        Schemes::PlainToo,
+        &mut |target, call| {
+            if target.tls {
+                crate::tls::fetch_abortable(&target.host, target.port, call, most, ask.abort)
+            } else {
+                crate::tls::fetch_plain_abortable(
+                    &target.host,
+                    target.port,
+                    call,
+                    most,
+                    ask.abort,
+                    fence_of(&target.host, &pasted),
+                )
+            }
+        },
+    )
+}
+
+/// Where a plain hop to `host` may go, in a walk that began at the host the
+/// person pasted (`pasted`): anywhere for that one, the public internet for
+/// every other. Pure.
+#[must_use]
+pub fn fence_of(host: &str, pasted: &str) -> crate::tls::Fence {
+    if host.eq_ignore_ascii_case(pasted) {
+        crate::tls::Fence::Open
+    } else {
+        crate::tls::Fence::Public
+    }
+}
+
+/// Which schemes a walk carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Schemes {
+    /// `https` alone — every walk but one.
+    Tls,
+    /// `http` too, for [`request_unencrypted`].
+    PlainToo,
+}
+
+/// The check of [`request_let`], before [`walk`], over any transport.
+fn request_let_over(
+    pass: &ronoctua_consent::Pass,
+    ask: &Ask<'_>,
+    send: &mut dyn FnMut(&Target, &Call<'_>) -> anyhow::Result<Reply>,
+) -> Result<Got, Error> {
+    let first = transport_of(&upgraded(ask.url))?;
+    let host = first.host_str().unwrap_or_default();
+    if !pass.covers(host) {
+        return Err(Error::new(
+            Kind::Invalid,
+            format!(
+                "{}: the pass lets {}, not this host",
+                without_query(ask.url),
+                pass.host()
+            ),
+        ));
+    }
+    walk_carrying(ask, Carry::ToItsHost, send)
+}
+
+fn request_named_over(
+    pass: &ronoctua_consent::Pass,
+    page: &str,
+    ask: &Ask<'_>,
+    send: &mut dyn FnMut(&Target, &Call<'_>) -> anyhow::Result<Reply>,
+) -> Result<Got, Error> {
+    let from = transport_of(&upgraded(page))?;
+    if !pass.covers(from.host_str().unwrap_or_default()) {
+        return Err(Error::new(
+            Kind::Invalid,
+            format!(
+                "{}: the pass lets {}, not the page that named {}",
+                without_query(page),
+                pass.host(),
+                without_query(ask.url)
+            ),
+        ));
+    }
+    if !ask.headers.is_empty() || ask.body.is_some() {
+        return Err(Error::new(
+            Kind::Invalid,
+            format!(
+                "{}: a file a page named is asked bare",
+                without_query(ask.url)
+            ),
+        ));
+    }
+    walk_carrying(ask, Carry::ToItsHost, send)
+}
+
+/// What a request carries past the host of its first address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Carry {
+    /// Its headers and (after a 307 or 308) its body, to wherever the
+    /// redirects go — the older callers' walk.
+    Everywhere,
+    /// Its headers and body to its own host only ([`request_let`]).
+    ToItsHost,
 }
 
 /// The walk of [`request`], over any transport: `send` is TLS for the
@@ -327,15 +742,56 @@ fn walk(
     ask: &Ask<'_>,
     send: &mut dyn FnMut(&Target, &Call<'_>) -> anyhow::Result<Reply>,
 ) -> Result<Got, Error> {
+    walk_carrying(ask, Carry::Everywhere, send)
+}
+
+/// [`walk`], carrying the caller's headers and body as `carry` says.
+fn walk_carrying(
+    ask: &Ask<'_>,
+    carry: Carry,
+    send: &mut dyn FnMut(&Target, &Call<'_>) -> anyhow::Result<Reply>,
+) -> Result<Got, Error> {
+    walk_under(ask, carry, Schemes::Tls, send)
+}
+
+/// [`walk_carrying`], carrying the `schemes` given — the one walk every
+/// request takes.
+fn walk_under(
+    ask: &Ask<'_>,
+    carry: Carry,
+    schemes: Schemes,
+    send: &mut dyn FnMut(&Target, &Call<'_>) -> anyhow::Result<Reply>,
+) -> Result<Got, Error> {
     let first = upgraded(ask.url);
-    let mut at = transport_of(&first)?;
+    let mut at = match schemes {
+        Schemes::Tls => transport_of(&first)?,
+        Schemes::PlainToo => transport_plain_of(&first)?,
+    };
+    let origin = at.host().map(|h| h.to_owned());
     let mut body = ask.body;
+    let stopped = |at: &Url| {
+        Error::new(
+            Kind::Failed,
+            format!("{}: aborted by its caller", without_query(at.as_str())),
+        )
+    };
     for hop in 0..=ask.hops {
+        if ask.abort.is_some_and(Abort::is_aborted) {
+            return Err(stopped(&at));
+        }
         let target = Target::of(&at)?;
         let accept = ask
             .accept
             .unwrap_or(if body.is_some() { crate::JSON } else { "*/*" });
-        let headers = headers(ask.user_agent, accept, ask.coding, ask.headers)?;
+        // Another host than the first gets none of the caller's headers when
+        // they are the first host's alone.
+        let home = at.host().map(|h| h.to_owned()) == origin;
+        let extra = if home || carry == Carry::Everywhere {
+            ask.headers
+        } else {
+            &[]
+        };
+        let headers = headers(ask.user_agent, accept, ask.coding, extra)?;
         let method = if body.is_some() { "POST" } else { "GET" };
         let mut call = Call::new(method, &target.path, &target.host_header)
             .with_headers(&headers)
@@ -343,14 +799,35 @@ fn walk(
         if let Some(b) = body {
             call = call.with_body(b);
         }
-        let reply = send(&target, &call)
-            .map_err(|e| Error::new(kind_of_error(&e), format!("{at}: {e:#}")))?;
+        let sent = send(&target, &call);
+        // AN ABORTED REQUEST IS ABORTED whatever its read said: a shut socket
+        // reads as an end of stream, and what arrived before it is half an
+        // answer, never one.
+        if ask.abort.is_some_and(Abort::is_aborted) {
+            return Err(stopped(&at));
+        }
+        let reply = sent.map_err(|e| Error::new(kind_of_error(&e), format!("{at}: {e:#}")))?;
         if let Some(location) = redirect_of(&reply) {
             if hop == ask.hops {
                 break;
             }
-            at = next_hop(&at, location)?;
+            let next = match schemes {
+                Schemes::Tls => next_hop(&at, location)?,
+                Schemes::PlainToo => next_hop_plain(&at, location)?,
+            };
             body = body.filter(|_| keeps_the_body(reply.status));
+            let leaves = next.host().map(|h| h.to_owned()) != origin;
+            if carry == Carry::ToItsHost && leaves && body.is_some() {
+                return Err(Error::new(
+                    Kind::Invalid,
+                    format!(
+                        "{} sent the request's body on to {}, which it is not carried to",
+                        without_query(at.as_str()),
+                        next.host_str().unwrap_or_default()
+                    ),
+                ));
+            }
+            at = next;
             continue;
         }
         let answered = (200..300).contains(&reply.status);
@@ -451,12 +928,30 @@ pub fn upgraded(url: &str) -> Cow<'_, str> {
 /// for anything but `https`, [`Kind::Credentials`] for a user name or a
 /// password.
 pub fn transport_of(url: &str) -> Result<Url, Error> {
-    let parsed =
-        Url::parse(url.trim()).map_err(|e| Error::new(Kind::Invalid, format!("{url}: {e}")))?;
+    let parsed = transport_plain_of(url)?;
     if parsed.scheme() != "https" {
         return Err(Error::new(
             Kind::Scheme,
             format!("{url}: only https is fetched"),
+        ));
+    }
+    Ok(parsed)
+}
+
+/// [`transport_of`], `http` taken too — for [`request_unencrypted`] alone.
+///
+/// # Errors
+///
+/// [`Kind::Invalid`] for what does not parse or has no host, [`Kind::Scheme`]
+/// for anything but `http` and `https`, [`Kind::Credentials`] for a user name
+/// or a password.
+pub fn transport_plain_of(url: &str) -> Result<Url, Error> {
+    let parsed =
+        Url::parse(url.trim()).map_err(|e| Error::new(Kind::Invalid, format!("{url}: {e}")))?;
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return Err(Error::new(
+            Kind::Scheme,
+            format!("{url}: only http and https are fetched"),
         ));
     }
     if parsed.host().is_none() {
@@ -485,6 +980,27 @@ pub fn transport_of(url: &str) -> Result<Url, Error> {
 /// [`Kind::Scheme`], [`Kind::Credentials`] or, for a `Location` that does not
 /// parse, [`Kind::Invalid`].
 pub fn next_hop(from: &Url, location: &str) -> Result<Url, Error> {
+    let next = next_hop_plain(from, location)?;
+    // The framer carries https only; an http→http hop is allowed by the rule
+    // and refused by the transport, the same way a first http address is.
+    if next.scheme() != "https" {
+        return Err(Error::new(
+            Kind::Scheme,
+            format!("{from} redirected to {next}: only https is fetched"),
+        ));
+    }
+    Ok(next)
+}
+
+/// [`next_hop`]'s rule without the transport's `https`: `http` to `http`
+/// taken too — for [`request_unencrypted`], whose hops may be plain. `https`
+/// to `http` is still refused: a walk that began encrypted never goes down.
+/// Pure.
+///
+/// # Errors
+///
+/// As [`next_hop`], `http` to `http` taken.
+pub fn next_hop_plain(from: &Url, location: &str) -> Result<Url, Error> {
     let next = from.join(location.trim()).map_err(|e| {
         Error::new(
             Kind::Invalid,
@@ -499,14 +1015,6 @@ pub fn next_hop(from: &Url, location: &str) -> Result<Url, Error> {
         return Err(Error::new(
             Kind::Scheme,
             format!("{from} redirected to {next}, which is not followed"),
-        ));
-    }
-    // The framer carries https only; an http→http hop is allowed by the rule
-    // and refused by the transport, the same way a first http address is.
-    if next.scheme() != "https" {
-        return Err(Error::new(
-            Kind::Scheme,
-            format!("{from} redirected to {next}: only https is fetched"),
         ));
     }
     if !next.username().is_empty() || next.password().is_some() {
@@ -637,9 +1145,12 @@ pub fn inflate(gzipped: &[u8], most: u64) -> Result<Vec<u8>, Error> {
 }
 
 /// What one request needs from an address: the name TLS checks, the port,
-/// the `Host` header and the path.
+/// the `Host` header, the path, and whether it goes over TLS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
+    /// Over TLS (`https`); plain TCP (`http`) only in a walk that carries it
+    /// ([`request_unencrypted`]).
+    pub tls: bool,
     /// The name the certificate must carry (an IPv6 address without brackets).
     pub host: String,
     /// The port, the scheme's default when the address names none.
@@ -673,6 +1184,7 @@ impl Target {
             .map_or_else(|| shown.to_owned(), |p| format!("{shown}:{p}"));
         let path = url[url::Position::BeforePath..url::Position::AfterQuery].to_owned();
         Ok(Self {
+            tls: url.scheme() == "https",
             host,
             port,
             host_header,
@@ -730,6 +1242,136 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("no status line"))
         });
         (got, sent)
+    }
+
+    /// Walks `ask` as [`request_unencrypted`] does, over canned replies: what
+    /// every hop sent, and whether it went over TLS.
+    fn walked_plain(
+        ask: &Ask<'_>,
+        replies: Vec<Reply>,
+    ) -> (Result<Got, Error>, Vec<(String, bool)>) {
+        let mut replies = replies.into_iter();
+        let mut sent = Vec::new();
+        let got = walk_under(
+            ask,
+            Carry::Everywhere,
+            Schemes::PlainToo,
+            &mut |target, _call| {
+                sent.push((target.host.clone(), target.tls));
+                replies
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("no status line"))
+            },
+        );
+        (got, sent)
+    }
+
+    /// FAILS IF: a person's `http` list is refused again — or the plain walk
+    /// lets a hop go down from `https` to `http`, lets any other scheme in,
+    /// or sends an `https` hop without TLS; or the ordinary walk starts taking
+    /// `http` too.
+    #[test]
+    fn a_pasted_http_list_is_fetched_in_the_clear_and_never_downgraded() {
+        let ask = Ask::get("http://iptv.example:8080/get.php?u=a&p=b", "t");
+        let (got, sent) = walked_plain(&ask, vec![reply(200, &[], b"#EXTM3U\n")]);
+        assert_eq!(got.unwrap().reply.body, b"#EXTM3U\n");
+        assert_eq!(
+            sent,
+            [("iptv.example".to_owned(), false)],
+            "plain, port kept"
+        );
+
+        // UP to https is taken, and goes over TLS.
+        let (got, sent) = walked_plain(
+            &ask,
+            vec![
+                reply(302, &[("location", "https://cdn.example/l.m3u")], b""),
+                reply(200, &[], b"ok"),
+            ],
+        );
+        assert!(got.is_ok());
+        assert_eq!(
+            sent,
+            [
+                ("iptv.example".to_owned(), false),
+                ("cdn.example".to_owned(), true)
+            ]
+        );
+        // PLAIN to plain is taken; DOWN from https is not.
+        assert_eq!(
+            next_hop_plain(&url("http://a.example/x"), "http://b.example/y")
+                .unwrap()
+                .as_str(),
+            "http://b.example/y"
+        );
+        assert_eq!(
+            next_hop_plain(&url("https://a.example/x"), "http://b.example/y")
+                .unwrap_err()
+                .kind,
+            Kind::Scheme
+        );
+        let secure = Ask::get("https://iptv.example/l.m3u", "t");
+        let (got, sent) = walked_plain(
+            &secure,
+            vec![reply(
+                301,
+                &[("location", "http://iptv.example/l.m3u")],
+                b"",
+            )],
+        );
+        assert_eq!(got.unwrap_err().kind, Kind::Scheme);
+        assert_eq!(sent.len(), 1, "the downgrade is never asked");
+        // NO OTHER SCHEME, and no account in the address itself.
+        for (bad, kind) in [
+            ("ftp://iptv.example/l.m3u", Kind::Scheme),
+            ("file:///etc/passwd", Kind::Scheme),
+            ("http://me:pw@iptv.example/l.m3u", Kind::Credentials),
+        ] {
+            assert_eq!(transport_plain_of(bad).unwrap_err().kind, kind, "{bad}");
+        }
+        // AND THE ORDINARY WALK is as strict as it was.
+        assert_eq!(
+            transport_of("http://iptv.example/l.m3u").unwrap_err().kind,
+            Kind::Scheme
+        );
+    }
+
+    /// FAILS IF: a hop in the clear to another host than the one the person
+    /// pasted may reach this machine or a network of its own — a list's
+    /// server could make the daemon ask a router, a printer or a service on
+    /// `localhost` — or the pasted host itself is fenced (a box on the
+    /// person's own network serving their list), or a private address is
+    /// taken for a public one.
+    #[test]
+    fn a_hop_in_the_clear_reaches_only_the_public_internet_but_the_pasted_host() {
+        use crate::tls::{Fence, is_public};
+        assert_eq!(fence_of("iptv.example", "iptv.example"), Fence::Open);
+        assert_eq!(fence_of("IPTV.example", "iptv.example"), Fence::Open);
+        assert_eq!(fence_of("cdn.example", "iptv.example"), Fence::Public);
+        assert_eq!(fence_of("192.168.1.10", "192.168.1.10"), Fence::Open);
+        for private in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.5.4",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.100.100.100",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "::1",
+            "::",
+            "fe80::1",
+            "fd7a:115c:a1e0::1",
+            "::ffff:192.168.1.1",
+        ] {
+            let ip: std::net::IpAddr = private.parse().unwrap();
+            assert!(!is_public(ip), "{private} taken for the public internet");
+        }
+        for public in ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"] {
+            let ip: std::net::IpAddr = public.parse().unwrap();
+            assert!(is_public(ip), "{public} fenced off");
+        }
     }
 
     #[test]
@@ -1137,6 +1779,7 @@ mod tests {
         assert_eq!(
             t,
             Target {
+                tls: true,
                 host: "example.org".into(),
                 port: 443,
                 host_header: "example.org".into(),
@@ -1147,6 +1790,397 @@ mod tests {
         assert_eq!(
             (t.host.as_str(), t.host_header.as_str()),
             ("::1", "[::1]:9")
+        );
+    }
+
+    /// A pass for `host`, minted the only way there is: the person let it, in
+    /// a consent file of the test's own.
+    fn pass_for(host: &str, tag: &str) -> ronoctua_consent::Pass {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-http-pass-{}-{tag}", std::process::id()));
+        let store = ronoctua_consent::store_at(Some(dir.clone()));
+        ronoctua_consent::let_hosts_in(&store, &[host], true).unwrap();
+        let pass = ronoctua_consent::pass_in(&store, host).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        pass
+    }
+
+    /// FAILS IF: a pass for one host lets a request to another — or the
+    /// check is made after something was sent.
+    #[test]
+    fn a_pass_lets_its_own_host_and_nothing_is_sent_to_another() {
+        let pass = pass_for("en.wiktionary.org", "hosts");
+        let mut sent = 0;
+        let mut send = |_: &Target, _: &Call<'_>| {
+            sent += 1;
+            Ok(reply(200, &[], b"{}"))
+        };
+        let ask = Ask::get("https://api.mymemory.translated.net/get?q=x", "t");
+        let refused = request_let_over(&pass, &ask, &mut send).unwrap_err();
+        assert_eq!(refused.kind, Kind::Invalid);
+        assert!(
+            !refused.trouble.contains("q=x"),
+            "the refusal names the address without its query: {}",
+            refused.trouble
+        );
+        let ask = Ask::get(
+            "https://EN.wiktionary.org/api/rest_v1/page/definition/casa",
+            "t",
+        );
+        let got = request_let_over(&pass, &ask, &mut send).unwrap();
+        assert_eq!(got.reply.status, 200);
+        assert_eq!(sent, 1, "only the request on the pass's host was sent");
+    }
+
+    /// FAILS IF: a file a page named is asked when the page was not on the
+    /// pass's host, or with the caller's headers or a body — anything of the
+    /// person's reaching a host nobody let — or is not asked at all when the
+    /// page was.
+    #[test]
+    fn a_file_a_page_named_is_asked_bare_on_the_pages_pass() {
+        let pass = pass_for("example.org", "named");
+        let sent = std::cell::Cell::new(0);
+        let mut send = |target: &Target, _: &Call<'_>| {
+            assert_eq!(target.host, "cdn.example.net");
+            sent.set(sent.get() + 1);
+            Ok(reply(200, &[], b"{}"))
+        };
+        let ask = Ask::get("https://cdn.example.net/site.webmanifest", "t");
+        let e = request_named_over(&pass, "https://other.org/", &ask, &mut send).unwrap_err();
+        assert_eq!(e.kind, Kind::Invalid, "a page on another host");
+        let headers = [("Authorization", "Bearer secret")];
+        let dressed =
+            Ask::get("https://cdn.example.net/site.webmanifest", "t").with_headers(&headers);
+        let e = request_named_over(&pass, "https://example.org/", &dressed, &mut send).unwrap_err();
+        assert_eq!(e.kind, Kind::Invalid, "the caller's headers");
+        assert_eq!(sent.get(), 0, "something was sent before the refusal");
+        let got = request_named_over(&pass, "https://example.org/app", &ask, &mut send).unwrap();
+        assert_eq!(got.reply.status, 200);
+        assert_eq!(sent.get(), 1);
+    }
+
+    /// FAILS IF: a pass lets a host beside its domain or above it, a pass
+    /// of another party lets a host under it, or nothing below it is let —
+    /// or anything is sent before the answer.
+    #[test]
+    fn a_pass_for_a_domain_lets_the_names_under_it_and_no_other() {
+        assert!(is_under("de1.api.radio-browser.info", "radio-browser.info"));
+        assert!(is_under("Radio-Browser.info.", "radio-browser.info"));
+        assert!(!is_under("evil-radio-browser.info", "radio-browser.info"));
+        assert!(!is_under(
+            "radio-browser.info.evil.example",
+            "radio-browser.info"
+        ));
+        assert!(!is_under("info", "radio-browser.info"));
+        assert!(!is_under(".radio-browser.info", "radio-browser.info"));
+        assert!(!is_under("x..radio-browser.info", "radio-browser.info"));
+        assert!(!is_under("a..b.radio-browser.info", "radio-browser.info"));
+        assert!(!is_under("radio-browser.info", ""));
+
+        let pass = pass_for("radio-browser.info", "under");
+        let domain = "radio-browser.info";
+        let mut sent = Vec::new();
+        let mut send = |target: &Target, _: &Call<'_>| {
+            sent.push(target.host.clone());
+            Ok(reply(200, &[], b"[]"))
+        };
+        let beside = Ask::get("https://evil-radio-browser.info/json/servers?k=v", "t");
+        let refused = request_under_over(&pass, domain, &beside, &mut send).unwrap_err();
+        assert_eq!(refused.kind, Kind::Invalid);
+        assert!(!refused.trouble.contains("k=v"), "{}", refused.trouble);
+        let below = Ask::get("https://de1.api.radio-browser.info/json/stats", "t");
+        assert_eq!(
+            request_under_over(&pass, domain, &below, &mut send)
+                .unwrap()
+                .reply
+                .status,
+            200
+        );
+        // A REGISTRY'S NAME is no party's domain.
+        assert_eq!(
+            request_under_over(&pass, "info", &below, &mut send)
+                .unwrap_err()
+                .kind,
+            Kind::Invalid
+        );
+        // A PASS OF ANOTHER PARTY lets nothing under this domain, though the
+        // address is under it: the party let is the pass's.
+        let other = pass_for("lrclib.net", "under-other");
+        assert_eq!(
+            request_under_over(&other, domain, &below, &mut send)
+                .unwrap_err()
+                .kind,
+            Kind::Invalid
+        );
+        // And a session host under OpenSubtitles' domain, on the pass its
+        // row lets (`api.`): the party's.
+        let subs = pass_for("api.opensubtitles.com", "under-subs");
+        let session = Ask::get("https://vip-api.opensubtitles.com/api/v1/download", "t");
+        assert_eq!(
+            request_under_over(&subs, "opensubtitles.com", &session, &mut send)
+                .unwrap()
+                .reply
+                .status,
+            200
+        );
+        assert_eq!(
+            sent,
+            ["de1.api.radio-browser.info", "vip-api.opensubtitles.com"],
+            "only the hosts under the domain were asked"
+        );
+    }
+
+    #[test]
+    fn a_pass_follows_the_hosts_own_redirects() {
+        let pass = pass_for("coverartarchive.org", "hops");
+        let mut replies = vec![
+            reply(200, &[], b"image"),
+            reply(
+                302,
+                &[("Location", "https://ia800.us.archive.org/i.jpg")],
+                b"",
+            ),
+            reply(
+                307,
+                &[("Location", "https://archive.org/download/x/i.jpg")],
+                b"",
+            ),
+        ];
+        let mut hosts = Vec::new();
+        // A first `http` address of an upgraded host is judged as it goes out.
+        let ask = Ask::get("http://coverartarchive.org/release/x/front", "t");
+        let got = request_let_over(&pass, &ask, &mut |target, _| {
+            hosts.push(target.host.clone());
+            replies
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("no status line"))
+        })
+        .unwrap();
+        assert_eq!(got.reply.body, b"image");
+        assert_eq!(
+            hosts,
+            ["coverartarchive.org", "archive.org", "ia800.us.archive.org"]
+        );
+    }
+
+    /// FAILS IF: a key the person gave one host (a header, or the body a
+    /// 307 carries on) reaches the host a redirect names — the person let the
+    /// first host, not the second.
+    #[test]
+    fn a_let_request_carries_its_key_to_its_own_host_only() {
+        let pass = pass_for("api.deepl.com", "carry");
+        let key = [("Authorization", "DeepL-Auth-Key k-123")];
+        // GET: followed to the other host, without the caller's headers.
+        let mut replies = vec![
+            reply(200, &[], b"{}"),
+            reply(302, &[("Location", "https://cdn.example/x")], b""),
+            reply(302, &[("Location", "/v2/usage")], b""),
+        ];
+        let mut seen = Vec::new();
+        let ask = Ask::get("https://api.deepl.com/v2/x", "t").with_headers(&key);
+        let got = request_let_over(&pass, &ask, &mut |target, call| {
+            let keyed = call.headers.iter().any(|(n, _)| *n == "Authorization");
+            seen.push((target.host.clone(), keyed));
+            replies
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("no status line"))
+        })
+        .unwrap();
+        assert_eq!(got.reply.status, 200);
+        assert_eq!(
+            seen,
+            [
+                ("api.deepl.com".to_owned(), true),
+                ("api.deepl.com".to_owned(), true),
+                ("cdn.example".to_owned(), false),
+            ]
+        );
+        // POST: a 307 on its own host keeps the body; one to another host is
+        // refused before anything is sent there.
+        let mut replies = vec![
+            reply(307, &[("Location", "https://elsewhere.example/t")], b""),
+            reply(307, &[("Location", "/v2/translate")], b""),
+        ];
+        let mut bodies = Vec::new();
+        let ask = Ask::get("https://api.deepl.com/v2/t", "t").posting(r#"{"text":["x"]}"#);
+        let e = request_let_over(&pass, &ask, &mut |target, call| {
+            bodies.push((target.host.clone(), call.body.is_some()));
+            replies
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("no status line"))
+        })
+        .unwrap_err();
+        assert_eq!(e.kind, Kind::Invalid, "{e}");
+        assert_eq!(
+            bodies,
+            [
+                ("api.deepl.com".to_owned(), true),
+                ("api.deepl.com".to_owned(), true),
+            ]
+        );
+        // The older walk is as it was: it carries both on.
+        let mut replies = vec![
+            reply(200, &[], b"{}"),
+            reply(307, &[("Location", "https://elsewhere.example/t")], b""),
+        ];
+        let mut carried = Vec::new();
+        walk(&ask.with_headers(&key), &mut |_, call| {
+            carried.push((
+                call.headers.iter().any(|(n, _)| *n == "Authorization"),
+                call.body.is_some(),
+            ));
+            replies
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("no status line"))
+        })
+        .unwrap();
+        assert_eq!(carried, [(true, true), (true, true)]);
+    }
+
+    /// FAILS IF: an aborted request goes on to its next hop, or hands back
+    /// what a shut socket read as if it were the answer.
+    #[test]
+    fn an_aborted_request_stops_and_answers_no_half_reply() {
+        let abort = Abort::new();
+        let ask = Ask::get("https://example.org/a", "t").abortable(&abort);
+        let mut hops = 0;
+        let got = walk(&ask, &mut |_, _| {
+            hops += 1;
+            // The person typed on while this hop was out.
+            abort.abort();
+            Ok(reply(301, &[("Location", "/b")], b"half"))
+        });
+        let e = got.unwrap_err();
+        assert_eq!(e.kind, Kind::Failed, "{e}");
+        assert_eq!(hops, 1, "the redirect was not followed");
+        // And one aborted before it starts sends nothing.
+        let mut sent = false;
+        let e = walk(&ask, &mut |_, _| {
+            sent = true;
+            Ok(reply(200, &[], b""))
+        })
+        .unwrap_err();
+        assert_eq!(e.kind, Kind::Failed);
+        assert!(!sent);
+        assert!(format!("{ask:?}").contains("abortable: true"));
+    }
+
+    fn an_upload(url: &str) -> Upload<'_> {
+        Upload {
+            url,
+            headers: &[("x-apikey", "the-key")],
+            user_agent: "t",
+            most: 1 << 20,
+            patience: Duration::from_secs(1),
+            abort: None,
+        }
+    }
+
+    /// FAILS IF: a file is sent to a host the pass does not let, a redirect
+    /// of an upload is followed (the file sent twice, the second time
+    /// somewhere nobody let), or the key header stops going with it.
+    #[test]
+    fn an_upload_goes_to_its_own_host_once() {
+        let pass = pass_for("www.virustotal.com", "upload");
+        let mut calls = Vec::new();
+        let mut file: &[u8] = b"MZ....";
+        let mut sent = |_: u64, _: u64| true;
+        let refused = upload_let_over(
+            &pass,
+            &an_upload("https://evil.example/api/v3/files"),
+            crate::multipart::Sending {
+                part: crate::multipart::Part {
+                    field: "file",
+                    filename: "a.exe",
+                    content_type: "application/octet-stream",
+                    length: 6,
+                },
+                file: &mut file,
+                sent: &mut sent,
+            },
+            &mut |_, _, _| {
+                calls.push("sent");
+                Ok(reply(200, &[], b"{}"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.kind, Kind::Invalid);
+        assert!(calls.is_empty(), "a file went to a host nobody let");
+
+        let mut file: &[u8] = b"MZ....";
+        let mut sent = |_: u64, _: u64| true;
+        let mut heard = Vec::new();
+        let got = upload_let_over(
+            &pass,
+            &an_upload("https://www.virustotal.com/api/v3/files"),
+            crate::multipart::Sending {
+                part: crate::multipart::Part {
+                    field: "file",
+                    filename: "a.exe",
+                    content_type: "application/octet-stream",
+                    length: 6,
+                },
+                file: &mut file,
+                sent: &mut sent,
+            },
+            &mut |target, call, sending| {
+                heard.push((
+                    target.host.clone(),
+                    call.method.to_owned(),
+                    call.path.to_owned(),
+                    call.headers
+                        .iter()
+                        .any(|(n, v)| *n == "x-apikey" && *v == "the-key"),
+                    sending.part.length,
+                ));
+                Ok(reply(200, &[], br#"{"data":{"id":"x"}}"#))
+            },
+        )
+        .unwrap();
+        assert_eq!(got.reply.status, 200);
+        assert_eq!(
+            heard,
+            [(
+                "www.virustotal.com".to_owned(),
+                "POST".to_owned(),
+                "/api/v3/files".to_owned(),
+                true,
+                6
+            )]
+        );
+
+        let mut file: &[u8] = b"MZ....";
+        let mut sent = |_: u64, _: u64| true;
+        let mut hops = 0;
+        let moved = upload_let_over(
+            &pass,
+            &an_upload("https://www.virustotal.com/api/v3/files"),
+            crate::multipart::Sending {
+                part: crate::multipart::Part {
+                    field: "file",
+                    filename: "a.exe",
+                    content_type: "application/octet-stream",
+                    length: 6,
+                },
+                file: &mut file,
+                sent: &mut sent,
+            },
+            &mut |_, _, _| {
+                hops += 1;
+                Ok(reply(
+                    307,
+                    &[("Location", "https://elsewhere.example/")],
+                    b"",
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(moved.kind, Kind::Invalid);
+        assert_eq!(hops, 1, "the redirect of an upload was followed");
+        let shown = format!("{:?}", an_upload("https://www.virustotal.com/x?k=v"));
+        assert!(
+            !shown.contains("the-key") && !shown.contains("k=v"),
+            "{shown}"
         );
     }
 }

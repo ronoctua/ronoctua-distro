@@ -64,7 +64,7 @@ pub(crate) fn code(text: &str, grammar: &Grammar, state: State, out: &mut Vec<Ra
                 }
             }
         }
-        Open::Fence { .. } | Open::Nothing => {}
+        Open::Fence { .. } | Open::Embedded { .. } | Open::Nothing => {}
     }
 
     while at < bytes.len() {
@@ -195,6 +195,28 @@ pub(crate) fn markup(text: &str, grammar: &Grammar, state: State, out: &mut Vec<
     let bytes = text.as_bytes();
     let mut at = 0usize;
 
+    // THE REST OF A `<script>` OR A `<style>` the line before opened, drawn
+    // in its own language up to the element's closing tag.
+    if let Open::Embedded { element, inner } = state.outer {
+        let close = EMBEDDED
+            .get(usize::from(element))
+            .and_then(|(name, _)| closing_tag(bytes, 0, name));
+        let stop = close.unwrap_or(text.len());
+        let carried = embedded(text, 0, stop, inner, state.inner, out);
+        let Some(stop) = close else {
+            return State {
+                outer: state.outer,
+                inner: carried,
+            };
+        };
+        at = stop;
+    }
+    let state = if matches!(state.outer, Open::Embedded { .. }) {
+        State::fresh()
+    } else {
+        state
+    };
+
     if let Open::Comment { depth } = state.outer {
         match close_comment(text, grammar, depth, 0) {
             Walked::Open(depth) => {
@@ -236,8 +258,33 @@ pub(crate) fn markup(text: &str, grammar: &Grammar, state: State, out: &mut Vec<
         }
 
         if c_at(bytes, at) == Some(b'<') {
-            let end = find(bytes, at, ">").map_or(text.len(), |n| n + 1);
+            let closed = find(bytes, at, ">");
+            let end = closed.map_or(text.len(), |n| n + 1);
             tag(text, at, end, out);
+            // AN ELEMENT WHOSE CONTENT IS ANOTHER LANGUAGE hands the text
+            // after its opening tag to that language, up to its closing tag —
+            // on this line, or on a later one through the state.
+            if closed.is_some()
+                && let Some((element, inner)) = embeds(bytes, at, end)
+            {
+                let close = EMBEDDED
+                    .get(usize::from(element))
+                    .and_then(|(name, _)| closing_tag(bytes, end, name));
+                let stop = close.unwrap_or(text.len());
+                let carried = embedded(text, end, stop, inner, Open::Nothing, out);
+                match close {
+                    Some(stop) => {
+                        at = stop;
+                        continue;
+                    }
+                    None => {
+                        return State {
+                            outer: Open::Embedded { element, inner },
+                            inner: carried,
+                        };
+                    }
+                }
+            }
             at = end;
             continue;
         }
@@ -258,6 +305,83 @@ pub(crate) fn markup(text: &str, grammar: &Grammar, state: State, out: &mut Vec<
     }
 
     with_outer(state, Open::Nothing)
+}
+
+/// The elements whose content is another language, and the fence tag that
+/// names it (`crate::of_tag`) — the one place markup learns that a `<script>`
+/// holds a program and a `<style>` a stylesheet.
+///
+/// BY TAG, AND NOT BY A `Language` VARIANT: the variants are generated, and a
+/// table row renamed upstream must leave the content plain rather than fail
+/// to compile here. A tag nothing answers to draws the content as prose,
+/// which is what it was before this existed.
+const EMBEDDED: [(&str, &str); 2] = [("script", "javascript"), ("style", "css")];
+
+/// Whether the tag in `from..to` OPENS one of [`EMBEDDED`] — not its closing
+/// tag, and not a self-closed `<script src=… />`, which holds nothing — and
+/// which, with the language its content is drawn in.
+fn embeds(bytes: &[u8], from: usize, to: usize) -> Option<(u8, crate::Language)> {
+    let name_at = from + 1;
+    if c_at(bytes, name_at) == Some(b'/') || to < 2 || c_at(bytes, to - 2) == Some(b'/') {
+        return None;
+    }
+    let name_end = word_end(bytes, name_at);
+    let name = bytes.get(name_at..name_end)?;
+    EMBEDDED
+        .iter()
+        .enumerate()
+        .find(|(_, (element, _))| name.eq_ignore_ascii_case(element.as_bytes()))
+        .and_then(|(n, (_, tag))| Some((u8::try_from(n).ok()?, crate::of_tag(tag)?)))
+}
+
+/// Where `</name` begins at or after `at`, any case — the end of an
+/// embedded element's content. A `</scripts` is not it: the name has to end
+/// there.
+fn closing_tag(bytes: &[u8], at: usize, name: &str) -> Option<usize> {
+    let mut from = at;
+    while let Some(n) = find(bytes, from, "</") {
+        let name_at = n + 2;
+        let end = name_at + name.len();
+        if bytes
+            .get(name_at..end)
+            .is_some_and(|b| b.eq_ignore_ascii_case(name.as_bytes()))
+            && !bytes.get(end).copied().is_some_and(is_word_char)
+        {
+            return Some(n);
+        }
+        from = name_at;
+    }
+    None
+}
+
+/// Draws `from..to` of a markup line in the embedded language, its ranges
+/// placed on the LINE's offsets, and answers what that language leaves open.
+fn embedded(
+    text: &str,
+    from: usize,
+    to: usize,
+    inner: crate::Language,
+    open: Open,
+    out: &mut Vec<Range>,
+) -> Open {
+    let Some(piece) = text.get(from..to) else {
+        return Open::Nothing;
+    };
+    let before = out.len();
+    let carried = code(
+        piece,
+        inner.grammar(),
+        State {
+            outer: open,
+            inner: Open::Nothing,
+        },
+        out,
+    );
+    for r in &mut out[before..] {
+        r.start += from;
+        r.end += from;
+    }
+    carried.outer
 }
 
 /// The pieces of one `<…>`: the element's name, then its attributes.

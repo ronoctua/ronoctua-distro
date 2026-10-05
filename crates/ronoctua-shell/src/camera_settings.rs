@@ -28,8 +28,6 @@
 //! typed it to its `0600` file — it never goes down a socket or into an
 //! `argv`.
 
-use std::path::PathBuf;
-
 use crate::files::{Field, Hit as FilesHit, Ink};
 use ronoctua_camera::{Camera, ControlKind, Kind, Mode};
 use ronoctua_studio::{
@@ -42,8 +40,8 @@ use ronoctua_tokens as tokens;
 pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "camera-settings-down", Where::Anywhere),
     ("<up>", "camera-settings-up", Where::Anywhere),
-    ("<left>", "camera-settings-less", Where::OnAValue),
-    ("<right>", "camera-settings-more", Where::OnAValue),
+    ("<left>", "camera-settings-less", Where::Turns),
+    ("<right>", "camera-settings-more", Where::Turns),
     ("RET", "camera-settings-enter", Where::OnAValue),
     ("d", "camera-settings-remove", Where::OnRemovable),
 ];
@@ -55,6 +53,9 @@ pub enum Where {
     Anywhere,
     /// On a row that turns or opens.
     OnAValue,
+    /// On a row whose value turns with the arrows — not the pictures'
+    /// folder, which `RET` opens and nothing turns.
+    Turns,
     /// On a scene or a script.
     OnRemovable,
 }
@@ -64,6 +65,7 @@ impl Where {
         match self {
             Self::Anywhere => true,
             Self::OnAValue => target.turns(),
+            Self::Turns => target.turns() && !matches!(target, Target::PicturesFolder),
             Self::OnRemovable => matches!(target, Target::Scene(_) | Target::Script(_)),
         }
     }
@@ -86,6 +88,9 @@ pub enum Press {
     Remove,
     /// Out.
     Escape,
+    /// A key the FILE PICKER up over the view takes — every letter, and its
+    /// own keys ([`View::picker_takes`]).
+    Pick(ronoctua_keymap::Key),
 }
 
 /// What a row is.
@@ -109,14 +114,22 @@ pub enum Target {
     Param(String, bool),
     /// The background mode.
     Background,
-    /// The replaced background's picture.
+    /// The replaced background's picture: `←`/`→` turn among the pictures
+    /// chosen for it, and none; `RET` chooses them in the file picker.
     Backdrop,
+    /// Where photos go: `RET` chooses the folder in the file picker.
+    PicturesFolder,
+    /// A row or a cell of the file picker, while it is up.
+    Pick(crate::file_picker::Target),
     /// The virtual camera now.
     Virtual,
     /// At every start.
     VirtualAtStart,
     /// What it sends.
     VirtualSends,
+    /// What the camera it sends goes through: the preview's chain, none, or
+    /// an effect of its own.
+    VirtualEffect,
     /// Program size.
     Size,
     /// Program rate.
@@ -277,6 +290,10 @@ pub enum Errand {
     Cameras(ronoctua_camera::prefs::Preferences),
     /// Every setting back as it came (see [`Target::Defaults`]).
     Defaults,
+    /// Say this; it is already a sentence.
+    Said(String),
+    /// Read the clipboard for the file picker ([`View::picker_pasted`]).
+    Paste,
     /// Set a camera's control now, and remember it.
     Control {
         /// The camera.
@@ -301,44 +318,20 @@ pub struct Snapshot {
     pub state: Option<State>,
     /// Whether a stream key is set.
     pub key_set: bool,
-    /// The pictures a background can be replaced with.
-    pub backdrops: Vec<PathBuf>,
 }
 
-/// How many pictures the backdrop ring offers.
-const BACKDROPS_MOST: usize = 60;
-
 impl Snapshot {
-    /// Reads the two files and the pictures directory; the cameras and the
-    /// state come from the threads.
+    /// Reads the two files; the cameras and the state come from the
+    /// threads. The backdrop is chosen in the file picker, where every
+    /// picture of every folder is — never a ring of one folder's.
     #[must_use]
     pub fn read(cameras: Vec<Camera>, state: Option<State>) -> Self {
-        let prefs = prefs::store().read();
-        let dir = prefs.pictures_dir();
-        let mut backdrops: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map(|d| {
-                d.flatten()
-                    .map(|e| e.path())
-                    .filter(|p| {
-                        p.extension().is_some_and(|x| {
-                            matches!(
-                                x.to_string_lossy().to_lowercase().as_str(),
-                                "png" | "jpg" | "jpeg" | "webp"
-                            )
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        backdrops.sort();
-        backdrops.truncate(BACKDROPS_MOST);
         Self {
             cameras,
             camera_prefs: ronoctua_camera::prefs::store().read(),
-            prefs,
+            prefs: prefs::store().read(),
             state,
             key_set: prefs::has_stream_key(),
-            backdrops,
         }
     }
 
@@ -361,6 +354,21 @@ pub struct View {
     /// The reset row was pressed once: the next press there carries it out,
     /// and any other press, or the cursor leaving, takes it back.
     armed: bool,
+    /// The file picker, while it is up over the view's rows — the
+    /// backdrop's picture, the pictures' folder
+    /// (`crate::file_picker::Hosted`).
+    picking: Option<crate::file_picker::Hosted<Picking>>,
+    /// The door's wake, for the file picker ([`View::watch_with`]).
+    wake: Option<crate::player_subtitles::Wake>,
+}
+
+/// What the file picker is up for, in this view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picking {
+    /// The replaced background's picture.
+    Backdrop,
+    /// Where photos go.
+    PicturesFolder,
 }
 
 /// The rings, in the order `→` walks them.
@@ -409,6 +417,126 @@ impl View {
             cursor: 1,
             moved: false,
             armed: false,
+            picking: None,
+            wake: None,
+        }
+    }
+
+    /// The door's wake, for the file picker's folder and devices: a door
+    /// with a loop hands it once, and every picker this view opens after is
+    /// watched through it (`file_picker::FilePicker::watch_with`).
+    pub fn watch_with(&mut self, wake: crate::player_subtitles::Wake) {
+        self.wake = Some(wake);
+    }
+
+    /// What the wake brought the file picker, taken — `true` when its rows
+    /// changed and the door draws again.
+    pub fn look(&mut self) -> bool {
+        self.picking
+            .as_mut()
+            .is_some_and(crate::file_picker::Hosted::look)
+    }
+
+    /// How many lines of rows the door shows, for the file picker's `PgUp`
+    /// and `PgDn` — told before a key is handed over.
+    pub fn page_is(&self, lines: usize) {
+        if let Some(h) = self.picking.as_ref() {
+            h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// Whether the file picker is up and takes `key` — the door hands it as
+    /// [`Press::Pick`] before anything else reads it.
+    #[must_use]
+    pub fn picker_takes(&self, key: ronoctua_keymap::Key) -> bool {
+        self.picking.as_ref().is_some_and(|h| h.picker.claims(key))
+    }
+
+    /// What was copied, for the file picker.
+    pub fn picker_pasted(&mut self, text: &str) {
+        if let Some(h) = self.picking.as_mut() {
+            let _ = h.pasted(text);
+        }
+    }
+
+    /// The file picker, up for `asked`: a picture, starting beside the one
+    /// chosen now — or a folder, on the one photos go to now.
+    fn choose(&mut self, asked: Picking, snap: &Snapshot) {
+        use crate::file_picker::{EVERY_FILE, Hosted, Mode, PICTURES, Request, Start};
+        let (purpose, mode, filters, start, title) = match asked {
+            Picking::Backdrop => (
+                "camera-backdrop",
+                Mode::Open { many: true },
+                PICTURES,
+                snap.prefs
+                    .backdrop
+                    .as_ref()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                    .unwrap_or_else(|| snap.prefs.pictures_dir()),
+                ronoctua_i18n::key::CAMERA_PICK_BACKDROPS,
+            ),
+            Picking::PicturesFolder => (
+                "camera-pictures",
+                Mode::Folder,
+                EVERY_FILE,
+                snap.prefs.pictures_dir(),
+                ronoctua_i18n::key::CAMERA_PICTURES,
+            ),
+        };
+        self.picking = Some(Hosted::open(
+            Request {
+                purpose,
+                mode,
+                filters,
+                start: Start::At(start),
+                addresses: false,
+                extras: &[],
+                alternate: None,
+            },
+            asked,
+            title,
+            self.wake.as_ref(),
+        ));
+    }
+
+    /// A key for the file picker: what it answers is written as the
+    /// studio's setting, and the view's rows come back.
+    fn pick_key(
+        &mut self,
+        key: ronoctua_keymap::Key,
+        snap: &Snapshot,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::file_picker::{Hosting, Picked};
+        let Some(h) = self.picking.as_mut() else {
+            return Errand::Nothing;
+        };
+        match h.key(key) {
+            Hosting::Nothing => Errand::Nothing,
+            Hosting::Back => {
+                self.picking = None;
+                Errand::Nothing
+            }
+            Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Paste => Errand::Paste,
+            Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
+                self.picking = None;
+                let Some(first) = paths.first().cloned() else {
+                    return Errand::Nothing;
+                };
+                let mut p = snap.prefs.clone();
+                match asked {
+                    // THE PICTURES CHOSEN are the ring the arrows turn, and
+                    // the first is the one shown.
+                    Picking::Backdrop => {
+                        p.backdrops = paths;
+                        p.backdrop = Some(first);
+                    }
+                    Picking::PicturesFolder => p.pictures = Some(first),
+                }
+                Errand::Studio(Box::new(p))
+            }
+            Hosting::Picked(..) => Errand::Nothing,
         }
     }
 
@@ -426,6 +554,9 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
+        if let Some(h) = self.picking.as_ref() {
+            return h.picker.hint(texts);
+        }
         let rows = self.rows(snap, columns, texts);
         let target = rows
             .get(self.cursor)
@@ -440,6 +571,15 @@ impl View {
 
     /// A click; `true` when it was the second on the same row.
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        // A ROW OF THE PICKER is chosen there: its cursor, and the second
+        // click its `RET`.
+        if let (Some(h), Some(Target::Pick(t))) =
+            (self.picking.as_mut(), rows.get(n).map(|r| &r.target))
+        {
+            let again = h.clicked(t.clone());
+            self.cursor = n;
+            return again;
+        }
         if rows.get(n).is_some_and(|r| !r.heading) {
             let again = self.cursor == n;
             if !again {
@@ -455,6 +595,11 @@ impl View {
     /// The cursor back on a real row after the rows changed.
     pub fn settle_in(&mut self, snap: &Snapshot, columns: u16, texts: &ronoctua_i18n::Texts) {
         let rows = self.rows(snap, columns, texts);
+        // THE PICKER KEEPS ITS OWN CURSOR: the view's is the row it is on.
+        if self.picking.is_some() {
+            self.cursor = rows.iter().position(|r| r.focused).unwrap_or(0);
+            return;
+        }
         self.clamp(&rows);
         if !self.moved
             && rows.get(self.cursor).is_some_and(|r| !r.target.turns())
@@ -523,6 +668,24 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
+        // THE PICKER takes its own keys, and the view's that walk, answer
+        // and go back — a second click's `RET`, the pointer's way back.
+        if self.picking.is_some() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match press {
+                Press::Pick(key) => key,
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Less => Key::simple(Sym::Left),
+                Press::More => Key::simple(Sym::Right),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                Press::Remove => return Errand::Nothing,
+            };
+            let errand = self.pick_key(key, snap, texts);
+            self.settle_in(snap, columns, texts);
+            return errand;
+        }
         self.settle_in(snap, columns, texts);
         let rows = self.rows(snap, columns, texts);
         if rows.is_empty() {
@@ -663,13 +826,30 @@ impl View {
             Target::Background => Errand::Tell(Ask::BackgroundTurn {
                 by: if forward { 1 } else { -1 },
             }),
-            Target::Backdrop => {
-                let all: Vec<Option<PathBuf>> = std::iter::once(None)
-                    .chain(snap.backdrops.iter().cloned().map(Some))
+            // THE BACKDROP TURNS among the pictures chosen for it, and none
+            // (`←`/`→`); `RET` — or an arrow with none chosen yet — chooses
+            // them in the file picker, several at once.
+            Target::Backdrop if press != Press::Enter && !p.backdrops.is_empty() => {
+                let all: Vec<Option<std::path::PathBuf>> = std::iter::once(None)
+                    .chain(p.backdrops.iter().cloned().map(Some))
                     .collect();
                 p.backdrop = ring(&all, &p.backdrop, forward);
                 studio(p)
             }
+            Target::Backdrop => {
+                self.choose(Picking::Backdrop, snap);
+                self.settle_in(snap, columns, texts);
+                Errand::Nothing
+            }
+            // THE PICTURES' FOLDER is chosen, and nothing turns it.
+            Target::PicturesFolder if press == Press::Enter => {
+                self.choose(Picking::PicturesFolder, snap);
+                self.settle_in(snap, columns, texts);
+                Errand::Nothing
+            }
+            Target::PicturesFolder => Errand::Nothing,
+            // A PICKER'S ROW reaches here only when none is up.
+            Target::Pick(_) => Errand::Nothing,
             Target::Virtual => Errand::Tell(Ask::Virtual {
                 on: Some(state.is_none_or(|s| s.virtual_node.is_none())),
             }),
@@ -679,6 +859,17 @@ impl View {
             }
             Target::VirtualSends => {
                 p.virtual_sends = ring(&[Sends::Program, Sends::Camera], &p.virtual_sends, forward);
+                studio(p)
+            }
+            // A CHAIN OF ITS OWN for the call: the preview's, none, or one
+            // declared effect — two chains on one capture
+            // (`ronoctua_studio::prefs::VirtualEffect`).
+            Target::VirtualEffect => {
+                p.virtual_effect = ring(
+                    &ronoctua_studio::prefs::VirtualEffect::ring(),
+                    &p.virtual_effect,
+                    forward,
+                );
                 studio(p)
             }
             Target::Size => {
@@ -765,6 +956,20 @@ impl View {
     /// Every row, in reading order.
     #[must_use]
     pub fn rows(&self, snap: &Snapshot, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        // THE PICKER'S ROWS while it is up, as this view's own.
+        if let Some(h) = self.picking.as_ref() {
+            return h.rows(columns, texts, |p| Row {
+                fields: p.fields,
+                focused: p.focused,
+                heading: p.heading,
+                spot: p.spot,
+                target: if p.heading {
+                    Target::Nothing
+                } else {
+                    Target::Pick(p.target)
+                },
+            });
+        }
         use ronoctua_i18n::key;
         let (left, room) = extent(columns);
         let mut b = Builder {
@@ -803,6 +1008,26 @@ impl View {
             Target::VirtualSends,
             "virtual-sends",
         );
+        // ONLY WHILE IT SENDS THE CAMERA ALONE: the program is the scene on
+        // air, effects and all, and has no chain of its own to choose.
+        if p.virtual_sends == Sends::Camera {
+            b.pair(
+                b.t(key::CAMERA_VIRTUAL_EFFECT),
+                match &p.virtual_effect {
+                    ronoctua_studio::prefs::VirtualEffect::Preview => {
+                        b.t(key::CAMERA_VIRTUAL_EFFECT_PREVIEW)
+                    }
+                    ronoctua_studio::prefs::VirtualEffect::None => {
+                        crate::camera::effect_name(None, texts)
+                    }
+                    ronoctua_studio::prefs::VirtualEffect::Own(id) => {
+                        crate::camera::effect_name(Some(id), texts)
+                    }
+                },
+                Target::VirtualEffect,
+                "virtual-effect",
+            );
+        }
         // CAPTURE.
         b.heading(key::CAMERA_HEADING_CAPTURE);
         b.note(key::CAMERA_ABOUT_CAPTURE);
@@ -866,7 +1091,7 @@ impl View {
         b.pair(
             b.t(key::CAMERA_PICTURES),
             p.pictures_dir().to_string_lossy().into_owned(),
-            Target::Nothing,
+            Target::PicturesFolder,
             "pictures",
         );
         b.pair(
@@ -1017,7 +1242,8 @@ pub fn carry_out(
     match errand {
         Errand::Nothing => Ok(None),
         Errand::Copy(text) => Ok(Some(crate::chrome::copied(&text, texts))),
-        Errand::Run(_) | Errand::Ask(_) | Errand::Close => Err(errand),
+        Errand::Run(_) | Errand::Ask(_) | Errand::Close | Errand::Paste => Err(errand),
+        Errand::Said(said) => Ok(Some(said)),
         // THE ADDRESS IS WRITTEN OVER WHAT THE FILE SAYS NOW, not over this
         // door's copy: the other door may have turned a ring since.
         Errand::StreamUrl(url) => {
@@ -1509,6 +1735,36 @@ mod tests {
         ronoctua_i18n::Texts::fresh("en-GB").expect("the base language")
     }
 
+    /// FAILS IF: the virtual camera's own effect is offered while it sends
+    /// the program (which has no chain of its own), or is not turned by the
+    /// row while it sends the camera alone.
+    #[test]
+    fn the_virtual_cameras_own_effect_is_a_ring_while_it_sends_the_camera() {
+        let t = texts();
+        let mut program = Snapshot::default();
+        let rows = View::fresh().rows(&program, 100, &t);
+        assert!(
+            !rows.iter().any(|r| r.target == Target::VirtualEffect),
+            "offered while sending the program"
+        );
+        program.prefs.virtual_sends = Sends::Camera;
+        let rows = View::fresh().rows(&program, 100, &t);
+        let row = rows
+            .iter()
+            .find(|r| r.target == Target::VirtualEffect)
+            .expect("the row, while it sends the camera");
+        assert!(
+            row.fields
+                .iter()
+                .any(|f| f.text == t.t(ronoctua_i18n::key::CAMERA_VIRTUAL_EFFECT_PREVIEW))
+        );
+        let ring = ronoctua_studio::prefs::VirtualEffect::ring();
+        assert_eq!(
+            super::ring(&ring, &program.prefs.virtual_effect, true),
+            ring[1]
+        );
+    }
+
     fn a_camera() -> Camera {
         Camera {
             identity: Identity::of("Cam", "usb-1", "1-1:1.0"),
@@ -1796,5 +2052,37 @@ mod tests {
         let modes = modes_of(&a_camera());
         assert_eq!(modes[0], None);
         assert_eq!(modes.len(), 2);
+    }
+
+    /// FAILS IF: the backdrop's arrows stop turning among the pictures
+    /// chosen for it (and none), or the pictures' folder — which `RET`
+    /// chooses — turns, or teaches the arrows it does not answer.
+    #[test]
+    fn the_backdrop_turns_among_the_pictures_chosen() {
+        let tx = texts();
+        let mut s = snap();
+        if let Some(state) = s.state.as_mut() {
+            state.background = Some("background-replace".into());
+        }
+        s.prefs.backdrops = vec!["/p/a.png".into(), "/p/b.png".into()];
+        let mut v = View::fresh();
+        let rows = v.rows(&s, 100, &tx);
+        let at = |spot: &str| rows.iter().position(|r| r.spot == spot).expect(spot);
+        (v.cursor, v.moved) = (at("backdrop"), true);
+        let Errand::Studio(p) = v.key(Press::More, &s, 100, &tx) else {
+            panic!("the arrow turns the backdrop");
+        };
+        assert_eq!(p.backdrop, Some("/p/a.png".into()));
+        s.prefs.backdrop = Some("/p/a.png".into());
+        let Errand::Studio(p) = v.key(Press::Less, &s, 100, &tx) else {
+            panic!("and back");
+        };
+        assert_eq!(p.backdrop, None, "none is one of the ring");
+        (v.cursor, v.moved) = (at("pictures"), true);
+        assert_eq!(v.key(Press::More, &s, 100, &tx), Errand::Nothing);
+        assert!(v.picking.is_none(), "an arrow opens nothing on the folder");
+        let taught: Vec<&str> = v.hint(&s, 100, &tx).iter().filter_map(|p| p.id).collect();
+        assert!(!taught.contains(&"camera-settings-more"), "{taught:?}");
+        assert!(taught.contains(&"camera-settings-enter"), "{taught:?}");
     }
 }

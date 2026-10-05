@@ -41,7 +41,27 @@
 
 use std::path::Path;
 
+use ronoctua_xml::roxmltree;
+
 use crate::{Refusal, text, tools, zip};
+
+/// How deep a document's XML may nest: the shared ceiling.
+///
+/// MEASURED on seventeen real files (ODF text and spreadsheets, Word and Excel
+/// parts, an EPUB's XHTML): the deepest nests eighteen levels, an ODF with
+/// lists inside lists, and every Word, Excel and EPUB part ten or fewer. A
+/// list or a table nested ten deep more is still under 48.
+const XML_DEPTH: usize = ronoctua_xml::DEPTH_MOST;
+
+/// One part's XML, parsed once its nesting is measured.
+///
+/// `roxmltree` recurses once per level and has no limit of its own: a part
+/// made for it ran the inspector's thread out of stack, which aborts the
+/// footer rather than refusing a preview.
+fn xml_of(text: &str) -> Result<roxmltree::Document<'_>, Refusal> {
+    ronoctua_xml::parse_within(text, roxmltree::ParsingOptions::default(), XML_DEPTH)
+        .map_err(|_| Refusal::Failed)
+}
 
 /// How many bytes of a document are read at all.
 ///
@@ -225,31 +245,38 @@ pub fn of(path: &Path, mime: &str, tab: usize) -> Option<Result<text::Read, Refu
 }
 
 fn read_it(path: &Path, kind: Kind, tab: usize) -> Result<text::Read, Refusal> {
+    lines_of(said(path, kind)?, tab)
+}
+
+/// What the document says, as the lines of its text — before any of the
+/// panel's cuts, de-tabbing or trimming. The panel's reader ([`of`]) and the
+/// index's (`crate::plain`) are this one reading, so a document is found by
+/// the words the preview shows.
+pub(crate) fn said(path: &Path, kind: Kind) -> Result<Vec<String>, Refusal> {
     if let Kind::Legacy(tool) = kind {
-        return from_a_program(path, tool, tab);
+        return from_a_program(path, tool);
     }
     let raw = read_capped(path)?;
     if let Kind::Rich = kind {
-        return lines_of(crate::rtf::plain(&raw)?, tab);
+        return crate::rtf::plain(&raw);
     }
     if let Kind::Show = kind {
-        return lines_of(crate::ppt::plain(&raw)?, tab);
+        return crate::ppt::plain(&raw);
     }
     if let Kind::Word = kind {
-        return lines_of(crate::doc::plain(&raw)?, tab);
+        return crate::doc::plain(&raw);
     }
     let list = zip::members(&raw)?;
-    let lines = match kind {
-        Kind::Words => words(&raw, &list)?,
-        Kind::Slides => slides(&raw, &list)?,
-        Kind::Sheet => sheet(&raw, &list)?,
-        Kind::Book => book(&raw, &list)?,
-        Kind::Archive => archive(&list),
+    match kind {
+        Kind::Words => words(&raw, &list),
+        Kind::Slides => slides(&raw, &list),
+        Kind::Sheet => sheet(&raw, &list),
+        Kind::Book => book(&raw, &list),
+        Kind::Archive => Ok(archive(&list)),
         Kind::Rich | Kind::Show | Kind::Word | Kind::Legacy(_) => {
             unreachable!("answered above")
         }
-    };
-    lines_of(lines, tab)
+    }
 }
 
 /// The lines, as the text module's `Read`.
@@ -318,7 +345,7 @@ fn cut_to(s: &str, max: usize) -> String {
 /// codes, which are `PAGE \* MERGEFORMAT` and belong to the layout this module
 /// does not draw.
 fn flow(xml: &str, breaks: &[&str], skip: &[&str]) -> Result<Vec<String>, Refusal> {
-    let doc = roxmltree::Document::parse(xml).map_err(|_| Refusal::Failed)?;
+    let doc = xml_of(xml)?;
     let mut out: Vec<String> = Vec::new();
     let mut line = String::new();
     for node in doc.descendants() {
@@ -428,7 +455,7 @@ fn book(raw: &[u8], list: &[zip::Member]) -> Result<Vec<String>, Refusal> {
         raw,
         zip::part(list, "META-INF/container.xml").ok_or(Refusal::Failed)?,
     )?)?;
-    let doc = roxmltree::Document::parse(&container).map_err(|_| Refusal::Failed)?;
+    let doc = xml_of(&container)?;
     let opf = doc
         .descendants()
         .find(|n| n.tag_name().name() == "rootfile")
@@ -440,7 +467,7 @@ fn book(raw: &[u8], list: &[zip::Member]) -> Result<Vec<String>, Refusal> {
         raw,
         zip::part(list, &opf).ok_or(Refusal::Failed)?,
     )?)?;
-    let doc = roxmltree::Document::parse(&package).map_err(|_| Refusal::Failed)?;
+    let doc = xml_of(&package)?;
     let by_id: Vec<(&str, &str)> = doc
         .descendants()
         .filter(|n| n.tag_name().name() == "item")
@@ -512,7 +539,7 @@ fn odf_sheet(raw: &[u8], list: &[zip::Member]) -> Result<Vec<Vec<String>>, Refus
         raw,
         zip::part(list, "content.xml").ok_or(Refusal::Failed)?,
     )?)?;
-    let doc = roxmltree::Document::parse(&xml).map_err(|_| Refusal::Failed)?;
+    let doc = xml_of(&xml)?;
     let mut grid = Vec::new();
     for row in doc
         .descendants()
@@ -565,7 +592,7 @@ fn ooxml_sheet(raw: &[u8], list: &[zip::Member]) -> Result<Vec<Vec<String>>, Ref
     let shared: Vec<String> = match zip::part(list, "xl/sharedStrings.xml") {
         Some(m) => {
             let xml = utf8(zip::member_bytes(raw, m)?)?;
-            let doc = roxmltree::Document::parse(&xml).map_err(|_| Refusal::Failed)?;
+            let doc = xml_of(&xml)?;
             doc.descendants()
                 .filter(|n| n.tag_name().name() == "si")
                 .map(|n| {
@@ -585,7 +612,7 @@ fn ooxml_sheet(raw: &[u8], list: &[zip::Member]) -> Result<Vec<Vec<String>>, Ref
     names.sort_by_key(|m| m.name().to_owned());
     let first = names.first().ok_or(Refusal::Nothing)?;
     let xml = utf8(zip::member_bytes(raw, first)?)?;
-    let doc = roxmltree::Document::parse(&xml).map_err(|_| Refusal::Failed)?;
+    let doc = xml_of(&xml)?;
     let mut grid = Vec::new();
     for row in doc.descendants().filter(|n| n.tag_name().name() == "row") {
         let mut cells: Vec<String> = Vec::new();
@@ -762,7 +789,7 @@ fn read_capped(path: &Path) -> Result<Vec<u8>, Refusal> {
 /// owner's choice — *"planilha vira tabela"* — is about spreadsheets and not
 /// about which library opened one, so the cells go through the same [`align`]
 /// the `.xlsx` and the `.ods` do.
-fn from_a_program(path: &Path, tool: tools::Tool, tab: usize) -> Result<text::Read, Refusal> {
+fn from_a_program(path: &Path, tool: tools::Tool) -> Result<Vec<String>, Refusal> {
     let out = tools::text_of(tool, path)?;
     if out.trim().is_empty() {
         return Err(Refusal::Failed);
@@ -777,9 +804,9 @@ fn from_a_program(path: &Path, tool: tools::Tool, tab: usize) -> Result<text::Re
                 row
             })
             .collect();
-        return lines_of(align(&grid), tab);
+        return Ok(align(&grid));
     }
-    lines_of(out.lines().map(str::to_owned).collect(), tab)
+    Ok(out.lines().map(str::to_owned).collect())
 }
 
 /// One line of CSV, as cells.

@@ -56,8 +56,15 @@
 //! which is the point: the same screen shows the same number of columns
 //! whether it is sharp or not.
 //!
-//! Only two things are physical, and both are here: the surface the GPU draws
-//! into, and the size the rasteriser draws a glyph at.
+//! Two things are physical here: the surface the GPU draws into, and the size
+//! the rasteriser draws a glyph at. And every TEXTURE is born at physical
+//! pixels and drawn into a logical box, by the same rule, where it is made:
+//! a launcher icon and a program's picture at `Footer::icon_side_px`, a
+//! buffer's `Command::Svg` at its cells times the scale (`buffer::Host::
+//! vector_ones`), the file manager's film, turning piece and globe at
+//! `Panel::preview_scale` (`files::globe_texture_at`), and the thumbnails at
+//! `files::thumb_side`. The clipboard's preview needs nothing: it is the
+//! copied image at its own size, fitted down.
 //!
 //! # What the clamp costs, and it is the pointer
 //!

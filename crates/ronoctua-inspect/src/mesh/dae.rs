@@ -25,12 +25,30 @@
 //! they are written. Collecting them by name and applying them in a fixed
 //! order gives a different placement for a rotate-then-translate node.
 
-use super::xml::{attr, tagged};
+use super::xml::{attr, parse, tagged};
 use super::{Mesh, Read, Shape, TRIANGLE_CEILING};
 use crate::Refusal;
+use ronoctua_xml::roxmltree;
 
 /// How deep the node tree may go before it is called a loop.
 const NESTING_CEILING: u32 = 64;
+
+/// How deep a COLLADA document's XML may nest: the node tree at its ceiling,
+/// and what sits around it.
+///
+/// A scene's `<node>`s ARE its nesting — a rig's skeleton passes twenty levels
+/// — so the shared ceiling of 48 would refuse real files. Three elements hold
+/// the first node (`COLLADA > library_visual_scenes > visual_scene`), and the
+/// deepest thing a node holds is a skinned instance's five
+/// (`instance_controller`, `bind_material`, `technique_common`,
+/// `instance_material`, `bind_vertex_input`): at the walk's ceiling that is
+/// 73, and 16 over the node tree leaves seven to spare.
+///
+/// MEASURED against the stack, not only the format: a scene at exactly this
+/// depth is read whole on a 2 MiB thread in a debug build
+/// (`a_scene_at_the_xml_ceiling_is_read_on_a_small_thread`) — the parse and
+/// the walk's own recursion together.
+const XML_DEPTH: usize = NESTING_CEILING as usize + 16;
 
 /// Reads a COLLADA document.
 ///
@@ -41,7 +59,7 @@ const NESTING_CEILING: u32 = 64;
 /// [`TRIANGLE_CEILING`].
 pub fn read(bytes: &[u8]) -> Result<Read, Refusal> {
     let text = std::str::from_utf8(bytes).map_err(|_| Refusal::Failed)?;
-    let doc = roxmltree::Document::parse(text).map_err(|_| Refusal::Failed)?;
+    let doc = parse(text, XML_DEPTH)?;
     let root = doc.root_element();
     if !tagged(root, "COLLADA") {
         return Err(Refusal::Failed);
@@ -419,7 +437,61 @@ fn positions(mesh: roxmltree::Node<'_, '_>, id: &str) -> Option<Vec<[f32; 3]>> {
 
 #[cfg(test)]
 mod tests {
-    use super::read;
+    use super::{NESTING_CEILING, XML_DEPTH, read};
+    use crate::Refusal;
+
+    /// A scene whose outer node holds `nodes` more, one inside the other, the
+    /// deepest holding a skinned instance's chain — the deepest a node goes.
+    fn deep(nodes: usize) -> String {
+        let mut inner = "<node>".repeat(nodes);
+        inner.push_str(
+            r##"<instance_geometry url="#g"><bind_material><technique_common><instance_material symbol="m" target="#m"><bind_vertex_input semantic="UV" input_semantic="TEXCOORD"/></instance_material></technique_common></bind_material></instance_geometry>"##,
+        );
+        inner.push_str(&"</node>".repeat(nodes));
+        document("<up_axis>Z_UP</up_axis>", &inner)
+    }
+
+    /// `read` on a thread with the stack a test thread and the inspector's
+    /// get by default, so an overflow is this test's and not a pass.
+    fn read_on_a_small_thread(text: String) -> Result<usize, Refusal> {
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || read(text.as_bytes()).map(|r| r.body.mesh.triangles()))
+            .expect("a thread")
+            .join()
+            .expect("the read came back")
+    }
+
+    #[test]
+    fn a_scene_at_the_xml_ceiling_is_read_on_a_small_thread() {
+        // THE MEASUREMENT `XML_DEPTH` CITES: the walk's deepest node, holding
+        // the deepest thing a node holds, parsed and walked on 2 MiB.
+        let text = deep(NESTING_CEILING as usize);
+        assert!(
+            ronoctua_xml::shallow(&text, XML_DEPTH),
+            "the fixture is under the ceiling"
+        );
+        assert!(
+            !ronoctua_xml::shallow(&text, XML_DEPTH - 9),
+            "the fixture is near the ceiling, or it measures nothing"
+        );
+        assert_eq!(read_on_a_small_thread(text), Ok(2));
+    }
+
+    #[test]
+    fn a_scene_past_its_ceiling_is_refused_before_it_is_parsed() {
+        // One level past the ceiling is a refusal, and a document made to run
+        // the parser out of stack is the same refusal — on the same small
+        // thread, so a parse that recursed would abort this test binary.
+        let past = format!(
+            "<COLLADA>{}{}</COLLADA>",
+            "<a>".repeat(XML_DEPTH),
+            "</a>".repeat(XML_DEPTH)
+        );
+        assert_eq!(read_on_a_small_thread(past), Err(Refusal::Failed));
+        let bomb = format!("<COLLADA>{}</COLLADA>", "<node>".repeat(100_000));
+        assert_eq!(read_on_a_small_thread(bomb), Err(Refusal::Failed));
+    }
 
     /// One triangle, with whatever `<asset>` and node body is given.
     fn document(asset: &str, node: &str) -> String {

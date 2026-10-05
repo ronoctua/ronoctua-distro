@@ -410,12 +410,12 @@ impl Notifications {
                 }
                 self.book.mine.retain(|r| r.id != rule.id);
                 self.book.mine.push(rule);
-                self.save_the_book();
+                self.save_the_book(ui);
             }
             Errand::Unfilter(id) => {
                 self.book.mine.retain(|r| r.id != id);
                 self.book.adjustments.remove(&id);
-                self.save_the_book();
+                self.save_the_book(ui);
             }
             // INTO THE REPOSITORY, one filter at a time, by name, after a
             // screen that said what it means. This writes SOURCE — what makes
@@ -423,15 +423,15 @@ impl Notifications {
             // is the owner's own commit, which needs them in front of the
             // machine anyway.
             Errand::Share(id) => {
-                let said = self.share_one(&id);
-                ui.message = Some(ui.texts.t(said));
+                let said = self.share_one(&id, ui);
+                ui.say(ui.texts.t(said));
             }
             Errand::Adjusted(id, verdict) => {
                 match verdict {
                     Some(v) => self.book.adjustments.insert(id, v),
                     None => self.book.adjustments.remove(&id),
                 };
-                self.save_the_book();
+                self.save_the_book(ui);
             }
         }
         ui.ask_paint();
@@ -447,7 +447,7 @@ impl Notifications {
     /// owner said was not an interface.
     ///
     /// It returns the text key to put on the message line.
-    fn share_one(&mut self, id: &str) -> &'static str {
+    fn share_one(&mut self, id: &str, ui: &mut Ui) -> &'static str {
         let Some(rule) = self.book.mine.iter().find(|r| r.id == id).cloned() else {
             return ronoctua_i18n::key::NOTIF_SHARE_FAILED;
         };
@@ -467,7 +467,7 @@ impl Notifications {
         // keeps working until a build brings it back as one of the distro's —
         // see `Book::took`, which is where it retires.
         self.book.shared.insert(id.to_owned());
-        self.save_the_book();
+        self.save_the_book(ui);
         tracing::info!(id, "a filter was written into the repository");
         ronoctua_i18n::key::NOTIF_SHARED_WRITTEN
     }
@@ -496,7 +496,7 @@ impl Notifications {
             return;
         }
         if let Some(said) = crate::notifications::copy_it(&deed) {
-            ui.message = Some(ui.texts.t(said));
+            ui.say(ui.texts.t(said));
         }
         if let Deed::Run(program, argv) = &deed {
             let Some(path) = crate::actions::notification_program(*program) else {
@@ -543,7 +543,7 @@ impl Notifications {
             }
             Launch::Failed { program, error } => {
                 tracing::error!(error, program, "could not open");
-                ui.message = Some(ui.texts.t_with(
+                ui.say(ui.texts.t_with(
                     ronoctua_i18n::key::ECHO_NO_OPENED,
                     &[("program", program.as_str())],
                 ));
@@ -554,7 +554,11 @@ impl Notifications {
 
     /// Writes the person's half of the filter book: their filters and their
     /// adjustments.
-    fn save_the_book(&mut self) {
+    /// Writes the person's filters and verdicts — and says so when it
+    /// could not, as the footer says it (`ECHO_PREFERENCE_NOT_WRITTEN`): a
+    /// filter that lasts only until the window closes is a filter somebody
+    /// thinks they made.
+    fn save_the_book(&mut self, ui: &mut Ui) {
         let prefs = ronoctua_notify::Preferences {
             rules: self.book.mine.clone(),
             shared: self.book.shared.clone(),
@@ -562,6 +566,16 @@ impl Notifications {
         };
         if let Err(e) = self.notes.save_preferences(&prefs) {
             tracing::warn!(error = %e, "could not write the preferences");
+            ui.say_for(
+                ui.texts.t_with(
+                    ronoctua_i18n::key::ECHO_PREFERENCE_NOT_WRITTEN,
+                    &[
+                        ("file", ronoctua_notify::store::PREFERENCES_FILE),
+                        ("why", &e.to_string()),
+                    ],
+                ),
+                crate::echo::Echo::Long,
+            );
         }
     }
 

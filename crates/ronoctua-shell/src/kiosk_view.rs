@@ -111,9 +111,11 @@ const fn door(key: &'static str, label: &'static str, command: &'static str, to:
 /// `h l r` are a browser's three, on vi's sideways keys; `[ ]` walk the tabs
 /// and `{ }` carry the tab in front with them (Chrome's own `Ctrl`+`Shift`
 /// pair, one key further). The zoom is `= - 0`, Chrome's own. `k` is the
-/// bars, `a` the address line, and the two capitals are the two that change
-/// what the kiosk IS: `M` the modeline's adaptation and `R` back to an
-/// ordinary window.
+/// bars, `a` the address line, and the capital changes what the kiosk IS:
+/// `R`, back to an ordinary window. The modeline's adaptation was `M` here
+/// until it moved to the footer's own settings (`LEADER s r`,
+/// `crate::footer_settings`, 2026-09-30): it is a setting of the footer, and
+/// this grid is where a person acts on the page.
 pub const ROOT: &[Cell] = &[
     run("h", key::KIOSK_MENU_BACK, "kiosk-back", true),
     run("l", key::KIOSK_MENU_FORWARD, "kiosk-forward", true),
@@ -152,12 +154,6 @@ pub const ROOT: &[Cell] = &[
         key::KIOSK_MENU_ADDRESS_SHOW,
         key::KIOSK_MENU_ADDRESS_HIDE,
         "kiosk-address-line",
-    ),
-    switch(
-        "M",
-        key::KIOSK_MENU_ADAPT,
-        key::KIOSK_MENU_PLAIN,
-        "modeline-adapt-kiosk",
     ),
     run("R", key::KIOSK_MENU_RELEASE, "kiosk-release", false),
 ];
@@ -225,8 +221,6 @@ pub struct Facts {
     pub bars_shown: bool,
     /// The address line is up.
     pub address_line: bool,
-    /// The modeline adapts to the kiosk.
-    pub adapted: bool,
 }
 
 impl Facts {
@@ -235,7 +229,6 @@ impl Facts {
         match command {
             "kiosk-chrome-ui" => self.bars_shown,
             "kiosk-address-line" => self.address_line,
-            "modeline-adapt-kiosk" => self.adapted,
             _ => false,
         }
     }

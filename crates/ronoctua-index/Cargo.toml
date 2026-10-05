@@ -1,0 +1,89 @@
+[package]
+name = "ronoctua-index"
+description = "The super index of fast-access: names, contents, manuals, packages and the video catalogue in one tantivy index — one writer, many readers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THREE LAYERS, AND THE DOORS LINK THE FIRST TWO.
+#
+# Without features the crate is the SHAPE — `Kind`, `Query`, `Hit`, the
+# refusals, the settings — and a reader that refuses honestly. `engine` brings
+# tantivy (the reader that answers). `write` is the builder the
+# `ronoctua-index` unit runs: the writer and the crawlers (contents through
+# `ronoctua-inspect`, the packages through `ronoctua-software`'s reader of the
+# Nix index, the video catalogue through `ronoctua-video-metrics`).
+#
+# BOTH ARE ON BY DEFAULT, so a workspace build compiles the unit's binary and
+# the bench (`[[bin]]` needs its features enabled by some member, and the
+# member that enables them is this one). A door depends with
+# `default-features = false, features = [ "engine" ]` and names no crawler:
+# what it calls is the reader, and the linker keeps only what is called —
+# the closure a door carries is `ronoctua-shell`'s own, never this unit's.
+[features]
+default = [ "engine", "write" ]
+engine = [ "dep:tantivy", "dep:ronoctua-files" ]
+# A manual page's text, for a door's detail (`man::text_of`): the folders,
+# the gzip and the roff stripped — none of the writer.
+man = [ "dep:flate2" ]
+write = [
+  "engine",
+  "man",
+  "dep:ronoctua-files",
+  "dep:ronoctua-inspect",
+  "dep:ronoctua-software",
+  "dep:ronoctua-video-metrics",
+  "ronoctua-video-metrics/db",
+  "dep:rustix",
+  "dep:flate2",
+  "dep:tracing-subscriber",
+]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# `fold` is the one accent-and-case folding of the tree: the name tokenizer
+# uses it, so a query folds the way the index did.
+ronoctua-apps = { path = "../ronoctua-apps" }
+# The cache root the index lives under, and the configuration root of
+# `index.json` (per instance: the nested loop's index is its own).
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-store = { path = "../ronoctua-store" }
+tantivy = { workspace = true, optional = true }
+# The commit watch a door arms (`on_commit`, `Notice::on_file` on
+# `meta.json`), and for the unit the MIME table, by name (no file is opened
+# to type it).
+ronoctua-files = { path = "../ronoctua-files", optional = true }
+# What is written in a file: `plain::of`, the preview's own readers without
+# the highlighting.
+ronoctua-inspect = { path = "../ronoctua-inspect", optional = true }
+# The Nix index's one reader (`nix_index::Row::of_line`): a second parser of
+# that TSV would be a second place to learn a new column.
+ronoctua-software = { path = "../ronoctua-software", optional = true }
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics", default-features = false, optional = true }
+# inotify and `poll`: the unit's one thread waits on the kernel, with no clock
+# unless changes are pending. Syscalls, not a crate: nothing new in the lock.
+rustix = { workspace = true, optional = true, features = [ "fs", "event" ] }
+# A manual page is gzip. Already in the lock (`ronoctua-inspect`, `png`).
+flate2 = { version = "1.1", optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+# THE UNIT: `serve` (reconcile, then inotify), and the one-shot `build`,
+# `query` and `wait` the checks drive.
+[[bin]]
+name = "ronoctua-index"
+path = "src/bin/index.rs"
+required-features = [ "write" ]
+
+# THE GATE: a million synthetic names, keystroke queries, p99 against the
+# design's two numbers. `nix run .#bench` runs it.
+[[bin]]
+name = "ronoctua-bench-index"
+path = "src/bin/bench.rs"
+required-features = [ "write" ]
+
+[lints]
+workspace = true

@@ -466,6 +466,55 @@ impl Ask {
     }
 }
 
+/// What the file picker is up for, in this view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picking {
+    /// An image for the web app's icon.
+    Icon,
+    /// A package file to install: an `.AppImage`, an `.apk`, a
+    /// `.flatpakref` (`order::file_source`).
+    Package,
+}
+
+impl Picking {
+    /// The request the picker opens with.
+    fn request(self) -> crate::file_picker::Request {
+        use crate::file_picker::{Mode, PICTURES, Request, Start, Xdg};
+        let (purpose, filters, place) = match self {
+            Self::Icon => ("software-icon", PICTURES, Xdg::PICTURES),
+            Self::Package => ("software-package", PACKAGE_FILES, Xdg::DOWNLOAD),
+        };
+        Request {
+            purpose,
+            mode: Mode::Open { many: false },
+            filters,
+            start: Start::Place(place),
+            addresses: false,
+            extras: &[],
+            alternate: None,
+        }
+    }
+
+    /// The key of the picker's title.
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Icon => ronoctua_i18n::key::SOFTWARE_ICON_TYPED,
+            Self::Package => ronoctua_i18n::key::SOFTWARE_PICK_PACKAGE,
+        }
+    }
+}
+
+/// The files a source installs, as the file picker shows them.
+const PACKAGE: crate::file_picker::Filter = crate::file_picker::Filter {
+    label: ronoctua_i18n::key::FILE_PICKER_FILTER_PACKAGES,
+    keeps: |path, _| {
+        ronoctua_software::order::file_source(path).map(|_| ronoctua_tokens::icon::FILE)
+    },
+};
+
+/// The ring of a package file.
+const PACKAGE_FILES: &[crate::file_picker::Filter] = &[PACKAGE, crate::file_picker::Filter::ANY];
+
 /// Which consent a question asks for — the crate's [`Consent`] fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsentKind {
@@ -875,6 +924,36 @@ impl OnlineSource {
             Self::Dashboard => "dashboard",
         }
     }
+
+    /// The hosts it asks, as its consent row lets them — the catalogue's
+    /// own list (`ronoctua_software::<catalogue>::HOSTS`), which the
+    /// requests of `ronoctua_software::net` are asked on a pass for.
+    #[must_use]
+    pub const fn hosts(self) -> &'static [&'static str] {
+        match self {
+            Self::Flathub => ronoctua_software::flathub::HOSTS,
+            Self::Fdroid => ronoctua_software::fdroid::HOSTS,
+            Self::AppImageHub => ronoctua_software::appimagehub::HOSTS,
+            Self::Dashboard => ronoctua_software::dashboard::HOSTS,
+        }
+    }
+
+    /// What its consent row says it is for.
+    const fn what(self) -> &'static str {
+        use ronoctua_i18n::key;
+        match self {
+            Self::Flathub => key::SOFTWARE_CONSENT_FLATHUB,
+            Self::Fdroid => key::SOFTWARE_CONSENT_FDROID,
+            Self::AppImageHub => key::SOFTWARE_CONSENT_APPIMAGEHUB,
+            Self::Dashboard => key::SOFTWARE_CONSENT_DASHBOARD,
+        }
+    }
+
+    /// Whether every host it asks was let.
+    #[must_use]
+    pub fn is_let(self, consents: &ronoctua_consent::Consents) -> bool {
+        self.hosts().iter().all(|h| consents.allows(h))
+    }
 }
 
 /// One change to the person's preferences, applied by the DOOR through
@@ -970,12 +1049,18 @@ pub enum Target {
     Link(String),
     /// Something `RET` asks for on the door's line.
     Ask(Ask),
+    /// A file `RET` opens the file picker for (`crate::file_picker`).
+    Choose(Picking),
+    /// A row or a cell of the file picker, while it is up.
+    Pick(crate::file_picker::Target),
     /// An icon candidate: `RET` makes it the draft's.
     Candidate(IconChoice),
     /// One answer to the question.
     Answer(Answer),
     /// A line of the history: `RET` opens the program's sheet.
     Entry(Option<AppKey>),
+    /// A catalogue's consent row: `RET` lets its hosts (`consent_rows`).
+    Let(OnlineSource),
 }
 
 /// What a row is, so the cursor can be found again after a rebuild.
@@ -1008,6 +1093,10 @@ pub enum Spot {
     Drawer(&'static str),
     /// An icon candidate.
     Candidate(IconChoice),
+    /// A catalogue's consent row, by the catalogue's id.
+    Let(&'static str),
+    /// A row of the file picker, by its own spot.
+    Pick(String),
     /// An answer.
     Answer(Answer),
     /// A consent, by its attribute.
@@ -1128,6 +1217,9 @@ pub enum Errand {
     /// Write the clipboard's newest IMAGE to a file and hand its path to
     /// [`View::dropped`].
     PasteImage,
+    /// Let this catalogue's hosts in the person's `consent.json`
+    /// (`consent_rows::allow`), and read the consents again.
+    Let(OnlineSource),
 }
 
 /// Where the rows start and how wide they are — `power::extent`, the one
@@ -1176,6 +1268,11 @@ pub struct View {
     icon_query: String,
     /// Names handed in with a key from outside (the launcher).
     outside: Vec<(AppKey, String)>,
+    /// The file picker, while it is up over the view's rows — an icon, a
+    /// package file (`crate::file_picker::Hosted`).
+    picking: Option<crate::file_picker::Hosted<Picking>>,
+    /// The door's wake, for the file picker ([`View::watch_with`]).
+    wake: Option<crate::player_subtitles::Wake>,
 }
 
 impl View {
@@ -1206,6 +1303,8 @@ impl View {
             draft: None,
             icon_query: String::new(),
             outside: Vec::new(),
+            picking: None,
+            wake: None,
         };
         let errand = v.reopen(opening, r, texts);
         (v, errand)
@@ -1302,6 +1401,10 @@ impl View {
     /// somebody meant for something else.
     #[must_use]
     pub fn takes_letters(&self) -> bool {
+        // THE PICKER, while it is up, takes every letter.
+        if self.picking.is_some() {
+            return true;
+        }
         self.asking.is_none()
             && match self.level {
                 Level::WebEditor | Level::Icons(Shelf::Site | Shelf::File) => false,
@@ -1328,6 +1431,24 @@ impl View {
     /// Every row, for this level.
     #[must_use]
     pub fn rows(&self, r: &Readings, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+        // THE PICKER'S ROWS while it is up, as this view's own.
+        if let Some(h) = self.picking.as_ref() {
+            return h.rows(columns, texts, |p| Row {
+                fields: p.fields,
+                focused: p.focused,
+                heading: p.heading,
+                target: Target::Pick(p.target),
+                spot: if p.heading {
+                    Spot::Nothing
+                } else {
+                    Spot::Pick(p.spot)
+                },
+                disabled: false,
+                said: None,
+                can: Can::default(),
+                picture: None,
+            });
+        }
         let first = self.build(r, columns, texts, &self.at);
         if first.iter().any(|x| x.focused) {
             return first;
@@ -1360,6 +1481,9 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
+        if let Some(h) = self.picking.as_ref() {
+            return h.picker.hint(texts);
+        }
         let rows = self.rows(r, columns, texts);
         let row = rows.iter().find(|x| x.focused);
         let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
@@ -1376,6 +1500,11 @@ impl View {
         let Some(row) = rows.get(n).filter(|x| !x.heading) else {
             return false;
         };
+        // A ROW OF THE PICKER is chosen there: its cursor, and the second
+        // click its `RET`.
+        if let (Some(h), Target::Pick(t)) = (self.picking.as_mut(), &row.target) {
+            return h.clicked(t.clone());
+        }
         let again = row.focused;
         self.at = row.spot.clone();
         self.last = n;
@@ -1393,6 +1522,23 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
+        // THE PICKER takes the view's keys that walk, answer and go back — a
+        // second click's `RET`, a command's arrows, the pointer's way back.
+        if self.picking.is_some() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match press {
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Less => Key::simple(Sym::Left),
+                Press::More => Key::simple(Sym::Right),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                Press::NextSource => Key::simple(Sym::Tab),
+                Press::Paste => return Errand::Paste,
+                _ => return Errand::Nothing,
+            };
+            return self.pick_key(key, r, texts).unwrap_or(Errand::Nothing);
+        }
         let rows = self.rows(r, columns, texts);
         let at = rows.iter().position(|x| x.focused);
         if let Some(i) = at {
@@ -1464,8 +1610,110 @@ impl View {
         }
     }
 
+    /// A key the door read, for the file picker while it is up — `None` when
+    /// none is, or it does not take the key, which is then the view's.
+    pub fn pick_key(
+        &mut self,
+        key: ronoctua_keymap::Key,
+        r: &Readings,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Errand> {
+        let h = self.picking.as_mut().filter(|h| h.picker.claims(key))?;
+        let hosting = h.key(key);
+        Some(self.hosting(hosting, r, texts))
+    }
+
+    /// What the picker's step is to this view: its answer taken — the icon,
+    /// the package asked about — and the view's rows back.
+    fn hosting(
+        &mut self,
+        hosting: crate::file_picker::Hosting<Picking>,
+        r: &Readings,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::file_picker::{Hosting, Picked};
+        match hosting {
+            Hosting::Nothing => Errand::Nothing,
+            Hosting::Back => {
+                self.picking = None;
+                Errand::Nothing
+            }
+            Hosting::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Paste => Errand::Paste,
+            Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
+                let Some(path) = paths.into_iter().next() else {
+                    return Errand::Nothing;
+                };
+                match asked {
+                    Picking::Icon => {
+                        self.picking = None;
+                        self.took_icon(IconChoice::File { path }, r)
+                    }
+                    // A FILE NO SOURCE INSTALLS is said, and the picker
+                    // stays for another.
+                    Picking::Package => {
+                        if ronoctua_software::order::file_source(&path).is_none() {
+                            return Errand::Say(
+                                texts.t(ronoctua_i18n::key::SOFTWARE_NOT_A_PACKAGE_FILE),
+                            );
+                        }
+                        self.picking = None;
+                        self.ask_it(Question::Foreign(path));
+                        Errand::Nothing
+                    }
+                }
+            }
+            Hosting::Picked(..) => Errand::Nothing,
+        }
+    }
+
+    /// The file picker, opened for `asked` — what the rows that choose a
+    /// file run, and the commands that ask for one with no argument.
+    pub fn choose(&mut self, asked: Picking) -> Errand {
+        self.picking = Some(crate::file_picker::Hosted::open(
+            asked.request(),
+            asked,
+            asked.title(),
+            self.wake.as_ref(),
+        ));
+        Errand::Nothing
+    }
+
+    /// The door's wake, for the file picker's folder and devices: a door
+    /// with a loop hands it once, and every picker this view opens after is
+    /// watched through it (`file_picker::FilePicker::watch_with`).
+    pub fn watch_with(&mut self, wake: crate::player_subtitles::Wake) {
+        self.wake = Some(wake);
+    }
+
+    /// What the wake brought the file picker, taken — `true` when its rows
+    /// changed and the door draws again.
+    pub fn look(&mut self) -> bool {
+        self.picking
+            .as_mut()
+            .is_some_and(crate::file_picker::Hosted::look)
+    }
+
+    /// How many lines of rows the door shows, for the file picker's `PgUp`
+    /// and `PgDn` — told before a key is handed over.
+    pub fn page_is(&self, lines: usize) {
+        if let Some(h) = self.picking.as_ref() {
+            h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// Whether the file picker is up.
+    #[must_use]
+    pub const fn picking(&self) -> bool {
+        self.picking.is_some()
+    }
+
     /// A letter typed, in either door.
     pub fn letter(&mut self, c: char, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
+        if self.picking.is_some() {
+            let key = ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Char(c));
+            return self.pick_key(key, r, texts).unwrap_or(Errand::Nothing);
+        }
         // A CONTROL CHARACTER IS NOT A LETTER: `Delete` arrives as U+007F,
         // and typed it is a search for a character nobody can see.
         if c.is_control() {
@@ -1496,6 +1744,16 @@ impl View {
     /// `DEL`, in either door: one letter off the search, and an empty search
     /// goes back where it came from.
     pub fn erase(&mut self, r: &Readings) -> Errand {
+        if let Some(h) = self.picking.as_mut() {
+            let key = ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Backspace);
+            return match h.key(key) {
+                crate::file_picker::Hosting::Back => {
+                    self.picking = None;
+                    Errand::Nothing
+                }
+                _ => Errand::Nothing,
+            };
+        }
         if !self.takes_letters() {
             return Errand::Nothing;
         }
@@ -1532,6 +1790,10 @@ impl View {
     /// `.flatpakref` offers to install that file — both as rows on top of what
     /// the search finds.
     pub fn pasted(&mut self, text: &str, r: &Readings) -> Errand {
+        if let Some(h) = self.picking.as_mut() {
+            let _ = h.pasted(text);
+            return Errand::Nothing;
+        }
         let line = text
             .lines()
             .map(str::trim)
@@ -1953,6 +2215,7 @@ impl View {
             Target::Door(level) => self.go(level.clone(), r),
             Target::Deed(deed) => self.perform(deed.clone(), r, texts),
             Target::Ring(ring) => self.turn(*ring, true, r, texts),
+            Target::Let(source) => Errand::Let(*source),
             Target::Drawer(id) => {
                 if let Some(at) = self.open.iter().position(|o| o == id) {
                     self.open.remove(at);
@@ -1975,6 +2238,9 @@ impl View {
                 Errand::Ask { ask: *ask, initial }
             }
             Target::Candidate(choice) => self.took_icon(choice.clone(), r),
+            Target::Choose(asked) => self.choose(*asked),
+            // A PICKER'S ROW reaches here only when none is up.
+            Target::Pick(_) => Errand::Nothing,
             Target::Answer(a) => self.answered(*a, r, texts),
             Target::Entry(key) => match key {
                 Some(k) => self.go(Level::Sheet(k.clone()), r),
@@ -3238,7 +3504,7 @@ impl View {
                 b.pair(
                     b.texts.t(key::SOFTWARE_ICON_TYPED),
                     String::new(),
-                    Target::Ask(Ask::IconPath),
+                    Target::Choose(Picking::Icon),
                     Spot::Deed("icon-path"),
                     Can::default(),
                     None,
@@ -3281,7 +3547,7 @@ impl View {
                         IconChoice::Dashboard { name, .. } | IconChoice::Collection { name } => {
                             name.clone()
                         }
-                        IconChoice::Site { url } => host_of(url),
+                        IconChoice::Site { url, .. } => host_of(url),
                         IconChoice::File { path } => path.display().to_string(),
                     };
                     let value = if chosen.as_ref() == Some(&c.choice) {
@@ -3413,7 +3679,7 @@ impl View {
         b.pair(
             b.texts.t(key::SOFTWARE_ANDROID_APK),
             String::new(),
-            Target::Ask(Ask::FilePath),
+            Target::Choose(Picking::Package),
             Spot::Deed("apk"),
             Can::default(),
             None,
@@ -3458,6 +3724,11 @@ impl View {
                 Can::default(),
                 refused,
             );
+            // ON AND NOT LET: nothing is asked until its row is pressed
+            // (`ronoctua_software::net::pass_for`), and the row says to whom.
+            if p.online && s.is_on(p) && !s.is_let(&r.consents) {
+                b.consent(s);
+            }
         }
         let rev = r.snapshot.as_ref().and_then(|s| s.nix_index_rev.clone());
         b.fact_at(
@@ -5119,6 +5390,32 @@ impl Builder<'_> {
             can,
             picture: None,
         });
+    }
+
+    /// A catalogue's consent row — "Ask {hosts}", what for, and that the
+    /// press allows it (`consent_rows::lines`): every line is the press, the
+    /// cursor stands on the first.
+    fn consent(&mut self, source: OnlineSource) {
+        let spot = Spot::Let(source.id());
+        let focused = spot == *self.focus;
+        let ask = crate::consent_rows::Ask {
+            hosts: source.hosts(),
+            what: source.what(),
+        };
+        let lines = crate::consent_rows::lines(ask, self.room, focused, self.texts);
+        for (n, (text, colour)) in lines.into_iter().enumerate() {
+            self.push(Row {
+                fields: vec![Self::piece(self.left, text, colour)],
+                focused: focused && n == 0,
+                heading: n > 0,
+                target: Target::Let(source),
+                spot: if n == 0 { spot.clone() } else { Spot::Nothing },
+                disabled: false,
+                said: None,
+                can: Can::default(),
+                picture: None,
+            });
+        }
     }
 
     /// A fact: `RET` copies its value.

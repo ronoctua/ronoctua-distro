@@ -658,7 +658,11 @@ fn one_lane(
 }
 
 /// The ruler's ticks over `track`, `nice_step` apart, each written from its
-/// own cell — and only the ones whose label ends before the track does.
+/// own cell — and only the ones whose label ends before the track does, but
+/// THE LAST: a label that would run past the track is moved back to end where
+/// the track ends, when that leaves a cell of air after the label before it —
+/// on a short track, where only `0:00` fits from its own cell, the ruler gets
+/// its second mark (its line stays where the time is).
 ///
 /// NEVER MORE THAN ONE A CELL, whatever the span says: a span that is not
 /// finite has no ticks at all, and the walk stops at the track's width even
@@ -673,7 +677,7 @@ fn ticks(track: (u16, u16), span: f64) -> Vec<Tick> {
     if !step.is_finite() || step <= 0.0 {
         return Vec::new();
     }
-    let mut out = Vec::new();
+    let mut out: Vec<Tick> = Vec::new();
     for k in 0..=u32::from(cells) {
         let t = f64::from(k) * step;
         if t > span {
@@ -686,7 +690,22 @@ fn ticks(track: (u16, u16), span: f64) -> Vec<Tick> {
         let wide = ronoctua_protocol::cells(&text);
         if label.saturating_add(wide) <= track.1 {
             out.push(Tick { at, label, text });
+            continue;
         }
+        // THE LAST, moved back to end at the track's end — only past the
+        // label before it with a cell of air, and never before the track.
+        let moved = track.1.saturating_sub(wide);
+        let clear = out
+            .last()
+            .is_none_or(|p| moved > p.label + ronoctua_protocol::cells(&p.text));
+        if clear && moved >= track.0 {
+            out.push(Tick {
+                at,
+                label: moved,
+                text,
+            });
+        }
+        break;
     }
     out
 }
@@ -816,6 +835,9 @@ impl Deck {
             Hit::Band { lane, grab } => (
                 Some(Grip::Band {
                     lane,
+                    picture: self
+                        .lane_line(line)
+                        .is_some_and(|l| l.kind == LaneKind::Video),
                     grab,
                     from: column,
                     moved: false,
@@ -1134,6 +1156,8 @@ pub enum Grip {
     Band {
         /// The lane.
         lane: LaneId,
+        /// Whether it is a PICTURE: its drag takes its voice's sound along.
+        picture: bool,
         /// How far into the band it was pressed, in seconds.
         grab: f64,
         /// The column it was pressed at.
@@ -1181,6 +1205,7 @@ impl Grip {
                 moved,
                 track,
                 span,
+                ..
             } => {
                 if !*moved && (column - *from).abs() < DRAG_SLACK_CELLS {
                     return (Act::Nothing, None);
@@ -1229,12 +1254,21 @@ impl Grip {
             Self::Band {
                 lane, moved: false, ..
             } => Act::Choose(lane),
-            Self::Band { lane, .. } => ghost.filter(|h| h.lane == lane).map_or(Act::Nothing, |h| {
-                Act::Tell(Ask::Lane {
-                    lane,
-                    change: LaneChange::Start { seconds: h.start() },
+            Self::Band { lane, picture, .. } => {
+                ghost.filter(|h| h.lane == lane).map_or(Act::Nothing, |h| {
+                    // A PICTURE DRAGGED ALONG THE TIMELINE takes its own
+                    // sound with it, in step (`voice`); a SOUND dragged moves
+                    // alone — that is how it is set against its picture's
+                    // lips, as its typed start is.
+                    Act::Tell(Ask::Lane {
+                        lane,
+                        change: LaneChange::Start {
+                            seconds: h.start(),
+                            voice: picture,
+                        },
+                    })
                 })
-            }),
+            }
             Self::Seek { .. } | Self::LaneVolume { .. } | Self::Volume { .. } | Self::Bar => {
                 Act::Nothing
             }
@@ -1286,11 +1320,9 @@ pub fn set_lanes<'a>(
 /// nothing loaded is the bar with nothing played.
 #[must_use]
 pub fn of_state(lanes: &[Lane], state: Option<&State>, room: Room, offset: usize) -> Deck {
-    let length_of = |id: LaneId| {
-        state
-            .and_then(|s| s.lane_states.iter().find(|l| l.lane == id))
-            .and_then(|l| l.duration_seconds)
-    };
+    // A LANE THAT IS OFF ends where its file does, as one that is on: its
+    // band never runs to the track's end like a live one's.
+    let length_of = |id: LaneId| state.and_then(|s| crate::player::lane_length(s, id));
     lay(
         lanes,
         length_of,
@@ -1858,6 +1890,40 @@ mod tests {
         assert!(lane_line(&dragged, 1).ghost.is_none());
     }
 
+    /// FAILS IF: on a short track — where only `0:00` fits from its own
+    /// cell — the last label is dropped instead of moved back to end where
+    /// the track ends, or is moved onto the label before it.
+    #[test]
+    fn the_last_label_is_moved_back_to_fit() {
+        let mut moved_some = 0;
+        for width in 10_u16..=40 {
+            let track = (4_u16, 4 + width);
+            for n in 1..=400 {
+                let span = f64::from(n) * 9.5;
+                let ticks = super::ticks(track, span);
+                let mut end = 0_u16;
+                for (i, t) in ticks.iter().enumerate() {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let own = t.at.floor() as u16;
+                    let wide = ronoctua_protocol::cells(&t.text);
+                    assert!(i == 0 || t.label > end, "{span} s over {width}: {ticks:?}");
+                    assert!(t.label + wide <= track.1, "{span} s over {width}: past");
+                    if t.label != own {
+                        moved_some += 1;
+                        assert_eq!(i, ticks.len() - 1, "only the last is moved");
+                        assert_eq!(t.label + wide, track.1, "it ends at the track's end");
+                        assert!(t.label < own, "it is moved back, never forward");
+                    }
+                    end = t.label + wide;
+                }
+            }
+        }
+        assert!(moved_some > 0, "a short track gets its second mark");
+        // THE PENDING'S CASE: 17 cells, where `0:00` alone fitted.
+        let ticks = super::ticks((0, 17), 3601.0);
+        assert!(ticks.len() >= 2, "{ticks:?}");
+    }
+
     /// FAILS IF: two labels of the ruler run into each other or past its
     /// track, at any length and any width.
     #[test]
@@ -2248,6 +2314,7 @@ mod tests {
                 master: false,
                 size: None,
                 cover: false,
+                languages: Vec::new(),
             })
             .collect();
         s.lanes = lanes;
@@ -2282,7 +2349,7 @@ mod tests {
             sound.band
         );
         let Act::Tell(Ask::Lane {
-            change: LaneChange::Start { seconds },
+            change: LaneChange::Start { seconds, .. },
             ..
         }) = grip.released(Some(held))
         else {
@@ -2343,15 +2410,32 @@ mod tests {
         match grip.released(Some(ghost)) {
             Act::Tell(Ask::Lane {
                 lane,
-                change: LaneChange::Start { seconds },
+                change: LaneChange::Start { seconds, voice },
             }) => {
                 assert_eq!(lane, LaneId(2));
                 assert!((seconds - ghost.start()).abs() < 1e-9);
+                assert!(!voice, "a sound dragged moves alone, against the lips");
             }
             other => panic!("the drag asked {other:?}"),
         }
         // CALLED OFF: the ghost was taken away, and nothing is asked.
         assert_eq!(grip.released(None), Act::Nothing);
+        // A PICTURE DRAGGED takes its sound with it.
+        let picture = lane_line(&deck, 1).clone();
+        let pressed = f64::from(picture.band.0) + 1.0;
+        let (grip, _) = deck.press(1, pressed);
+        let mut grip = grip.expect("held");
+        let (_, ghost) = grip.moved(pressed + 5.0);
+        match grip.released(ghost) {
+            Act::Tell(Ask::Lane {
+                lane,
+                change: LaneChange::Start { voice, .. },
+            }) => {
+                assert_eq!(lane, LaneId(1));
+                assert!(voice, "a picture dragged left its sound behind");
+            }
+            other => panic!("the drag asked {other:?}"),
+        }
     }
 
     /// FAILS IF: a press on any control of the deck asks anything but what

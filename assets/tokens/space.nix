@@ -73,7 +73,7 @@
   # -------------------------------------------------------------------
   #
   # IN PIXELS, which is the fourth block in this file that is — the reason
-  # `files.pictureAir` gives: what these measure is a picture, and a picture is
+  # the picture's sizes give: what these measure is a picture, and a picture is
   # not made of cells.
   atlas = {
     # Air round the disc, so the rim is not flush with the panel's edge.
@@ -214,14 +214,16 @@
     # this file already carries about the unread counter, the date column and
     # the sidebar's glyph.
     #
-    # Six, and it is bounded from both sides. Below about four the air stops
-    # being visible at all next to a one-pixel rule; a whole cell (10,8 px in the
-    # footer, 14,4 in the window) is more than the gap between two columns of
-    # text, and the picture would read as belonging to neither panel. Six is
-    # rather more than half of the half-cell the rule already leaves beside it,
-    # so what one sees between the line and the ink is about one cell — the same
-    # air the text beside it gets.
-    pictureAir = 6;
+    # A FRACTION OF A CELL — 56 % of one, `files::picture_air` — and it is
+    # bounded from both sides. Below about a third of a cell the air stops being
+    # visible at all next to a one-pixel rule; a whole cell is more than the gap
+    # between two columns of text, and the picture would read as belonging to
+    # neither panel. Rather more than half of the half-cell the rule already
+    # leaves beside it, so what one sees between the line and the ink is about
+    # one cell — the same air the text beside it gets. It was six PIXELS, which
+    # is this fraction at 100 % (a cell of 10,8 px) and a third of it at 200 %:
+    # the argument is in cells, so the number is too.
+    pictureAirPct = 56;
 
     # THE LARGEST A PREVIEW IS EVER DECODED TO, in PIXELS and not in cells —
     # the third block in this file measured that way, after `rule.thickness`
@@ -960,7 +962,7 @@
     saidAir = 1;
   };
 
-  # THE SCREEN RESIZER (`LEADER d r`, `crate::resizer`): two curtains that cut
+  # THE SCREEN RESIZER (`LEADER / r`, `crate::resizer`): two curtains that cut
   # the screen from the right and from below, for testing how everything
   # behaves on a smaller one.
   #
@@ -1058,6 +1060,9 @@
   # of air after it, as the file browser's glyphs have — and `queueAir` the
   # cell between an entry's number and what comes after it. A level is set
   # in by `view.nestCells`, the one indent every list here has.
+  # `queueAround` is the entries the HOME shows on each side of the one that
+  # plays, at every level of a long queue (`player_queue::home_window`): the
+  # home is about what plays, and the whole queue is its own page.
   #
   # A SUBTITLE LANE'S CHIP (`chrome::chip`) — its colour drawn on the black
   # edge a subtitle wears over a film, never on a page, where the lane
@@ -1101,6 +1106,7 @@
   player = {
     queueGlyph = 2;
     queueAir = 1;
+    queueAround = 3;
     browseColumn = 24;
     volumeBar = 10;
     pipWidth = 384;
@@ -1201,4 +1207,323 @@
     tight = 6;
     gap = 10;
   };
+
+  # HOW LONG A MESSAGE STAYS, by its class (`crate::echo`), in TENTHS of a
+  # second — `files.thumbClipTenths`' unit, for its reason: a second is too
+  # coarse for a glance. `normal` is the three seconds both doors always
+  # agreed on (`ECHO_SECONDS`); `brief` is a word that confirms what the hand
+  # just did — `Quit`, the bars' new mode — read in one look; `long` is a
+  # refusal to be read to the end and acted on.
+  echo = {
+    briefTenths = 12;
+    normalTenths = 30;
+    longTenths = 60;
+  };
+
+  # THE MAXIMUM ALERT BAR (`crate::alert`). The battery's line and the step it
+  # must fall, closed by hand, before the bar comes back — both in percent —
+  # and how long each of its two colours lasts, in tenths of a second.
+  #
+  # TEN, under UPower's `percentageLow` (15, the band's notification) and over
+  # its `percentageCritical` (8): the band has said it once by then, and the
+  # bar says it until something is done, before the machine hibernates at the
+  # action level (`nix/modules/power.nix`). FIVE is the step the modeline's
+  # battery mark and the power view already count in.
+  #
+  # EIGHT TENTHS a colour: slow enough to read the words on either, quick
+  # enough that the eye finds the one line on screen that moves.
+  alert = {
+    batteryBelowPct = 10;
+    batteryStepPct = 5;
+    alternateTenths = 8;
+  };
+
+  # THE GIT BROWSER'S COLUMNS (`git_browser::Layout`), in cells and in per
+  # cent of the region. From `threeColumnsFrom` cells on a window lays the
+  # items, the detail and the diff side by side — the items and the detail a
+  # share each, the diff the rest, because a line of code is the widest thing
+  # of the three; narrower, and always in the footer, two sit side by side,
+  # the left one `pairPercent` of the width.
+  #
+  # `columnFloor` is the narrowest a column is laid out at — below two of
+  # them side by side, one column: a subject or a path in fewer cells says
+  # nothing. `kindsGap` is the air between two kinds on the items column's
+  # first line (Changes · History · …), which are controls, and two of them
+  # touching read as one. `subjectFloor` is what a commit's subject keeps
+  # before its age gives way: an age beside three letters of a subject is a
+  # date with nothing to date.
+  git = {
+    threeColumnsFrom = 160;
+    itemsPercent = 28;
+    detailPercent = 30;
+    pairPercent = 40;
+    columnFloor = 20;
+    kindsGap = 2;
+    subjectFloor = 8;
+  };
+
+  # THE ICONS APP (`crate::icons`, `crate::icons_page`).
+  #
+  # THE GRID. An icon is drawn at `gridScale` times the text's size, so its
+  # box is exactly `gridScale` lines tall and its advance `gridScale` × 0.6 em
+  # — a whole number of cells, which is what lets the cell under the pointer
+  # and the cursor's cell be drawn as rectangles of the grid. Two, and not
+  # one: at the body's size a glyph is a letter, and one looks for a SHAPE.
+  #
+  # How many cells one item takes ACROSS, per collection, at that scale: a
+  # Nerd glyph is one cell of ink at the body's size, so two here; a Lucide
+  # figure is drawn as wide as the font's size (its face is not the monospaced one), so
+  # three — the cell of air after it takes the rest; a Unicode character may
+  # be two cells wide (the long arrows, every emoji), and its column is
+  # budgeted for the widest, so four — the grid's step absorbs the ink, and a
+  # narrow character is centred in it.
+  icons = {
+    gridScale = 2;
+    nerdCells = 2;
+    lucideCells = 3;
+    unicodeCells = 4;
+
+    # THE ICON'S PAGE. The stage is a SQUARE whose side is this share of the
+    # page's width, in percent — or the page's height, when that is less —
+    # and never so wide that the list beside it has less than `listCells`.
+    # Under half, so the list of adjustments and copies is the larger half
+    # of a wide window: it is what is read; the stage is what is looked at.
+    stageSharePct = 45;
+    listCells = 30;
+    # THE AIR between the stage and the list, in cells.
+    stageGap = 2;
+
+    # THE SIZES ON THE STAGE, in logical pixels: where a glyph and a Unicode
+    # character start, the step `←`/`→` take, and the two ends. A Lucide
+    # figure's size is the SVG's own (`ronoctua_iconset::lucide`), stepped by
+    # `lucideStepPx`; its stroke by `strokeStepTenths` of a unit.
+    glyphStartPx = 96;
+    glyphStepPx = 8;
+    glyphMinPx = 8;
+    glyphMaxPx = 512;
+    lucideStepPx = 4;
+    strokeStepTenths = 5;
+
+    # THE FILTER PANEL (`TAB`): at most this share of the lines under the
+    # search line, in percent — the rest is the grid's, which is what the
+    # choice is made to look at — and the air between two choices, in cells.
+    panelSharePct = 50;
+    panelGap = 2;
+  };
+
+  # THE CALCULATOR (`crate::calc_keypad`). A key is a CARD — a ground and a
+  # legend, no border, no radius, no shadow (invariant 15) — big enough for a
+  # finger: `keyCells` cells wide and `keyLines` lines tall is what a key
+  # PREFERS, and what the keypad must keep for the history to stand beside
+  # it; a roomy window grows every key alike up to `keyMaxCells` ×
+  # `keyMaxLines`, so a tiled calculator is keys and answers and not a small
+  # keypad in an empty window. A short room shrinks every key alike, never
+  # under `keyMinCells` nor under its widest legend (in any language) and air
+  # — the scientific keypad changes shape instead — before anything leaves
+  # the window ("nothing leaks"). `keyAir` is the logical pixels of window
+  # left bare around each card, so two cards side by side are two cards; the
+  # hit is the card drawn, air excluded. In the footer a key is one line and
+  # `footerKeyCells` wide, or as wide as its widest legend and a cell.
+  #
+  # THE HISTORY is a column on the right, `historyGap` cells from the keypad,
+  # that keeps `historyCells` from the keys and takes the rest of the window
+  # to its edge; a window that cannot give it `historyMinCells` beside a
+  # keypad of preferred keys puts it UNDER the keypad instead, where it keeps
+  # `historyUnderLines` answers in view under its title. `convertCells` is
+  # what the converter's side prefers beside the history. `digits` is how
+  # many decimals an answer is written with (the engine rounds half away from
+  # zero and drops the trailing zeros).
+  calc = {
+    keyCells = 8;
+    keyMinCells = 4;
+    keyMaxCells = 14;
+    keyLines = 3;
+    keyMaxLines = 5;
+    keyAir = 3;
+    footerKeyCells = 6;
+    historyCells = 30;
+    historyMinCells = 20;
+    historyGap = 2;
+    historyUnderLines = 4;
+    convertCells = 48;
+    digits = 10;
+  };
+
+  # THE CATALOGUE'S LISTINGS (`player_catalog`, `player_posters`), in CELLS
+  # and LINES of the rows' grid — a poster is laid out as the rows are, so a
+  # click takes what the pointer is on in every door (`ronoctua_design::Grid`).
+  #
+  # `posterCells` × `posterLines` is one poster's box in the poster grid, and
+  # `bigCells` × `bigLines` in the big grid; the picture is fitted in it in its
+  # own proportion (a film's is tall, a channel's logo square, a video's wide
+  # — `player_metadata::cover_place`), and `titleLines` lines under it say
+  # what it is, wrapped. Sixteen cells by six lines is a box a
+  # little wider than tall at the base size (0.60 em a cell, 1.45 em a line),
+  # which holds the three shapes without one of them a sliver; a title
+  # longer than its lines ends in an ellipsis, as a name in the files' grid.
+  #
+  # `postersMost` is the most posters one screen holds: a page of a poster
+  # layout never holds more (the page's size is cut to it), and the renderer's
+  # frame ceiling counts it (`ronoctua_render::image`, `the-grid-never-drops-
+  # a-picture`'s argument: a texture past the ceiling is dropped with no word
+  # anywhere). 96: a 1920-wide window at the base size is 13 posters across
+  # and 5 shelves down, 65; a 4K one at scale 2 the same; the column never
+  # more than two across.
+  #
+  # `posterPx` is the LOGICAL PIXELS the longer side of a poster is decoded
+  # to at the most, as `player.coverPx` for a cover: the big box is under 180
+  # px wide at the base size, and twice that keeps it sharp at scale 2.
+  catalog = {
+    posterCells = 16;
+    posterLines = 6;
+    bigCells = 28;
+    bigLines = 11;
+    titleLines = 2;
+    postersMost = 96;
+    posterPx = 384;
+  };
+
+  # THE VIDEO CATALOGUE'S GRID (`video_metrics.rs`): a thumbnail's box in
+  # cells and lines — twenty cells by five lines is YouTube's 16:9
+  # `mqdefault` at its own proportion, height-bound, with the pictures' air
+  # above and below: five lines of 1.45 em less 2 × `files.pictureAirPct` of a cell, times
+  # 16/9, over 0.6 em a cell, is 19.3 to 20 cells from 16 to 24 px — so the
+  # picture fills its box, and the box's air is the cell's, the same on both
+  # sides (twenty-two left two cells of slack on the right only). Then the
+  # title's two lines under it, the size a picture is decoded at (the
+  # `mqdefault` is 320 wide; nothing is scaled up), and the most a page puts
+  # on screen, under the file manager's grid ceiling.
+  videoMetrics = {
+    thumbCells = 20;
+    thumbLines = 5;
+    titleLines = 2;
+    thumbPx = 320;
+    thumbsMost = 48;
+  };
+
+  # THE CONTAINERS' VIEW (`crate::containers`): three columns side by side —
+  # the kinds with their counts, the list of the kind, and the detail of the
+  # row chosen — from `panesFrom` cells on; below it, and in the footer's
+  # region, one list with the kinds on a strip above it and the detail over
+  # the list.
+  #
+  # `panesFrom` is `files.panelsFrom`, where this system already decided a
+  # second column of content is worth its width, and `notifications`'
+  # `twoColumnsFrom`: a third column is the kinds, eighteen cells, which is
+  # the longest kind's name in either language with its glyph and count
+  # (`Networks  12`, `Volumes  3`, `Redes  12`). What the kinds leave goes
+  # `listPct` to the list and the rest to the detail: a row of the list is a
+  # name and a state, the detail is a label and a value and a log line.
+  containers = {
+    panesFrom = 96;
+    kindsCells = 18;
+    listPct = 42;
+  };
+
+  # FAST-ACCESS (`crate::fast_access`), in CELLS and LINES of the search's
+  # area. The results take the left and the detail the right, apart by a
+  # divider; a press on the divider swaps the detail between `detailCells`
+  # and `detailWideCells`. Under `resultsMinCells` of room for the results
+  # beside the detail, the detail goes BELOW them, `belowLines` tall — a
+  # press on the rule above it swaps that for `belowWideLines` — with a bar of
+  # its own. An icon of a strip is `stripCells` wide (a glyph of two
+  # cells and its air). A video of the YouTube grid is `gridCells` by
+  # `gridLines`: its picture `gridPictureLines` tall, then its title and its
+  # channel; `gridMost` is the most a screen holds (a page is cut to it, and
+  # the renderer's frame ceiling counts it). `thumbPx` is the logical width a
+  # video's picture is decoded at.
+  fastAccess = {
+    detailCells = 40;
+    detailWideCells = 64;
+    resultsMinCells = 40;
+    belowLines = 12;
+    belowWideLines = 20;
+    stripCells = 3;
+    gridCells = 26;
+    gridLines = 9;
+    gridPictureLines = 6;
+    gridMost = 48;
+    thumbPx = 320;
+  };
+
+  # THE SIZE A WINDOW IS BORN AT (`door::Content::default_size`): what a door
+  # lays out at before the compositor says a size, and for an axis it leaves
+  # to the window — a floating window keeps it. Logical pixels, because that
+  # is the unit a configure speaks; the compositor's answer wins the moment it
+  # comes, so these are a first frame, not a layout.
+  #
+  # `widthPx` × `heightPx` is every view window: a list of label and value
+  # with a header, which 900 × 600 holds at 100 % with room for a second
+  # column. The five that differ do so for what they draw: the calculator a
+  # keypad taller than wide, the player a stage of 16:9 over its controls, the
+  # git browser three panes side by side, the fast-access search its results
+  # beside a detail pane (`crate::fast_access_window`), and a right column
+  # only a height (its width is the strip's, `crate::column`).
+  window = {
+    widthPx = 900;
+    heightPx = 600;
+    calcWidthPx = 640;
+    calcHeightPx = 760;
+    playerWidthPx = 760;
+    playerHeightPx = 720;
+    gitWidthPx = 1400;
+    gitHeightPx = 800;
+    fastAccessWidthPx = 1100;
+    fastAccessHeightPx = 720;
+    columnHeightPx = 720;
+  };
+
+  # THE TERMINAL THINKS IN CELLS (`crate::terminal`): its first size is a grid,
+  # and the window is whatever holds that grid at the size of the text now —
+  # 80 × 24 is the VT's own measure, the one every program assumes before a
+  # `SIGWINCH` says otherwise. A buffer's host is a grid too and asks the
+  # same before its first configure.
+  terminal = {
+    columns = 80;
+    lines = 24;
+  };
+
+  # THE RESIZER'S READY SIZES (`LEADER / r`, then `p` / `P`, `crate::resizer`):
+  # the rooms a laptop, a projector and the commonest monitors give, in
+  # LOGICAL pixels — the compositor's unit for a room, the same as `edgePx`.
+  # What a person is checking with the resizer is "does this hold on THAT
+  # screen", and these are the screens. A size larger than the screen being
+  # cut is skipped, never squeezed.
+  resizerPresets = {
+    xga = {
+      widthPx = 1024;
+      heightPx = 768;
+    };
+    hd = {
+      widthPx = 1280;
+      heightPx = 720;
+    };
+    wxga = {
+      widthPx = 1366;
+      heightPx = 768;
+    };
+    wxgaPlus = {
+      widthPx = 1440;
+      heightPx = 900;
+    };
+    hdPlus = {
+      widthPx = 1600;
+      heightPx = 900;
+    };
+    fullHd = {
+      widthPx = 1920;
+      heightPx = 1080;
+    };
+  };
+
+  # THE CLIPBOARD'S PREVIEW (`crate::clipboard_view`), in LINES of the view's
+  # right half, under the entry's facts: as many lines of the entry's text, or
+  # the box its picture or its QR code is drawn in. Twelve lines hold a QR
+  # code of a short link at a module a phone's camera reads from the screen,
+  # and the text past them is in the entry itself, which `RET` puts back.
+  # A ceiling and not a count: a megabyte of text is never wrapped whole.
+  clipboard = {
+    previewLines = 12;
+  };
+
 }

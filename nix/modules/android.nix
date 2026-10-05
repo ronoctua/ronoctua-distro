@@ -23,7 +23,7 @@
 #
 # One rule: the action that manages units, the verb `start` and nothing else,
 # four units named exactly, one person. `YES` and not `AUTH_SELF_KEEP`,
-# because there is no polkit agent in this session (`nix/modules/update.nix`);
+# because there is no polkit agent in this session (the update's `module.nix`);
 # what buys that width back is that a typo in any of the names is a refusal
 # rather than a wider door.
 #

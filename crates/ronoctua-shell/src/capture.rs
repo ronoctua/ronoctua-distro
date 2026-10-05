@@ -91,6 +91,54 @@ pub enum Choice {
 /// A rectangle, in the surface's logical pixels.
 type Box4 = (f32, f32, f32, f32);
 
+/// The line the overlay prints when the rectangle chosen lay wholly under
+/// the resizer's curtains — a refusal by NAME, which the footer says in the
+/// person's language (`Outcome::OutsideTheRoom`).
+pub const OUTSIDE_THE_ROOM: &str = "refused outside-the-room";
+
+/// The refusal behind [`OUTSIDE_THE_ROOM`], carried inside the error.
+#[derive(Debug)]
+struct OutsideTheRoom;
+
+impl std::fmt::Display for OutsideTheRoom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the rectangle lies wholly under the resizer's curtains")
+    }
+}
+
+impl std::error::Error for OutsideTheRoom {}
+
+/// How the overlay ended, as the footer reads it off what it printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// A file was written here.
+    Saved(std::path::PathBuf),
+    /// It failed, in these words — for the log.
+    Failed(String),
+    /// The rectangle lay wholly under the resizer's curtains.
+    OutsideTheRoom,
+    /// Given up: `Esc`, or nothing said.
+    GivenUp,
+}
+
+/// What the overlay printed, read.
+#[must_use]
+pub fn outcome_of(said: &str) -> Outcome {
+    said.lines()
+        .find_map(|l| {
+            if l == OUTSIDE_THE_ROOM {
+                return Some(Outcome::OutsideTheRoom);
+            }
+            l.strip_prefix("saved ")
+                .map(|p| Outcome::Saved(std::path::PathBuf::from(p)))
+                .or_else(|| {
+                    l.strip_prefix("failed ")
+                        .map(|w| Outcome::Failed(w.to_owned()))
+                })
+        })
+        .unwrap_or(Outcome::GivenUp)
+}
+
 /// Takes the picture, lets somebody choose, and writes what they chose.
 ///
 /// Prints `saved <path>` when a file was written — the footer reads that and
@@ -107,6 +155,12 @@ pub fn host_it() -> Result<()> {
             Ok(())
         }
         Ok(None) => Ok(()),
+        // A CHOICE THE ROOM EMPTIED is not a capture given up: the person
+        // chose something, and is told why nothing was written.
+        Err(e) if e.downcast_ref::<OutsideTheRoom>().is_some() => {
+            println!("{OUTSIDE_THE_ROOM}");
+            Ok(())
+        }
         Err(e) => {
             println!("failed {e:#}");
             Err(e)
@@ -161,15 +215,21 @@ fn choose_and_keep() -> Result<Option<std::path::PathBuf>> {
         })
     })?;
 
-    let region = match chosen.get() {
-        Choice::Nothing => return Ok(None),
-        Choice::Whole => None,
-        Choice::Region(x, y, w, h) => Some((x, y, w, h)),
-    };
+    // THE ROOM, where the resizer cuts this screen: its curtains are the
+    // tool, not the screen being tested, and "the whole screen" is what the
+    // room shows (`resizer::room_box`).
+    let cut = crate::resizer::is_on();
+    let room = crate::resizer::room_box(&out.name, (at.width, at.height), cut.as_ref());
     // THE SURFACE WAS THE SCREEN, in logical pixels — which is what a
     // rectangle chosen on it is measured in.
     #[allow(clippy::cast_precision_loss)]
     let size = (at.width as f32, at.height as f32);
+    let region = match within_the_room(chosen.get(), room, size) {
+        Kept::Nothing => return Ok(None),
+        Kept::OutsideTheRoom => return Err(anyhow::Error::new(OutsideTheRoom)),
+        Kept::Whole => None,
+        Kept::Part(r) => Some(r),
+    };
     let picture = match region {
         None => still,
         Some(r) => crop(&still, physical(r, size, (still.width, still.height)))
@@ -189,6 +249,41 @@ fn choose_and_keep() -> Result<Option<std::path::PathBuf>> {
     )
     .with_context(|| format!("could not write {}", path.display()))?;
     Ok(Some(path))
+}
+
+/// What a choice keeps, once the room has had its say.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Kept {
+    /// Nothing at all: the capture was given up.
+    Nothing,
+    /// A rectangle that lay wholly under the curtains: nothing of it is the
+    /// room.
+    OutsideTheRoom,
+    /// The whole picture.
+    Whole,
+    /// This rectangle of it, in the surface's logical pixels.
+    Part(Box4),
+}
+
+/// A choice limited to the room: the whole screen is the room when the
+/// resizer cuts it, and a rectangle or a window loses what lies under the
+/// curtains. A rectangle wholly under them keeps nothing, and says so.
+fn within_the_room(choice: Choice, room: Box4, screen: (f32, f32)) -> Kept {
+    let whole_screen = room.2 >= screen.0 && room.3 >= screen.1;
+    match choice {
+        Choice::Nothing => Kept::Nothing,
+        Choice::Whole if whole_screen => Kept::Whole,
+        Choice::Whole => Kept::Part(room),
+        Choice::Region(x, y, w, h) => {
+            let (x0, y0) = (x.max(room.0), y.max(room.1));
+            let (x1, y1) = ((x + w).min(room.0 + room.2), (y + h).min(room.1 + room.3));
+            if x1 <= x0 || y1 <= y0 {
+                Kept::OutsideTheRoom
+            } else {
+                Kept::Part((x0, y0, x1 - x0, y1 - y0))
+            }
+        }
+    }
 }
 
 /// Reads the whole of one screen, as `grim` sees it, into a picture.
@@ -878,5 +973,50 @@ mod tests {
             (area - (100.0 * 100.0 - 30.0 * 40.0)).abs() < 0.01,
             "{area}"
         );
+    }
+
+    /// FAILS IF: a capture taken while the resizer cuts the screen keeps the
+    /// curtains — the whole screen is the room, and a rectangle loses what
+    /// lies under them.
+    #[test]
+    fn a_capture_is_limited_to_the_room() {
+        let screen = (1920.0, 1080.0);
+        let room = (0.0, 0.0, 1280.0, 720.0);
+        assert_eq!(
+            within_the_room(Choice::Whole, room, screen),
+            Kept::Part(room)
+        );
+        assert_eq!(
+            within_the_room(Choice::Whole, (0.0, 0.0, 1920.0, 1080.0), screen),
+            Kept::Whole
+        );
+        assert_eq!(
+            within_the_room(Choice::Region(1000.0, 600.0, 600.0, 300.0), room, screen),
+            Kept::Part((1000.0, 600.0, 280.0, 120.0))
+        );
+        assert_eq!(
+            within_the_room(Choice::Region(1400.0, 100.0, 100.0, 100.0), room, screen),
+            Kept::OutsideTheRoom
+        );
+        assert_eq!(
+            within_the_room(Choice::Nothing, room, screen),
+            Kept::Nothing
+        );
+    }
+
+    /// FAILS IF: the footer reads a choice the room emptied as a capture
+    /// given up — silence — or as a failure in English words.
+    #[test]
+    fn every_ending_is_read_by_its_name() {
+        assert_eq!(
+            outcome_of("saved /home/x/a.png\n"),
+            Outcome::Saved("/home/x/a.png".into())
+        );
+        assert_eq!(outcome_of(OUTSIDE_THE_ROOM), Outcome::OutsideTheRoom);
+        assert_eq!(
+            outcome_of("failed grim exited"),
+            Outcome::Failed("grim exited".into())
+        );
+        assert_eq!(outcome_of(""), Outcome::GivenUp);
     }
 }

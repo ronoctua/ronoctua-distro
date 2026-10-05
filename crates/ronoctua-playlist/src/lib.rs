@@ -125,6 +125,76 @@ pub struct Entry {
     /// should see that and not a path they never typed. The resolved one goes
     /// on the message line.
     pub written: String,
+    /// What an extended M3U said about it beyond a length and a title — its
+    /// group, its logo, its guide id, its country and language, and the two
+    /// headers a stream asks with. `None` when the list said none of these
+    /// (every list but an IPTV one), so a plain list pays nothing for them.
+    pub attributes: Option<Box<Attributes>>,
+}
+
+/// What an extended M3U's `#EXTINF` line says about an entry beyond its
+/// length and title.
+///
+/// # Why they are kept now
+///
+/// An IPTV list files every channel under a `group-title`, and names its logo,
+/// its programme-guide id, its country and its language as attributes of the
+/// `#EXTINF` line. They were read past and dropped while a list was only
+/// something to queue; the player's catalogue sorts channels BY them (a group
+/// is a category, the logo a poster, the country and language are filters),
+/// so they are kept exactly as written, and what they mean is the reader's.
+///
+/// Two more ride along because a stream fails without them: the
+/// `#EXTVLCOPT:http-user-agent=` and `http-referrer=` lines some lists write
+/// above an entry, which the hosts that check them demand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Attributes {
+    /// `group-title`, as written: several groups are separated by `;`
+    /// (iptv-org writes `Animation;Kids`), and splitting them is the
+    /// reader's. An `#EXTGRP:` line gives it when the `#EXTINF` did not.
+    pub group: Option<String>,
+    /// `tvg-logo`: the address of the channel's picture.
+    pub logo: Option<String>,
+    /// `tvg-id`: the programme guide's id of the channel (`BBCNews.uk`).
+    pub guide_id: Option<String>,
+    /// `tvg-country`, as written (`US`, `us;ca`, a name).
+    pub country: Option<String>,
+    /// `tvg-language`, as written (`English`, `eng;spa`).
+    pub language: Option<String>,
+    /// The `User-Agent` an `#EXTVLCOPT:http-user-agent=` line asks for.
+    pub user_agent: Option<String>,
+    /// The `Referer` an `#EXTVLCOPT:http-referrer=` line asks for.
+    pub referrer: Option<String>,
+}
+
+impl Attributes {
+    /// Whether it says nothing at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How much of a list is read: its bytes, and its entries.
+///
+/// The defaults ([`BYTE_CEILING`], [`ENTRY_CEILING`]) are for a list a person
+/// opens and a panel draws. The player's catalogue reads an IPTV provider's
+/// whole list — tens of thousands of channels, tens of megabytes — and asks
+/// with bounds of its own ([`parse_text_within`]); a bound is still a bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    /// The most bytes of the text read; the rest is not.
+    pub bytes: usize,
+    /// The most entries kept; the list says it was cut past them.
+    pub entries: usize,
+}
+
+impl Bounds {
+    /// The panel's bounds: [`BYTE_CEILING`] and [`ENTRY_CEILING`].
+    pub const PANEL: Self = Self {
+        bytes: BYTE_CEILING as usize,
+        entries: ENTRY_CEILING,
+    };
 }
 
 /// A playlist, read.
@@ -328,9 +398,28 @@ impl<'a> From<&'a Path> for Base<'a> {
 ///
 /// [`Trouble::Empty`] when it names nothing.
 pub fn parse_text(text: &str, kind: Kind, base: Base<'_>) -> Result<List, Trouble> {
-    let text = within_the_ceiling(text);
+    parse_text_within(text, kind, base, Bounds::PANEL)
+}
+
+/// [`parse_text`], within bounds of the caller's.
+///
+/// For the player's catalogue, which reads a provider's whole list; an M3U
+/// stops reading at one entry past the bound, so a list ten times too long
+/// costs the bound and not the list.
+///
+/// # Errors
+///
+/// [`Trouble::Empty`] when it names nothing.
+pub fn parse_text_within(
+    text: &str,
+    kind: Kind,
+    base: Base<'_>,
+    bounds: Bounds,
+) -> Result<List, Trouble> {
+    let text = within(text, bounds.bytes);
+    let most = bounds.entries;
     let mut found = match kind {
-        Kind::M3u => from_m3u(text, base),
+        Kind::M3u => from_m3u_up_to(text, base, most.saturating_add(1)),
         Kind::Pls => from_pls(text, base),
         Kind::Xspf => from_xspf(text, base),
         Kind::Asx => from_asx(text, base),
@@ -343,8 +432,8 @@ pub fn parse_text(text: &str, kind: Kind, base: Base<'_>) -> Result<List, Troubl
             Base::Address(_) => Vec::new(),
         },
     };
-    let cut = found.len() > ENTRY_CEILING;
-    found.truncate(ENTRY_CEILING);
+    let cut = found.len() > most;
+    found.truncate(most);
     if found.is_empty() {
         // NOTHING IN IT is a sentence the panel already has, and the true one:
         // a file of comments is a file with nothing inside.
@@ -359,7 +448,11 @@ pub fn parse_text(text: &str, kind: Kind, base: Base<'_>) -> Result<List, Troubl
 
 /// The first [`BYTE_CEILING`] bytes, cut where a character ends.
 fn within_the_ceiling(text: &str) -> &str {
-    let most = usize::try_from(BYTE_CEILING).unwrap_or(usize::MAX);
+    within(text, Bounds::PANEL.bytes)
+}
+
+/// The first `most` bytes, cut where a character ends.
+fn within(text: &str, most: usize) -> &str {
     if text.len() <= most {
         return text;
     }
@@ -530,23 +623,54 @@ fn declared(text: &str) -> Option<f64> {
     (n.is_finite() && n > 0.0).then_some(n)
 }
 
-/// The plain list: a name a line, with an optional `#EXTINF:` above each.
+/// The plain list: a name a line, with an optional `#EXTINF:` above each —
+/// within the panel's bound, as the tests read it.
+#[cfg(test)]
 fn from_m3u(text: &str, base: Base<'_>) -> Vec<Entry> {
+    from_m3u_up_to(text, base, ENTRY_CEILING.saturating_add(1))
+}
+
+/// [`from_m3u`], stopping once `most` entries are read.
+fn from_m3u_up_to(text: &str, base: Base<'_>, most: usize) -> Vec<Entry> {
     let mut out = Vec::new();
     let mut title = None;
     let mut seconds = None;
+    let mut said = Attributes::default();
     for line in text.lines() {
+        if out.len() >= most {
+            break;
+        }
         let line = line.trim_end_matches('\r').trim();
         if line.is_empty() {
             continue;
         }
         if let Some(rest) = line.strip_prefix("#EXTINF:") {
-            // THE FIRST COMMA ONLY. A title with a comma in it is ordinary —
-            // *"Michael Jackson - Billie Jean, single version"* — and
-            // splitting on all of them loses the half after it.
-            let (length, name) = rest.split_once(',').unwrap_or((rest, ""));
-            seconds = declared(length);
-            title = (!name.trim().is_empty()).then(|| name.trim().to_owned());
+            let read = extinf(rest);
+            seconds = declared(read.length);
+            title = read.title.map(ToOwned::to_owned);
+            // A NEW `#EXTINF` STARTS A NEW ENTRY'S WORDS: what an earlier one
+            // said, if nothing followed it, is not this one's.
+            said = read.attributes;
+            continue;
+        }
+        if let Some(group) = line.strip_prefix("#EXTGRP:") {
+            // THE `#EXTINF`'S OWN GROUP WINS: `#EXTGRP` is the older spelling,
+            // and a list that writes both means the attribute.
+            if said.group.is_none() {
+                said.group = kept(group);
+            }
+            continue;
+        }
+        if let Some(option) = line.strip_prefix("#EXTVLCOPT:") {
+            if let Some((name, value)) = option.split_once('=') {
+                match name.trim().to_ascii_lowercase().as_str() {
+                    "http-user-agent" => said.user_agent = kept(value),
+                    // BOTH SPELLINGS: HTTP's own header is `Referer`, and lists
+                    // write the option either way.
+                    "http-referrer" | "http-referer" => said.referrer = kept(value),
+                    _ => {}
+                }
+            }
             continue;
         }
         // EVERY OTHER `#` LINE IS A DIRECTIVE, and the HLS ones (`#EXT-X-…`)
@@ -554,14 +678,102 @@ fn from_m3u(text: &str, base: Base<'_>) -> Vec<Entry> {
         if line.starts_with('#') {
             continue;
         }
+        let attributes = std::mem::take(&mut said);
         out.push(Entry {
             at: points_at(line, base),
             title: title.take(),
             seconds: seconds.take(),
             written: line.to_owned(),
+            attributes: (!attributes.is_empty()).then(|| Box::new(attributes)),
         });
     }
     out
+}
+
+/// A value an attribute or an option gave: trimmed, and `None` when blank.
+fn kept(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// What an `#EXTINF:` line says, after its colon.
+struct Extinf<'a> {
+    /// The length, as written (`-1` is "unknown").
+    length: &'a str,
+    /// The title: everything after the first comma that is not inside quotes.
+    title: Option<&'a str>,
+    /// The attributes kept.
+    attributes: Attributes,
+}
+
+/// An `#EXTINF:` line, read: `<length> key="value" key=value…,<title>`.
+///
+/// THE FIRST COMMA OUTSIDE QUOTES ends the attributes, and everything after
+/// it is the title, commas and all: *"Michael Jackson - Billie Jean, single
+/// version"* is ordinary, and so is `group-title="News, Weather"`. An
+/// attribute whose name is not one of the five kept is read past, so its
+/// value — quoted, or up to a space — never leaks into the title.
+fn extinf(rest: &str) -> Extinf<'_> {
+    let bytes = rest.as_bytes();
+    let mut at = 0;
+    // THE LENGTH: up to a space or the comma.
+    while at < bytes.len() && !matches!(bytes[at], b' ' | b'\t' | b',') {
+        at += 1;
+    }
+    let length = &rest[..at];
+    let mut attributes = Attributes::default();
+    loop {
+        while at < bytes.len() && matches!(bytes[at], b' ' | b'\t') {
+            at += 1;
+        }
+        if at >= bytes.len() {
+            return Extinf {
+                length,
+                title: None,
+                attributes,
+            };
+        }
+        if bytes[at] == b',' {
+            let title = rest[at + 1..].trim();
+            return Extinf {
+                length,
+                title: (!title.is_empty()).then_some(title),
+                attributes,
+            };
+        }
+        // A NAME: up to `=`, a space or the comma.
+        let name_from = at;
+        while at < bytes.len() && !matches!(bytes[at], b'=' | b' ' | b'\t' | b',') {
+            at += 1;
+        }
+        let name = &rest[name_from..at];
+        if at >= bytes.len() || bytes[at] != b'=' {
+            // A WORD WITH NO VALUE is read past, like any attribute not kept.
+            continue;
+        }
+        at += 1;
+        let value = if bytes.get(at) == Some(&b'"') {
+            let from = at + 1;
+            let to = rest[from..].find('"').map_or(rest.len(), |n| from + n);
+            at = (to + 1).min(rest.len());
+            &rest[from..to]
+        } else {
+            let from = at;
+            while at < bytes.len() && !matches!(bytes[at], b' ' | b'\t' | b',') {
+                at += 1;
+            }
+            &rest[from..at]
+        };
+        let slot = match name.to_ascii_lowercase().as_str() {
+            "group-title" => &mut attributes.group,
+            "tvg-logo" => &mut attributes.logo,
+            "tvg-id" => &mut attributes.guide_id,
+            "tvg-country" => &mut attributes.country,
+            "tvg-language" => &mut attributes.language,
+            _ => continue,
+        };
+        *slot = kept(value);
+    }
 }
 
 /// The ini list, whose fields are joined by a NUMBER rather than by order.
@@ -608,6 +820,7 @@ fn from_pls(text: &str, base: Base<'_>) -> Vec<Entry> {
             title,
             seconds,
             written: file,
+            attributes: None,
         })
         .collect()
 }
@@ -646,6 +859,7 @@ fn from_xspf(text: &str, base: Base<'_>) -> Vec<Entry> {
                 .filter(|d| d.is_finite() && *d > 0.0)
                 .map(|d| d / 1000.0),
             written: location.to_owned(),
+            attributes: None,
         });
     }
     out
@@ -703,6 +917,7 @@ fn from_asx(text: &str, base: Base<'_>) -> Vec<Entry> {
                 })
                 .and_then(on_the_clock),
             written: href.to_owned(),
+            attributes: None,
         });
     }
     out
@@ -734,8 +949,8 @@ fn on_the_clock(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Base, Entry, Kind, Trouble, Where, from_asx, from_m3u, from_pls, from_xspf, is_hls,
-        kind_by_name, on_the_clock, parse_text,
+        Attributes, Base, Bounds, Entry, Kind, Trouble, Where, from_asx, from_m3u, from_pls,
+        from_xspf, is_hls, kind_by_name, on_the_clock, parse_text, parse_text_within,
     };
     use std::path::{Path, PathBuf};
 
@@ -948,6 +1163,104 @@ mod tests {
             Where::Remote("http://192.0.2.1/two.mp3".to_owned())
         );
         assert_eq!(out[1].seconds, None);
+    }
+
+    /// FAILS IF: an IPTV list's attributes are dropped, a quoted comma ends
+    /// the attributes, or one entry's words land on the next.
+    ///
+    /// A hand-written fixture in the shape iptv-org and the IPTV providers
+    /// publish (`#EXTINF:-1 tvg-id=… tvg-logo=… group-title=…,Name`, with
+    /// `#EXTVLCOPT` headers and an `#EXTGRP` line).
+    #[test]
+    fn an_iptv_list_keeps_its_group_logo_guide_country_and_language() {
+        let text = "#EXTM3U x-tvg-url=\"https://guide.example/epg.xml\"\n\
+            #EXTINF:-1 tvg-id=\"BBCNews.uk\" tvg-country=\"UK\" tvg-language=\"English\" \
+            tvg-logo=\"https://logo.example/bbc.png\" group-title=\"News, Weather;Documentary\",BBC News, HD\n\
+            #EXTVLCOPT:http-user-agent=Mozilla/5.0 (X11; Linux x86_64)\n\
+            #EXTVLCOPT:http-referrer=https://tv.example/\n\
+            https://stream.example/bbc/index.m3u8\n\
+            #EXTINF:0 catchup=\"default\" tvg-ID=unquoted radio=true,Plain\n\
+            #EXTGRP:Radio\n\
+            http://radio.example/live.mp3\n\
+            #EXTINF:-1,No attributes at all\n\
+            https://stream.example/plain.ts\n";
+        let out = from_m3u(text, Base::Address("https://lists.example/all.m3u"));
+        assert_eq!(out.len(), 3, "{out:#?}");
+
+        let bbc = out[0]
+            .attributes
+            .as_deref()
+            .expect("the attributes are kept");
+        assert_eq!(bbc.guide_id.as_deref(), Some("BBCNews.uk"));
+        assert_eq!(
+            bbc.country.as_deref(),
+            Some("UK"),
+            "as written: the reader maps it"
+        );
+        assert_eq!(bbc.language.as_deref(), Some("English"));
+        assert_eq!(bbc.logo.as_deref(), Some("https://logo.example/bbc.png"));
+        // A COMMA INSIDE QUOTES does not end the attributes.
+        assert_eq!(bbc.group.as_deref(), Some("News, Weather;Documentary"));
+        assert_eq!(out[0].title.as_deref(), Some("BBC News, HD"));
+        assert_eq!(out[0].seconds, None, "-1 is not a length");
+        assert_eq!(
+            bbc.user_agent.as_deref(),
+            Some("Mozilla/5.0 (X11; Linux x86_64)"),
+            "an option's value keeps its spaces"
+        );
+        assert_eq!(bbc.referrer.as_deref(), Some("https://tv.example/"));
+
+        // AN UNQUOTED VALUE, A NAME IN OTHER CASE, AN ATTRIBUTE NOT KEPT, and
+        // the older `#EXTGRP` giving the group.
+        let plain = out[1].attributes.as_deref().expect("kept");
+        assert_eq!(plain.guide_id.as_deref(), Some("unquoted"));
+        assert_eq!(plain.group.as_deref(), Some("Radio"));
+        assert_eq!(
+            plain.user_agent, None,
+            "the first entry's header is its own"
+        );
+        assert_eq!(out[1].title.as_deref(), Some("Plain"));
+
+        // AND A PLAIN LINE PAYS NOTHING.
+        assert_eq!(out[2].attributes, None);
+        assert_eq!(out[2].title.as_deref(), Some("No attributes at all"));
+        assert!(Attributes::default().is_empty());
+    }
+
+    /// FAILS IF: a caller's bounds are not the ones applied, or a list past
+    /// them does not say it was cut.
+    #[test]
+    fn a_list_read_within_bounds_stops_at_them_and_says_so() {
+        let long: String = (0..5000)
+            .map(|n| {
+                format!("#EXTINF:-1 group-title=\"G\",Channel {n}\nhttps://s.example/{n}.ts\n")
+            })
+            .collect();
+        let base = Base::Address("https://lists.example/all.m3u");
+        // THE PANEL'S BOUND: two thousand.
+        let panel = parse_text(&long, Kind::M3u, base).unwrap();
+        assert_eq!(panel.entries.len(), super::ENTRY_CEILING);
+        assert!(panel.cut);
+        // A CATALOGUE'S: all of them, and not cut.
+        let wide = Bounds {
+            bytes: 16 << 20,
+            entries: 10_000,
+        };
+        let all = parse_text_within(&long, Kind::M3u, base, wide).unwrap();
+        assert_eq!(all.entries.len(), 5000);
+        assert!(!all.cut);
+        // AND A BYTE BOUND CUTS THE TEXT, not the entry count.
+        let few = parse_text_within(
+            &long,
+            Kind::M3u,
+            base,
+            Bounds {
+                bytes: 200,
+                entries: 10_000,
+            },
+        )
+        .unwrap();
+        assert!(few.entries.len() < 10, "{}", few.entries.len());
     }
 
     /// FAILS IF: a clock is read as a count of seconds.

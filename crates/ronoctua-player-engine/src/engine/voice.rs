@@ -97,6 +97,53 @@ pub(crate) struct Voice {
     applied: HashMap<&'static str, String>,
     /// Subtitle files added to it, by location, and the id mpv gave each.
     pub added: Vec<(String, i64)>,
+    /// What mpv's parts that load a file said of it since it started
+    /// loading — the `ytdl_hook` (yt-dlp's words) and `cplayer`, errors
+    /// only, the last [`HEARD_MOST`] ([`keeps`]).
+    pub heard: std::collections::VecDeque<String>,
+    /// What the program behind mpv said when this file would not play: the
+    /// last `ERROR:` line [`said_of`] found in [`Voice::heard`].
+    pub said: Option<String>,
+    /// mpv said FILE_LOADED for what it holds: its tracks are what the
+    /// file has, and a sound it lacks is known to be lacking.
+    pub file_loaded: bool,
+}
+
+/// How many lines of mpv's log a voice keeps of the file it loads.
+pub(super) const HEARD_MOST: usize = 8;
+
+/// The least level of mpv's log a voice asks for: nothing below what
+/// [`keeps`] keeps is sent at all.
+const LOG_LEVEL: &str = "error";
+
+/// The longest line of a program's words kept, in characters.
+pub(super) const SAID_MOST_CHARS: usize = 400;
+
+/// Whether a line of mpv's log is one a voice keeps: an error of the part
+/// that asks yt-dlp (`ytdl_hook`) or of the player's core (`cplayer`), which
+/// is where a file that will not load says why. Pure.
+#[must_use]
+pub(super) fn keeps(prefix: &str, level: &str) -> bool {
+    matches!(prefix, "ytdl_hook" | "cplayer") && matches!(level, "error" | "fatal")
+}
+
+/// What yt-dlp said of a file that would not play: the last `ERROR:` line
+/// among what was heard, from its words on, `ERROR:` itself left out, cut at
+/// [`SAID_MOST_CHARS`]. `None` when it said none. Pure.
+///
+/// The hook says yt-dlp's whole standard error in ONE `msg.error`, and mpv's
+/// client API hands it over a line per event (`mpv_event_log_message.text`
+/// is one line since API 1.6): so each heard line is a line — and a message
+/// that still holds several is read line by line all the same.
+#[must_use]
+pub(super) fn said_of<'a>(heard: impl DoubleEndedIterator<Item = &'a String>) -> Option<String> {
+    heard.rev().find_map(|message| {
+        message.lines().rev().find_map(|line| {
+            let (_, words) = line.split_once("ERROR:")?;
+            let words = words.trim();
+            (!words.is_empty()).then(|| words.chars().take(SAID_MOST_CHARS).collect())
+        })
+    })
 }
 
 impl Voice {
@@ -111,6 +158,11 @@ impl Voice {
         for (id, name, format) in OBSERVED {
             mpv.observe(id, name, format)?;
         }
+        // WHY A FILE WOULD NOT PLAY is said in mpv's log and nowhere else —
+        // yt-dlp's `ERROR:` line comes through the ytdl hook's log — so a
+        // voice listens to it, from ERRORS up: what it keeps ([`keeps`]),
+        // and not the warnings a broken stream says many times a second.
+        mpv.request_log_messages(LOG_LEVEL)?;
         let stop = Arc::new(AtomicBool::new(false));
         let (render, poke) = spawn_render(mpv.clone(), serial, stop.clone(), shared.clone())?;
         let events = spawn_events(mpv.clone(), serial, stop.clone(), shared.clone())?;
@@ -131,7 +183,29 @@ impl Voice {
             drift_ms: 0,
             applied: HashMap::new(),
             added: Vec::new(),
+            heard: std::collections::VecDeque::new(),
+            said: None,
+            file_loaded: false,
         })
+    }
+
+    /// A line of mpv's log: kept when it is one [`keeps`] names, the oldest
+    /// going past [`HEARD_MOST`].
+    pub(super) fn hear(&mut self, prefix: &str, level: &str, text: &str) {
+        if !keeps(prefix, level) {
+            return;
+        }
+        if self.heard.len() == HEARD_MOST {
+            self.heard.pop_front();
+        }
+        self.heard.push_back(text.trim_end().to_owned());
+    }
+
+    /// A new file starts: nothing heard of the last one is about this one.
+    pub(super) fn starting(&mut self) {
+        self.heard.clear();
+        self.said = None;
+        self.file_loaded = false;
     }
 
     /// Sets `name` to `value` unless it already is.
@@ -169,6 +243,7 @@ impl Voice {
         self.tracks.clear();
         self.eof = false;
         self.failed = None;
+        self.file_loaded = false;
         self.added.clear();
         self.applied.remove("sid");
         self.applied.remove("secondary-sid");
@@ -243,6 +318,13 @@ fn spawn_events(
                 let event = mpv.wait(1.0);
                 if event == Event::Shutdown || stop.load(Ordering::SeqCst) {
                     return;
+                }
+                // A LINE OF THE LOG NOBODY KEEPS — a decoder's error on a
+                // broken stream, many a second — never takes the lock.
+                if let Event::Log { prefix, level, .. } = &event
+                    && !keeps(prefix, level)
+                {
+                    continue;
                 }
                 let (lock, bell) = &*shared;
                 let Ok(mut e) = lock.lock() else { return };
@@ -411,6 +493,69 @@ pub(super) fn added_track(json: &str, location: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: yt-dlp's `ERROR:` line is not what a refusal quotes — mpv
+    /// hands the hook's message over a line per event, warnings and all, and
+    /// then the hook's own summary — or a warning, another part of mpv, or
+    /// an error line with nothing after it is taken for it; or a voice asks
+    /// mpv for more of its log than it keeps.
+    #[test]
+    fn what_yt_dlp_said_is_its_last_error_line() {
+        // THE FIXTURE: what mpv 0.41's `ytdl_hook.lua` logs when yt-dlp
+        // fails — its standard error trimmed, said in one `msg.error` and
+        // handed to a client a LINE PER EVENT (client.h: one line since API
+        // 1.6) — then the hook's own line, and what the core says after.
+        let sorry = "[youtube] dQw4w9WgXcQ: Sign in to confirm you\u{2019}re not a bot. \
+                     Use --cookies-from-browser or --cookies for the authentication.";
+        let error = format!("ERROR: {sorry}\n");
+        let log = [
+            (
+                "ffmpeg/demuxer",
+                "error",
+                "hls: stream 0: segment unavailable\n",
+            ),
+            (
+                "ytdl_hook",
+                "error",
+                "WARNING: [youtube] dQw4w9WgXcQ: nsig extraction failed\n",
+            ),
+            ("ytdl_hook", "error", error.as_str()),
+            (
+                "ytdl_hook",
+                "error",
+                "youtube-dl failed: unexpected error occurred\n",
+            ),
+            ("ytdl_hook", "warn", "ERROR: a warning level is not kept\n"),
+            ("cplayer", "error", "Failed to recognize file format.\n"),
+        ];
+        let mut heard = std::collections::VecDeque::new();
+        for (prefix, level, text) in log {
+            if keeps(prefix, level) {
+                heard.push_back(text.trim_end().to_owned());
+            }
+        }
+        assert_eq!(heard.len(), 4, "{heard:?}");
+        assert_eq!(said_of(heard.iter()).as_deref(), Some(sorry));
+        // THE SAME, SAID AS ONE MESSAGE of several lines: read line by line.
+        let whole = [
+            format!("WARNING: [youtube] dQw4w9WgXcQ: nsig extraction failed\n{error}"),
+            "youtube-dl failed: unexpected error occurred".to_owned(),
+        ];
+        assert_eq!(said_of(whole.iter()).as_deref(), Some(sorry));
+        // WHAT IS ASKED OF mpv is what is kept: nothing below an error.
+        assert!(keeps("ytdl_hook", LOG_LEVEL));
+        assert!(!keeps("ytdl_hook", "warn"));
+        // NOTHING SAID IS NONE, and an `ERROR:` with nothing after it is none.
+        assert_eq!(said_of(std::iter::empty()), None);
+        let bare = ["ERROR:  ".to_owned()];
+        assert_eq!(said_of(bare.iter()), None);
+        // A LONG ONE is cut, by characters.
+        let long = [format!("ERROR: {}", "ç".repeat(SAID_MOST_CHARS * 2))];
+        assert_eq!(
+            said_of(long.iter()).map(|s| s.chars().count()),
+            Some(SAID_MOST_CHARS)
+        );
+    }
 
     /// FAILS IF: mpv's list of tracks stops being read as the kinds the wire
     /// names, a cover stops being told from a film, or a kind nobody named

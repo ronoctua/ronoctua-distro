@@ -430,6 +430,40 @@ impl Queue {
         }
     }
 
+    /// Puts new words on a notification already received — where it is on
+    /// the band, where it waits, and in the history — without raising it
+    /// again. `false` when nothing by that key is anywhere.
+    ///
+    /// # Why it exists
+    ///
+    /// Because one event can arrive twice, and the second time knowing more:
+    /// oomd's kill reaches the footer as a bus signal, at once, and again from
+    /// the brain's watch on the journal, with what died, where, how much
+    /// memory it held and how stalled the machine was. Two notifications for
+    /// one kill is the defect; the first one saying less than is known is the
+    /// other. The KEY and not the id, for the reason [`RecordKey`] gives: an id
+    /// names several records across restarts.
+    pub fn amend(&mut self, key: RecordKey, summary: &str, body: &str) -> bool {
+        let mut found = false;
+        let mut words = |n: &mut Notification| {
+            if n.key() == key {
+                summary.clone_into(&mut n.summary);
+                body.clone_into(&mut n.body);
+                found = true;
+            }
+        };
+        if let Some(shown) = self.showing.as_mut() {
+            words(&mut shown.notification);
+        }
+        for (n, _) in &mut self.pending {
+            words(n);
+        }
+        for r in &mut self.history {
+            words(&mut r.notification);
+        }
+        found
+    }
+
     /// Expires the one on the band if its time is up and pulls the next.
     pub fn tick(&mut self, now: Instant) -> Tick {
         let Some(current) = self.showing.as_ref() else {
@@ -847,6 +881,50 @@ mod tests {
     /// The name of the record `n(id)` makes.
     fn named(id: u32) -> RecordKey {
         n(id).key()
+    }
+
+    #[test]
+    fn an_amended_notification_says_the_new_words_wherever_it_is() {
+        // ONE KILL, TOLD TWICE: once by the bus, at once, and again with the
+        // details. The second is new words on the first — on the band, in the
+        // queue and in the history — and never a second notification.
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(1), p(50, Life::Normal), t0);
+        f.enqueue(n(2), p(50, Life::Normal), t0);
+        assert!(f.amend(named(1), "one, whole", "with what is known"));
+        assert!(f.amend(named(2), "two, whole", "and this"));
+        let showing = f.showing().expect("the first is on the band");
+        assert_eq!(showing.notification.summary, "one, whole");
+        assert_eq!(showing.notification.body, "with what is known");
+        assert_eq!(f.pending(), 1, "an amendment raised a notification");
+        let words: Vec<(&str, &str)> = f
+            .history()
+            .iter()
+            .map(|r| {
+                (
+                    r.notification.summary.as_str(),
+                    r.notification.body.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("one, whole", "with what is known"),
+                ("two, whole", "and this")
+            ]
+        );
+        // THE WAITING ONE, when its turn comes, says its new words too.
+        f.dismiss_current(t0);
+        assert_eq!(
+            f.showing().map(|s| s.notification.summary.as_str()),
+            Some("two, whole")
+        );
+        // AND A KEY NOBODY HAS changes nothing, and says so.
+        assert!(!f.amend(named(9), "x", "y"));
+        // THE SAME ID FROM ANOTHER ARRIVAL is another record.
+        assert!(!f.amend(at(1, 999).key(), "x", "y"));
     }
 
     #[test]

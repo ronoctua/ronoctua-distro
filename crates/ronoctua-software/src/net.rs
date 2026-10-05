@@ -171,6 +171,45 @@ pub fn get(url: &str, most: u64) -> Result<Got, Refusal> {
     fetch(url, None, most).map_err(|f| f.refusal.unwrap_or(Refusal::ToolFailed))
 }
 
+/// [`get`], on the person's [`ronoctua_consent::Pass`] for the host of `url`
+/// (`web::request_let`): a page at an address the person typed. The pass is
+/// for the FIRST host; the redirects follow the web's rule, and nothing of
+/// ours but the request itself goes past that host. Blocks: call it on a
+/// thread.
+///
+/// # Errors
+///
+/// [`Refusal::NotLet`] when `url` is not on the pass's host (nothing is
+/// sent), and every refusal of [`get`].
+pub fn get_let(pass: &ronoctua_consent::Pass, url: &str, most: u64) -> Result<Got, Refusal> {
+    // THE ADDRESS'S OWN REFUSAL first, then the pass: nothing is sent to a
+    // host the pass does not name.
+    first_hop(url).map_err(|f| f.refusal.unwrap_or(Refusal::UrlInvalid))?;
+    if !first_host_is(pass, url) {
+        return Err(Refusal::NotLet);
+    }
+    let ask = web::Ask::get(url, USER_AGENT)
+        .most(most)
+        .hops(MOST_REDIRECTS);
+    let got = web::request_let(pass, &ask)
+        .map_err(|e| Failure::from(e).refusal.unwrap_or(Refusal::ToolFailed))?;
+    answered(Got {
+        url: got.url,
+        reply: got.reply,
+    })
+    .map_err(|f| f.refusal.unwrap_or(Refusal::ToolFailed))
+}
+
+/// Whether `url`'s first host — after the web's upgrade — is the one `pass`
+/// lets. Pure.
+#[must_use]
+pub fn first_host_is(pass: &ronoctua_consent::Pass, url: &str) -> bool {
+    first_hop(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| pass.covers(h)))
+        .unwrap_or(false)
+}
+
 /// POST a JSON body (Flathub's search), same rules. Blocks: call it on a
 /// thread.
 ///
@@ -209,6 +248,24 @@ pub fn answered(got: Got) -> Result<Got, Failure> {
     }
 }
 
+/// THE PASS for the first host of `url` (after the web's upgrade), minted
+/// from the person's `consent.json` at the moment of asking: a catalogue is
+/// asked only once its row "Ask {hosts}" was pressed (`OnlineSource::hosts`
+/// in the shell, the hosts each catalogue module declares).
+///
+/// # Errors
+///
+/// The address's refusal ([`transport_of`]), and [`Refusal::NotLet`] when
+/// the host was not let — nothing is sent.
+pub fn pass_for(url: &str) -> Result<ronoctua_consent::Pass, Failure> {
+    let first = first_hop(url)?;
+    let host = first.host_str().unwrap_or_default();
+    ronoctua_consent::pass(host).map_err(|_| Failure {
+        refusal: Some(Refusal::NotLet),
+        trouble: format!("{host} was not let in consent.json"),
+    })
+}
+
 /// THE request: a GET (`post` `None`) or a JSON POST of `post`, carrying
 /// `extra` headers after ours, following at most [`MOST_REDIRECTS`] redirects
 /// by [`next_hop`] (301, 302 and 303 turn a POST into a GET; 307 and 308 carry
@@ -223,8 +280,9 @@ pub fn answered(got: Got) -> Result<Got, Failure> {
 ///
 /// # Errors
 ///
-/// The address's refusal ([`transport_of`], [`next_hop`]), `Offline` when a
-/// host cannot be reached, `TooLarge` above the ceiling, `ToolFailed` for a
+/// The address's refusal ([`transport_of`], [`next_hop`]), `NotLet` when its
+/// host was not let ([`pass_for`]: nothing is sent), `Offline` when a host
+/// cannot be reached, `TooLarge` above the ceiling, `ToolFailed` for a
 /// header this module will not send, after [`MOST_REDIRECTS`] redirects, or
 /// for a body in a content coding that is not read ([`refusal_of_kind`]).
 pub fn request(
@@ -240,11 +298,45 @@ pub fn request(
     if let Some(body) = post {
         ask = ask.posting(body);
     }
-    let got = web::request(&ask)?;
+    // ON THE PERSON'S PASS for the first host: its headers and its body go
+    // to that host alone, and the redirects are the host's answer.
+    let pass = pass_for(url)?;
+    let got = web::request_let(&pass, &ask)?;
     Ok(Got {
         url: got.url,
         reply: got.reply,
     })
+}
+
+/// A file a PAGE NAMED on another host — a manifest or an icon on a CDN —
+/// asked bare on the pass of the page's host (`web::request_named`): the
+/// page's answer, as a redirect is. `page` is the address the person typed,
+/// on the pass's host. Blocks: call it on a thread.
+///
+/// # Errors
+///
+/// [`Refusal::NotLet`] when `page` is not on the pass's host (nothing is
+/// sent), and every refusal of [`get`].
+pub fn get_named(
+    pass: &ronoctua_consent::Pass,
+    page: &str,
+    url: &str,
+    most: u64,
+) -> Result<Got, Refusal> {
+    first_hop(url).map_err(|f| f.refusal.unwrap_or(Refusal::UrlInvalid))?;
+    if !first_host_is(pass, page) {
+        return Err(Refusal::NotLet);
+    }
+    let ask = web::Ask::get(url, USER_AGENT)
+        .most(most)
+        .hops(MOST_REDIRECTS);
+    let got = web::request_named(pass, page, &ask)
+        .map_err(|e| Failure::from(e).refusal.unwrap_or(Refusal::ToolFailed))?;
+    answered(Got {
+        url: got.url,
+        reply: got.reply,
+    })
+    .map_err(|f| f.refusal.unwrap_or(Refusal::ToolFailed))
 }
 
 /// THE download: `url` into `to`, STREAMING — nothing of it is held in memory.
@@ -770,6 +862,76 @@ mod tests {
 
     use super::*;
 
+    /// A pass minted from a consent file of the test's own.
+    fn pass_for_test(host: &str, tag: &str) -> ronoctua_consent::Pass {
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-software-pass-{}-{tag}",
+            std::process::id()
+        ));
+        let store = ronoctua_consent::store_at(Some(dir.clone()));
+        ronoctua_consent::let_hosts_in(&store, &[host], true).unwrap();
+        let pass = ronoctua_consent::pass_in(&store, host).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        pass
+    }
+
+    /// FAILS IF: a page is asked on a pass for another host — the check
+    /// made at all, or made after the address went out (an unroutable
+    /// address answers `NotLet` before any socket) — or an address the web
+    /// refuses anyway is said to be "not let", or the pass stops covering
+    /// its own host after the web's upgrade.
+    #[test]
+    fn a_page_goes_out_only_on_the_pass_for_its_host() {
+        let pass = pass_for_test("app.example", "page");
+        assert!(first_host_is(&pass, "https://app.example/x"));
+        assert!(first_host_is(&pass, "https://APP.example./"));
+        assert!(!first_host_is(&pass, "https://cdn.example/manifest.json"));
+        assert!(!first_host_is(&pass, "https://evil-app.example/"));
+        assert_eq!(
+            get_let(&pass, "https://other.invalid/", 1 << 10).unwrap_err(),
+            Refusal::NotLet
+        );
+        assert_eq!(
+            get_let(&pass, "ftp://app.example/", 1 << 10).unwrap_err(),
+            Refusal::UrlScheme
+        );
+    }
+
+    /// FAILS IF: a catalogue's request goes out to a host nobody let —
+    /// `request` asked with no pass, as it did before the catalogues had a
+    /// consent row — or the refusal stops being `NotLet`, said before any
+    /// socket (an unroutable host would be `Offline`).
+    #[test]
+    fn a_catalogue_is_asked_only_on_a_pass() {
+        let refused = request("https://never-let.invalid/feed.json", None, &[], 1 << 10)
+            .expect_err("a host nobody let was asked");
+        assert_eq!(
+            refused.refusal,
+            Some(Refusal::NotLet),
+            "{}",
+            refused.trouble
+        );
+        assert_eq!(
+            pass_for("ftp://f-droid.org/")
+                .map(|_| ())
+                .unwrap_err()
+                .refusal,
+            Some(Refusal::UrlScheme)
+        );
+        let pass = pass_for_test("example.org", "named");
+        assert_eq!(
+            get_named(
+                &pass,
+                "https://other.invalid/",
+                "https://cdn.invalid/i.png",
+                1 << 10
+            )
+            .unwrap_err(),
+            Refusal::NotLet,
+            "a page off the pass named a file"
+        );
+    }
+
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()
     }
@@ -1058,6 +1220,7 @@ mod tests {
         assert_eq!(
             t,
             Target {
+                tls: true,
                 host: "example.org".into(),
                 port: 443,
                 host_header: "example.org".into(),

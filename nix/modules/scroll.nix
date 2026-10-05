@@ -378,7 +378,7 @@ in
     #
     # Booting to a `getty` and stopping there. There was no autologin and
     # nothing pulled the compositor in — `default.target.wants` in the built
-    # system held `emacs.service` and the activation unit and nothing else —
+    # system held the editor's daemon and the activation unit and nothing else —
     # so the machine asked for a user and a password and then handed over a
     # SHELL. The desktop had no way to start at all, and the same was true of
     # the compositor before this one: the gap is as old as the repository, and
@@ -639,14 +639,29 @@ in
         RestartSec = 1;
         Slice = "session.slice";
         OOMPolicy = "stop";
+        # A FOOTER THAT HANGS IS ONE THAT DIES. `OnFailure=` sees a process
+        # that dies; one that stops answering (a tight loop, a hung GPU, a
+        # `SIGSTOP`) stays `active` and the lifeline never comes. The footer
+        # pets this watchdog from its event loop's one-second tick
+        # (`crate::watchdog`), so a loop that stopped turning stops the pings,
+        # the unit fails with `Result=watchdog`, and the line rises as for a
+        # crash. Thirty seconds is far past any frame and any read the loop
+        # waits on; `main` is the only process allowed to speak for it.
+        WatchdogSec = 30;
+        NotifyAccess = "main";
+        # A STOPPED PROCESS DOES NOT TAKE `SIGABRT`: it waits pending until
+        # the process runs again, which a `SIGSTOP` never does. Five seconds
+        # after the abort, systemd's `SIGKILL` — the one signal a stopped
+        # process takes — ends it, and the failure is the lifeline's.
+        TimeoutAbortSec = 5;
       };
     };
 
     # THE LINE THAT OUTLIVES THE FOOTER.
     #
     # Two rows saying what happened and what can be done about it: see the
-    # logs, restart the interface, ask an AI (drawn and refusing — it is not
-    # built yet), close. It is a second `wlr-layer-shell` surface, and that is
+    # logs, restart the interface, ask an AI (through Claude Code, after
+    # showing what would leave and asking with "no" first), close. It is a second `wlr-layer-shell` surface, and that is
     # not a second chrome against invariant 14: it is the footer's own row drawn
     # by another process, alive exactly while there is no chrome at all, and
     # gone on one key.
@@ -669,6 +684,12 @@ in
         # be assumed.
         RONOCTUA_THEME = config.ronoctua.theme;
         RONOCTUA_THEMES = "${ronoctua.themed}";
+        # WHAT "ASK AN AI" SHOWS THE REPORT IN — a pager in the rescue
+        # console — by store path, because this unit's `PATH` is minimal.
+        # Claude Code itself (`RONOCTUA_CLAUDE`) is handed over by
+        # `dev.nix`, the module that installs it: it is unfree, and a VM test
+        # that imports this module evaluates its `pkgs` without the predicate.
+        RONOCTUA_LESS = "${pkgs.less}/bin/less";
       };
       after = [ "graphical-session.target" ];
       partOf = [ "graphical-session.target" ];

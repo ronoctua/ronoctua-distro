@@ -480,7 +480,7 @@ fn carry(
 /// of a transaction, and both clean up on it. Then SIGKILL to whatever of the
 /// GROUP is left — not only the CLI: a grandchild that ignored the polite ask
 /// would otherwise go on holding the lane.
-fn stop(child: &mut Child, pid: u32, grace: Duration) {
+pub(crate) fn stop(child: &mut Child, pid: u32, grace: Duration) {
     signal(pid, rustix::process::Signal::TERM);
     let until = Instant::now() + grace;
     let mut reaped = false;

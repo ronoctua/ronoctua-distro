@@ -12,21 +12,23 @@
 //!
 //! This is the buffer with NO width constant of its own. The other seven
 //! declare what they reserved and can be read; here the widths are numbers
-//! inside four `Table`s (`Column::fixed("label", 16, 2)`) and half the keys are
-//! ASSEMBLED at run time — `brain-why-{}`, `brain-hold-{}`, `brain-standing-{}`,
-//! `update-{}`. No parser of this file's source can pair a key with a budget.
+//! inside `Table`s (`Column::fixed("label", 20, 2)`) and the keys ARRIVE at run
+//! time — a module's name, its reason, a step's name travel beside the ids, and
+//! `brain-hold-{}` and `brain-outcome-{}` are assembled. No parser of this
+//! file's source can pair a key with a budget.
 //!
 //! The frame can: `Command::Text` carries the key and its `max_width` side by
 //! side, already assembled. So this driver walks the buffer's screens and hands
 //! them to `driven::every_label_fits`, which is the only way a label of this
 //! buffer has ever been measured against the language.
 //!
-//! Usage: `ronoctua-test-brain <component.wasm> <i18n-dir>`
+//! Usage: `ronoctua-test-brain <component.wasm> <i18n-dir> [--modules <file>]`
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_protocol::{
-    Announcement, DayPart, Gate, HoldKind, Input, Mind, OutcomeKind, Pulse, RunRecord, Standing,
-    StepOutcome, TaskState, TaskStep, Vital, VitalSign,
+    ActivityRow, Announcement, BrainTone, DayPart, Gate, HoldKind, Input, Mind, ModuleAction,
+    ModuleRow, ModuleScreen, ModuleSection, Notice, NoticeLevel, OutcomeKind, Pulse, RunRecord,
+    ScreenCell, Standing, StepOutcome, TaskKind, TaskState, TaskStep, Vital, VitalSign,
 };
 
 /// The labels this buffer cuts ON PURPOSE, and why.
@@ -47,67 +49,79 @@ const COLUMNS: u16 = 100;
 /// A moment far enough from the epoch that a countdown is not negative.
 const NOW: u64 = 1_800_000_000;
 
-/// The task whose STEPS this driver draws.
+/// EVERY TASK THE BRAIN HAS, so every one of them is drawn — read at RUN TIME.
 ///
-/// From `assets/updates.nix`, through the brain's own table.
-const TASK: &str = "system-update";
-
-/// EVERY TASK THE BRAIN DECLARES, so every one of them is drawn.
+/// # Why this is not a list any more
 ///
-/// # Why this list is here and not one name
+/// It was: five ids written here, and the day a sixth task arrived (the
+/// clock's watch) the list did not learn it — its row was never drawn, and a
+/// label of its missing from a language would have passed. A list in the
+/// driver is a second registry of what the brain has.
 ///
-/// Because it was one name, and that made the check blind to the thing it is
-/// best placed to catch. The buffer builds a task's label as
-/// `format!("brain-task-{}", task.id)`, which `buffer-keys-have-text` cannot
-/// see — it reads `const` literals — and `i18n-complete` only compares the two
-/// languages with each other. So a task added without its two keys would have
-/// drawn `[brain-task-cache-sweep]` on screen with every check in the tree
-/// green. Driving all of them is what closes that.
-///
-/// A LIST AND NOT A READ of `crates/ronoctua-brain/src/tasks/`: this binary
-/// runs inside a check with no source tree, and the day a third task arrives
-/// the line here is the same line the registry needs.
-const TASKS: &[&str] = &[
-    "system-update",
-    "cache-sweep",
-    "trash-expire",
-    "emacs-daemon",
-    "disk-space",
-];
-
-/// The update sequence's table, as the build generated it.
-///
-/// # Why this file is read and not summarised
-///
-/// Because a step's id is a TEXT KEY once it reaches the panel — the buffer
-/// builds `update-<id>` from it — so a driver that invented ids would draw
-/// bracketed keys, and one that copied the real ones would be a second list of
-/// the sequence. `update-has-one-list` refuses the second, and it is right to:
-/// this crate carried three step names of its own once, and they were disjoint
-/// from the twelve the unit actually runs.
-///
-/// So the ids come from the same generated table `ronoctua-brain` includes.
-const TABLE: &str = include_str!(env!("RONOCTUA_UPDATES_RS"));
-
-/// The declared step ids, in the order the sequence declares them.
-///
-/// A hand parse and not a regex: the shape is `id: "…",` on its own line, which
-/// is what generated the file and what `update-has-one-list` reads it with.
-fn declared_steps() -> Vec<String> {
-    let mut out = Vec::new();
-    for line in TABLE.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("id: \"") else {
-            continue;
-        };
-        let Some(id) = rest.split('"').next() else {
-            continue;
-        };
-        if !id.is_empty() && !out.iter().any(|x: &String| x == id) {
-            out.push(id.to_owned());
+/// So the ids come from what the brain REPORTS: the output of
+/// `ronoctua-brain modules` (one module per line, its id first) when the check
+/// hands it over as `--modules <file>`, and otherwise the modules the texts
+/// declare — every `brain-task-<id>` beside its `brain-task-<id>-does`, which is
+/// the pair the brain's generator requires of every module, in the bundle the
+/// check hands in (the merged texts, the modules' fragments included).
+fn reported(i18n: &str, modules: Option<&str>) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(file) = modules {
+        let raw =
+            std::fs::read_to_string(file).with_context(|| format!("could not read {file}"))?;
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(id) = line.split_whitespace().next()
+                && !out.iter().any(|o| o == id)
+            {
+                out.push(id.to_owned());
+            }
         }
+    } else {
+        let base = ronoctua_runtime::driven::languages(i18n)?
+            .into_iter()
+            .next()
+            .context("no language in the texts")?;
+        let table = ronoctua_runtime::driven::ftl(&format!("{i18n}/{base}.ftl"))?;
+        let mut ids: Vec<String> = table
+            .keys()
+            .filter_map(|k| k.strip_prefix("brain-task-"))
+            .filter(|id| !id.ends_with("-does"))
+            .filter(|id| table.contains_key(&format!("brain-task-{id}-does")))
+            .map(ToOwned::to_owned)
+            .collect();
+        ids.sort();
+        out = ids;
     }
-    out
+    anyhow::ensure!(
+        !out.is_empty(),
+        "the brain reports no module at all — the check is reading the wrong texts, \
+         or `ronoctua-brain modules` said nothing"
+    );
+    Ok(out)
+}
+
+/// THE STEPS A MODULE DECLARES, with the keys it declared for each — the first
+/// module the build compiled that has steps.
+///
+/// # Why the compiled registry and not a table
+///
+/// Because a step's KEYS are the module's, and the host sends them beside the
+/// id (`name-key`, `does-key`): a driver that invented ids would draw bracketed
+/// keys, and one that copied the real ones — or read one module's table by
+/// its name — would be a second list of what the brain has. So the steps come
+/// from what the brain itself registers (`compiled::all`), found by what they
+/// are and never by whose.
+fn declared_steps() -> Vec<&'static ronoctua_brain::Step> {
+    ronoctua_brain::compiled::all(&ronoctua_brain::Birth::detached())
+        .iter()
+        .map(|m| m.steps())
+        .find(|steps| !steps.is_empty())
+        .map(|steps| steps.iter().collect())
+        .unwrap_or_default()
 }
 
 /// Looks at the screen, remembering its labels, and refuses a frame that
@@ -122,9 +136,7 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::Disp
     for columns in [46, 80, COLUMNS] {
         // THE NARROW ONES ARE NOT MEASURED, only looked at. A `fill` column
         // gives way on purpose, so at forty-six columns every budget is "what
-        // was left" and the host elides by design. The question the label
-        // measurement asks is whether the buffer RESERVED enough, and that is
-        // only answerable where it got what it asked for.
+        // was left" and the host elides by design.
         let at = if columns == COLUMNS {
             list.clone()
         } else {
@@ -140,53 +152,90 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::Disp
     Ok(list)
 }
 
-/// Fill in the names the HOST would have resolved, in this language.
+/// Fill in the names the HOST would have resolved, in this language, by the
+/// KEY each row carries — what `mind_wire` does in production.
 ///
 /// # Why the driver has to do it at all
 ///
 /// Because `TaskState::name_text` and `RunRecord::task_text` are the words the
-/// component MEASURES — it draws the key beside them — and the production host
-/// resolves them in `mind_wire::task_of`. A driver that sent the ids instead
-/// would hand the buffer a thirteen-cell name and then measure a seventeen-cell
-/// translation against the column it reserved, which is exactly what this
-/// check caught the first time it ran: four labels reported as cut, on a
-/// screen that cuts none of them.
+/// component MEASURES — it draws the key beside them. A driver that sent the
+/// ids instead would hand the buffer a thirteen-cell name and then measure a
+/// seventeen-cell translation against the column it reserved.
 fn named(mind: &mut Mind, words: &std::collections::HashMap<String, String>) {
-    let say = |id: &str| {
-        words
-            .get(&format!("brain-task-{id}"))
-            .cloned()
-            .unwrap_or_else(|| id.to_owned())
-    };
+    let say = |key: &str| words.get(key).cloned().unwrap_or_else(|| key.to_owned());
     for t in &mut mind.tasks {
-        t.name_text = say(&t.id);
-        t.last.task_text = say(&t.last.task);
+        t.name_text = say(&t.name_key);
+        t.last.task_text = say(&t.last.task_key);
         for r in &mut t.history {
-            r.task_text = say(&r.task);
+            r.task_text = say(&r.task_key);
         }
     }
-    for r in &mut mind.activity {
-        r.task_text = say(&r.task);
+    for row in &mut mind.activity_rows {
+        row.newest.task_text = say(&row.newest.task_key);
+        for r in &mut row.members {
+            r.task_text = say(&r.task_key);
+        }
+    }
+}
+
+/// A run of `task`, with the keys the host would have sent beside it.
+fn a_run(task: &str, outcome: OutcomeKind, at: &str, why: &str) -> RunRecord {
+    RunRecord {
+        task: task.to_owned(),
+        task_text: task.to_owned(),
+        began: NOW - 7200,
+        ended: NOW - 7000,
+        when_text: "2026-08-23 13:00".to_owned(),
+        outcome,
+        at: at.to_owned(),
+        why: why.to_owned(),
+        trouble: String::new(),
+        steps: Vec::new(),
+        task_key: format!("brain-task-{task}"),
+        // THE KEY THE STEP'S MODULE DECLARED, found by the step's id — what
+        // `mind_wire` does in production. Empty for a word that is no step.
+        at_key: declared_steps()
+            .iter()
+            .find(|s| !at.is_empty() && s.id == at)
+            .map(|s| s.name_key.to_owned())
+            .unwrap_or_default(),
+        why_key: if why.is_empty() {
+            String::new()
+        } else {
+            format!("brain-why-{why}")
+        },
+        says: String::new(),
+        says_text: String::new(),
     }
 }
 
 /// A task in whichever shape the screen is being asked about.
-fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskState {
-    // THE IDS COME FROM THE DECLARATION, never from here — see `TABLE`. Two
-    // are enough for what this driver proves: that the panel draws a step that
-    // ran and one that is switched off.
+fn task(id: &str, standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskState {
+    // THE STEPS COME FROM A MODULE, never from here — see `declared_steps`.
+    // Two are enough for what this driver proves: that the panel draws a step
+    // that ran and one that is switched off, each by the keys its module
+    // declared.
     let declared = declared_steps();
+    let first = declared
+        .first()
+        .map(|s| s.id.to_owned())
+        .unwrap_or_default();
+    let step = |n: usize, root: bool, on: bool| {
+        declared.get(n).map(|s| TaskStep {
+            id: s.id.to_owned(),
+            command: s.command.to_owned(),
+            needs_root: root,
+            on,
+            on_by_default: true,
+            name_key: s.name_key.to_owned(),
+            does_key: s.does_key.to_owned(),
+        })
+    };
     TaskState {
-        id: TASK.to_owned(),
-        // THE NAME AS THE HOST WOULD HAVE RESOLVED IT. This driver has no
-        // bundle, and the point of the field is the WIDTH — so it carries a
-        // word of the right shape rather than an empty string, which would
-        // photograph a column the real screen never has.
-        name_text: "Rebuild the system".to_owned(),
-        // THE KIND, and the driver pushes BOTH: a one-shot row is drawn in
-        // different colours and with a different glyph, and a driver that only
-        // ever built routines would never measure the other half.
-        kind: ronoctua_protocol::TaskKind::Routine,
+        id: id.to_owned(),
+        // THE NAME AS THE HOST WOULD HAVE RESOLVED IT — see `named`.
+        name_text: id.to_owned(),
+        kind: TaskKind::Routine,
         standing,
         enabled: true,
         interval_days: 7,
@@ -198,52 +247,143 @@ fn task(standing: Standing, hold: HoldKind, why_not: &str, ran: bool) -> TaskSta
         hold,
         why_not: why_not.to_owned(),
         ran,
-        history: Vec::new(),
+        history: vec![
+            a_run(id, OutcomeKind::Done, "", ""),
+            a_run(id, OutcomeKind::Failed, &first, ""),
+            a_run(id, OutcomeKind::Held, "", "ram"),
+        ],
         last: RunRecord {
-            task: TASK.to_owned(),
-            task_text: "Rebuild the system".to_owned(),
-            began: NOW - 7200,
-            ended: NOW - 7000,
-            when_text: "yesterday, 03:00".to_owned(),
-            outcome: OutcomeKind::Done,
-            at: declared.first().cloned().unwrap_or_default(),
-            why: String::new(),
-            trouble: String::new(),
             steps: vec![StepOutcome {
-                id: declared.first().cloned().unwrap_or_default(),
+                id: first.clone(),
                 ok: true,
                 seconds: 42,
                 trouble: String::new(),
             }],
+            ..a_run(id, OutcomeKind::Done, &first, "")
         },
-        steps: vec![
-            TaskStep {
-                id: declared.first().cloned().unwrap_or_default(),
-                command: "nix flake update".to_owned(),
-                needs_root: false,
-                on: true,
-                on_by_default: true,
-            },
-            TaskStep {
-                id: declared.get(1).cloned().unwrap_or_default(),
-                command: "nix store optimise".to_owned(),
-                needs_root: true,
-                on: false,
-                on_by_default: true,
-            },
-        ],
+        steps: [step(0, false, true), step(1, true, false)]
+            .into_iter()
+            .flatten()
+            .collect(),
+        calendar: true,
+        name_key: format!("brain-task-{id}"),
+        does_key: format!("brain-task-{id}-does"),
+        why_key: if why_not.is_empty() {
+            String::new()
+        } else {
+            format!("brain-why-{why_not}")
+        },
+        screen_generation: 1,
+        // ONE THING ITS MODULE OFFERS ON ITS PAGE, by a label the texts have,
+        // so the page's `Actions` block is drawn and measured.
+        actions: vec![ModuleAction {
+            id: "fixture".to_owned(),
+            label_key: "cmd-brain-run".to_owned(),
+            row: false,
+            asks_key: String::new(),
+        }],
     }
 }
 
-/// The mind, with one task in the shape asked for.
-fn mind(one: TaskState, announcement: Announcement) -> Mind {
+/// Every other task the brain reports, drawn plainly — and one of each KIND,
+/// so the labels and colours of a one-shot and of a watch are measured too.
+fn others(ids: &[String]) -> Vec<TaskState> {
+    ids.iter()
+        .skip(1)
+        .enumerate()
+        .map(|(n, id)| TaskState {
+            kind: match n % 3 {
+                0 => TaskKind::Watch,
+                1 => TaskKind::Once,
+                _ => TaskKind::Routine,
+            },
+            standing: Standing::Idle,
+            ran: false,
+            hold: HoldKind::None,
+            history: Vec::new(),
+            last: RunRecord::default(),
+            steps: Vec::new(),
+            calendar: n % 2 == 0,
+            actions: Vec::new(),
+            ..task(id, Standing::Idle, HoldKind::None, "", false)
+        })
+        .collect()
+}
+
+/// A notice of every level, the loudest offering all three controls — its
+/// sentence is DATA the host made, and the labels of its controls are keys.
+fn notices(ids: &[String]) -> Vec<Notice> {
+    let module = ids.first().cloned().unwrap_or_default();
+    [
+        NoticeLevel::Alarm,
+        NoticeLevel::Danger,
+        NoticeLevel::Warn,
+        NoticeLevel::Info,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(n, level)| Notice {
+        module: module.clone(),
+        id: format!("n{n}"),
+        says: String::new(),
+        says_text: "A notice the module raised, long enough to be cut at a narrow width".to_owned(),
+        args: Vec::new(),
+        level,
+        since: NOW - 60,
+        since_text: "2026-08-23 12:59".to_owned(),
+        controls: vec![ModuleAction {
+            id: "fixture".to_owned(),
+            label_key: "cmd-brain-run".to_owned(),
+            row: false,
+            asks_key: String::new(),
+        }],
+        dismissable: true,
+        snooze: vec![10],
+    })
+    .collect()
+}
+
+/// The activity log, FOLDED: a row that stands alone and one that folds three,
+/// with every outcome in it — `noted` included, the one added last and
+/// therefore the one a `.ftl` would be missing.
+fn activity(ids: &[String]) -> Vec<ActivityRow> {
+    let id = |n: usize| ids[n % ids.len()].clone();
+    let one = |r: RunRecord| ActivityRow {
+        last_text: r.when_text.clone(),
+        first_text: r.when_text.clone(),
+        repeats: 1,
+        members: vec![r.clone()],
+        newest: r,
+    };
+    let held = a_run(&id(1), OutcomeKind::Held, "", "ram");
+    vec![
+        one(a_run(&id(0), OutcomeKind::Done, "", "")),
+        ActivityRow {
+            newest: held.clone(),
+            repeats: 3,
+            last_text: "2026-08-23 13:00".to_owned(),
+            first_text: "2026-08-21 03:00".to_owned(),
+            members: vec![held.clone(), held.clone(), held],
+        },
+        one(a_run(&id(2), OutcomeKind::Failed, "", "")),
+        one(a_run(&id(3), OutcomeKind::Skipped, "", "off")),
+        one(RunRecord {
+            says: "brain-outcome-noted".to_owned(),
+            says_text: "Something a module noticed, as its sentence".to_owned(),
+            ..a_run(&id(4), OutcomeKind::Noted, "", "")
+        }),
+    ]
+}
+
+/// The mind, with the first task in the shape asked for.
+fn mind(ids: &[String], one: TaskState, announcement: Announcement, said: bool) -> Mind {
     let running = if one.standing == Standing::Running {
-        TASK.to_owned()
+        one.id.clone()
     } else {
         String::new()
     };
     let queue = if one.standing == Standing::Queued {
-        vec![TASK.to_owned()]
+        vec![one.id.clone()]
     } else {
         Vec::new()
     };
@@ -270,38 +410,10 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
                 },
             ],
         },
-        // THE ONE BEING ASKED ABOUT, AND THEN EVERY OTHER TASK THE BRAIN HAS.
-        //
-        // The extra rows are drawn plainly — nothing running, nothing held —
-        // and they are here for one reason: their LABELS. A task whose two text
-        // keys were forgotten draws a bracketed key, and this is the only check
-        // in the tree positioned to see that, because the buffer assembles the
-        // key with `format!` and no scan of `const` literals can find it.
-        tasks: std::iter::once(one)
-            .chain(TASKS.iter().filter(|id| **id != TASK).map(|id| TaskState {
-                id: (*id).to_owned(),
-                name_text: (*id).to_owned(),
-                // ONE OF THEM IS A ONE-SHOT, so the labels and the colours of
-                // that row are measured too.
-                kind: if *id == TASKS[TASKS.len() - 1] {
-                    ronoctua_protocol::TaskKind::Once
-                } else {
-                    ronoctua_protocol::TaskKind::Routine
-                },
-                standing: Standing::Idle,
-                enabled: true,
-                interval_days: 5,
-                part_of_day: DayPart::Night,
-                next: NOW + 3600,
-                next_text: "tomorrow, 03:00".to_owned(),
-                hold: HoldKind::None,
-                why_not: String::new(),
-                ran: false,
-                history: Vec::new(),
-                last: RunRecord::default(),
-                steps: Vec::new(),
-            }))
-            .collect(),
+        // THE ONE BEING ASKED ABOUT, AND THEN EVERY OTHER TASK THE BRAIN HAS —
+        // here for their LABELS: a module whose two keys were forgotten draws
+        // a bracketed key, and this is the check positioned to see it.
+        tasks: std::iter::once(one).chain(others(ids)).collect(),
         queue,
         running,
         rehearsing: String::new(),
@@ -312,47 +424,107 @@ fn mind(one: TaskState, announcement: Announcement) -> Mind {
             abort_on_battery: true,
         },
         cadence: vec![1, 7, 30],
-        // NOTHING WRONG IN THE DRIVER'S OWN MIND. The notice's own shapes are
-        // driven by `every_label_fits` through the `.ftl`, and a permanent one
-        // here would put a danger line over every screen it photographs.
-        notice: ronoctua_protocol::Notice::default(),
-        // AND THE LOG, with every outcome in it — `held` included, which is
-        // the one added last and therefore the one a `.ftl` would be missing.
-        activity: [
-            ronoctua_protocol::OutcomeKind::Done,
-            ronoctua_protocol::OutcomeKind::Failed,
-            ronoctua_protocol::OutcomeKind::Skipped,
-            ronoctua_protocol::OutcomeKind::Held,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(n, outcome)| RunRecord {
-            task: TASKS[n % TASKS.len()].to_owned(),
-            task_text: TASKS[n % TASKS.len()].to_owned(),
-            began: NOW - 3600 * (n as u64 + 1),
-            ended: NOW - 3600 * (n as u64 + 1) + 60,
-            when_text: "2026-08-23 13:00".to_owned(),
-            outcome,
-            at: String::new(),
-            why: if outcome == ronoctua_protocol::OutcomeKind::Held {
-                "ram".to_owned()
-            } else {
-                String::new()
-            },
-            trouble: String::new(),
-            steps: Vec::new(),
-        })
-        .collect(),
+        activity_rows: activity(ids),
+        notices: if said { notices(ids) } else { Vec::new() },
     }
 }
 
+/// A module's own page, of two sections, by keys the texts have — one row
+/// that acts and one that tells, every kind of cell among them.
+fn screen(module: &str) -> ModuleScreen {
+    let row = |id: &str, label: &str, value: ScreenCell, tone: BrainTone, act: &str| ModuleRow {
+        id: id.to_owned(),
+        label: ScreenCell::Key(label.to_owned()),
+        value,
+        note: ScreenCell::Data("a note the module wrote".to_owned()),
+        tone,
+        act: act.to_owned(),
+        also: String::new(),
+    };
+    ModuleScreen {
+        module: module.to_owned(),
+        generation: 1,
+        sections: vec![
+            ModuleSection {
+                heading: "brain-history".to_owned(),
+                rows: vec![
+                    row(
+                        "a",
+                        "brain-last-run",
+                        ScreenCell::Moment(ronoctua_protocol::Timed {
+                            at: NOW,
+                            text: "2026-08-23 13:00".to_owned(),
+                        }),
+                        BrainTone::Watching,
+                        "fixture",
+                    ),
+                    row(
+                        "b",
+                        "brain-next",
+                        ScreenCell::Count(3),
+                        BrainTone::Danger,
+                        "",
+                    ),
+                ],
+            },
+            ModuleSection {
+                heading: "brain-steps".to_owned(),
+                rows: vec![row(
+                    "c",
+                    "brain-enabled",
+                    ScreenCell::Bytes(ronoctua_protocol::Measured {
+                        bytes: 12_345_678,
+                        text: "12 MB".to_owned(),
+                    }),
+                    BrainTone::Quiet,
+                    "",
+                )],
+            },
+        ],
+        refused: String::new(),
+    }
+}
+
+/// Whether a frame WRITES this piece of data, as a line or as a paragraph.
+fn writes(list: &ronoctua_protocol::DisplayList, data: &str) -> bool {
+    use ronoctua_protocol::{Command, Text};
+    list.commands.iter().any(|c| match c {
+        Command::Text {
+            text: Text::Data(d),
+            ..
+        }
+        | Command::Paragraph {
+            content: Text::Data(d),
+            ..
+        } => d == data,
+        _ => false,
+    })
+}
+
 fn main() -> Result<()> {
-    let path = std::env::args()
-        .nth(1)
-        .context("usage: ronoctua-test-brain <component.wasm> <i18n-dir>")?;
-    let i18n = std::env::args()
-        .nth(2)
-        .context("usage: ronoctua-test-brain <component.wasm> <i18n-dir>")?;
+    const USAGE: &str = "usage: ronoctua-test-brain <component.wasm> <i18n-dir> [--modules <what `ronoctua-brain modules` printed>]";
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let path = args.first().context(USAGE)?.clone();
+    let i18n = args.get(1).context(USAGE)?.clone();
+    let modules = match args.get(2).map(String::as_str) {
+        Some("--modules") => Some(args.get(3).context(USAGE)?.clone()),
+        Some(other) => bail!("unknown option `{other}`.\n{USAGE}"),
+        None => None,
+    };
+    let ids = reported(&i18n, modules.as_deref())?;
+    println!("modules   {} reported: {}", ids.len(), ids.join(", "));
+    // THE STEP ROWS ARE MEASURED TOO, or this says so: a build whose modules
+    // declare no step would draw a page with none, and every step label would
+    // go unmeasured without a word.
+    let steps = declared_steps();
+    anyhow::ensure!(
+        steps.len() >= 2,
+        "the brain compiled no module with two steps or more; the step rows would go unmeasured"
+    );
+    println!(
+        "steps     {} of the first module that has them",
+        steps.len()
+    );
 
     let wasm = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
     let rt = ronoctua_runtime::Runtime::fresh()?;
@@ -361,26 +533,14 @@ fn main() -> Result<()> {
 
     // ---- ONCE PER LANGUAGE, AND A FRESH COMPONENT EACH TIME ----
     //
-    // This used to hand the buffer English and then measure every language
-    // against what it reserved. That was right for as long as a buffer could
-    // only reserve BLIND — it emits a key, the host translates, and a fixed
-    // budget is all anybody has to go on.
-    //
-    // The brain's header no longer reserves blind: `Input::Phrases` hands it
-    // the words and it MEASURES them, which is what let its shortcuts be
-    // packed as tightly as the minibuffer's instead of each being charged a
-    // thirteen-cell column. A measured budget is one language's width, so
-    // there is no single number that could satisfy every language — and there
-    // does not need to be. The budget IS the text.
-    //
-    // So the drive happens once for each language, with that language's words,
-    // and each pass is measured against itself. The guarantee is not weaker:
-    // it is the same guarantee, asked once per language rather than once for
-    // all of them.
+    // The brain's header does not reserve blind: `Input::Phrases` hands it
+    // the words and it MEASURES them, so a measured budget is one language's
+    // width and each pass is measured against itself. The guarantee is the
+    // same, asked once per language rather than once for all of them.
     let spoken = ronoctua_runtime::driven::languages(&i18n)?;
     for language in &spoken {
         ronoctua_runtime::driven::forget();
-        drive(&rt, &component, &i18n, language)?;
+        drive(&rt, &component, &i18n, language, &ids)?;
     }
     println!("OK: the brain's panel takes from the host, and every label it draws fits");
     Ok(())
@@ -392,6 +552,7 @@ fn drive(
     component: &wasmtime::component::Component,
     i18n: &str,
     language: &str,
+    ids: &[String],
 ) -> Result<()> {
     let i18n = i18n.to_owned();
     // THE LANGUAGE'S OWN WORDS, for the names the host would have resolved.
@@ -411,9 +572,8 @@ fn drive(
     {
         bail!("the panel does not declare the capability that feeds it");
     }
-    // EVERY LANGUAGE, and not just the base one. Checking en-GB alone would
-    // pass a command whose label was never translated, and which-key would show
-    // the raw key to whoever reads the other one.
+    // EVERY LANGUAGE, and not just the base one: a command whose label was
+    // never translated would show the raw key in which-key.
     for language in ronoctua_runtime::driven::languages(&i18n)? {
         let table = ronoctua_runtime::driven::ftl(&format!("{i18n}/{language}.ftl"))?;
         for id in &d.commands {
@@ -430,10 +590,6 @@ fn drive(
     );
 
     // ---- THE SCREEN IS EMPTY UNTIL THE HOST SPEAKS ----
-    //
-    // The same criterion the memory panel has, and for the same reason: this
-    // buffer owns no database. What it draws before the first `mind` must not
-    // be an invented zero.
     let quiet = look(&mut inst)?;
     if quiet.commands.is_empty() {
         bail!("with no mind, the panel drew nothing at all — not even the word for it");
@@ -441,39 +597,43 @@ fn drive(
 
     // ---- EVERY SHAPE OF THE HOME PAGE ----
     //
-    // Four minds, because four different key families are only drawn in one of
-    // them each: the hold's reason, the refusal's reason, the running task's
-    // standing, and the warning in flight. A label nobody drew is a label
-    // nobody measured.
-    let shapes: [(&str, TaskState, Announcement); 4] = [
+    // Each draws a family of keys the others do not: the hold's reason, the
+    // refusal's reason, the running task's standing, the warning in flight —
+    // and the notices, each shape with and without them.
+    let first = ids[0].clone();
+    let shapes: [(&str, TaskState, Announcement, bool); 4] = [
         (
-            "idle",
-            task(Standing::Idle, HoldKind::None, "", true),
+            "idle, with notices",
+            task(&first, Standing::Idle, HoldKind::None, "", true),
             Announcement::default(),
+            true,
         ),
         (
             "held by ram",
-            task(Standing::Queued, HoldKind::Ram, "", true),
+            task(&first, Standing::Queued, HoldKind::Ram, "", true),
             Announcement::default(),
+            false,
         ),
         (
             "refused",
-            task(Standing::Idle, HoldKind::None, "off", false),
+            task(&first, Standing::Idle, HoldKind::None, "off", false),
             Announcement::default(),
+            true,
         ),
         (
             "running, with a warning",
-            task(Standing::Running, HoldKind::None, "", true),
+            task(&first, Standing::Running, HoldKind::None, "", true),
             Announcement {
-                task: TASK.to_owned(),
+                task: first.clone(),
                 total_seconds: 30,
                 deadline: NOW + 30,
                 why: "postponed".to_owned(),
             },
+            true,
         ),
     ];
-    for (what, one, announcement) in shapes {
-        let mut m = mind(one, announcement);
+    for (what, one, announcement, said) in shapes {
+        let mut m = mind(ids, one, announcement, said);
         named(&mut m, &words);
         inst.event(&Input::Mind(Box::new(m)))?;
         let list = look(&mut inst)?;
@@ -485,14 +645,9 @@ fn drive(
 
     // ---- AND EVERY REASON A TASK CAN BE HELD FOR ----
     //
-    // Because `every_label_fits` measures what was DRAWN, and one shape above
-    // draws one of these. With only `Ram` among them the other five crossed
-    // untouched, and the widest of the six was one of those five: in pt-BR
-    // `brain-hold-cpu` is `Processador ocupado`, nineteen cells, against a
-    // column that reserved twelve. It was cut on every machine that ever ran
-    // out of processor, and the check that exists to catch exactly that had
-    // never looked at it. One frame each is what makes the budget a measured
-    // number rather than one somebody checked by hand once.
+    // `every_label_fits` measures what was DRAWN, and one shape above draws one
+    // of these; in pt-BR `brain-hold-cpu` is nineteen cells, and it was cut on
+    // every machine that ran out of processor until each was drawn here.
     for hold in [
         HoldKind::Ram,
         HoldKind::Cpu,
@@ -501,8 +656,8 @@ fn drive(
         HoldKind::Network,
         HoldKind::Asleep,
     ] {
-        let one = task(Standing::Queued, hold, "", true);
-        let mut m = mind(one, Announcement::default());
+        let one = task(&first, Standing::Queued, hold, "", true);
+        let mut m = mind(ids, one, Announcement::default(), false);
         named(&mut m, &words);
         inst.event(&Input::Mind(Box::new(m)))?;
         if look(&mut inst)?.commands.is_empty() {
@@ -511,32 +666,56 @@ fn drive(
     }
     println!("held      all six reasons a task waits, each measured in every language");
 
-    // ---- AND A TASK'S OWN PAGE ----
+    // ---- AND THE LOG, WITH A FOLDED ROW OPENED ----
+    //
+    // The fold's word before the date and its members are drawn only on a
+    // row that folds, and only open: the page OPENED on its notices (the
+    // first mind had some), so `Tab` twice goes to the log past the tasks,
+    // `Down` to the folded row, `RET` opens it.
+    let mut m = mind(
+        ids,
+        task(&first, Standing::Idle, HoldKind::None, "", true),
+        Announcement::default(),
+        true,
+    );
+    named(&mut m, &words);
+    inst.event(&Input::Mind(Box::new(m)))?;
+    inst.event(&Input::Toggle)?;
+    inst.event(&Input::Toggle)?;
+    inst.event(&Input::Down)?;
+    inst.event(&Input::Confirm)?;
+    for _ in 0..4 {
+        inst.event(&Input::Down)?;
+        if look(&mut inst)?.commands.is_empty() {
+            bail!("the log drew nothing with a folded row open");
+        }
+    }
+    println!("log       a folded row opened, and every line of it explained");
+
+    // ---- AND A TASK'S OWN PAGE, with its module's ----
     //
     // It is a state the buffer DECLARED, so it is reached the way the footer
-    // reaches it, and it is where the schedule, the steps and the history are
-    // drawn — key families the home page does not show.
-    //
-    // `task` and not `update`: the page belongs to whichever task is under the
-    // cursor, and it always did — the state was called `update` back when the
-    // update was the only task with a page. Four tasks later the name was
-    // telling readers something false.
+    // reaches it, and it is where the schedule, the actions, the module's own
+    // page, the steps and the history are drawn.
     const PAGE: &str = "task";
     if !d.states.iter().any(|s| s.id == PAGE) {
         bail!("the buffer no longer declares the `{PAGE}` state this page lives in");
     }
+    inst.event(&Input::Cancel)?;
     inst.event(&Input::EnterState(PAGE.to_owned()))?;
+    inst.event(&Input::ModuleScreen(Box::new(screen(&first))))?;
     let behind = look(&mut inst)?;
     if behind.commands.is_empty() {
         bail!("a task's own page drew nothing");
     }
-    println!("page      a task's own, with its schedule, its steps and its history");
+    println!(
+        "page      a task's own, with its schedule, its module's page, its steps and its history"
+    );
 
     // AND THE CURSOR WALKS IT, which is what puts the footer on each kind of
-    // row in turn: a schedule row, a step, and a run of the history. Each
-    // hands the footer a different family of keys, and a page drawn only at
-    // rest would measure none of them.
-    for _ in 0..12 {
+    // row in turn: a schedule row, an action, a module's row, a step, and a
+    // run of the history. Each hands the footer a different family of keys.
+    for _ in 0..20 {
         inst.event(&Input::Down)?;
         let walked = look(&mut inst)?;
         if walked.commands.is_empty() {
@@ -545,11 +724,22 @@ fn drive(
     }
     println!("walked    the cursor over every kind of row, measuring each footer");
 
-    // ---- AND EVERY LABEL FITS THE BUDGET, IN THIS LANGUAGE ----
+    // ---- AND A PAGE THE BRAIN WOULD NOT GIVE ----
     //
-    // The point of this whole binary. What a buffer declares is what it
-    // RESERVED — a number inside a `Table`, with the key assembled at run
-    // time, so neither is readable from the source and both are in the frame.
+    // A newer generation that is a SENTENCE and no rows: the page says why,
+    // and a refused page never looks like an empty one.
+    const REFUSED: &str = "the brain would not show this page";
+    let mut refused = screen(&first);
+    refused.generation += 1;
+    refused.sections.clear();
+    refused.refused = REFUSED.to_owned();
+    inst.event(&Input::ModuleScreen(Box::new(refused)))?;
+    if !writes(&look(&mut inst)?, REFUSED) {
+        bail!("a page the brain refused did not say why");
+    }
+    println!("refused   a page the brain would not give says why, in place of its rows");
+
+    // ---- AND EVERY LABEL FITS THE BUDGET, IN THIS LANGUAGE ----
     let measured =
         ronoctua_runtime::driven::every_label_fits_in(&i18n, ON_PURPOSE, COLUMNS, language)?;
     println!("labels    {measured} measured in {language}, all inside their budget");

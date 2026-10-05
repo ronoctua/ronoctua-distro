@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-lookup"
-description = "The player's online lookups: lyrics, skipped segments, tags, covers, films and subtitles — and the person's keys."
+description = "The online lookups: the player's (lyrics, skipped segments, tags, covers, films, subtitles) and the security centre's checks (VirusTotal, XposedOrNot, Pwned Passwords) — and the person's keys."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,11 +39,34 @@ tracing = { workspace = true, optional = true }
 ronoctua-http = { path = "../ronoctua-http" }
 # Where the keys live: `$XDG_CONFIG_HOME/ronoctua/player-keys/`, per instance.
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# What a key is kept in — `Secret`, `write_private_file`, the `0700` folder —
+# written here first and moved there so every crate with a key keeps it the
+# same way; `keys` re-exports them.
+ronoctua-consent = { path = "../ronoctua-consent" }
 # SubDL (and Podnapisi) answer a zip.
 ronoctua-zip = { path = "../ronoctua-zip" }
 # `Field`: a suggestion names the same fields a sheet has, so taking one is
 # writing those fields. Schema only.
 ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+# THE SECURITY CENTRE'S CHECKS: SHA-256 of a file and SHA-1 of a password,
+# computed here (the TLS stack already brings `ring`); the digest's hex zeroed
+# once split; `scans.json` kept like every file of the person's, by `Store`.
+ring.workspace = true
+zeroize.workspace = true
+ronoctua-store = { path = "../ronoctua-store" }
+
+# THE QUEUE'S CHILD FOR `Work::Scan`: one file sent to VirusTotal and its
+# analysis waited for. Its own binary, so the queue's daemon runs it and
+# carries no TLS itself (`transfers-unit-is-narrow`).
+[[bin]]
+name = "ronoctua-scan"
+path = "src/bin/scan.rs"
+required-features = [ "net" ]
+
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [lints]
 workspace = true

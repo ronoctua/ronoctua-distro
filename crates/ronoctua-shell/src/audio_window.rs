@@ -132,7 +132,7 @@ impl AudioWindow {
             }
             ronoctua_audio::Event::Done { refused, .. } => {
                 if let Some((why, words)) = refused {
-                    ui.message = Some(crate::audio_words::refused(why, &words, &ui.texts));
+                    ui.say(crate::audio_words::refused(why, &words, &ui.texts));
                     ui.ask_paint();
                 }
             }
@@ -159,10 +159,13 @@ impl AudioWindow {
             // AN INFORMATIVE ROW COPIES ITSELF — `chrome::information_of`,
             // and `chrome::copied` for the one place the doors share.
             Errand::Copy(text) => {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             Errand::Speak(key) => {
-                ui.message = Some(ui.texts.t(key));
+                ui.say(ui.texts.t(key));
             }
             Errand::Close => {
                 // THE MICROPHONE CLOSES BEFORE THE WINDOW DOES. Dropping the
@@ -180,7 +183,7 @@ impl AudioWindow {
             Errand::Order(order) => match &self.audio {
                 Some(h) => h.send(order),
                 None => {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::AUDIO_NO_PIPEWIRE));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::AUDIO_NO_PIPEWIRE));
                 }
             },
             // THE FILE IS WRITTEN HERE, and the footer watches it. Both doors
@@ -190,7 +193,10 @@ impl AudioWindow {
                 let store = ronoctua_audio::prefs::store();
                 if let Err(e) = ronoctua_audio::prefs::keep(&store, prefs) {
                     tracing::warn!(error = %e, "could not write audio.json");
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::ECHO_AUDIO_WILL_NOT_PARSE));
+                    ui.say_for(
+                        ui.texts.t(ronoctua_i18n::key::ECHO_AUDIO_WILL_NOT_PARSE),
+                        crate::echo::Echo::Long,
+                    );
                 }
             }
         }

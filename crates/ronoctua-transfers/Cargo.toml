@@ -19,6 +19,10 @@ ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
 # The disk. Every local operation in the queue is one of this crate's, watched —
 # there is no second implementation of "copy a tree" here.
 ronoctua-files = { path = "../ronoctua-files" }
+# THE ARCHIVES: packing, unpacking, testing, adding, removing, converting —
+# every one through the crate that runs 7zz, bsdtar and unrar by store path.
+# The queue carries the work and the switch; it never names a program.
+ronoctua-archive = { path = "../ronoctua-archive" }
 # BitTorrent. The `unsafe` and the C++ live THERE and never here — this crate
 # stays `forbid(unsafe_code)`, which is the whole reason the border is a crate
 # of its own rather than a module.
@@ -54,10 +58,26 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 # stay in the child's closure — `default-features = false` is the whole point
 # (`transfers-unit-is-narrow`).
 ronoctua-software = { path = "../ronoctua-software", default-features = false }
+# THE PERSON'S BELONGINGS, as the order and the CLI's lines and nothing more:
+# `age` is the CLI's, behind `crypt`, and stays out of this daemon.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
 # CHROME'S NATIVE-MESSAGING FRAMING and the caller's origin, from the crate
 # that owns the running Chrome: one reader of that framing for both hosts. Its
 # library is a JSON parser and a socket, nothing more.
 ronoctua-browser = { path = "../ronoctua-browser" }
+# THE SCAN'S LINES (`virustotal::Beat`), from the crate whose child prints
+# them — without its `net` feature: the child carries the TLS, this does not.
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+# THE PERSON'S CONTAINERS, as a library: the job this queue carries, the
+# podman that runs it (from the unit's environment, never baked in) and what
+# its lines mean. Serde and nothing else — no socket, no decoder.
+ronoctua-containers = { path = "../ronoctua-containers" }
+
+# `SIGTERM` UNWINDS THE COPY. A stop with a copy in flight waits for the
+# copy to remove what it wrote (`Shared::wind_down`); the handler is this
+# crate's iterator, safe to call, so the queue stays `forbid(unsafe_code)`.
+# Already in the lock, under the terminal emulator.
+signal-hook.workspace = true
 
 [[bin]]
 name = "ronoctua-transfers"

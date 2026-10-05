@@ -69,7 +69,7 @@ let
     # software view, gone on the next `nixos-rebuild`.
     uninstallUnmanaged = false;
     # NO UPDATES FROM HERE. The distro's own sequence updates Flatpaks
-    # (`flatpak-system` and `flatpak-user` in `assets/updates.nix`) when the
+    # (`flatpak-system` and `flatpak-user` in the update's `steps.nix`) when the
     # brain or the person decides; a second updater on its own timer would be
     # a second answer to "when does this machine change".
     update.onActivation = false;

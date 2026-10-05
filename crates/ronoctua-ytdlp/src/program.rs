@@ -27,6 +27,24 @@ pub fn program() -> PathBuf {
     program_of(std::env::var(VARIABLE).ok().as_deref())
 }
 
+/// The path the unit names, when it names one — for a caller that hands
+/// yt-dlp's path to ANOTHER program (mpv's `ytdl_hook`) only when there is a
+/// path to hand, and lets that program find it by its own means otherwise.
+///
+/// The variable is read here and nowhere else (`yt-dlp-has-one-reader`).
+#[must_use]
+pub fn named() -> Option<PathBuf> {
+    named_of(std::env::var(VARIABLE).ok().as_deref())
+}
+
+/// The same decision, over a value a test can hand it.
+#[must_use]
+pub fn named_of(set: Option<&str>) -> Option<PathBuf> {
+    set.map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 /// The same decision, over a value a test can hand it.
 #[must_use]
 pub fn program_of(set: Option<&str>) -> PathBuf {
@@ -57,6 +75,16 @@ pub fn installed_of(set: Option<&str>, system: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_is_named_only_when_the_unit_sets_one() {
+        assert_eq!(
+            named_of(Some("/nix/store/x/bin/yt-dlp")),
+            Some(PathBuf::from("/nix/store/x/bin/yt-dlp"))
+        );
+        assert_eq!(named_of(Some("  ")), None);
+        assert_eq!(named_of(None), None);
+    }
 
     #[test]
     fn the_unit_says_where_it_is_and_a_devshell_finds_it_by_name() {

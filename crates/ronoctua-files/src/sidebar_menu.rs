@@ -55,6 +55,10 @@ pub enum Applies {
     /// Both halves. Ejecting cuts the power to a drive: on something soldered
     /// in it means nothing, and on the disk the system booted from it means
     /// the machine stops.
+    ///
+    /// AN ENCRYPTED ONE MOUNTED OR NOT: a locked stick has nothing mounted
+    /// and is still a stick one pulls out, and ejecting is how its power is
+    /// cut; an open one that is not mounted is locked on the way.
     Removable,
     /// A device the running system does NOT need.
     ///
@@ -62,6 +66,9 @@ pub enum Applies {
     /// they are running from. The fact is resolved by the disk border and
     /// carried on the row: this crate does not know what a volume is.
     Spare,
+    /// An encrypted device that is open, and that the running system does
+    /// not need: what locking it again is offered on.
+    Unlocked,
 }
 
 /// One row of the sidebar's menu.
@@ -134,6 +141,16 @@ pub fn all_of() -> &'static [Action] {
             key: "e",
             applies: Applies::Removable,
         },
+        // LOCKING AGAIN, WITHOUT CUTTING THE POWER: an internal disk, or a
+        // stick one will open again in a minute. Ejecting locks too, on its
+        // way to the power.
+        Action {
+            id: "lock",
+            label: key::SIDEBAR_LOCK,
+            does: key::SIDEBAR_DOES_LOCK,
+            key: "l",
+            applies: Applies::Unlocked,
+        },
         Action {
             id: "information",
             label: key::SIDEBAR_INFORMATION,
@@ -185,8 +202,11 @@ pub fn offered(applies: Applies, row: &Row) -> bool {
         Applies::Mounted => device && row.mounted == Some(true),
         Applies::MountedSpare => spare && row.mounted == Some(true),
         Applies::Unmounted => device && row.mounted == Some(false),
-        Applies::Removable => spare && row.removable && row.mounted == Some(true),
+        Applies::Removable => {
+            spare && row.removable && (row.mounted == Some(true) || row.seal.is_some())
+        }
         Applies::Spare => spare,
+        Applies::Unlocked => spare && row.seal == Some(crate::sidebar::Seal::Unlocked),
     }
 }
 
@@ -209,9 +229,10 @@ pub fn by_id(id: &str) -> Option<&'static Action> {
 /// compares this list against both `.ftl` files.
 pub mod key {
     pub use ronoctua_i18n::key::{
-        SIDEBAR_DOES_EJECT, SIDEBAR_DOES_FORMAT, SIDEBAR_DOES_INFORMATION, SIDEBAR_DOES_MOUNT,
-        SIDEBAR_DOES_OPEN, SIDEBAR_DOES_UNMOUNT, SIDEBAR_DOES_UNPIN, SIDEBAR_EJECT, SIDEBAR_FORMAT,
-        SIDEBAR_INFORMATION, SIDEBAR_MOUNT, SIDEBAR_OPEN, SIDEBAR_UNMOUNT, SIDEBAR_UNPIN,
+        SIDEBAR_DOES_EJECT, SIDEBAR_DOES_FORMAT, SIDEBAR_DOES_INFORMATION, SIDEBAR_DOES_LOCK,
+        SIDEBAR_DOES_MOUNT, SIDEBAR_DOES_OPEN, SIDEBAR_DOES_UNMOUNT, SIDEBAR_DOES_UNPIN,
+        SIDEBAR_EJECT, SIDEBAR_FORMAT, SIDEBAR_INFORMATION, SIDEBAR_LOCK, SIDEBAR_MOUNT,
+        SIDEBAR_OPEN, SIDEBAR_UNMOUNT, SIDEBAR_UNPIN,
     };
 }
 
@@ -234,6 +255,7 @@ mod tests {
             needed: needed.map(ToOwned::to_owned),
             removable,
             built_in: true,
+            seal: None,
         }
     }
 
@@ -250,6 +272,7 @@ mod tests {
             needed: None,
             removable: false,
             built_in: false,
+            seal: None,
         }
     }
 
@@ -299,6 +322,42 @@ mod tests {
         // AND FORMATTING, which is the case somebody opens this for: a stick
         // that will not mount is usually a stick to be reformatted.
         assert!(cold.contains(&"format"));
+    }
+
+    #[test]
+    fn a_locked_stick_mounts_by_its_passphrase_and_an_open_one_locks_again() {
+        // LOCKED: unmounted, so `mount` is on the menu — and it is the row
+        // that asks for the passphrase. Nothing to lock.
+        let mut locked = a_device(false, true, None);
+        locked.seal = Some(crate::sidebar::Seal::Locked);
+        let offered = ids(&locked);
+        assert!(
+            offered.contains(&"mount") && offered.contains(&"format"),
+            "{offered:?}"
+        );
+        assert!(!offered.contains(&"lock"), "{offered:?}");
+        // AND IT EJECTS, mounted or not: a locked stick is still a stick one
+        // pulls out, and ejecting is how its power is cut.
+        assert!(offered.contains(&"eject"), "{offered:?}");
+        // AN OPEN ONE THAT IS NOT MOUNTED ejects too, locked on the way.
+        let mut open_idle = a_device(false, true, None);
+        open_idle.seal = Some(crate::sidebar::Seal::Unlocked);
+        assert!(ids(&open_idle).contains(&"eject"));
+        // AND A PLAIN STICK THAT IS NOT MOUNTED is as it was.
+        assert!(!ids(&a_device(false, true, None)).contains(&"eject"));
+        // OPEN AND MOUNTED: it unmounts, ejects (locking on the way) and
+        // locks without the power going.
+        let mut open = a_device(true, true, None);
+        open.seal = Some(crate::sidebar::Seal::Unlocked);
+        let offered = ids(&open);
+        for wanted in ["unmount", "eject", "lock"] {
+            assert!(offered.contains(&wanted), "{wanted}: {offered:?}");
+        }
+        // AND AN OPEN ONE THE SYSTEM NEEDS is not offered locking: that is the
+        // running system's own disk.
+        let mut root = a_device(true, false, Some("/"));
+        root.seal = Some(crate::sidebar::Seal::Unlocked);
+        assert!(!ids(&root).contains(&"lock"));
     }
 
     #[test]

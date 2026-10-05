@@ -28,6 +28,10 @@ use crate::{AppKey, Refusal};
 /// The API's root.
 pub const API: &str = "https://flathub.org/api/v2";
 
+/// The hosts this catalogue asks — its API and its pictures — as the
+/// person's consent row lets them (`consent.json`): nothing is asked before.
+pub const HOSTS: &[&str] = &["flathub.org", "dl.flathub.org"];
+
 /// The largest answer read: a search of [`MOST_HITS`] carries full
 /// descriptions and every keyword (37 KB for 21 hits, measured), an appstream
 /// answer every screenshot size.

@@ -1,4 +1,4 @@
-//! The screen resizer — `LEADER d r`: two curtains that cut the screen with
+//! The screen resizer — `LEADER / r`: two curtains that cut the screen with
 //! the focus from the right and from below, so the whole system can be seen
 //! living on a smaller screen without the monitor changing its mode.
 //!
@@ -109,7 +109,42 @@ pub const OF_THE_RESIZER: &[(&str, &str)] = &[
     ("<up>", "resizer-shorter"),
     ("<down>", "resizer-taller"),
     ("f", "resizer-largest"),
+    ("p", "resizer-preset"),
+    ("P", "resizer-preset-back"),
 ];
+
+/// The ready sizes `p` and `P` walk (`space.resizerPresets`), in logical
+/// pixels — the rooms of the commonest screens.
+pub const PRESETS: [(u16, u16); 6] = [
+    (
+        tokens::space::RESIZERPRESETS_XGA_WIDTHPX,
+        tokens::space::RESIZERPRESETS_XGA_HEIGHTPX,
+    ),
+    (
+        tokens::space::RESIZERPRESETS_HD_WIDTHPX,
+        tokens::space::RESIZERPRESETS_HD_HEIGHTPX,
+    ),
+    (
+        tokens::space::RESIZERPRESETS_WXGA_WIDTHPX,
+        tokens::space::RESIZERPRESETS_WXGA_HEIGHTPX,
+    ),
+    (
+        tokens::space::RESIZERPRESETS_WXGAPLUS_WIDTHPX,
+        tokens::space::RESIZERPRESETS_WXGAPLUS_HEIGHTPX,
+    ),
+    (
+        tokens::space::RESIZERPRESETS_HDPLUS_WIDTHPX,
+        tokens::space::RESIZERPRESETS_HDPLUS_HEIGHTPX,
+    ),
+    (
+        tokens::space::RESIZERPRESETS_FULLHD_WIDTHPX,
+        tokens::space::RESIZERPRESETS_FULLHD_HEIGHTPX,
+    ),
+];
+
+/// The state file that remembers the last room, so the resizer starts where
+/// it was left (`$XDG_STATE_HOME`, per instance).
+const REMEMBERED_FILE: &str = "resizer-last.json";
 
 /// Which side of the screen a curtain cuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +256,17 @@ pub enum Press {
     Height(i64),
     /// As large as the curtains allow.
     Largest,
+    /// The next ready size up (`1`) or down (`-1`) — see [`preset_from`].
+    Preset(i64),
+}
+
+/// The last room, as the state file keeps it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Remembered {
+    /// The room's width, `0` for nothing remembered.
+    pub width_px: u32,
+    /// The room's height.
+    pub height_px: u32,
 }
 
 /// A rectangle in a curtain's own logical pixels: `(x, y, width, height)`.
@@ -307,6 +353,85 @@ pub fn largest(output: String, width: u32, height: u32, l: Limits) -> State {
 pub fn remeasured(mut s: State, size: (u32, u32), l: Limits) -> State {
     (s.screen_width_px, s.screen_height_px) = size;
     fitted(s, l)
+}
+
+/// The room a new resizer starts at: the LAST ONE, where it is remembered and
+/// still fits this screen, and the largest otherwise. Turning it on again is
+/// going back to the size being tested, not starting over from the top.
+#[must_use]
+pub fn first_cut(output: String, width: u32, height: u32, l: Limits, last: Remembered) -> State {
+    if last.width_px == 0 || last.height_px == 0 {
+        return largest(output, width, height, l);
+    }
+    fitted(
+        State {
+            output,
+            screen_width_px: width,
+            screen_height_px: height,
+            width_px: last.width_px,
+            height_px: last.height_px,
+        },
+        l,
+    )
+}
+
+/// The ready size `by` steps from the room now — larger for `1`, smaller for
+/// `-1`, wrapping round — among the [`PRESETS`] this screen can hold whole.
+/// A preset larger than the room the curtains allow is skipped, never
+/// squeezed: a squeezed preset would be a size nobody asked for. `None` when
+/// the screen holds none of them.
+#[must_use]
+pub fn preset_from(s: &State, l: Limits, by: i64) -> Option<State> {
+    let most_wide = s.screen_width_px.saturating_sub(l.right_min_px);
+    let most_tall = s.screen_height_px.saturating_sub(l.bottom_min_px);
+    let mut held: Vec<(u32, u32)> = PRESETS
+        .iter()
+        .map(|&(w, h)| (u32::from(w), u32::from(h)))
+        .filter(|&(w, h)| {
+            w <= most_wide && h <= most_tall && w >= l.min_width_px && h >= l.min_height_px
+        })
+        .collect();
+    held.sort_by_key(|&(w, h)| (u64::from(w) * u64::from(h), w));
+    held.dedup();
+    let now = (u64::from(s.width_px) * u64::from(s.height_px), s.width_px);
+    let key = |&(w, h): &(u32, u32)| (u64::from(w) * u64::from(h), w);
+    let pick = if by >= 0 {
+        held.iter().find(|p| key(p) > now).or_else(|| held.first())
+    } else {
+        held.iter()
+            .rev()
+            .find(|p| key(p) < now)
+            .or_else(|| held.last())
+    }?;
+    let mut next = s.clone();
+    (next.width_px, next.height_px) = *pick;
+    Some(next)
+}
+
+/// What the pointer looks like over a grip: the resize arrow of the axis it
+/// moves.
+#[must_use]
+pub const fn look_of(grip: Grip) -> crate::cursor_shape::Look {
+    match grip {
+        Grip::Width => crate::cursor_shape::Look::Across,
+        Grip::Height => crate::cursor_shape::Look::UpDown,
+        Grip::Both => crate::cursor_shape::Look::Corner,
+    }
+}
+
+/// The room on a screen, in that screen's logical pixels from its top-left
+/// corner: `(x, y, width, height)`. The whole screen where the resizer does
+/// not cut it — what the capture takes as "the whole screen": the curtains
+/// are the tool, not the screen being tested.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn room_box(output: &str, size: (u32, u32), cut: Option<&State>) -> Box4 {
+    (
+        0.0,
+        0.0,
+        room_width(size.0, Some(output), cut) as f32,
+        room_height(size.1, Some(output), cut) as f32,
+    )
 }
 
 /// How many columns and lines the room holds.
@@ -486,6 +611,8 @@ pub fn press_of(key: Key) -> Option<Press> {
         Sym::Up => Press::Height(-stride),
         Sym::Down => Press::Height(stride),
         Sym::Char('f') => Press::Largest,
+        Sym::Char('p') => Press::Preset(if m.shift { -1 } else { 1 }),
+        Sym::Char('P') => Press::Preset(-1),
         _ => return None,
     })
 }
@@ -581,6 +708,32 @@ fn merged(mine: &State, mut file: State, keep: Axes) -> State {
         file.height_px = mine.height_px;
     }
     file
+}
+
+/// Where the last room is remembered.
+fn remembered_store() -> ronoctua_store::Store<Remembered> {
+    ronoctua_store::Store::at(ronoctua_store::state_dir(), REMEMBERED_FILE)
+}
+
+/// The last room, or nothing remembered.
+#[must_use]
+pub fn remembered() -> Remembered {
+    remembered_store().read()
+}
+
+/// Remembers the room — every write of the cut, so whichever way the resizer
+/// ends (a curtain closed, the footer's toggle, a session gone), the next one
+/// starts at the size it had.
+fn remember(s: &State) {
+    let last = Remembered {
+        width_px: s.width_px,
+        height_px: s.height_px,
+    };
+    if remembered() != last
+        && let Err(e) = remembered_store().write(&last)
+    {
+        tracing::warn!(error = %e, "the resizer's last size could not be kept");
+    }
 }
 
 /// The file's path, when there is a runtime directory.
@@ -766,7 +919,13 @@ fn keep() -> Result<()> {
         .context("the compositor did not say which screen has the focus")?
         .context("no screen has the focus")?;
     let at = out.logical.context("the screen with the focus is off")?;
-    let cut = largest(out.name, at.width, at.height, limits(Units::now()));
+    let cut = first_cut(
+        out.name,
+        at.width,
+        at.height,
+        limits(Units::now()),
+        remembered(),
+    );
 
     let kept = Kept {
         state: state_file.clone(),
@@ -921,13 +1080,14 @@ pub fn curtain_it(edge: Edge) -> Result<()> {
             dragging: None,
             unsaved: Axes::default(),
             wm: None,
+            said: None,
         })
     })
 }
 
 /// What one pointer keeps of its own: each hand drags on its own.
 #[derive(Debug, Default)]
-struct PerPointer {
+pub(crate) struct PerPointer {
     /// The drag this pointer is making, while its button is down.
     drag: Option<Drag>,
 }
@@ -973,8 +1133,36 @@ impl Drag {
     }
 }
 
+/// One curtain, DETACHED, over a cut handed in whole — what
+/// `crate::scene_photograph` draws: no file is watched, and the compositor is
+/// told nothing.
+pub(crate) fn photographed(
+    edge: Edge,
+    state: State,
+    qh: QueueHandle<base::Door<Curtain>>,
+) -> Curtain {
+    Curtain {
+        edge,
+        state,
+        configured: (0, 0),
+        told_px: Cell::new(0),
+        layer: RefCell::new(None),
+        qh,
+        settle_first: false,
+        settle_asked: false,
+        _watch: None,
+        marks: Vec::new(),
+        hint_lit: None,
+        lit: None,
+        dragging: None,
+        unsaved: Axes::default(),
+        wm: None,
+        said: None,
+    }
+}
+
 /// One curtain, as a door's content.
-struct Curtain {
+pub(crate) struct Curtain {
     /// Which side it cuts.
     edge: Edge,
     /// The cut, as this curtain last read or made it.
@@ -1006,6 +1194,9 @@ struct Curtain {
     unsaved: Axes,
     /// The compositor, opened the first time it is needed.
     wm: Option<Box<dyn ronoctua_compositor::Compositor>>,
+    /// What the last key could not do, said on the line until the next one
+    /// — a refusal is a sentence, never a key that does nothing.
+    said: Option<String>,
 }
 
 /// An exclusive zone of `px`.
@@ -1023,12 +1214,28 @@ fn zone_of(px: u32) -> i32 {
 /// place of what FOLLOWED, because nothing up to the key under the pointer
 /// may move: a key that moved would leave the pointer, its sentence would go
 /// and the key come back, in a loop.
-fn line_of(s: &State, lit: Option<&str>, texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+fn line_of(
+    s: &State,
+    lit: Option<&str>,
+    said: Option<&str>,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<Piece> {
     use ronoctua_i18n::{Arg, key};
     let (way_out, rest) = OF_THE_RESIZER.split_at(1);
     let (columns, lines) = grid_of(s, Units::now());
     let mut pieces = crate::chrome::hint_of(way_out, texts);
     pieces.push(Piece::separator());
+    // WHAT THE LAST KEY COULD NOT DO, right after the way out: the line is
+    // cut at the curtain's end, and a refusal at its end is the part cut.
+    if let Some(said) = said {
+        pieces.push(Piece {
+            text: said.to_owned(),
+            register: Register::Explain,
+            id: None,
+            press: None,
+        });
+        pieces.push(Piece::separator());
+    }
     pieces.push(Piece::said(texts.t_args(
         key::RESIZER_SIZE,
         &[
@@ -1112,7 +1319,10 @@ impl Curtain {
     fn write(&mut self, ui: &mut Ui, axes: Axes) {
         let mine = self.state.clone();
         match update(|s| *s = merged(&mine, s.clone(), axes)) {
-            Ok(Some(s)) => self.state = s,
+            Ok(Some(s)) => {
+                remember(&s);
+                self.state = s;
+            }
             // NO FILE: the resizer was ended while this hand moved it.
             Ok(None) => {
                 ui.quit = true;
@@ -1231,7 +1441,7 @@ impl Curtain {
             f.line(),
             tokens::color::SURFACE_HEADER,
         ));
-        let pieces = line_of(&self.state, self.hint_lit, &ui.texts);
+        let pieces = line_of(&self.state, self.hint_lit, self.said.as_deref(), &ui.texts);
         canvas.spans.extend(crate::chrome::hint_spans(
             &pieces,
             ronoctua_render::Size::Grid,
@@ -1244,6 +1454,10 @@ impl Curtain {
 
     /// A press: a step, the largest room, or the way out.
     fn pressed(&mut self, ui: &mut Ui, press: Press) {
+        // A NEW KEY, a new answer: what the last one could not do is gone.
+        if self.said.take().is_some() {
+            ui.ask_paint();
+        }
         let u = Units::now();
         let mut next = self.state.clone();
         let axes = match press {
@@ -1261,6 +1475,15 @@ impl Curtain {
             }
             Press::Largest => {
                 (next.width_px, next.height_px) = (u32::MAX, u32::MAX);
+                Axes::of(Grip::Both)
+            }
+            Press::Preset(by) => {
+                let Some(ready) = preset_from(&self.state, limits(u), by) else {
+                    self.said = Some(ui.texts.t(ronoctua_i18n::key::RESIZER_NO_PRESET));
+                    ui.ask_paint();
+                    return;
+                };
+                next = ready;
                 Axes::of(Grip::Both)
             }
         };
@@ -1330,6 +1553,22 @@ impl Content for Curtain {
     /// NO SWEEP OF TEXT: a held button here is the drag.
     fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
         None
+    }
+
+    /// THE RESIZE ARROW OVER A GRIP, from the same rectangles the edges are
+    /// drawn and taken on — and over the grip being dragged wherever the hand
+    /// is, so the arrow does not flicker back while it pulls. A shortcut of
+    /// the line is a click, and keeps the arrow.
+    #[allow(clippy::cast_possible_truncation)]
+    fn cursor_at(&self, _: &Ui, at: (f64, f64)) -> crate::cursor_shape::Look {
+        if let Some(g) = self.dragging {
+            return look_of(g);
+        }
+        if self.mark_at(at).is_some() {
+            return crate::cursor_shape::Look::Arrow;
+        }
+        grip_at(&self.grips_now(), (at.0 as f32, at.1 as f32))
+            .map_or(crate::cursor_shape::Look::Arrow, look_of)
     }
 
     /// Every configure: the curtain's size, which curtain spans the corner
@@ -1803,6 +2042,8 @@ mod tests {
                 "resizer-shorter" => Press::Height(-1),
                 "resizer-taller" => Press::Height(1),
                 "resizer-largest" => Press::Largest,
+                "resizer-preset" => Press::Preset(1),
+                "resizer-preset-back" => Press::Preset(-1),
                 other => panic!("`{other}` is taught and means nothing here"),
             };
             assert_eq!(press_of(key), Some(wanted), "{notation}");
@@ -1812,13 +2053,14 @@ mod tests {
             ("S-<right>", Press::Width(big)),
             ("S-<up>", Press::Height(-big)),
             ("S-<down>", Press::Height(big)),
+            ("P", Press::Preset(-1)),
         ] {
             assert_eq!(press_of(Key::parse(notation).unwrap()), Some(wanted));
         }
         assert_eq!(press_of(Key::parse("C-<left>").unwrap()), None);
         // AND THE LINE'S CLICKS ARE THOSE KEYS, `ESC` first.
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
-        let line = line_of(&cut((1920, 1080), (1500, 900)), None, &texts);
+        let line = line_of(&cut((1920, 1080), (1500, 900)), None, None, &texts);
         let pressed: Vec<&str> = line
             .iter()
             .filter(|p| p.is_a_key())
@@ -1852,7 +2094,7 @@ mod tests {
         let cell = tokens::metrics::cell_width(tokens::text::size());
         let margin = 1;
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
-        let pieces = line_of(&s, None, &texts);
+        let pieces = line_of(&s, None, None, &texts);
         let reach = |columns: u16| -> f32 {
             crate::chrome::hint_marks(&pieces, margin, 0, columns)
                 .iter()
@@ -1886,9 +2128,9 @@ mod tests {
         let s = cut((1920, 1080), (400, 900));
         for language in ["en-GB", "pt-BR"] {
             let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
-            let rest = line_of(&s, None, &texts);
+            let rest = line_of(&s, None, None, &texts);
             for (_, id) in OF_THE_RESIZER {
-                let line = line_of(&s, Some(id), &texts);
+                let line = line_of(&s, Some(id), None, &texts);
                 let sentence = crate::chrome::hint_sentence(id, &texts).expect(id);
                 let at = line
                     .iter()
@@ -1906,7 +2148,7 @@ mod tests {
             }
             // THE WAY OUT, in a room of 40 columns: its sentence is drawn
             // inside them, where the old line started it past the 110th.
-            let line = line_of(&s, Some("resizer-off"), &texts);
+            let line = line_of(&s, Some("resizer-off"), None, &texts);
             let at = line
                 .iter()
                 .position(|p| p.register == Register::Explain)
@@ -2057,5 +2299,96 @@ mod tests {
         assert_eq!(room_width(1920, Some("HDMI-1"), Some(&s)), 1920);
         assert_eq!(room_width(1920, None, Some(&s)), 1920);
         assert_eq!(room_width(1920, Some("DP-1"), None), 1920);
+    }
+
+    /// FAILS IF: `p` lands on a size nobody asked for — a preset squeezed
+    /// into a screen too small for it — or does not walk them in order of
+    /// size, round, both ways.
+    #[test]
+    fn a_preset_is_a_ready_size_the_screen_holds_whole() {
+        let l = limits(units());
+        let s = cut((1920, 1200), (900, 600));
+        let mut seen = vec![];
+        let mut at = s;
+        for _ in 0..PRESETS.len() {
+            at = preset_from(&at, l, 1).expect("a 1920x1200 screen holds some");
+            seen.push((at.width_px, at.height_px));
+        }
+        // ONLY WHOLE PRESETS, larger each step until the walk wraps.
+        for w in &seen {
+            assert!(
+                PRESETS
+                    .iter()
+                    .any(|&(pw, ph)| (u32::from(pw), u32::from(ph)) == *w),
+                "{w:?} is not a ready size"
+            );
+        }
+        assert_eq!(seen[0], (1024, 768), "the first one up from 900x600");
+        assert!(
+            !seen.contains(&(1920, 1080)),
+            "1920x1080 does not fit beside a curtain on a 1920-wide screen"
+        );
+        // AND DOWN from the smallest wraps to the largest that fits.
+        let small = cut((1920, 1200), (1024, 768));
+        let down = preset_from(&small, l, -1).expect("wraps");
+        assert_eq!((down.width_px, down.height_px), (1600, 900));
+        // A SCREEN SMALLER THAN EVERY PRESET has none, and says so with None.
+        assert_eq!(preset_from(&cut((800, 600), (500, 400)), l, 1), None);
+    }
+
+    /// FAILS IF: turning the resizer on again starts from the largest room
+    /// instead of the last one — or keeps a remembered room the screen can
+    /// no longer hold.
+    #[test]
+    fn the_resizer_starts_at_the_last_size() {
+        let l = limits(units());
+        let none = first_cut("DP-1".into(), 1920, 1080, l, Remembered::default());
+        assert_eq!(none, largest("DP-1".into(), 1920, 1080, l));
+        let last = Remembered {
+            width_px: 1280,
+            height_px: 720,
+        };
+        let again = first_cut("DP-1".into(), 1920, 1080, l, last);
+        assert_eq!((again.width_px, again.height_px), (1280, 720));
+        let smaller = first_cut("DP-1".into(), 1024, 600, l, last);
+        assert_eq!(smaller, fitted(cut((1024, 600), (1280, 720)), l));
+    }
+
+    /// FAILS IF: the pointer over a grip is not the resize arrow of the axis
+    /// that grip moves — read off the same rectangles the edges are drawn on.
+    #[test]
+    fn a_grip_wears_the_resize_arrow_of_its_axis() {
+        use crate::cursor_shape::Look;
+        assert_eq!(look_of(Grip::Width), Look::Across);
+        assert_eq!(look_of(Grip::Height), Look::UpDown);
+        assert_eq!(look_of(Grip::Both), Look::Corner);
+        let s = cut((1024, 768), (686, 653));
+        let configured = (1024, 115);
+        for (grip, (x, y, w, h)) in grips(Edge::Bottom, &s, configured) {
+            let inside = (x + w / 2.0, y + h / 2.0);
+            assert_eq!(
+                grip_at(&grips(Edge::Bottom, &s, configured), inside),
+                Some(grip)
+            );
+        }
+    }
+
+    /// FAILS IF: the capture's "whole screen" includes the curtains on the
+    /// screen that is cut, or loses any of a screen that is not.
+    #[test]
+    fn the_room_is_what_a_capture_takes_whole() {
+        let s = cut((1920, 1080), (1280, 720));
+        assert_eq!(
+            room_box("DP-1", (1920, 1080), Some(&s)),
+            (0.0, 0.0, 1280.0, 720.0)
+        );
+        assert_eq!(
+            room_box("HDMI-1", (1920, 1080), Some(&s)),
+            (0.0, 0.0, 1920.0, 1080.0)
+        );
+        assert_eq!(
+            room_box("DP-1", (1920, 1080), None),
+            (0.0, 0.0, 1920.0, 1080.0)
+        );
     }
 }

@@ -304,6 +304,20 @@ fn shell_path() -> String {
         .unwrap_or_else(|_| "ronoctua-shell".to_owned())
 }
 
+/// The compositor's name for this binary, set in the config
+/// ([`shell_variable`]) — what a DEED that runs one of our commands names,
+/// since a deed is text fixed at build time and the path is this binary's
+/// (`wm-fold-keys-hold`, `assets/compositor-deeds.nix`).
+pub const SHELL_VARIABLE: &str = "$ronoctua_shell";
+
+/// The config line that sets [`SHELL_VARIABLE`] to this binary's path — the
+/// first line `export-binds` prints, so every config that takes the binds
+/// takes the name with them.
+#[must_use]
+pub fn shell_variable() -> String {
+    format!("set {SHELL_VARIABLE} \"{}\"", shell_path())
+}
+
 /// All the chords.
 ///
 /// The key comes WITHOUT the modifier's prefix: it is `Mod` in production and `Alt`
@@ -375,6 +389,9 @@ pub fn chords() -> Vec<Chord> {
         // drop that one.
         through_shell("ESC", "Escape", "monitor-btop"),
         through_shell("S-ESC", "Shift+Escape", "monitor-bottom"),
+        // THE SEARCH OVER EVERYTHING on one chord — `Super+d`, `Alt+d` nested:
+        // the footer's door, as `LEADER d` opens it.
+        through_shell("d", "d", "fast-access-open"),
     ]
     .into_iter()
     .chain(scroll_chords())

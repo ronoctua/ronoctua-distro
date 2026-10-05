@@ -43,6 +43,7 @@ pub const fn word_of(show: crate::player::Show) -> &'static str {
         crate::player::Show::Only => "only",
         crate::player::Show::Maximized => "maximized",
         crate::player::Show::Small => "pip",
+        crate::player::Show::Listing => "listing",
     }
 }
 

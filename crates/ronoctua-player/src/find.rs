@@ -33,8 +33,8 @@
 //!
 //! # And the directories
 //!
-//! The world's radio (radio-browser), the world's TV (iptv-org), the
-//! Internet Archive's films and YouTube's lives are listed the same way:
+//! The world's radio (radio-browser) and the world's TV (iptv-org) are listed
+//! the same way:
 //! a [`Query`] the daemon asks on a desk's thread, the page kept for every
 //! door. A directory's page carries its rows AND what the globe draws of
 //! them ([`Globe`]): a door draws, and never places a thing on the map
@@ -45,7 +45,7 @@
 //! ([`Directory::host`], [`crate::prefs::Preferences::let_directory`]), and
 //! nothing is asked of one that is not.
 
-use ronoctua_broadcast::{Code, Spot, archive, radio::Station};
+use ronoctua_broadcast::{Code, Spot, radio::Station};
 use ronoctua_lookup::{Service, found::Found, lrclib::Record, suggestion::Suggestion};
 use ronoctua_playlist::own::Stream;
 use serde::{Deserialize, Serialize};
@@ -133,24 +133,6 @@ pub enum Query {
     Radio(RadioList),
     /// The world's TV, from iptv-org's index ([`Directory::Iptv`]).
     Tv(TvList),
-    /// A category's films on the Internet Archive ([`Directory::Archive`]),
-    /// a page at a time, the most downloaded first.
-    Archive {
-        /// The category (`ronoctua_broadcast::table::CATEGORIES`).
-        category: String,
-        /// Words in the title, when the person typed some.
-        #[serde(default)]
-        words: Option<String>,
-        /// Which page, from 1.
-        #[serde(default = "first_page")]
-        page: u32,
-    },
-    /// What is live on YouTube now for a category, through yt-dlp
-    /// ([`Directory::Lives`]).
-    Lives {
-        /// The category.
-        category: String,
-    },
 }
 
 /// A search's first page, when a door does not say.
@@ -245,13 +227,6 @@ pub enum TvList {
         /// The country (`UK` is read as `GB`).
         country: Code,
     },
-    /// A category's live channels — the TV of "channels by theme", on a desk
-    /// of its own ([`DeskKind::Channels`]) so the world's TV stays where it
-    /// was.
-    Category {
-        /// The category (`ronoctua_broadcast::table::CATEGORIES`).
-        category: String,
-    },
     /// Channels whose name has these words.
     Search {
         /// What the person typed.
@@ -272,10 +247,7 @@ impl Query {
             Self::Subtitles { .. } => DeskKind::Subtitles,
             Self::Lyrics { .. } => DeskKind::Lyrics,
             Self::Radio(_) => DeskKind::Radio,
-            Self::Tv(TvList::Category { .. }) => DeskKind::Channels,
             Self::Tv(_) => DeskKind::Television,
-            Self::Archive { .. } => DeskKind::Archive,
-            Self::Lives { .. } => DeskKind::Lives,
         }
     }
 
@@ -287,7 +259,7 @@ impl Query {
             Self::Suggest { location, .. }
             | Self::Subtitles { location, .. }
             | Self::Lyrics { location, .. } => location,
-            Self::Radio(_) | Self::Tv(_) | Self::Archive { .. } | Self::Lives { .. } => "",
+            Self::Radio(_) | Self::Tv(_) => "",
         }
     }
 
@@ -299,7 +271,7 @@ impl Query {
             Self::Suggest { source, .. } => source.services(),
             Self::Subtitles { .. } => &SUBTITLE_SERVICES,
             Self::Lyrics { .. } => &[Service::Lrclib],
-            Self::Radio(_) | Self::Tv(_) | Self::Archive { .. } | Self::Lives { .. } => &[],
+            Self::Radio(_) | Self::Tv(_) => &[],
         }
     }
 
@@ -310,8 +282,6 @@ impl Query {
             Self::Suggest { .. } | Self::Subtitles { .. } | Self::Lyrics { .. } => None,
             Self::Radio(_) => Some(Directory::Radio),
             Self::Tv(_) => Some(Directory::Iptv),
-            Self::Archive { .. } => Some(Directory::Archive),
-            Self::Lives { .. } => Some(Directory::Lives),
         }
     }
 }
@@ -517,7 +487,7 @@ pub enum Page {
         /// When the index was made.
         listed: Listed,
     },
-    /// TV channels: a country's, a category's, a search's.
+    /// TV channels: a country's, a search's.
     Channels {
         /// The channels, by name — at most [`CHANNELS_MOST`].
         channels: Vec<ChannelRow>,
@@ -527,30 +497,6 @@ pub enum Page {
         /// the others share their country's anchor.
         globe: Globe,
         /// When the index was made.
-        listed: Listed,
-    },
-    /// A page of a category's films on the Internet Archive.
-    Archive {
-        /// The category.
-        category: String,
-        /// The items of this page, the most downloaded first.
-        items: Vec<ArchiveRow>,
-        /// How many the search found in all.
-        total: u64,
-        /// Which page this is, from 1.
-        number: u32,
-        /// Whether there is a page after it.
-        more: bool,
-        /// When the page was asked.
-        listed: Listed,
-    },
-    /// What is live on YouTube now for a category.
-    Lives {
-        /// The category.
-        category: String,
-        /// The lives, each once, in the order found.
-        lives: Vec<LiveRow>,
-        /// When they were asked.
         listed: Listed,
     },
 }
@@ -685,28 +631,6 @@ pub struct ChannelRow {
     pub mark: Option<u32>,
 }
 
-/// A film of the Internet Archive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveRow {
-    /// What the search said of it — its rights' address among it.
-    pub item: archive::Item,
-    /// What the door puts in the queue: the WHOLE item, which the daemon
-    /// opens into its files when it is put (`archive::Item::stream`).
-    pub stream: Stream,
-}
-
-/// A broadcast live on YouTube now.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LiveRow {
-    /// What the search said of it.
-    pub live: ronoctua_ytdlp::Live,
-    /// The words it was found by — the category's own, said on the row as
-    /// where it came from.
-    pub asked: String,
-    /// What the door puts in the queue.
-    pub stream: Stream,
-}
-
 impl Page {
     /// The stream of the row that is `(kind, id)`, and its title and
     /// country — what a favourite or a recent keeps; `None` when no row of
@@ -727,14 +651,6 @@ impl Page {
                 .iter()
                 .find(|r| r.id == id)
                 .map(|r| (r.name.clone(), r.country, r.stream.clone())),
-            (Self::Archive { items, .. }, Kind::Archive) => items
-                .iter()
-                .find(|r| r.item.identifier == id)
-                .map(|r| (r.item.title.clone(), None, r.stream.clone())),
-            (Self::Lives { lives, .. }, Kind::Live) => lives
-                .iter()
-                .find(|r| r.live.id == id)
-                .map(|r| (r.live.title.clone(), None, r.stream.clone())),
             _ => None,
         }
     }
@@ -922,35 +838,23 @@ mod tests {
                 page: 1
             })
         );
-        let theme = read(r#"{"what":"tv","list":"category","category":"news"}"#);
-        assert_eq!(theme.desk(), DeskKind::Channels);
-        assert_eq!(theme.directory(), Some(Directory::Iptv));
+        // THE THEMES' THREE DESKS ARE RETIRED — a theme is the local
+        // catalogue's now — and their lists are not read as anything else.
+        for gone in [
+            r#"{"what":"tv","list":"category","category":"news"}"#,
+            r#"{"what":"archive","category":"films"}"#,
+            r#"{"what":"lives","category":"news"}"#,
+        ] {
+            assert!(serde_json::from_str::<Query>(gone).is_err(), "{gone}");
+        }
         assert_eq!(
             read(r#"{"what":"tv","list":"search","words":"bbc"}"#).desk(),
             DeskKind::Television
         );
-        assert_eq!(
-            read(r#"{"what":"archive","category":"films"}"#),
-            Query::Archive {
-                category: "films".into(),
-                words: None,
-                page: 1
-            }
-        );
-        let lives = read(r#"{"what":"lives","category":"news"}"#);
-        assert_eq!(lives.desk(), DeskKind::Lives);
-        assert_eq!(lives.directory().map(Directory::host), Some("youtube.com"));
         for q in [
             radio,
-            theme,
-            lives,
             Query::Tv(TvList::Countries),
             Query::Radio(RadioList::Tags),
-            Query::Archive {
-                category: "anime".into(),
-                words: Some("robot".into()),
-                page: 3,
-            },
         ] {
             let s = serde_json::to_string(&q).expect("serialises");
             assert_eq!(serde_json::from_str::<Query>(&s).expect(&s), q);

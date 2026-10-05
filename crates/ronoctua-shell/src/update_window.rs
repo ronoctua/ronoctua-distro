@@ -4,18 +4,26 @@
 //! # What this module may NOT know
 //!
 //! **A step.** Not one id, not one command, not one order. The sequence is
-//! declared once, in `assets/updates.nix`, and everything downstream is
-//! generated from it: the Rust table, the two text keys per step, the two shell
-//! runners and the two systemd units. `ronoctua-brain` reads that table through
-//! its `build.rs` — it used to declare three steps of its own, and they came
-//! out DISJOINT from the twelve the sequence actually runs — and this module
-//! reads the same table through the same crate.
+//! declared once, in the update's brain module (`system-update`, its
+//! `steps.nix`), and everything downstream is generated from it: the Rust
+//! table, the two text keys per step, the two shell runners and the systemd
+//! units. The brain's module reads that table — the brain used to declare
+//! three steps of its own, and they came out DISJOINT from the twelve the
+//! sequence actually runs — and this file reads the same table through the
+//! same module ([`module::steps`]), with the keys it declared for each step.
 //!
 //! So `LEADER s u n` TRIGGERS; it never enumerates. What it starts is the unit
-//! the brain starts, named by the brain's own constant, and the steps the view
-//! draws are [`ronoctua_brain::tasks::update::steps`] and nothing else.
-//! `update-has-one-list` is the check that keeps it that way: a step's id
-//! written by hand anywhere outside the declaration takes the build down.
+//! the brain starts, named by the module's own manifest ([`unit::RUN`]), and
+//! the steps the view draws are the module's and nothing else. The module's
+//! `…-has-one-list` check keeps it that way: a step's id written by hand
+//! anywhere outside the declaration takes the build down.
+//!
+//! # The one file outside the module that names it
+//!
+//! It is listed in the module's `namedBy`, and it is where the three commands
+//! live — [`COMMANDS`] and their keys, [`BINDINGS`] — so the leader and the
+//! footer reach them through these tables and never spell an id of the
+//! module's themselves ([`order_of`] is how the footer asks).
 //!
 //! # Four things live here, and they are one feature
 //!
@@ -51,7 +59,9 @@ use std::path::PathBuf;
 
 use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
 use anyhow::Result;
-use ronoctua_brain::tasks::update as declared;
+use ronoctua_brain::compiled::system_update as module;
+use ronoctua_brain::compiled::system_update::unit;
+use ronoctua_i18n::key;
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
@@ -121,7 +131,7 @@ pub fn running(mind: Option<&ronoctua_brain::Mind>) -> bool {
     let Some(m) = mind else {
         return false;
     };
-    m.running == declared::ID || m.queue.iter().any(|q| q == declared::ID)
+    m.running == module::ID || m.queue.iter().any(|q| q == module::ID)
 }
 
 /// The modeline's mark, or `None` when there is nothing to say.
@@ -177,12 +187,12 @@ pub enum Started {
 /// footer once by being synchronous inside a `calloop`.
 pub fn begin() -> Started {
     let ask = ronoctua_brain::Ask::Run {
-        task: declared::ID.to_owned(),
+        task: module::ID.to_owned(),
         rehearsal: false,
     };
     match ronoctua_brain::client::tell(&ask) {
         Ok(()) => {
-            tracing::info!(task = declared::ID, "update asked of the brain");
+            tracing::info!(task = module::ID, "update asked of the brain");
             return Started::Brain;
         }
         Err(e) => tracing::debug!(error = %e, "no brain; asking systemd directly"),
@@ -202,8 +212,8 @@ pub fn begin() -> Started {
             // SYSTEM bus `systemctl start` is authorised by polkit BEFORE
             // systemd looks the unit up, and with no agent in this session the
             // call would hang on an authentication request nobody asked for.
-            if let Err(e) = ronoctua_brain::systemd::start(declared::UNIT) {
-                tracing::error!(unit = declared::UNIT, error = %e, "systemd refused");
+            if let Err(e) = ronoctua_brain::systemd::start(unit::RUN) {
+                tracing::error!(unit = unit::RUN, error = %e, "systemd refused");
             }
         });
     match born {
@@ -219,26 +229,22 @@ pub fn begin() -> Started {
 // WHAT THE UNITS REPORTED
 // ---------------------------------------------------------------------------
 
-/// The privileged half's unit.
-///
-/// # Why this name is written here at all
-///
-/// Because nothing exports it: `nix/modules/update.nix` holds it in a `let`
-/// (`systemUnit`) and travels it three ways from there — into the unit, into
-/// the polkit rule and into the generated runner. The person's half is
-/// [`declared::UNIT`], which the brain owns and this file borrows; the root
-/// half has no Rust owner. It is named once, here, and the report at the top of
-/// this wave asks for a check that compares it against the module.
-const SYSTEM_UNIT: &str = "ronoctua-update-system.service";
+// THE TWO HALVES' UNITS are the module's manifest's (`unit::RUN`, the
+// person's half, and `unit::SYSTEM`, the root half): written there once, read
+// by its NixOS half into the units and the rule, and by this file from the
+// table generated out of it. They used to be typed here again, and a check
+// compared the two spellings; now there is one.
 
 /// Where the root half leaves its report.
 ///
 /// `/run`, because none of it survives a boot and none of it should — the
-/// `stateDir` of `nix/modules/update.nix`, written `0755` root so the person
-/// can READ it, which is what makes this window possible without privilege.
+/// `stateDir` of the module's NixOS half, written `0755` root so the person can
+/// READ it, which is what makes this window possible without privilege. The
+/// module's `…-names-agree` check holds the two to each other.
 const SYSTEM_REPORT: &str = "/run/ronoctua-update/system.report";
 
-/// The person's half's report, under their own runtime directory.
+/// The person's half's report, under their own runtime directory — where the
+/// generated runner writes it, which the same check reads.
 const PERSON_REPORT: &str = "ronoctua-update/user.report";
 
 /// `journalctl`, by store path and never by name.
@@ -255,7 +261,7 @@ const JOURNALCTL: &str = match option_env!("RONOCTUA_JOURNALCTL") {
 ///
 /// # A closed vocabulary, and it is not ours
 ///
-/// `nix/scripts/gen-updates.py` emits exactly these words — `off`,
+/// the update's `gen-updates.py` emits exactly these words — `off`,
 /// `skipped-<kind>`, `rehearsed`, `ran`, `failed`, `stopped` — and its own
 /// comment says so: *"Ids and verdicts are English and closed; the sentence on
 /// screen comes from a text key, never from here."* [`Verdict::Pending`] is the
@@ -270,8 +276,8 @@ pub enum Verdict {
     /// This machine has it switched off, in `/etc/ronoctua/updates.conf`.
     Off,
     /// A precondition did not hold. The word is the KIND — `binary`,
-    /// `directory`, `writable-file`, `network` — and it is the tail of
-    /// `update-needs-<kind>`, which both languages already carry.
+    /// `directory`, `writable-file`, `network` — and the module says which key
+    /// explains it ([`module::needs_key`]).
     Skipped(String),
     /// A rehearsal printed it and ran nothing.
     Rehearsed,
@@ -287,17 +293,17 @@ impl Verdict {
     #[must_use]
     pub const fn key(&self) -> &'static str {
         match self {
-            Self::Ran => "update-verdict-ran",
-            Self::Failed => "update-verdict-failed",
-            Self::Off => "update-verdict-off",
+            Self::Ran => key::SYSTEM_UPDATE_VERDICT_RAN,
+            Self::Failed => key::SYSTEM_UPDATE_VERDICT_FAILED,
+            Self::Off => key::SYSTEM_UPDATE_VERDICT_OFF,
             // THE ROW SAYS *SKIPPED* AND THE CURSOR SAYS WHY. The kind's own
-            // sentence is a whole line long (`update-needs-binary` is *"this
-            // program is not on your PATH"*), which is right for the second
-            // register and far too wide for a column.
-            Self::Skipped(_) => "update-verdict-skipped",
-            Self::Rehearsed => "update-verdict-rehearsed",
-            Self::Stopped => "update-verdict-stopped",
-            Self::Pending => "update-verdict-pending",
+            // sentence is a whole line long (*"this program is not on your
+            // PATH"*), which is right for the second register and far too wide
+            // for a column.
+            Self::Skipped(_) => key::SYSTEM_UPDATE_VERDICT_SKIPPED,
+            Self::Rehearsed => key::SYSTEM_UPDATE_VERDICT_REHEARSED,
+            Self::Stopped => key::SYSTEM_UPDATE_VERDICT_STOPPED,
+            Self::Pending => key::SYSTEM_UPDATE_VERDICT_PENDING,
         }
     }
 
@@ -587,28 +593,37 @@ pub fn readable(raw: &str) -> String {
 /// The [`std::process::Child`] comes back so the window can KILL it: `-f`
 /// never ends on its own, and a door that leaves two `journalctl` behind every
 /// time it is closed is a door that leaks processes.
+///
+/// # Several units, one `journalctl`
+///
+/// A half is two units — the one that acts and the one that rehearses — and
+/// `-u` given twice matches either, in the order the lines were written. One
+/// child per half, then, not per unit: the backlog of `-n` is the half's last
+/// lines, whichever of the two wrote them.
 fn follow(
-    unit: &str,
+    units: &[&str],
     of_the_person: bool,
     to: &channel::Sender<String>,
 ) -> Option<std::process::Child> {
+    let first = units.first().copied().unwrap_or_default();
     let mut command = std::process::Command::new(JOURNALCTL);
     if of_the_person {
         command.arg("--user");
     }
+    command.args([
+        "--no-pager",
+        // Just the message. The window has narrow columns and the stamp,
+        // the host and the unit are the same on every line of a run.
+        "-o",
+        "cat",
+        "-n",
+        &KEPT.to_string(),
+        "-f",
+    ]);
+    for unit in units {
+        command.args(["-u", unit]);
+    }
     command
-        .args([
-            "--no-pager",
-            // Just the message. The window has narrow columns and the stamp,
-            // the host and the unit are the same on every line of a run.
-            "-o",
-            "cat",
-            "-n",
-            &KEPT.to_string(),
-            "-f",
-            "-u",
-            unit,
-        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -618,14 +633,14 @@ fn follow(
             // NOT FATAL. Without it the window loses the live half and still
             // draws the steps and their verdicts — the same criterion
             // `transfers::listen` uses about a missing socket.
-            tracing::warn!(unit, error = %e, "no journalctl; the live output does not appear");
+            tracing::warn!(unit = first, error = %e, "no journalctl; the live output does not appear");
             return None;
         }
     };
     let out = child.stdout.take()?;
     let sender = to.clone();
     let named = std::thread::Builder::new()
-        .name(format!("journal-{unit}"))
+        .name(format!("journal-{first}"))
         .spawn(move || {
             for line in std::io::BufReader::new(out).lines() {
                 let Ok(text) = line else {
@@ -638,7 +653,7 @@ fn follow(
             }
         });
     if let Err(e) = named {
-        tracing::error!(unit, error = %e, "could not start the journal thread");
+        tracing::error!(unit = first, error = %e, "could not start the journal thread");
         let _ = child.kill();
         return None;
     }
@@ -732,16 +747,16 @@ pub fn step_row(
         });
     }
 
-    // `update-<id>` AND NOT A FAMILY OF OUR OWN. The ids are not this shell's:
-    // they come from `assets/updates.nix`, which already owes every one of them
-    // a name and a sentence in both languages — the same keys the brain's own
-    // screen draws. A second family for the same twelve steps would be twelve
-    // more sentences to keep in step with these.
+    // THE STEP'S OWN KEY, AND NOT A FAMILY OF OUR OWN. The ids are not this
+    // shell's: the module declared each step's name and sentence in both
+    // languages — the same keys the brain's own screen draws — and the step
+    // carries them. A key built here out of the id would be a second family
+    // for the same steps, and a word nobody declared.
     let at = GUTTER + COLUMN_GAP;
     let room = right.saturating_sub(at.saturating_add(COLUMN_GAP));
     out.push(Piece {
         at,
-        text: layout::elide_end(&texts.t(&format!("update-{}", step.id)), room),
+        text: layout::elide_end(&texts.t(step.name_key), room),
         color: if step.on_by_default {
             tokens::color::TEXT_PRIMARY
         } else {
@@ -763,10 +778,14 @@ pub fn cursor_explains(
     verdict: &Verdict,
     texts: &ronoctua_i18n::Texts,
 ) -> String {
-    let mut said = texts.t(&format!("update-does-{}", step.id));
-    if let Verdict::Skipped(kind) = verdict {
+    let mut said = texts.t(step.does_key);
+    // A KIND THE SEQUENCE DOES NOT HAVE SAYS NOTHING, rather than a key made
+    // up of it: the row already says *skipped*.
+    if let Verdict::Skipped(kind) = verdict
+        && let Some(why) = module::needs_key(kind)
+    {
         said.push(' ');
-        said.push_str(&texts.t(&format!("update-needs-{kind}")));
+        said.push_str(&texts.t(why));
     }
     if step.needs_root {
         said.push(' ');
@@ -787,22 +806,94 @@ pub fn cursor_explains(
 /// the brain's countdown, the band's two buttons and the brain buffer's
 /// `, a` and `, p`.
 pub const OF_THE_VIEW: &[(&str, &str)] = &[
-    ("<down>", "update-step-next"),
-    ("<up>", "update-step-previous"),
-    ("C-j", "update-output-down"),
-    ("C-k", "update-output-up"),
-    ("G", "update-output-end"),
+    ("<down>", "system-update-next-step"),
+    ("<up>", "system-update-previous-step"),
+    ("C-j", "system-update-output-down"),
+    ("C-k", "system-update-output-up"),
+    ("G", "system-update-output-end"),
     ("u", START),
     ("a", ABORT),
     ("p", PROCEED),
 ];
 
-/// The command that starts the whole sequence now.
-pub const START: &str = "system-update";
+/// The command that starts the whole sequence now — the module's own id, and
+/// the word its key teaches (`update now`).
+pub const START: &str = module::ID;
+/// The command that opens the view in the footer's region.
+pub const OPEN: &str = "system-update-open";
+/// The command that opens the view in a window — the door the modeline's
+/// mark opens.
+pub const WATCH: &str = "system-update-watch";
 /// The countdown's "not now" — or "stop it", once it runs.
 pub const ABORT: &str = "brain-abort";
 /// The countdown's "start now".
 pub const PROCEED: &str = "brain-proceed";
+
+/// The update's three commands, which the leader registers with its own
+/// (`leader::default_of`) without spelling one of them.
+///
+/// `START` IS THE WHOLE UPDATE, BY HAND, WITH NO BRAIN IN IT. The brain decides
+/// WHEN the machine updates itself; this is the person deciding it is now. The
+/// two are not two sequences: this starts the same unit the brain starts, and
+/// neither of them holds a list of steps — the module's `steps.nix` does, and
+/// everything else is generated from it. It works with the daemon down, on
+/// purpose ([`begin`]): a scheduler that is not running must not be able to
+/// stop a person from updating their own machine.
+///
+/// `OPEN` AND `WATCH` ARE THE VIEW THAT WATCHES ONE HAPPEN, in the footer's
+/// region and in a window. They are commands of the registry and not keys of
+/// a view for the reason `brain-abort` is: the mark appears on the footer's
+/// own line, with no window open, and the mouse may not reach a door the
+/// keyboard does not. And the window opens with NOTHING running, which is when
+/// somebody wants to read what the last run did.
+pub const COMMANDS: &[ronoctua_cmd::Command] = &[
+    ronoctua_cmd::Command {
+        id: START,
+        label: key::CMD_SYSTEM_UPDATE,
+    },
+    ronoctua_cmd::Command {
+        id: OPEN,
+        label: key::CMD_SYSTEM_UPDATE_OPEN,
+    },
+    ronoctua_cmd::Command {
+        id: WATCH,
+        label: key::CMD_SYSTEM_UPDATE_WATCH,
+    },
+];
+
+/// `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory panel
+/// and the disk formatter: `s u u` opens its view (the doubled letter every
+/// view uses) and `s u w` its window — `w` for WINDOW, the letter every view
+/// with a second door uses — and `s u n` starts it NOW, the key the view
+/// itself teaches as `u`. The leader takes these whole, as it takes its own.
+pub const BINDINGS: &[(&str, &str, Option<&str>)] = &[
+    ("s u u", OPEN, None),
+    ("s u w", WATCH, None),
+    ("s u n", START, None),
+];
+
+/// What one of the update's commands asks of the footer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    /// The whole sequence, now ([`START`]).
+    Start,
+    /// The view, in the footer's region ([`OPEN`]).
+    Open,
+    /// The view, in a window ([`WATCH`]).
+    Watch,
+}
+
+/// Which of the update's commands an id is — the one question the footer asks
+/// to dispatch them, so it spells none.
+#[must_use]
+pub fn order_of(id: &str) -> Option<Order> {
+    match id {
+        START => Some(Order::Start),
+        OPEN => Some(Order::Open),
+        WATCH => Some(Order::Watch),
+        _ => None,
+    }
+}
 
 /// A key, read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -853,11 +944,11 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         .find(|(taught, _)| *taught == notation)
         .map(|(_, id)| *id)?;
     Some(match id {
-        "update-step-next" => Press::Down,
-        "update-step-previous" => Press::Up,
-        "update-output-down" => Press::OutputDown,
-        "update-output-up" => Press::OutputUp,
-        "update-output-end" => Press::OutputEnd,
+        "system-update-next-step" => Press::Down,
+        "system-update-previous-step" => Press::Up,
+        "system-update-output-down" => Press::OutputDown,
+        "system-update-output-up" => Press::OutputUp,
+        "system-update-output-end" => Press::OutputEnd,
         START => Press::Start,
         ABORT => Press::Abort,
         PROCEED => Press::Proceed,
@@ -916,7 +1007,7 @@ impl View {
     /// The declared steps, and what the reports on this machine say.
     #[must_use]
     pub fn read() -> Self {
-        Self::of(declared::steps(), Verdicts::read(), report_stamp())
+        Self::of(module::steps(), Verdicts::read(), report_stamp())
     }
 
     /// A view of `steps` with `verdicts` — what a test builds, and nothing of
@@ -1100,7 +1191,7 @@ impl View {
                 RegionRow {
                     fields: vec![field(
                         GUTTER,
-                        layout::elide_end(&texts.t(ronoctua_i18n::key::UPDATE_NO_OUTPUT), room),
+                        layout::elide_end(&texts.t(key::SYSTEM_UPDATE_NO_OUTPUT), room),
                         tokens::color::TEXT_DIM,
                     )],
                     step: None,
@@ -1151,26 +1242,41 @@ pub struct RegionRow {
 #[must_use]
 pub const fn said_of(started: Started) -> &'static str {
     match started {
-        Started::Brain => ronoctua_i18n::key::ECHO_UPDATE_QUEUED,
-        Started::Systemd => ronoctua_i18n::key::ECHO_UPDATE_STARTED,
-        Started::Nowhere => ronoctua_i18n::key::ECHO_UPDATE_NOWHERE,
+        Started::Brain => key::ECHO_SYSTEM_UPDATE_QUEUED,
+        Started::Systemd => key::ECHO_SYSTEM_UPDATE_STARTED,
+        Started::Nowhere => key::ECHO_SYSTEM_UPDATE_NOWHERE,
     }
 }
 
 /// Follows both journals — the root half's and the person's — each on a
 /// thread of its own, sending every line down `to`. The children come back so
 /// the door that opened them KILLS them: `-f` never ends by itself.
+///
+/// Each half is followed in both its units, the run's and the rehearsal's
+/// ([`HALVES`]): a rehearsal is a run the verdicts already show — both write
+/// the same reports — and its output is what it is for. A step whose
+/// rehearsal is a unit of its own (the trim of the system's generations)
+/// relays what that unit said into the rehearsing half's output, so which
+/// generations would go is on screen here, in both doors.
 pub fn follow_both(to: &channel::Sender<String>) -> Vec<std::process::Child> {
     // The root half runs first and the person's half BLOCKS on it —
     // `systemctl start` on a `Type=oneshot` returns when the work is done —
     // so the two are never producing at the same time except at the
     // hand-over. Arrival order is the sequence's order, and nothing here
     // claims more than that.
-    let mut children = Vec::new();
-    children.extend(follow(SYSTEM_UNIT, false, to));
-    children.extend(follow(declared::UNIT, true, to));
-    children
+    HALVES
+        .iter()
+        .filter_map(|(units, of_the_person)| follow(units, *of_the_person, to))
+        .collect()
 }
+
+/// The two halves the view follows, root's first, each as the units it runs
+/// in — the one that acts and the one that rehearses — and whether it is the
+/// person's (`journalctl --user`).
+const HALVES: [(&[&str], bool); 2] = [
+    (&[unit::SYSTEM, unit::SYSTEM_REHEARSAL], false),
+    (&[unit::RUN, unit::REHEARSE], true),
+];
 
 /// Stops what [`follow_both`] started.
 pub fn stop_following(children: &mut Vec<std::process::Child>) {
@@ -1263,7 +1369,7 @@ pub fn host_it() -> Result<()> {
 }
 
 /// The window: the view both doors show, and this door's own page.
-struct UpdateWindow {
+pub struct UpdateWindow {
     /// The steps, their verdicts, the cursor and the output — the footer's
     /// view too.
     view: View,
@@ -1276,8 +1382,46 @@ struct UpdateWindow {
     /// The window's lines under its header, as the door last counted them —
     /// kept so the arithmetic of the two halves can be asked from a key.
     lines: u16,
+    /// How many of those lines the second register takes, wrapped whole
+    /// ([`UpdateWindow::measure`]) — at least one.
+    register: u16,
     /// The two `journalctl -f`, so they can be killed.
     children: Vec<std::process::Child>,
+    /// Where a key that starts or answers something goes: the machine, or
+    /// nowhere — a photograph's.
+    reach: Reach,
+}
+
+/// Where a key or a click of this window reaches past the door.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Reach {
+    /// The machine's: the brain's socket, and systemd when the brain is not
+    /// listening (`begin`); the brain again for the countdown's answers.
+    Machine,
+    /// Nobody's: what it would have asked is KEPT, in order, and the
+    /// photograph prints it (`ronoctua-shell photograph --door update`). A
+    /// photograph whose `u` started an update on the machine taking it would
+    /// be a camera that rebuilds the system.
+    Kept(Vec<String>),
+}
+
+/// The window a photograph takes (`ronoctua-shell photograph --door update`).
+///
+/// The declared steps — the module's, as the window on a screen has them —
+/// with the verdicts of the `halves` given, each a report as its runner
+/// writes it, and `said` as the two journals would have printed it, a line
+/// each. Nothing of this machine's is read: no report under `/run` or the
+/// runtime directory, no journal followed, no brain asked. What a key would
+/// have started or answered is kept (`would_have`), never done.
+#[must_use]
+pub fn photographed(halves: &[String], said: &str) -> UpdateWindow {
+    let mut view = View::of(module::steps(), Verdicts::of(halves), Vec::new());
+    for line in said.lines() {
+        view.heard(readable(line));
+    }
+    let mut window = UpdateWindow::of(view, Vec::new());
+    window.reach = Reach::Kept(Vec::new());
+    window
 }
 
 impl Drop for UpdateWindow {
@@ -1298,7 +1442,20 @@ impl UpdateWindow {
             step_offset: 0,
             output_up: 0,
             lines: 22,
+            register: 1,
             children,
+            reach: Reach::Machine,
+        }
+    }
+
+    /// What a photograph's window would have asked past the door, in order,
+    /// as the photograph prints it — nothing for the window on a screen,
+    /// which asked for real.
+    #[must_use]
+    pub fn would_have(&self) -> Vec<String> {
+        match &self.reach {
+            Reach::Machine => Vec::new(),
+            Reach::Kept(asked) => asked.clone(),
         }
     }
 
@@ -1312,14 +1469,37 @@ impl UpdateWindow {
     /// the table scrolls when it does not fit — which on any window worth
     /// opening it does.
     fn steps_room(&self) -> usize {
-        let below = self.lines.saturating_sub(1);
+        let below = self.lines.saturating_sub(self.register);
         usize::from(below / 2).min(self.view.steps().len())
     }
 
     /// The first row of the output region, counted from the first line under
     /// the header.
     fn output_top(&self) -> u16 {
-        1 + u16::try_from(self.steps_room()).unwrap_or(0)
+        self.register + u16::try_from(self.steps_room()).unwrap_or(0)
+    }
+
+    /// Counts the window's lines under its header and the second register's
+    /// share of them — the one count the painting, the keys and the pointer
+    /// read, so a step is clicked on the row it is drawn on.
+    ///
+    /// # Why the register is wrapped and not cut
+    ///
+    /// Because it is a note, and a note wraps whole (`chrome::note_lines`):
+    /// the end of a step's sentence is where its consequence is — the trim's
+    /// says what a rehearsal shows — and the footer's region already wraps
+    /// the same sentence (`View::register_lines`). Cut here, the two doors
+    /// would say two different things about one step.
+    ///
+    /// AT MOST ALL BUT TWO LINES, a step's and the output's: what does not fit
+    /// a window that small is past its edge — nothing leaks off the screen —
+    /// and never an ellipsis.
+    fn measure(&mut self, ui: &Ui) {
+        self.lines = ui.lines.saturating_sub(ui.first_of_list());
+        let wrapped = self.view.register_lines(ui.columns, &ui.texts).len();
+        self.register = u16::try_from(wrapped)
+            .unwrap_or(u16::MAX)
+            .clamp(1, self.lines.saturating_sub(2).max(1));
     }
 
     /// How many rows of output fit.
@@ -1373,7 +1553,7 @@ impl UpdateWindow {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let line = (y / line_px) as u16;
-        let first_step = ui.first_of_list() + 1;
+        let first_step = ui.first_of_list() + self.register;
         if line < first_step || line >= ui.first_of_list() + self.output_top() {
             return None;
         }
@@ -1398,11 +1578,22 @@ impl UpdateWindow {
             }
             // STARTED FROM HERE, through the door the footer's `LEADER s u n`
             // goes through, and said here in its words.
-            Errand::Start => ui.message = Some(ui.texts.t(said_of(begin()))),
-            Errand::Answer(proceeding) => {
-                let said = crate::brain::answer(self.mind.as_ref(), proceeding);
-                ui.message = Some(ui.texts.t(said));
-            }
+            Errand::Start => match &mut self.reach {
+                Reach::Machine => ui.say(ui.texts.t(said_of(begin()))),
+                Reach::Kept(asked) => {
+                    asked.push(format!("would have asked for a run of {}", module::ID))
+                }
+            },
+            Errand::Answer(proceeding) => match &mut self.reach {
+                Reach::Machine => {
+                    let said = crate::brain::answer(self.mind.as_ref(), proceeding);
+                    ui.say(ui.texts.t(said));
+                }
+                Reach::Kept(asked) => asked.push(format!(
+                    "would have answered the countdown: {}",
+                    if proceeding { "proceed" } else { "abort" }
+                )),
+            },
             Errand::Close => ui.quit = true,
         }
         ui.ask_paint();
@@ -1411,8 +1602,10 @@ impl UpdateWindow {
     /// One key, from the keyboard or from a click on the header.
     fn pressed(&mut self, ui: &mut Ui, press: Press) {
         ui.message = None;
-        self.lines = ui.lines.saturating_sub(ui.first_of_list());
         let errand = self.view.key(press);
+        // AFTER THE KEY: the cursor's new step has a sentence of its own, and
+        // the room the page follows it in is what is left under it.
+        self.measure(ui);
         self.apply(ui, errand);
     }
 }
@@ -1451,7 +1644,7 @@ impl Content for UpdateWindow {
     }
 
     fn resized(&mut self, ui: &mut Ui) {
-        self.lines = ui.lines.saturating_sub(ui.first_of_list());
+        self.measure(ui);
         self.follow_the_cursor();
         self.follow_the_tail();
     }
@@ -1488,7 +1681,7 @@ impl Content for UpdateWindow {
             |_| hint,
         );
         let first = ui.first_of_list();
-        self.lines = ui.lines.saturating_sub(first);
+        self.measure(ui);
         let margin = ui.margin;
         let columns = ui.columns;
         #[allow(clippy::cast_precision_loss)]
@@ -1504,12 +1697,19 @@ impl Content for UpdateWindow {
                 foot: false,
             };
 
-        // THE SECOND REGISTER — what the step under the cursor really is.
-        if let Some(second) = self.view.explains(&texts) {
+        // THE SECOND REGISTER — what the step under the cursor really is —
+        // WRAPPED WHOLE, on the lines `measure` counted for it.
+        for (n, said) in self
+            .view
+            .register_lines(columns, &texts)
+            .into_iter()
+            .take(usize::from(self.register))
+            .enumerate()
+        {
             canvas.spans.push(span(
-                layout::elide_end(&second, columns),
+                said,
                 margin,
-                first,
+                first + u16::try_from(n).unwrap_or(0),
                 tokens::color::TEXT_SECONDARY,
             ));
         }
@@ -1525,7 +1725,7 @@ impl Content for UpdateWindow {
             .enumerate()
         {
             let row = self.step_offset + n;
-            let y = first + 1 + u16::try_from(n).unwrap_or(0);
+            let y = first + self.register + u16::try_from(n).unwrap_or(0);
             // THE CURSOR AND THE POINTER GET DIFFERENT BANDS, and each is a
             // flat quad with no border and no radius — invariant 15.
             //
@@ -1577,7 +1777,7 @@ impl Content for UpdateWindow {
         // and never translated: a build log is not interface.
         if self.view.scrollback().is_empty() {
             canvas.spans.push(span(
-                layout::elide_end(&texts.t(ronoctua_i18n::key::UPDATE_NO_OUTPUT), columns),
+                layout::elide_end(&texts.t(key::SYSTEM_UPDATE_NO_OUTPUT), columns),
                 margin + GUTTER,
                 top,
                 tokens::color::TEXT_DIM,
@@ -1791,11 +1991,11 @@ mod tests {
             "a stopped brain has no mark"
         );
         assert!(
-            mark(Some(&a_mind(declared::ID, &[])), 0).is_some(),
+            mark(Some(&a_mind(module::ID, &[])), 0).is_some(),
             "running has a mark"
         );
         assert!(
-            mark(Some(&a_mind("", &[declared::ID])), 0).is_some(),
+            mark(Some(&a_mind("", &[module::ID])), 0).is_some(),
             "queued has a mark"
         );
         // AND IT IS THIS TASK AND NOT ANY TASK. The brain's door is a `vec![]`
@@ -1803,6 +2003,38 @@ mod tests {
         // whatever was running would draw a rebuild's glyph over somebody
         // else's work.
         assert_eq!(mark(Some(&a_mind("something-else", &[])), 0), None);
+    }
+
+    #[test]
+    fn the_view_follows_the_rehearsal_as_well_as_the_run() {
+        // A REHEARSAL IS A RUN THE VERDICTS ALREADY SHOW, and what it says —
+        // the trim's list of generations that would go among it — is what it
+        // is for. Each half is followed in both its units, each in the
+        // journal it writes to: the person's with `--user`, root's without.
+        let followed = |person: bool| -> Vec<&str> {
+            HALVES
+                .iter()
+                .filter(|(_, of_the_person)| *of_the_person == person)
+                .flat_map(|(units, _)| units.iter().copied())
+                .collect()
+        };
+        let mut person = followed(true);
+        person.sort_unstable();
+        let mut run_and_rehearsal = [unit::RUN, unit::REHEARSE];
+        run_and_rehearsal.sort_unstable();
+        assert_eq!(person, run_and_rehearsal, "the person's half, in --user");
+        let mut root = followed(false);
+        root.sort_unstable();
+        let mut system = [unit::SYSTEM, unit::SYSTEM_REHEARSAL];
+        system.sort_unstable();
+        assert_eq!(root, system, "the root half, in the system journal");
+        // THE MANIFEST'S TWO FOR THE PERSON are the brain's own, so the
+        // units the brain starts are the ones followed.
+        assert_eq!(module::MANIFEST.units.run, Some(unit::RUN));
+        assert_eq!(module::MANIFEST.units.rehearse, Some(unit::REHEARSE));
+        // ROOT FIRST: the person's half blocks on it, so the arrival order of
+        // the two is the sequence's.
+        assert!(!HALVES[0].1 && HALVES[1].1, "root's half is followed first");
     }
 
     #[test]
@@ -1975,7 +2207,7 @@ mod tests {
         // declaration and can be long in either language; the window can be
         // narrow; neither may spill, because a compositor does not clip.
         let texts = texts();
-        let steps = declared::steps();
+        let steps = module::steps();
         assert!(!steps.is_empty(), "the declared table came out empty");
         let verdicts = [
             Verdict::Ran,
@@ -2008,7 +2240,7 @@ mod tests {
     #[test]
     fn a_step_row_says_the_same_thing_in_two_registers() {
         let texts = texts();
-        let step = declared::steps().first().expect("there are steps");
+        let step = module::steps().first().expect("there are steps");
         let pieces = step_row(step, &Verdict::Ran, 65, 80, &texts);
         // THE MARK, THE NAME, THE CLOCK AND THE WORD — four pieces, and the
         // clock only for a step that actually ran.
@@ -2022,10 +2254,71 @@ mod tests {
         // AND THE SECOND REGISTER CARRIES WHAT THE ROW CANNOT.
         let said = cursor_explains(step, &Verdict::Skipped("network".to_owned()), &texts);
         assert!(
-            said.contains(&texts.t(ronoctua_i18n::key::UPDATE_NEEDS_NETWORK)),
+            said.contains(&texts.t(key::SYSTEM_UPDATE_NEEDS_NETWORK)),
             "the reason for the skip did not reach the second record: {said}"
         );
         assert!(!said.starts_with('['), "a key with no text: {said}");
+        // AND A KIND THE SEQUENCE DOES NOT HAVE ADDS NOTHING — never a key
+        // made up of the word.
+        let unknown = cursor_explains(
+            step,
+            &Verdict::Skipped("a-kind-nobody-writes".to_owned()),
+            &texts,
+        );
+        assert_eq!(unknown, cursor_explains(step, &Verdict::Pending, &texts));
+        assert!(!unknown.contains('['), "a made-up key reached the screen");
+    }
+
+    /// THE NAME ON THE ROW IS THE STEP'S OWN KEY, the one the module declared
+    /// and the brain's page draws too — never a key this file builds.
+    #[test]
+    fn a_step_is_named_by_the_key_its_module_declared() {
+        let texts = texts();
+        for step in module::steps() {
+            let pieces = step_row(step, &Verdict::Pending, 0, 200, &texts);
+            let name = pieces.last().expect("a name");
+            assert_eq!(name.text, texts.t(step.name_key), "{}", step.id);
+            assert!(!name.text.starts_with('['), "`{}` has no name", step.id);
+            assert!(
+                !cursor_explains(step, &Verdict::Pending, &texts).starts_with('['),
+                "`{}` has no sentence",
+                step.id
+            );
+        }
+    }
+
+    /// THE THREE COMMANDS ARE THIS FILE'S, and the footer finds each by the
+    /// one question it asks — so neither it nor the leader spells an id.
+    #[test]
+    fn the_three_commands_are_one_table_and_the_footer_finds_each() {
+        let mut registry = ronoctua_cmd::Registry::fresh();
+        for c in COMMANDS {
+            registry
+                .register(*c)
+                .expect("a command the registry refuses");
+        }
+        assert_eq!(COMMANDS.len(), 3);
+        for c in COMMANDS {
+            assert!(order_of(c.id).is_some(), "`{}` is not dispatched", c.id);
+        }
+        assert_eq!(order_of(START), Some(Order::Start));
+        assert_eq!(order_of(OPEN), Some(Order::Open));
+        assert_eq!(order_of(WATCH), Some(Order::Watch));
+        assert_eq!(order_of("brain-open"), None);
+        // EVERY BINDING IS ONE OF THEM, and each of them has a key.
+        for (_, id, argument) in BINDINGS {
+            assert!(order_of(id).is_some(), "`{id}` is bound and not ours");
+            assert!(argument.is_none());
+        }
+        for c in COMMANDS {
+            assert!(
+                BINDINGS.iter().any(|(_, id, _)| *id == c.id),
+                "`{}` has no key",
+                c.id
+            );
+        }
+        // AND THE COMMAND THAT STARTS IT IS THE KEY THE VIEW TEACHES AS `u`.
+        assert!(OF_THE_VIEW.contains(&("u", START)));
     }
 
     #[test]
@@ -2069,7 +2362,7 @@ mod tests {
     /// A view of the declared steps with nothing reported — no file of the
     /// machine is read.
     fn a_view() -> View {
-        View::of(declared::steps(), Verdicts::default(), Vec::new())
+        View::of(module::steps(), Verdicts::default(), Vec::new())
     }
 
     fn key(notation: &str) -> Option<Press> {
@@ -2156,7 +2449,7 @@ mod tests {
             .iter()
             .map(|f| f.text.as_str())
             .collect();
-        assert_eq!(said, t.t(ronoctua_i18n::key::UPDATE_NO_OUTPUT));
+        assert_eq!(said, t.t(key::SYSTEM_UPDATE_NO_OUTPUT));
 
         for n in 0..50 {
             v.heard(format!("line {n}"));
@@ -2243,7 +2536,7 @@ mod tests {
         let (w, ui) = a_window();
         let hint = w.hint(&ui);
         let words: String = hint.iter().map(|p| p.text.clone()).collect();
-        for id in [START, ABORT, PROCEED, "update-output-end"] {
+        for id in [START, ABORT, PROCEED, "system-update-output-end"] {
             assert!(
                 words.contains(&ui.texts.t(id)),
                 "`{id}` is not taught: {words}"
@@ -2272,6 +2565,97 @@ mod tests {
         assert!(ui.orders().is_empty(), "an answer went to the footer");
         typed(&mut w, &mut ui, "ESC");
         assert!(ui.quit);
+    }
+
+    /// A PHOTOGRAPH'S WINDOW STARTS NOTHING (`photograph --door update`): its
+    /// `u` and the countdown's two answers are kept, in order, and nothing is
+    /// said as if they had gone out — and what it draws is what it was given,
+    /// the verdicts of the reports and the journals' lines, none of this
+    /// machine's.
+    ///
+    /// THE DEFECT THIS CATCHES: a camera that rebuilds the system. The
+    /// window's `u` is `begin`, which asks the brain and, without one,
+    /// systemd.
+    #[test]
+    fn a_photographs_window_reaches_nothing_and_draws_what_it_was_given() {
+        let steps = module::steps();
+        let (first, second) = (steps[0].id, steps[1].id);
+        let halves = vec![
+            format!("{first}\tran\t12\n"),
+            format!("{second}\trehearsed\t0\n"),
+        ];
+        let mut w = photographed(
+            &halves,
+            "would remove system generations 3 4\n\u{1b}[1mkept\u{1b}[0m 5 6\n",
+        );
+        assert_eq!(w.view.verdicts().of_step(first), (Verdict::Ran, 12));
+        assert_eq!(w.view.verdicts().of_step(second), (Verdict::Rehearsed, 0));
+        assert_eq!(w.view.scrollback().amount(), 2, "one line per line said");
+        assert_eq!(
+            w.view.scrollback().line(1),
+            Some("kept 5 6"),
+            "made safe as a journal's line is"
+        );
+        assert!(w.children.is_empty(), "a photograph follows no journal");
+        let mut ui = Ui::for_tests(texts());
+        for press in ["u", "a", "p"] {
+            typed(&mut w, &mut ui, press);
+            assert!(ui.message.is_none(), "`{press}` said something went out");
+        }
+        let kept = w.would_have();
+        assert_eq!(kept.len(), 3, "{kept:?}");
+        assert!(
+            kept[0].contains(module::ID)
+                && kept[1].ends_with("abort")
+                && kept[2].ends_with("proceed"),
+            "{kept:?}"
+        );
+        // AND THE WINDOW ON A SCREEN KEEPS NOTHING: it asked for real.
+        assert!(a_window().0.would_have().is_empty());
+    }
+
+    /// THE WINDOW'S SECOND REGISTER IS WRAPPED WHOLE, as the footer's region
+    /// wraps it, and the step rows start under its last line — where the
+    /// pointer finds them too.
+    ///
+    /// THE DEFECT THIS CATCHES: the window cut the sentence with an ellipsis
+    /// at its width, so the end of it — the trim's says what a rehearsal
+    /// shows — was in the footer and never in the window.
+    #[test]
+    fn the_windows_second_register_is_wrapped_whole_and_the_rows_follow_it() {
+        let (mut w, mut ui) = a_window();
+        let longest = (0..w.view.steps().len())
+            .max_by_key(|&n| ui.texts.t(w.view.steps()[n].does_key).len())
+            .expect("steps");
+        for _ in 0..longest {
+            typed(&mut w, &mut ui, "<down>");
+        }
+        assert_eq!(w.view.cursor(), longest);
+        let wrapped = w.view.register_lines(ui.columns, &ui.texts);
+        assert!(
+            wrapped.len() > 1,
+            "the longest sentence fits one line: {wrapped:?}"
+        );
+        assert_eq!(usize::from(w.register), wrapped.len());
+        let words = |s: &str| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            words(&wrapped.join(" ")),
+            words(&w.view.explains(&ui.texts).expect("a sentence")),
+            "the register is not the whole sentence"
+        );
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let middle = |line: u16| (f64::from(line) + 0.5) * line_px;
+        let first = ui.first_of_list() + w.register;
+        assert_eq!(w.at(&ui, 10.0, middle(first)), Some(w.step_offset));
+        assert_eq!(
+            w.at(&ui, 10.0, middle(first - 1)),
+            None,
+            "the register's last line is a step"
+        );
+        assert_eq!(
+            w.output_top(),
+            w.register + u16::try_from(w.steps_room()).expect("small")
+        );
     }
 
     /// THE OUTPUT MOVES ON THIS DOOR'S PAGE: `C-k` a page up from the tail,

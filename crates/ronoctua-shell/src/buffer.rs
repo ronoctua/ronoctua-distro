@@ -127,6 +127,18 @@ fn svg_key(side: u32, theme_position: usize, token: tokens::Color, svg: &str) ->
     format!("{side}:{theme_position}:{}:{svg}", token.name())
 }
 
+/// The side a `Command::Svg` is rasterised at, in PHYSICAL pixels: the
+/// square its rectangle of cells holds, times the window's scale — so the
+/// drawing is as sharp as the letters beside it, and a scale is a new key.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn svg_side_px(columns: u16, lines: u16, (cell_px, line_px): (f32, f32), by: u32) -> u32 {
+    let logical = (f32::from(columns) * cell_px)
+        .min(f32::from(lines) * line_px)
+        .max(1.0) as u32;
+    logical.saturating_mul(by.max(1))
+}
+
 /// The SVG's `currentColor` resolved to a value.
 ///
 /// # Why the substitution belongs to the host
@@ -169,6 +181,23 @@ struct Host {
     /// install made — started at the end of the turn by the door, off the
     /// loop (`Ui::launch_entry`), which says on THIS window what went wrong.
     to_launch: Vec<String>,
+    /// A question to put on this window's line at the end of the turn
+    /// (`Ui::ask`) — what a brain module's action asks before it is done: its
+    /// id is the action's command, which the answer comes back to
+    /// `Content::answered` under, and its words the key the module declared.
+    to_ask: Option<crate::line::Line>,
+    /// A sentence to put on this window's line at the end of the turn — what
+    /// the brain answered to something this window asked of it, a refusal
+    /// above all: said in the door that asked.
+    to_say: Option<String>,
+    /// The question on this window's line, as it was last DRAWN — under the
+    /// component's lines, where the door's message goes — and where each of
+    /// its two keys landed, for the pointer: a key drawn is a key a click
+    /// presses (`chrome::hint_marks`, the same `laid` the drawing reads).
+    question: Vec<crate::chrome::Piece>,
+    /// Which of the question's two keys the pointer rests on — lit, as every
+    /// shortcut under the pointer is, from the same marks a click reads.
+    question_lit: Option<&'static str>,
     /// The door's message, wrapped to the window — drawn on the lines under
     /// the component's, which it is rendered without while there is one.
     ///
@@ -509,7 +538,23 @@ struct Disks {
     /// it should not: the wording belongs where the bundle is, which is the
     /// same split `files::Report::Refused` already makes.
     said: Option<calloop_channel::Sender<Verdict>>,
+    /// A plan that asked for ENCRYPTION, waiting for its passphrase — and the
+    /// passphrase's first answer, waiting for the second.
+    ///
+    /// The passphrase is asked HERE, on this window's own line, twice: it is
+    /// never a field of the plan and never crosses into the component
+    /// (`buffers/format`), which only said yes.
+    sealing: Option<(
+        ronoctua_protocol::Plan,
+        Option<ronoctua_consent::keys::Secret>,
+    )>,
 }
+
+/// The line's ids for the passphrase of an encrypted format: asked, and asked
+/// again. Their questions are `ask-<id>`.
+const PASSPHRASE: &str = "format-encrypt-passphrase";
+/// See [`PASSPHRASE`].
+const PASSPHRASE_AGAIN: &str = "format-encrypt-again";
 
 /// What a format came back as.
 enum Verdict {
@@ -538,6 +583,7 @@ impl Disks {
             known: Vec::new(),
             rack: None,
             said: None,
+            sealing: None,
         }
     }
 }
@@ -573,7 +619,16 @@ struct Keyboards {
     /// coming back is turned into a kept one by the SAME numbering.
     shown: Option<ronoctua_pointers::Shown>,
     layouts: Vec<(String, Vec<String>)>,
+    /// The watch on the input devices' directory, kept for as long as the
+    /// window is open: dropped with it, the watcher's thread leaves.
+    _plugged: Option<ronoctua_files::notice::Notice>,
 }
+
+/// Where the kernel's input devices appear and go — `devtmpfs`, whose nodes
+/// are made through `vfs_mknod` and so are announced to inotify like any
+/// other file: a keyboard plugged in, a Bluetooth one pairing, a battery
+/// dying, each is an `eventN` created or deleted here.
+pub const INPUT_DEVICES: &str = "/dev/input";
 
 /// Every keyboard unit, plugged or remembered, as the buffer draws it.
 fn units_of(
@@ -661,6 +716,7 @@ impl Keyboards {
             cursors: Vec::new(),
             shown: None,
             layouts: Vec::new(),
+            _plugged: None,
         }
     }
 }
@@ -679,14 +735,39 @@ struct Brain {
     /// an index, never a name the buffer built — and an index checked against a
     /// stale list is the wrong task.
     tasks: Vec<String>,
-    /// The preferences as the daemon last reported them.
-    ///
-    /// Kept because `Ask::Tune` carries the WHOLE record and the component
-    /// sends ONE knob: the change is applied on top of what the brain last
-    /// said, so two screens changing two different fields do not undo each
-    /// other. It is also why the file the daemon writes never grows a field
-    /// this side invented.
-    prefs: ronoctua_brain::Prefs,
+    /// The notices of the last mind delivered, IN THE ORDER SENT
+    /// (`mind_wire::ranked`) — what `dismiss-notice`, `snooze-notice` and
+    /// `act-notice` index into, by the same discipline as `tasks`.
+    notices: Vec<Noticed>,
+    /// The module whose page the component asked to follow
+    /// (`request::watch-screen`), by id — `None` when no page is open.
+    watched: Option<String>,
+    /// The `screen-generation` the brain was last asked for the watched
+    /// module's page at: a mind whose generation moved asks again, and one
+    /// that did not asks nothing. An ask nobody answered forgets it, so the
+    /// next mind — the brain back — asks again; a REFUSAL keeps it, since the
+    /// same page asked again is refused again.
+    asked_at: Option<u64>,
+    /// The generation of the page last DELIVERED to the component for the
+    /// watched module: an older one arriving late is dropped here, by the
+    /// rule the component drops it by (`screened`), so the two never hold
+    /// different pages and an `act-row` index names the row that is drawn.
+    shown_at: Option<u64>,
+    /// The rows of the last module page delivered, counted across its
+    /// sections — `(row id, action id, second action id)` — what an
+    /// `act-row` (and an `act-row-also`) index names.
+    screen_rows: Vec<(String, String, String)>,
+    /// Where the page's answer comes back to the loop from its thread.
+    screens: Option<calloop_channel::Sender<Paged>>,
+    /// Where the brain's answer to a change comes back from its thread
+    /// (`brain::put`).
+    answers: Option<calloop_channel::Sender<crate::brain::Answer>>,
+    /// The action waiting for what its question asks, and the row it was
+    /// asked on — sent when the line answers, dropped when it is let go.
+    pending: Option<(crate::brain::Acting, Option<String>)>,
+    /// Whether the window was opened ABOUT a module (`brain-open <id>`) and
+    /// has not opened its page yet: the first mind does.
+    about_owed: bool,
     /// The machine's zone, read once.
     ///
     /// The component has none (invariant 11), so the dates are formatted here.
@@ -717,14 +798,131 @@ struct Brain {
     log: std::collections::VecDeque<ronoctua_brain::tail::Line>,
 }
 
+/// One notice as the component was sent it: whose, which, and what it
+/// offers — enough to answer an index without the mind in hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Noticed {
+    module: String,
+    id: String,
+    controls: Vec<String>,
+    dismiss: bool,
+    snooze: Option<u16>,
+}
+
+/// What came of asking the brain for a module's page, from the thread that
+/// asked.
+#[derive(Debug)]
+enum Paged {
+    /// The page, at the generation the brain says it is.
+    Screen {
+        module: String,
+        generation: u64,
+        screen: ronoctua_brain::module::Screen,
+    },
+    /// No page, and why — at the generation that was asked for.
+    Not {
+        module: String,
+        asked: u64,
+        answer: crate::brain::Answer,
+    },
+}
+
 impl Brain {
     fn fresh() -> Self {
         Self {
             tasks: Vec::new(),
-            prefs: ronoctua_brain::Prefs::default(),
+            notices: Vec::new(),
+            watched: None,
+            asked_at: None,
+            shown_at: None,
+            screen_rows: Vec::new(),
+            screens: None,
+            answers: None,
+            pending: None,
+            about_owed: true,
             zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
             last: None,
             log: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// The generation of the watched module's page in the last mind.
+    fn generation_of(&self, module: &str) -> Option<u64> {
+        self.last
+            .as_ref()
+            .and_then(|m| m.task(module))
+            .map(|t| t.screen_generation)
+    }
+
+    /// What a page that arrived becomes: the record to deliver, or `None`
+    /// when it is not the page followed or is OLDER than the one delivered
+    /// last — the component's own rule (`screened`), so the two never hold
+    /// different pages.
+    fn page_arrived(
+        &mut self,
+        paged: &Paged,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<ronoctua_protocol::ModuleScreen> {
+        let (module, generation) = match paged {
+            Paged::Screen {
+                module, generation, ..
+            } => (module.as_str(), *generation),
+            Paged::Not { module, asked, .. } => (module.as_str(), *asked),
+        };
+        if self.watched.as_deref() != Some(module) || self.shown_at.is_some_and(|s| s > generation)
+        {
+            return None;
+        }
+        self.shown_at = Some(generation);
+        Some(match paged {
+            Paged::Screen { screen, .. } => {
+                self.screen_rows = screen
+                    .sections
+                    .iter()
+                    .flat_map(|s| s.rows.iter())
+                    .map(|r| {
+                        (
+                            r.id.clone(),
+                            r.act.as_deref().unwrap_or_default().to_owned(),
+                            r.also.as_deref().unwrap_or_default().to_owned(),
+                        )
+                    })
+                    .collect();
+                crate::mind_wire::screen_of(module, generation, screen, &self.zone, texts)
+            }
+            // NO PAGE IS A SENTENCE ON THE PAGE, never an empty one: the rows
+            // go, and what the brain said takes their place. An ask NOBODY
+            // ANSWERED is forgotten, so the next mind — the brain back — asks
+            // again; a refusal is kept, since the same page asked again is
+            // refused again.
+            Paged::Not { answer, .. } => {
+                if *answer == crate::brain::Answer::Unreachable && self.asked_at == Some(generation)
+                {
+                    self.asked_at = None;
+                }
+                self.screen_rows.clear();
+                crate::mind_wire::refused_screen(
+                    module,
+                    generation,
+                    answer.sentence(texts).unwrap_or_default(),
+                )
+            }
+        })
+    }
+
+    /// One of a module's actions, as the last mind lists it.
+    fn acting(&self, module: &str, action: &str) -> crate::brain::Acting {
+        let asks = self
+            .last
+            .as_ref()
+            .and_then(|m| m.task(module))
+            .and_then(|t| t.actions.iter().find(|a| a.id == action))
+            .and_then(|a| a.asks.clone());
+        crate::brain::Acting {
+            module: module.to_owned(),
+            action: action.to_owned(),
+            command: format!("{module}-{action}"),
+            asks,
         }
     }
 
@@ -1031,7 +1229,11 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
 
         // The initial columns and rows are a guess; the `configure` brings the actual
         // size and the `render` runs again with it.
-        let list = instance.render(80, 24, Host::heights())?;
+        let list = instance.render(
+            ronoctua_tokens::space::TERMINAL_COLUMNS,
+            ronoctua_tokens::space::TERMINAL_LINES,
+            Host::heights(),
+        )?;
         tracing::info!(
             commands = list.commands.len(),
             height = list.height(crate::paint::heights()),
@@ -1108,6 +1310,10 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             file: file.map(std::path::Path::to_path_buf),
             paste_wanted: false,
             to_launch: Vec::new(),
+            to_ask: None,
+            to_say: None,
+            question: Vec::new(),
+            question_lit: None,
             said: Vec::new(),
             typing_seat: None,
             key_seat: 0,
@@ -1344,17 +1550,81 @@ pub fn host_it(path: &std::path::Path, file: Option<&std::path::Path>) -> Result
             } else {
                 tracing::warn!("could not hang the brain log's channel");
             }
+            // AND A MODULE'S OWN PAGE, when the component follows one: asked
+            // of the brain on a thread (`Ask::Screen`) whenever its generation
+            // moves, and handed back here — never a clock, and never a wait
+            // inside the loop that draws.
+            let (send, screens) = calloop_channel::channel::<Paged>();
+            if w.handle
+                .insert_source(screens, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(paged) = event {
+                        door.content.screen_arrived(paged);
+                    }
+                })
+                .is_ok()
+            {
+                if let Some(b) = host.brain.as_mut() {
+                    b.screens = Some(send);
+                }
+            } else {
+                tracing::warn!("could not hang the brain page's channel");
+            }
+            // AND WHAT THE BRAIN ANSWERED to a change asked from here — said on
+            // this window's line, a refusal above all (`brain::put`).
+            let (send, answers) = calloop_channel::channel::<crate::brain::Answer>();
+            if w.handle
+                .insert_source(answers, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(answer) = event {
+                        door.content.brain_answered(&answer);
+                    }
+                })
+                .is_ok()
+            {
+                if let Some(b) = host.brain.as_mut() {
+                    b.answers = Some(send);
+                }
+            } else {
+                tracing::warn!("could not hang the brain's answers");
+            }
         }
 
-        // THE KEYBOARDS ARRIVE ONCE, AND AGAIN AFTER EVERY CHANGE.
+        // THE KEYBOARDS ARRIVE ONCE, AND AGAIN AFTER EVERY CHANGE — of the
+        // remap, and of the MACHINE: a keyboard plugged in, or paired, while
+        // the window is open appears without anything being touched.
         //
-        // No thread and no clock: `/proc/bus/input/devices` is three kilobytes
-        // read at the moment somebody opens the window, and a keyboard plugged in
-        // while it is open is a case that costs a `udev` socket and a thread to
-        // catch. The buffer is re-sent the whole picture after every remap — which
-        // is when the numbers on screen actually change — and the header of
-        // `keyboards_arrived` says so.
+        // AN EVENT AND NOT A CLOCK: the input devices' directory is watched
+        // (`INPUT_DEVICES`), on the watcher's own thread, and a burst — one
+        // keyboard is several nodes — is one nudge. The answer is the same
+        // three kilobytes of `/proc/bus/input/devices` the window opened with,
+        // sent whole.
         if host.keyboards.is_some() {
+            let (told, heard) = calloop_channel::channel::<()>();
+            let hung = w
+                .handle
+                .insert_source(heard, |event, (), door: &mut Door<Host>| {
+                    if let calloop_channel::Event::Msg(()) = event {
+                        door.content.keyboards_arrived();
+                        door.ui.ask_paint();
+                    }
+                })
+                .is_ok();
+            let watch = hung
+                .then(|| {
+                    ronoctua_files::notice::Notice::on_dirs(
+                        &[std::path::PathBuf::from(INPUT_DEVICES)],
+                        &[],
+                        ronoctua_files::notice::Pace::Coalesced,
+                        move || told.send(()).is_ok(),
+                    )
+                    .map_err(
+                        |e| tracing::warn!(error = %e, "keyboards plugged later will not appear"),
+                    )
+                    .ok()
+                })
+                .flatten();
+            if let Some(k) = host.keyboards.as_mut() {
+                k._plugged = watch;
+            }
             host.keyboards_arrived();
         }
 
@@ -1378,6 +1648,7 @@ fn run_format(
     whole: bool,
     unmount_first: &[String],
     name: &str,
+    passphrase: Option<&ronoctua_consent::keys::Secret>,
 ) -> Verdict {
     let refused = |which, why: String| Verdict::Refused {
         which,
@@ -1395,14 +1666,22 @@ fn run_format(
     // from it — which is the write-half-done this repository already refuses
     // once, in `Doing::Eject`.
     for at in unmount_first {
-        if let Err(e) = manager.unmount(at) {
+        // `put_away` WITHOUT THE POWER: unmounted, and an encrypted disk's
+        // container locked again after what came out of it.
+        if let Err(e) = manager.put_away(at, true) {
             return refused(ronoctua_disks::refusal(&e), e.to_string());
         }
     }
 
-    match manager.format(device, filesystem, label, whole) {
+    match manager.format(device, filesystem, label, whole, passphrase) {
         Ok(()) => {
-            tracing::info!(device, filesystem, whole, "formatted");
+            tracing::info!(
+                device,
+                filesystem,
+                whole,
+                encrypted = passphrase.is_some(),
+                "formatted"
+            );
             Verdict::Done
         }
         Err(e) => {
@@ -1499,6 +1778,10 @@ fn publish_keymap(
         .collect::<Vec<_>>()
         .join("\n");
     let ids: Vec<String> = states.iter().map(|s| s.id.clone()).collect();
+    let tones: Vec<&'static str> = states
+        .iter()
+        .map(|s| crate::leader::tone_word(s.tone))
+        .collect();
 
     let built = std::thread::Builder::new()
         .name("keymap".into())
@@ -1523,7 +1806,13 @@ fn publish_keymap(
                     // — and a footer that restarted has nothing at all.
                     None if line.trim() == "states" => {
                         let n = current.load(std::sync::atomic::Ordering::Relaxed);
-                        let now = ids.get(n).cloned().unwrap_or_default();
+                        // `<id> <tone>`: the tone rides on the same line.
+                        let now = ids
+                            .get(n)
+                            .map(|id| {
+                                format!("{id} {}", tones.get(n).copied().unwrap_or("standard"))
+                            })
+                            .unwrap_or_default();
                         if listed.is_empty() {
                             now
                         } else {
@@ -1619,7 +1908,15 @@ impl Host {
     /// drawn: a half-typed colour (`#8ab`) makes the preview disappear
     /// while one types, which is true information. Inventing a drawing
     /// in its place would be worse.
-    fn vector_ones(&mut self) -> Vec<VectorDrawing> {
+    ///
+    /// # Rasterised at the PHYSICAL side
+    ///
+    /// The drawing is laid out in logical cells and rasterised at that box
+    /// times the window's scale, so it is as sharp as the letters beside it
+    /// (`crate::hidpi`); the key carries the physical side, so a change of
+    /// scale asks a question the cache has not been asked.
+    fn vector_ones(&mut self, scale: i32) -> Vec<VectorDrawing> {
+        let by = u32::try_from(scale.max(1)).unwrap_or(1);
         use ronoctua_protocol::Command;
         // THE SAME cell as the click's and the text's — see [`crate::paint::cell`].
         // A second calculation here would make the drawing land in one place and the click find it
@@ -1646,10 +1943,7 @@ impl Host {
             };
             // THE SIDE IS COMPUTED FIRST, because it is part of the key now —
             // see `svg_key`.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let side = (f32::from(*columns) * cell_px)
-                .min(f32::from(*lines) * line_height)
-                .max(1.0) as u32;
+            let side = svg_side_px(*columns, *lines, (cell_px, line_height), by);
             let key = svg_key(side, tokens::theme::palette(), token, svg);
             if !self.rasterized.contains_key(&key) {
                 // THE SIDE IN PIXELS comes from the rectangle of CELLS the buffer
@@ -1686,7 +1980,9 @@ impl Host {
                 // CENTRE, and do not fit: `fit_into` would grow to the edge and would
                 // undo the rasterisation at the natural size, which is what makes
                 // the size adjustment show.
-                .centre(r.width, r.height),
+                // IN LOGICAL PIXELS: the picture holds `by` of its pixels per
+                // logical one.
+                .centre((r.width / by).max(1), (r.height / by).max(1)),
                 key,
             });
         }
@@ -1704,7 +2000,14 @@ impl Host {
     fn draw(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         self.width = ui.width;
         self.height = ui.height;
-        self.said = self.said_of(ui.message.as_deref());
+        // A QUESTION ON THE LINE TAKES THE MESSAGE'S PLACE: it is what the
+        // keyboard is typing into, and the door routes every key to it.
+        self.question = self.question_of(ui);
+        self.said = if self.question.is_empty() {
+            self.said_of(ui.message.as_deref())
+        } else {
+            Vec::new()
+        };
         // A THEME CHOSEN SINCE drops the old theme's CPU copies. The key
         // already tells the two apart (`svg_key`), so this is memory and not
         // correctness.
@@ -1729,6 +2032,14 @@ impl Host {
             .spans
             .extend(spans_of(&self.list, &self.texts, columns, lines));
         canvas.spans.extend(said_spans(&self.said, lines));
+        // THE KEY UNDER THE POINTER LIT, from the marks the click reads.
+        canvas.spans.extend(crate::chrome::hint_spans(
+            &crate::chrome::lit(&self.question, self.question_lit),
+            ronoctua_render::Size::Px(tokens::text::size()),
+            tokens::space::CONTENT_INSET,
+            tokens::space::CONTENT_INSETY + lines,
+            columns,
+        ));
         // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
         // after it stays on top. THE DRAWING BELOW THE TEXT, as in the footer:
         // what is written over it has to stay legible. The canvas draws in
@@ -1747,7 +2058,7 @@ impl Host {
                 canvas.bar(Some(crate::bars::Track::of((g.x, g.y, g.width, g.height))));
             }
         }
-        for v in self.vector_ones() {
+        for v in self.vector_ones(ui.scale) {
             let rasterized = &self.rasterized;
             if canvas.upload(&v.key, || rasterized.get(&v.key).cloned()) {
                 canvas.pictures.push((v.key, v.area));
@@ -1893,9 +2204,72 @@ impl Host {
             .saturating_sub(u32::from(tokens::space::CONTENT_INSETY) * 2)
             .clamp(1, u32::from(u16::MAX)) as u16;
         // THE DOOR'S MESSAGE TAKES ITS LINES FROM THE COMPONENT, which is told
-        // a window that much shorter — nothing it draws is covered.
-        let said = u16::try_from(self.said.len()).unwrap_or(u16::MAX);
+        // a window that much shorter — nothing it draws is covered. And so
+        // does a question, which is one line.
+        let said = u16::try_from(self.said.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(u16::from(!self.question.is_empty()));
         (columns, lines.saturating_sub(said).max(1))
+    }
+
+    /// What of the question's line is at `(x, y)`: `None` off the line, and
+    /// on it the key there, if any — the ONE answer the lit key and the click
+    /// both read, off the pieces as they were drawn.
+    fn question_at(&self, x: f64, y: f64) -> Option<Option<crate::chrome::Mark>> {
+        if self.question.is_empty() || x < 0.0 || y < 0.0 {
+            return None;
+        }
+        let (width, height) = cell();
+        let (columns, lines) = self.context_of();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (column, line) = (
+            (x / f64::from(width)) as u16,
+            (y / f64::from(height)) as u16,
+        );
+        question_mark_at(
+            &self.question,
+            (column, line),
+            tokens::space::CONTENT_INSETY + lines,
+            columns,
+        )
+    }
+
+    /// The question on the door's line as pieces this wide — none when
+    /// nothing is being asked.
+    fn question_of(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        let Some(line) = ui.asking.as_ref() else {
+            return Vec::new();
+        };
+        let (cell_width_px, _) = cell();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let columns = ((self.width as f32 / cell_width_px) as u32)
+            .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
+            .clamp(1, u32::from(u16::MAX)) as u16;
+        crate::door::list::question_pieces(line, &ui.texts, columns)
+    }
+
+    /// A press on the question's line: its two keys, as the keyboard presses
+    /// them — `RET` answers with what is typed, `ESC` lets it go. `true` when
+    /// the press was the line's.
+    ///
+    /// Read off the SAME layout the drawing used (`chrome::hint_marks`, over
+    /// the one `laid`), so the key lit is the key the click takes.
+    fn question_pressed(&mut self, ui: &mut Ui, x: f64, y: f64) -> bool {
+        let Some(mark) = self.question_at(x, y) else {
+            return false;
+        };
+        let Some(crate::chrome::Act::Key(key)) = mark.and_then(|m| m.press) else {
+            return true;
+        };
+        let Some(asked) = ui.asking.take() else {
+            return true;
+        };
+        if ronoctua_keymap::Key::parse("RET").is_ok_and(|k| k == key) {
+            self.answered(ui, asked.id, &asked.text);
+        } else {
+            self.unanswered(ui, asked.id);
+        }
+        true
     }
 
     /// The door's message, as the lines it is drawn on at this width — at most
@@ -2030,10 +2404,10 @@ impl Host {
     /// and the whole of `nix run .#dev`'s single-buffer mode work. A window that
     /// refused to run without a modeline would be a buffer that needs chrome.
     fn tell_the_footer(&self) {
-        let Some(id) = self.states.get(self.now()).map(|s| s.id.as_str()) else {
+        let Some(state) = self.states.get(self.now()) else {
             return;
         };
-        let order = format!("state {} {id}", std::process::id());
+        let order = crate::door::state_order(std::process::id(), &state.id, state.tone);
         if let Err(e) = crate::leader::send_it(&order) {
             tracing::debug!(error = %e, "no footer to tell the state to");
         }
@@ -2406,9 +2780,239 @@ impl Host {
             R::RunTask | R::RehearseTask | R::AbortTask => {
                 self.task_demand(demand.what, demand.target);
             }
-            R::Proceed => Self::tell_brain(&ronoctua_brain::Ask::Proceed),
-            R::Postpone => Self::tell_brain(&ronoctua_brain::Ask::Postpone),
+            // AND WHAT THEY SAY is what the footer's line says for the same
+            // two answers: both doors do the same.
+            R::Proceed => self.put_brain(
+                ronoctua_brain::Ask::Proceed,
+                Some(ronoctua_i18n::key::ECHO_BRAIN_PROCEEDING),
+            ),
+            R::Postpone => self.put_brain(
+                ronoctua_brain::Ask::Postpone,
+                Some(ronoctua_i18n::key::ECHO_BRAIN_POSTPONED),
+            ),
+            // THE MODULES' SIX, each an index into a list this host sent.
+            R::WatchScreen => self.watch_screen(demand.target),
+            R::ActRow => self.act_row(demand.target, false),
+            R::ActRowAlso => self.act_row(demand.target, true),
+            R::ActPage => self.act_page(demand.target),
+            R::DismissNotice | R::SnoozeNotice | R::ActNotice => {
+                self.notice_demand(demand.what, demand.target);
+            }
         }
+    }
+
+    /// Which module's page the component follows now: `0` stops, and any
+    /// other target is a 1-based index into the tasks sent — asked of the
+    /// brain at once, and again whenever its generation moves.
+    fn watch_screen(&mut self, target: u64) {
+        let Some(b) = self.brain.as_mut() else {
+            return;
+        };
+        let module = index_of(target).and_then(|n| b.tasks.get(n)).cloned();
+        if target != 0 && module.is_none() {
+            tracing::warn!(target, "a page asked for a task that is not in the list");
+        }
+        b.watched = module;
+        b.asked_at = None;
+        b.shown_at = None;
+        b.screen_rows.clear();
+        self.ask_screen();
+    }
+
+    /// Asks the brain for the watched module's page, on a thread — when its
+    /// generation moved since the last ask, and never otherwise.
+    fn ask_screen(&mut self) {
+        let Some(b) = self.brain.as_mut() else {
+            return;
+        };
+        let Some(module) = b.watched.clone() else {
+            return;
+        };
+        // A MODULE THE MIND NO LONGER LISTS has no page to ask for — and
+        // asking on every mind for one would be a thread per beat.
+        let Some(generation) = b.generation_of(&module) else {
+            return;
+        };
+        if b.asked_at == Some(generation) {
+            return;
+        }
+        let Some(send) = b.screens.clone() else {
+            return;
+        };
+        b.asked_at = Some(generation);
+        let built = std::thread::Builder::new()
+            .name("brain-page".into())
+            .spawn(move || {
+                let asked = ronoctua_brain::Ask::Screen {
+                    module: module.clone(),
+                };
+                let paged = match ronoctua_brain::client::ask(&asked) {
+                    Ok(ronoctua_brain::Say::Screen {
+                        module,
+                        generation: at,
+                        screen,
+                    }) => Paged::Screen {
+                        module,
+                        generation: at,
+                        screen,
+                    },
+                    // A MIND IS NOT A PAGE: the protocol drifted, and the page
+                    // says the brain did not answer rather than draw nothing.
+                    Ok(ronoctua_brain::Say::Mind { .. }) => {
+                        tracing::warn!(%module, "the brain answered a page with a mind");
+                        Paged::Not {
+                            module,
+                            asked: generation,
+                            answer: crate::brain::Answer::Unreachable,
+                        }
+                    }
+                    other => {
+                        let answer = crate::brain::answer_from(other, None);
+                        tracing::warn!(%module, ?answer, "no page from the brain");
+                        Paged::Not {
+                            module,
+                            asked: generation,
+                            answer,
+                        }
+                    }
+                };
+                let _ = send.send(paged);
+            });
+        if let Err(e) = built {
+            tracing::error!(error = %e, "could not start the page's thread");
+            // NOTHING WILL COME BACK, so nothing is waited for: the next mind
+            // asks again.
+            if let Some(b) = self.brain.as_mut() {
+                b.asked_at = None;
+            }
+        }
+    }
+
+    /// A module's page arrived from its thread — or why none did. Delivered
+    /// only while it is still the page followed, and never OLDER than the one
+    /// delivered last: two asks can answer out of order, and a host holding
+    /// one page's rows while the component draws another's would act on a row
+    /// nobody sees.
+    fn screen_arrived(&mut self, paged: Paged) {
+        let Some(b) = self.brain.as_mut() else {
+            return;
+        };
+        if let Some(over) = b.page_arrived(&paged, &self.texts) {
+            self.deliver(&ronoctua_protocol::Input::ModuleScreen(Box::new(over)));
+        }
+    }
+
+    /// The action on a row of the followed page, by its index across the
+    /// page's sections — its press's, or its `also` (the second action).
+    fn act_row(&mut self, target: u64, also: bool) {
+        let Some(b) = self.brain.as_ref() else {
+            return;
+        };
+        let (Some(module), Some((row, act, second))) = (
+            b.watched.clone(),
+            index_of(target).and_then(|n| b.screen_rows.get(n)).cloned(),
+        ) else {
+            tracing::warn!(target, "an action for a row that is not on the page");
+            return;
+        };
+        let action = if also { second } else { act };
+        if action.is_empty() {
+            tracing::warn!(target, also, "a row with no such action was asked to act");
+            return;
+        }
+        let acting = b.acting(&module, &action);
+        self.act(acting, Some(row));
+    }
+
+    /// One of the followed module's own actions, by its index in its list.
+    fn act_page(&mut self, target: u64) {
+        let Some(b) = self.brain.as_ref() else {
+            return;
+        };
+        let Some(module) = b.watched.clone() else {
+            return;
+        };
+        let action = b
+            .last
+            .as_ref()
+            .and_then(|m| m.task(&module))
+            .and_then(|t| index_of(target).and_then(|n| t.actions.get(n)))
+            .map(|a| a.id.clone());
+        let Some(action) = action else {
+            tracing::warn!(target, "an action that is not on the page");
+            return;
+        };
+        let acting = b.acting(&module, &action);
+        self.act(acting, None);
+    }
+
+    /// The notice at an index of the list sent: put away, put off, or its
+    /// first control — each only when the notice offers it.
+    fn notice_demand(&mut self, what: ronoctua_protocol::Request, target: u64) {
+        use ronoctua_protocol::Request as R;
+        let Some(b) = self.brain.as_ref() else {
+            return;
+        };
+        let Some(n) = index_of(target).and_then(|i| b.notices.get(i)).cloned() else {
+            tracing::warn!(target, "a request for a notice that is not in the list");
+            return;
+        };
+        match what {
+            R::DismissNotice if n.dismiss => self.put_brain(
+                ronoctua_brain::Ask::Dismiss {
+                    module: n.module,
+                    notice: n.id,
+                },
+                Some(ronoctua_i18n::key::ECHO_BRAIN_DISMISSED),
+            ),
+            R::SnoozeNotice => match n.snooze {
+                Some(minutes) => self.put_brain(
+                    ronoctua_brain::Ask::Snooze {
+                        module: n.module,
+                        notice: n.id,
+                        minutes,
+                    },
+                    Some(ronoctua_i18n::key::ECHO_BRAIN_SNOOZED),
+                ),
+                None => tracing::warn!(target, "a snooze the notice does not offer"),
+            },
+            R::ActNotice => match n.controls.first() {
+                Some(action) => {
+                    let acting = b.acting(&n.module, action);
+                    self.act(acting, None);
+                }
+                None => tracing::warn!(target, "an action the notice does not offer"),
+            },
+            _ => tracing::warn!(target, ?what, "the notice does not offer that"),
+        }
+    }
+
+    /// A module's action: sent at once, or — when it asks a question first —
+    /// the question on this window's line, and sent with its answer.
+    fn act(&mut self, acting: crate::brain::Acting, row: Option<String>) {
+        if acting.asks.is_some() {
+            // IN THE WORDS OF THE KEY ITS MODULE DECLARED, under the action's
+            // command — the footer's line asks the same way.
+            match crate::brain::question_of(&acting) {
+                Some((id, asks)) => {
+                    self.to_ask = Some(crate::line::Line::asking(id, asks));
+                    if let Some(b) = self.brain.as_mut() {
+                        b.pending = Some((acting, row));
+                    }
+                    self.owed = true;
+                }
+                None => {
+                    tracing::warn!(command = %acting.command, "no question for the action");
+                    self.to_say = Some(self.texts.t(ronoctua_i18n::key::ECHO_BRAIN_NO_ACTION));
+                    self.owed = true;
+                }
+            }
+            return;
+        }
+        self.put_brain(
+            act_ask(&acting, row, None),
+            Some(ronoctua_i18n::key::ECHO_BRAIN_TAKEN),
+        );
     }
 
     /// Passes one of the buffer's task demands on to the brain, once the index
@@ -2454,22 +3058,26 @@ impl Host {
             // Unreachable by construction: `ask` only routes those three here.
             _ => return,
         };
-        Self::tell_brain(&ask);
+        // WHAT IT DID IS ON THE PAGE — the row running, queued, stopped — so
+        // only a refusal is said.
+        self.put_brain(ask, None);
     }
 
-    /// One preference the person changed, applied on top of what the daemon
-    /// last said and sent back whole.
+    /// One preference the person changed, sent to the daemon KNOB BY KNOB.
     ///
-    /// # Why the whole record goes back
+    /// # Why one knob and not the whole record
     ///
-    /// Because that is what `Ask::Tune` carries, and the reason it does is on
-    /// the other side: one shape to validate instead of one message per
-    /// preference. What this function must not do is BUILD one — the base is
-    /// the brain's own last answer, so a field this screen never touched comes
-    /// back exactly as it was.
+    /// It was the whole record (`Ask::Tune`), built here on top of the
+    /// preferences the daemon last reported — and built from the SHARED
+    /// default whenever the task had no entry of its own (`Prefs::mine`). A
+    /// watch switched off and on again from this page came back as a weekly
+    /// run with a minute of countdown it never had. One knob is applied by the
+    /// daemon, which is the one place that knows the module's own defaults,
+    /// and a step's state needs no default here either: the daemon turns "on"
+    /// into an exception against the step it declared.
     fn tune(&mut self, setting: &ronoctua_protocol::Setting) {
         use ronoctua_protocol::Knob;
-        let Some(b) = self.brain.as_mut() else {
+        let Some(b) = self.brain.as_ref() else {
             return;
         };
         // THE TASK IS CHECKED against the list actually sent, exactly as an
@@ -2479,55 +3087,30 @@ impl Host {
             tracing::warn!(task = %setting.task, "a preference for a task that is not in the list");
             return;
         }
-        let mut prefs = b.prefs.clone();
-        {
-            let mine = prefs.mine(&setting.task);
-            match &setting.knob {
-                Knob::IntervalDays(days) => mine.interval_days = *days,
-                Knob::PartOfDay(part) => mine.part_of_day = crate::brain::part_back(*part),
-                Knob::Enabled(on) => mine.enabled = *on,
-                // A SET OF EXCEPTIONS, and not a list of what runs: the order
-                // and the contents belong to the task, so a step added by a
-                // later version takes its declared default instead of being
-                // missing from everybody's file. `on` is the state the screen
-                // wants, and not a toggle — a toggle sent twice by a key that
-                // repeated would land back where it started with nobody the
-                // wiser.
-                //
-                // AND THE STATE HAS TO BE TURNED INTO AN EXCEPTION, which
-                // needs the declared default. The default is in the mind this
-                // host is holding; without it the file was written as though
-                // every step ships on, which is what put "you changed" on six
-                // untouched rows. A step this host has never heard of is left
-                // alone rather than guessed at.
-                Knob::Step(switch) => {
-                    let ships_on = b.last.as_ref().and_then(|m| {
-                        m.tasks
-                            .iter()
-                            .find(|t| t.id == setting.task)
-                            .and_then(|t| t.steps.iter().find(|s| s.id == switch.id))
-                            .map(|s| s.on_by_default)
-                    });
-                    if let Some(ships_on) = ships_on {
-                        if switch.on == ships_on {
-                            mine.steps_flipped.remove(&switch.id);
-                        } else {
-                            mine.steps_flipped.insert(switch.id.clone());
-                        }
-                    } else {
-                        tracing::warn!(
-                            task = %setting.task,
-                            step = %switch.id,
-                            "a step this host has not been told about; left alone"
-                        );
-                    }
-                }
-                Knob::ResetSteps => mine.steps_flipped.clear(),
+        let knob = match &setting.knob {
+            Knob::IntervalDays(days) => ronoctua_brain::Knob::IntervalDays(*days),
+            Knob::PartOfDay(part) => {
+                ronoctua_brain::Knob::PartOfDay(crate::brain::part_back(*part))
             }
-        }
-        Self::tell_brain(&ronoctua_brain::Ask::Tune {
-            prefs: Box::new(prefs),
-        });
+            Knob::Enabled(on) => ronoctua_brain::Knob::Enabled(*on),
+            // `on` IS THE STATE THE SCREEN WANTS, and not a toggle — a toggle
+            // sent twice by a key that repeated would land back where it
+            // started with nobody the wiser.
+            Knob::Step(switch) => ronoctua_brain::Knob::Step {
+                id: switch.id.clone(),
+                on: switch.on,
+            },
+            Knob::ResetSteps => ronoctua_brain::Knob::ResetSteps,
+        };
+        // THE PAGE SHOWS THE CHANGE, so only a refusal is said: a cadence a
+        // task does not keep, a step it does not have.
+        self.put_brain(
+            ronoctua_brain::Ask::Set {
+                task: setting.task.clone(),
+                knob,
+            },
+            None,
+        );
     }
 
     /// Says it to the daemon, and says so in the log when it cannot.
@@ -2536,9 +3119,33 @@ impl Host {
     /// these needs an answer, and waiting for one that never comes would freeze
     /// this window's loop. What comes back arrives on the watch stream, which
     /// is where the screen reads it anyway.
-    fn tell_brain(what: &ronoctua_brain::Ask) {
-        if let Err(e) = crate::brain::tell(what) {
-            tracing::error!(error = %e, ?what, "the brain did not take the request");
+    /// Asks the brain for a change OFF THE LOOP (`brain::put`), and says what
+    /// came of it on this window's line when it comes back — `taken` when it
+    /// went well, and whatever the brain said when it did not.
+    ///
+    /// # Why every ask here waits for its answer
+    ///
+    /// Because the brain refuses — a notice no longer up, an action its module
+    /// declined, a run of a module that only watches — and a request told
+    /// into a socket nobody reads was a key that did nothing and said nothing.
+    /// A refusal is a sentence, said in the door that asked.
+    fn put_brain(&mut self, ask: ronoctua_brain::Ask, taken: Option<&'static str>) {
+        let started = self
+            .brain
+            .as_ref()
+            .and_then(|b| b.answers.clone())
+            .is_some_and(|back| crate::brain::put(ask, taken, back));
+        if !started {
+            self.to_say = crate::brain::Answer::Unreachable.sentence(&self.texts);
+            self.owed = true;
+        }
+    }
+
+    /// The brain answered something this window asked of it.
+    fn brain_answered(&mut self, answer: &crate::brain::Answer) {
+        if let Some(said) = answer.sentence(&self.texts) {
+            self.to_say = Some(said);
+            self.owed = true;
         }
     }
 
@@ -2549,6 +3156,7 @@ impl Host {
     /// and what is being agreed about here is when the machine will rebuild
     /// itself.
     fn mind_arrived(&mut self, mind: &ronoctua_brain::Mind) {
+        let mut found = false;
         let over = {
             let Some(b) = self.brain.as_mut() else {
                 return;
@@ -2562,12 +3170,54 @@ impl Host {
                 return;
             }
             b.last = Some(mind.clone());
+            let mut over = crate::brain::mind_of(mind, &b.zone, &self.texts);
+            // WHAT THIS WINDOW WAS OPENED ABOUT GOES FIRST — a mark's click
+            // names its module — the arrangement the disks and keyboards
+            // buffers have: ordering is the host's business, and the index
+            // gate below reads the order sent.
+            if let Some(about) = self.file.as_ref().map(|p| p.to_string_lossy().into_owned())
+                && let Some(at) = over.tasks.iter().position(|t| t.id == about)
+            {
+                let chosen = over.tasks.remove(at);
+                over.tasks.insert(0, chosen);
+                found = true;
+            }
             b.tasks.clear();
-            b.tasks.extend(mind.tasks.iter().map(|t| t.id.clone()));
-            b.prefs.clone_from(&mind.prefs);
-            crate::brain::mind_of(mind, &b.zone, &self.texts)
+            b.tasks.extend(over.tasks.iter().map(|t| t.id.clone()));
+            b.notices = crate::mind_wire::ranked(mind)
+                .into_iter()
+                .map(|n| Noticed {
+                    module: n.module.clone(),
+                    id: n.what.id.to_string(),
+                    controls: n.what.controls.iter().map(ToString::to_string).collect(),
+                    dismiss: n.what.dismiss,
+                    snooze: n.what.snooze.first().copied(),
+                })
+                .collect();
+            over
         };
         self.deliver(&ronoctua_protocol::Input::Mind(Box::new(over)));
+        // AND THE MODULE IT WAS OPENED ABOUT, on the first mind: its page,
+        // which the component opens by the state it declared for a task's page
+        // — and only when that module IS in the list: a page opened on the
+        // first task in its place would be somebody else's page.
+        // A MIND WITH NO MODULES YET is not the answer: it waits for one that
+        // has them.
+        let opens = self.brain.as_mut().is_some_and(|b| {
+            if !b.about_owed || b.tasks.is_empty() {
+                return false;
+            }
+            b.about_owed = false;
+            if self.file.is_some() && !found {
+                tracing::warn!(about = ?self.file, "the brain has no module by that name");
+            }
+            found
+        });
+        if opens {
+            self.deliver(&ronoctua_protocol::Input::EnterState("task".to_owned()));
+        }
+        // A PAGE FOLLOWED WHOSE GENERATION MOVED is asked for again.
+        self.ask_screen();
     }
 
     /// Lines of the daemon's own log arrived.
@@ -2592,7 +3242,7 @@ impl Host {
     /// state that could go out of step, and the list is short enough that
     /// sending it whole costs less than being wrong about it.
     fn queue_arrived(&mut self, jobs: &[ronoctua_transfers::Job]) {
-        let queue = crate::transfers::queue_of(jobs);
+        let queue = crate::transfers::queue_of(jobs, &self.texts);
         if let Some(q) = self.queue.as_mut() {
             q.took(jobs);
         }
@@ -2655,10 +3305,10 @@ impl Host {
     /// # Why it reads the kernel every time
     ///
     /// `/proc/bus/input/devices` is three kilobytes and a parse. A keyboard
-    /// arrives when somebody plugs it in and leaves when the battery dies, and
-    /// there is no signal for either — udev would be a socket and a thread for
-    /// a list nobody looks at while it changes. Reading it at every delivery
-    /// costs less than being wrong about which keyboards exist.
+    /// arrives when somebody plugs it in and leaves when the battery dies;
+    /// the watch on [`INPUT_DEVICES`] is what says so while the window is open,
+    /// and every remap delivers again. Reading it at every delivery costs less
+    /// than being wrong about which keyboards exist.
     fn keyboards_arrived(&mut self) {
         if self.keyboards.is_none() {
             return;
@@ -2983,6 +3633,78 @@ impl Host {
     /// counts: the buffer is a separate binary and a guard that lives inside
     /// the thing being guarded holds until somebody writes a second one.
     fn format(&mut self, plan: &ronoctua_protocol::Plan) {
+        self.format_with(plan, None);
+    }
+
+    /// The passphrase's two answers, for a plan that asked for encryption.
+    ///
+    /// The first is kept, the second compared with it; the plan is carried
+    /// out only when they agree, and the buffer is told in words when they do
+    /// not — a disk encrypted under a passphrase mistyped once is a disk
+    /// nobody opens again.
+    fn sealed(&mut self, id: &'static str, text: &str) -> bool {
+        let Some(d) = self.disks.as_mut() else {
+            return false;
+        };
+        let Some((plan, first)) = d.sealing.take() else {
+            return false;
+        };
+        match (id, first) {
+            (PASSPHRASE, None) => {
+                // AN EMPTY ANSWER IS NO PASSPHRASE, and said as that: there
+                // was no second one for it to differ from.
+                if text.is_empty() {
+                    let said = self.texts.t(ronoctua_i18n::key::FORMAT_ENCRYPT_LET_GO);
+                    self.deliver(&ronoctua_protocol::Input::Formatted(
+                        ronoctua_protocol::Outcome {
+                            done: false,
+                            trouble: said,
+                        },
+                    ));
+                    return true;
+                }
+                d.sealing = Some((plan, Some(ronoctua_consent::keys::Secret::new(text))));
+                self.to_ask = Some(crate::line::Line::new(PASSPHRASE_AGAIN, true, None));
+                self.owed = true;
+                true
+            }
+            (PASSPHRASE_AGAIN, Some(first)) => {
+                if first.expose() == text {
+                    self.format_with(&plan, Some(first));
+                } else {
+                    let said = self.texts.t(ronoctua_i18n::key::FORMAT_ENCRYPT_DIFFER);
+                    self.deliver(&ronoctua_protocol::Input::Formatted(
+                        ronoctua_protocol::Outcome {
+                            done: false,
+                            trouble: said,
+                        },
+                    ));
+                }
+                true
+            }
+            (_, first) => {
+                d.sealing = Some((plan, first));
+                false
+            }
+        }
+    }
+
+    /// [`Host::format`], with the passphrase an encrypted plan was answered
+    /// with — or, for one that asked for encryption and has none yet, the
+    /// question for it.
+    fn format_with(
+        &mut self,
+        plan: &ronoctua_protocol::Plan,
+        passphrase: Option<ronoctua_consent::keys::Secret>,
+    ) {
+        if plan.encrypt && passphrase.is_none() {
+            if let Some(d) = self.disks.as_mut() {
+                d.sealing = Some((plan.clone(), None));
+                self.to_ask = Some(crate::line::Line::new(PASSPHRASE, true, None));
+                self.owed = true;
+            }
+            return;
+        }
         let Some(d) = self.disks.as_ref() else {
             return;
         };
@@ -3044,7 +3766,13 @@ impl Host {
                 first.extend(
                     r.volumes
                         .iter()
-                        .filter(|v| v.mounted())
+                        // AND AN ENCRYPTED DISK OPEN ON IT: its container
+                        // holds the partition, and udisks refuses to write
+                        // under it until it is locked again.
+                        .filter(|v| {
+                            v.mounted()
+                                || v.encrypted() == Some(ronoctua_disks::Encrypted::Unlocked)
+                        })
                         .filter(|v| {
                             drive.is_some()
                                 && ronoctua_disks::attached_to(v, &r.volumes) == drive.as_deref()
@@ -3077,7 +3805,13 @@ impl Host {
             .name("ronoctua-format".to_owned())
             .spawn(move || {
                 let _ = said.send(run_format(
-                    &device, filesystem, &label, whole, &first, &name,
+                    &device,
+                    filesystem,
+                    &label,
+                    whole,
+                    &first,
+                    &name,
+                    passphrase.as_ref(),
                 ));
             })
         {
@@ -3401,6 +4135,9 @@ impl Host {
                         let seat = ui.pointer_seat;
                         self.deliver(&ronoctua_protocol::Input::Unhover { seat });
                     }
+                    if self.question_lit.take().is_some() {
+                        ui.ask_paint();
+                    }
                     // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
                     // grab usually delivers the release, but a broken grab
                     // drops it — and a drag left standing makes the next
@@ -3423,6 +4160,17 @@ impl Host {
                             first,
                         });
                         continue;
+                    }
+                    // THE QUESTION'S KEY UNDER THE POINTER LIGHTS, as every
+                    // shortcut does: what the click would press.
+                    let lit = self
+                        .question_at(e.position.0, e.position.1)
+                        .flatten()
+                        .filter(|m| m.press.is_some())
+                        .map(|m| m.id);
+                    if lit != self.question_lit {
+                        self.question_lit = lit;
+                        ui.ask_paint();
                     }
                     // A POINTER ON A DRAWN BAR NEVER REACHES HERE: the door
                     // hands it over as leaving the rows (`crate::bars`).
@@ -3514,6 +4262,11 @@ impl Host {
                 continue;
             };
             if button != crate::door::LEFT_BUTTON {
+                continue;
+            }
+            // A PRESS ON THE QUESTION'S LINE is the line's: its keys are
+            // controls, and the component's rows end above it.
+            if self.question_pressed(ui, e.position.0, e.position.1) {
                 continue;
             }
             // A PRESS ON A BAR IS A DRAG, and never a click on the row behind
@@ -3688,6 +4441,61 @@ impl Content for Host {
         self.texts = ui.texts.clone();
     }
 
+    /// What was typed for a module's question: the action it was asked for is
+    /// sent with it — and only that action, under the id it was asked.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        // THE PASSPHRASE OF AN ENCRYPTED FORMAT, which never reaches the
+        // component: asked here, compared here, written into the call here.
+        if self.sealed(id, text) {
+            ui.ask_paint();
+            return;
+        }
+        let pending = self.brain.as_mut().and_then(|b| b.pending.take());
+        match pending {
+            Some((acting, row)) if crate::brain::question_id(&acting.command) == Some(id) => {
+                self.put_brain(
+                    act_ask(&acting, row, Some(text)),
+                    Some(ronoctua_i18n::key::ECHO_BRAIN_TAKEN),
+                );
+            }
+            other => {
+                tracing::warn!(id, "an answer for a question nothing asked");
+                if let Some(b) = self.brain.as_mut() {
+                    b.pending = other;
+                }
+            }
+        }
+        ui.ask_paint();
+    }
+
+    /// The question was let go: nothing is sent.
+    fn unanswered(&mut self, ui: &mut Ui, id: &'static str) {
+        // AN ENCRYPTED FORMAT WHOSE PASSPHRASE WAS LET GO writes nothing, and
+        // the buffer — waiting on a disk being written — is told so.
+        if matches!(id, PASSPHRASE | PASSPHRASE_AGAIN)
+            && let Some(d) = self.disks.as_mut()
+            && d.sealing.take().is_some()
+        {
+            let said = self.texts.t(ronoctua_i18n::key::FORMAT_ENCRYPT_LET_GO);
+            self.deliver(&ronoctua_protocol::Input::Formatted(
+                ronoctua_protocol::Outcome {
+                    done: false,
+                    trouble: said,
+                },
+            ));
+            ui.ask_paint();
+            return;
+        }
+        if let Some(b) = self.brain.as_mut()
+            && b.pending
+                .as_ref()
+                .is_some_and(|(a, _)| crate::brain::question_id(&a.command) == Some(id))
+        {
+            b.pending = None;
+        }
+        ui.ask_paint();
+    }
+
     /// What the component asked for between frames — a redraw, a close —
     /// reaches the door here, once per turn of the loop, from whatever
     /// delivered it: a key, a daemon's answer, the clock.
@@ -3705,9 +4513,66 @@ impl Host {
         for desktop in std::mem::take(&mut self.to_launch) {
             ui.launch_entry(&desktop);
         }
+        // A MODULE'S QUESTION, on this window's own line — the door routes
+        // every key to it while it stands, and the answer comes back to
+        // `answered`.
+        if let Some(line) = self.to_ask.take() {
+            ui.ask(line);
+        }
+        // AND WHAT THE BRAIN ANSWERED, on the line the door's messages take —
+        // once the line is free: a question standing there is not unseated,
+        // and the answer waits for it to be answered or let go.
+        if ui.asking.is_none()
+            && let Some(said) = self.to_say.take()
+        {
+            ui.say(said);
+            ui.ask_paint();
+        }
         if self.quit {
             ui.quit = true;
         }
+    }
+}
+
+/// What of a question's line drawn on `row` is at the cell `(column, line)`:
+/// `None` off the line, and on it the key there, if any — read off the SAME
+/// marks the drawing lays (`chrome::hint_marks`), so the key the pointer
+/// lights is the key its click presses.
+fn question_mark_at(
+    question: &[crate::chrome::Piece],
+    (column, line): (u16, u16),
+    row: u16,
+    columns: u16,
+) -> Option<Option<crate::chrome::Mark>> {
+    if question.is_empty() || line != row {
+        return None;
+    }
+    Some(
+        crate::chrome::hint_marks(question, tokens::space::CONTENT_INSET, row, columns)
+            .into_iter()
+            .find(|m| column >= m.at && column < m.at + m.cells),
+    )
+}
+
+/// A 1-based index into a list the host sent, as a position: `0` is "none",
+/// and `checked_sub` — not `- 1` — because a zero is an ordinary thing for a
+/// buffer to send.
+fn index_of(target: u64) -> Option<usize> {
+    target.checked_sub(1).and_then(|n| usize::try_from(n).ok())
+}
+
+/// The ask that does a module's action, on the row it was asked on and with
+/// what was typed for it.
+fn act_ask(
+    acting: &crate::brain::Acting,
+    row: Option<String>,
+    answer: Option<&str>,
+) -> ronoctua_brain::Ask {
+    ronoctua_brain::Ask::Act {
+        module: acting.module.clone(),
+        action: acting.action.clone(),
+        row,
+        answer: answer.map(ToOwned::to_owned),
     }
 }
 
@@ -3797,6 +4662,21 @@ fn advance_sequence(
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: a buffer's drawing is rasterised at its LOGICAL side on a
+    /// screen of scale 2 — stretched, beside letters drawn at the scale.
+    #[test]
+    fn a_drawing_is_rasterised_at_the_screens_pixels() {
+        let at_one = super::svg_side_px(4, 2, (10.8, 26.1), 1);
+        let at_two = super::svg_side_px(4, 2, (10.8, 26.1), 2);
+        assert_eq!(at_one, 43, "four cells of 10.8 px, the tighter side");
+        assert_eq!(at_two, 2 * at_one);
+        assert_eq!(
+            super::svg_side_px(4, 2, (10.8, 26.1), 0),
+            at_one,
+            "scale 0 is 1"
+        );
+    }
+
     use super::{Brain, Escape, EscapeAct};
     use crate::paint::{bar_grabbed, cell, quads_of};
     use smithay_client_toolkit::seat::keyboard::Keysym;
@@ -3810,6 +4690,188 @@ mod tests {
                 text: format!("line {seq}"),
             })
             .collect()
+    }
+
+    /// FAILS IF: an index a component hands back is read as anything but
+    /// 1-based with `0` for none, or an action is asked for with anything but
+    /// its module, its row and what was typed — or a module's action is found
+    /// with a question it did not declare.
+    #[test]
+    fn a_module_action_is_asked_as_the_mind_declared_it() {
+        assert_eq!(super::index_of(0), None);
+        assert_eq!(super::index_of(1), Some(0));
+        assert_eq!(super::index_of(3), Some(2));
+        let mut b = Brain::fresh();
+        let mut mind = ronoctua_brain::Mind::default();
+        mind.tasks.push(ronoctua_brain::TaskState {
+            kind: ronoctua_brain::Kind::Watch,
+            id: "fixture".to_owned(),
+            standing: ronoctua_brain::Standing::Idle,
+            enabled: true,
+            interval_days: 7,
+            part_of_day: ronoctua_brain::PartOfDay::Any,
+            next: 0,
+            hold: None,
+            why_not: String::new(),
+            history: Vec::new(),
+            last: None,
+            steps: Vec::new(),
+            calendar: false,
+            name_key: String::new(),
+            does_key: String::new(),
+            why_key: String::new(),
+            screen_generation: 7,
+            actions: vec![ronoctua_brain::mind::ActionState {
+                id: "when".to_owned(),
+                label: "cmd-fixture-when".to_owned(),
+                row: true,
+                asks: Some("ask-fixture-when".to_owned()),
+            }],
+        });
+        b.last = Some(mind);
+        assert_eq!(b.generation_of("fixture"), Some(7));
+        let acting = b.acting("fixture", "when");
+        assert_eq!(acting.command, "fixture-when");
+        assert_eq!(acting.asks.as_deref(), Some("ask-fixture-when"));
+        assert_eq!(b.acting("fixture", "other").asks, None);
+        assert_eq!(
+            super::act_ask(&acting, Some("r-1".to_owned()), Some("tomorrow at nine")),
+            ronoctua_brain::Ask::Act {
+                module: "fixture".to_owned(),
+                action: "when".to_owned(),
+                row: Some("r-1".to_owned()),
+                answer: Some("tomorrow at nine".to_owned()),
+            }
+        );
+    }
+
+    /// FAILS IF: the question's key under the pointer is not the one lit, a
+    /// key is lit off the question's line, or a key lit is not the key its
+    /// click presses.
+    #[test]
+    fn the_questions_key_under_the_pointer_is_lit_and_pressed() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let line = crate::line::Line::asking("fixture-when", "line-answer");
+        let pieces = crate::door::list::question_pieces(&line, &texts, 80);
+        let row = 9;
+        let marks = crate::chrome::hint_marks(&pieces, tokens::space::CONTENT_INSET, row, 80);
+        // THE TWO KEYS, each drawn as its notation and its word.
+        let mut ids: Vec<&str> = marks.iter().map(|m| m.id).collect();
+        ids.dedup();
+        assert_eq!(ids.len(), 2, "the question's two keys are not both marked");
+        for m in &marks {
+            let found = super::question_mark_at(&pieces, (m.at, row), row, 80)
+                .flatten()
+                .expect("nothing under the pointer on a key");
+            assert_eq!((found.id, found.press), (m.id, m.press));
+            let lit = crate::chrome::lit(&pieces, Some(found.id));
+            let changed: Vec<_> = pieces
+                .iter()
+                .zip(&lit)
+                .filter(|(was, now)| was.register != now.register)
+                .map(|(_, now)| (now.id, now.register))
+                .collect();
+            assert!(
+                changed.iter().all(|(id, _)| *id == Some(m.id)),
+                "another key was lit: {changed:?}"
+            );
+            assert!(
+                changed
+                    .iter()
+                    .any(|(_, r)| *r == crate::chrome::Register::KeyLit),
+                "the key under the pointer was not lit"
+            );
+        }
+        assert!(super::question_mark_at(&pieces, (marks[0].at, row + 1), row, 80).is_none());
+        assert!(super::question_mark_at(&[], (0, row), row, 80).is_none());
+    }
+
+    /// A page of the module `fixture` at `generation`, with one row.
+    fn a_page(generation: u64) -> Paged {
+        use ronoctua_brain::module::{Cell, Row, Screen, Section, Tone};
+        Paged::Screen {
+            module: "fixture".to_owned(),
+            generation,
+            screen: Screen {
+                sections: vec![Section {
+                    heading: "fixture-heading".into(),
+                    rows: vec![Row {
+                        id: format!("row-{generation}"),
+                        label: Cell::Key("fixture-row".into()),
+                        value: Cell::Count(u64::from(generation > 0)),
+                        note: Cell::Empty,
+                        tone: Tone::Quiet,
+                        act: Some("forget".into()),
+                        also: None,
+                    }],
+                }],
+            },
+        }
+    }
+
+    /// FAILS IF: a module's page answered OUT OF ORDER is delivered — the
+    /// host would hold one page's rows while the component draws another's,
+    /// and `act-row` would name a row nobody sees — or a page that did not
+    /// come is delivered as nothing instead of as a sentence, or an ask
+    /// nobody answered is never asked again.
+    #[test]
+    fn a_module_page_is_delivered_in_order_and_a_refusal_is_a_sentence() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut b = Brain::fresh();
+        b.watched = Some("fixture".to_owned());
+        // THE NEWER ANSWERS FIRST; THE OLDER, LATE, IS DROPPED.
+        let newer = b.page_arrived(&a_page(5), &texts).expect("the newer page");
+        assert_eq!(newer.generation, 5);
+        assert_eq!(
+            b.screen_rows,
+            vec![("row-5".to_owned(), "forget".to_owned(), String::new())]
+        );
+        assert!(b.page_arrived(&a_page(4), &texts).is_none());
+        assert_eq!(
+            b.screen_rows[0].0, "row-5",
+            "the late page's rows were kept"
+        );
+        // ANOTHER MODULE'S PAGE is not the page followed.
+        b.watched = Some("other".to_owned());
+        assert!(b.page_arrived(&a_page(9), &texts).is_none());
+        b.watched = Some("fixture".to_owned());
+
+        // A REFUSAL IS THE BRAIN'S SENTENCE, in the rows' place — and it is
+        // kept: the same page asked again is refused again.
+        b.asked_at = Some(6);
+        let refused = b
+            .page_arrived(
+                &Paged::Not {
+                    module: "fixture".to_owned(),
+                    asked: 6,
+                    answer: crate::brain::Answer::Refused("no page today".to_owned()),
+                },
+                &texts,
+            )
+            .expect("the refusal");
+        assert!(refused.sections.is_empty() && refused.refused.contains("no page today"));
+        assert!(
+            b.screen_rows.is_empty(),
+            "the refused page left rows to act on"
+        );
+        assert_eq!(b.asked_at, Some(6));
+        // NOBODY ANSWERED: said, and forgotten, so the next mind asks again.
+        b.asked_at = Some(7);
+        let silent = b
+            .page_arrived(
+                &Paged::Not {
+                    module: "fixture".to_owned(),
+                    asked: 7,
+                    answer: crate::brain::Answer::Unreachable,
+                },
+                &texts,
+            )
+            .expect("the silence");
+        assert_eq!(
+            silent.refused,
+            texts.t(ronoctua_i18n::key::ECHO_BRAIN_UNREACHABLE)
+        );
+        assert_eq!(b.asked_at, None, "an unanswered ask is never asked again");
     }
 
     /// THE RING SENT WHOLE AGAIN REPLACES WHAT WAS HELD — a reconnection, or a

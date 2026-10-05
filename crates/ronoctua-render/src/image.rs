@@ -148,13 +148,50 @@ struct Instance {
 /// around it — and, on a directory's page, the GLOBE beside them
 /// ([`PLAYER_GLOBE`]), and the COVERS its Metadata draws among its rows — a
 /// suggested one beside the file's own ([`PLAYER_COVERS`]).
+///
+/// # AND THE CATALOGUE'S POSTERS, in the place of the thumbnails
+///
+/// A listing of the player's catalogue drawn as posters holds at most
+/// `space.catalog.postersMost` of them on a screen — the page is cut to it —
+/// and it is a view of the player's, where the file manager's grid is not: a
+/// frame holds the one grid or the other, so the ceiling holds the larger of
+/// the two ([`GRID_MOST`]).
+///
+/// # AND THE SEARCH'S VIDEOS
+///
+/// The search's YouTube grid (`/y`) holds at most `space.fastAccess.gridMost`
+/// pictures, and a frame holds it in the place of the other two: the larger
+/// of the three.
 const CEILING: usize = tokens::space::EXPANSION_MAXLINES as usize
     + 1
     + crate::image::MANAGER_PICTURES
     + crate::image::PLAYER_PICTURES
     + crate::image::PLAYER_GLOBE
     + crate::image::PLAYER_COVERS
-    + tokens::space::FILES_THUMBMOST as usize;
+    + larger(
+        larger(
+            tokens::space::FILES_THUMBMOST as usize,
+            tokens::space::CATALOG_POSTERSMOST as usize,
+        ),
+        tokens::space::FASTACCESS_GRIDMOST as usize,
+    );
+
+/// The most pictures a grid puts on a screen: the file manager's thumbnails,
+/// the catalogue's posters or the search's videos, whichever holds more — the
+/// same tokens [`CEILING`] counts (`the-grid-never-drops-a-picture`,
+/// `the-listing-never-drops-a-poster`).
+pub const GRID_MOST: usize = larger(
+    larger(
+        tokens::space::FILES_THUMBMOST as usize,
+        tokens::space::CATALOG_POSTERSMOST as usize,
+    ),
+    tokens::space::FASTACCESS_GRIDMOST as usize,
+);
+
+/// The larger of two counts, in a constant.
+const fn larger(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
 
 /// How many pictures the file manager can have on screen at once.
 ///
@@ -207,7 +244,7 @@ pub const PLAYER_COVERS: usize = 2;
 /// step draws two hundred pictures of 256 px, so keeping two screenfuls of them
 /// is a hundred mebibytes of file manager. Half is a screenful either side of
 /// where the list is, which is what makes scrolling back free.
-const TEXTURE_CEILING: usize = CEILING + tokens::space::FILES_THUMBMOST as usize / 2;
+const TEXTURE_CEILING: usize = CEILING + GRID_MOST / 2;
 
 /// A texture already on the GPU.
 struct Upload {

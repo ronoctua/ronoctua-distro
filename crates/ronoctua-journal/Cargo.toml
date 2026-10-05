@@ -1,0 +1,23 @@
+[package]
+name = "ronoctua-journal"
+description = "The one boundary with the systemd journal: one journalctl --follow, entries read from its JSON, the matches that filter them in process, and the cursor it was left at."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# `journalctl --output=json` answers one object per line; `serde_json` reads
+# it, and nothing else is needed — no libsystemd, no FFI. The program is run
+# by its store path (`RONOCTUA_JOURNALCTL`, set by the brain's unit), never by
+# name.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The cursor is written ATOMICALLY, by the one writer every store in this tree
+# shares: a cursor cut in half by a kill is a follower that cannot start. Zero
+# dependencies of its own.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+
+[lints]
+workspace = true

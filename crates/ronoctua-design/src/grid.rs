@@ -3,8 +3,8 @@
 //! # What it replaces
 //!
 //! Three near-identical blocks (`grid_columns`, `height`, `panel_first_row`,
-//! `rule_row`, `grid_first_row`, `footer_row`, `row_step`) in
-//! `buffers/glyphs`, `buffers/lucide` and `buffers/unicode`, each with its own
+//! `rule_row`, `grid_first_row`, `footer_row`, `row_step`) in the three icon
+//! buffers the shell's icons app replaced, each with its own
 //! constants and each with a bare literal `2` for the air on the right. The
 //! constants that genuinely differ — how wide one drawing is — stay with the
 //! caller; the arithmetic is here.

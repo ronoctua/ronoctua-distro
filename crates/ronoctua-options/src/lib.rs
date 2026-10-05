@@ -21,10 +21,12 @@
 //! writes JSON. A value is a `&str` here and each domain converts at its own
 //! edge, which is where it already has to know the spelling of `true`.
 //!
-//! **Syncthing.** It has its own copy of this, older and shaped around
-//! `serde_json::Value`, and it is not migrated here: a hundred and twenty-one
-//! working options are not worth a refactor in the middle of another delivery.
-//! That migration is in `docs/PENDING.md`, named, with what it would buy.
+//! **Which kinds turn and which are typed.** A domain decides: Syncthing's
+//! amount is `{ value, unit }` and its arrows move the number
+//! (`ronoctua_syncthing::options::Setting::turns`), where the other three
+//! type a size ([`Kind::is_typed`]). Syncthing reads everything else from
+//! here — the kind, the ring's turn, the number's nudge and a word's key — and
+//! its table had its own copy of all four until the migration.
 
 /// How `true` and `false` are spelled in one domain's configuration file.
 ///

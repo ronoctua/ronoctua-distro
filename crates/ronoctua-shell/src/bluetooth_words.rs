@@ -32,11 +32,16 @@ pub fn refused(ask: &Ask, why: Refusal, words: &str, texts: &ronoctua_i18n::Text
         Refusal::Away => key::BLUETOOTH_REFUSED_AWAY,
         Refusal::Busy => key::BLUETOOTH_REFUSED_BUSY,
         Refusal::Rejected => key::BLUETOOTH_REFUSED_REJECTED,
+        Refusal::TimedOut => key::BLUETOOTH_REFUSED_TIMED_OUT,
+        Refusal::NoBus => key::BLUETOOTH_REFUSED_NO_BUS,
         Refusal::Other => key::BLUETOOTH_REFUSED_OTHER,
     });
+    // BLUEZ'S OWN WORDS GO TO THE LOG: they are English, and the line is in
+    // the person's language. The name already chose the phrase.
+    tracing::info!(?why, words, "the Bluetooth daemon refused");
     texts.t_with(
         key::ECHO_BLUETOOTH_REFUSED,
-        &[("what", &what), ("why", &reason), ("words", words)],
+        &[("what", &what), ("why", &reason)],
     )
 }
 
@@ -152,17 +157,24 @@ mod tests {
             Refusal::Away,
             Refusal::Busy,
             Refusal::Rejected,
+            Refusal::TimedOut,
+            Refusal::NoBus,
             Refusal::Other,
         ];
+        let mut seen = std::collections::BTreeSet::new();
         for ask in &asks {
             for why in whys {
                 let said = refused(ask, why, "org.bluez.Error.Failed", &t);
                 assert!(!said.contains('['), "a key reached the screen raw: {said}");
+                // THE DAEMON'S WORDS NEVER REACH THE LINE: they are English.
                 assert!(
-                    said.contains("org.bluez"),
-                    "the daemon's words were dropped"
+                    !said.contains("org.bluez"),
+                    "the daemon's words were drawn: {said}"
                 );
+                seen.insert(said);
             }
         }
+        // AND EVERY REFUSAL IS ITS OWN SENTENCE.
+        assert_eq!(seen.len(), asks.len() * whys.len());
     }
 }

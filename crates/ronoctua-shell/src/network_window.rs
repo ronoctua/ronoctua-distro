@@ -30,7 +30,7 @@
 //! password waits for its answer here ([`Network::remember`]).
 
 use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use smithay_client_toolkit::{
     reexports::calloop::{self, channel},
     seat::{
@@ -93,6 +93,7 @@ pub fn host_it() -> Result<()> {
                 calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
                 |_, (), door: &mut Door<Network>| {
                     door.content.watch.sample();
+                    door.content.ask_names();
                     door.content.settle(&door.ui);
                     door.ui.ask_paint();
                     calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
@@ -105,12 +106,14 @@ pub fn host_it() -> Result<()> {
         let mut watch = crate::network::Watch::default();
         watch.sample();
 
-        // THE LOCAL NETWORK'S SWEEP, a thread per press — see the footer's own.
-        let (lan_sender, lan_answers) = channel::channel::<ronoctua_lan::Found>();
+        // THE LOCAL NETWORK'S SLOW WORK — the sweep, the names, the
+        // gateway's round trip — a thread per piece, and its answer here
+        // (`network::spawn`, the footer's own path).
+        let (lan_sender, lan_answers) = channel::channel::<crate::network::Heard>();
         w.handle
             .insert_source(lan_answers, |event, (), door: &mut Door<Network>| {
-                if let channel::Event::Msg(found) = event {
-                    door.content.watch.found(found);
+                if let channel::Event::Msg(heard) = event {
+                    door.content.watch.heard(heard);
                     door.content.settle(&door.ui);
                     door.ui.ask_paint();
                 }
@@ -146,8 +149,15 @@ pub fn host_it() -> Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("could not hang the tunnel channel: {e}"))?;
 
+        // THE FILE PICKER'S FOLDER, watched through the door's wake.
+        let mut view = crate::network::View::fresh();
+        view.watch_with(w.wake());
+        // A HOTSPOT ALREADY UP shows its password from the first frame,
+        // whichever door started it.
+        let mut hotspot_serving = false;
+        view.show_sharing(crate::network::sharing::follow(&mut hotspot_serving, &net));
         Ok(Network {
-            view: crate::network::View::fresh(),
+            view,
             wire,
             net,
             watch,
@@ -155,6 +165,7 @@ pub fn host_it() -> Result<()> {
             tunnels: ronoctua_tunnel::Scene::default(),
             hand,
             remember: None,
+            hotspot_serving,
         })
     })
 }
@@ -170,8 +181,8 @@ struct Network {
     /// What `/proc` says: the sockets and the interface counters, sampled on
     /// this window's own second.
     watch: crate::network::Watch,
-    /// Where a finished sweep of the local network reports.
-    lan_sender: Option<channel::Sender<ronoctua_lan::Found>>,
+    /// Where the view's threads report — a sweep, the names, a measurement.
+    lan_sender: Option<channel::Sender<crate::network::Heard>>,
     /// What the two tunnels say, from this window's own thread.
     tunnels: ronoctua_tunnel::Scene,
     /// The thread that reads them and carries out their orders.
@@ -181,6 +192,9 @@ struct Network {
     /// answer: a password left behind would be a password in memory with no
     /// owner and no deadline.
     remember: Option<(String, crate::network::Password)>,
+    /// Was a hotspot up at the last reading? Its END takes the password's
+    /// file away (`network::sharing::follow`); the view only reads it.
+    hotspot_serving: bool,
 }
 
 /// What this window keeps for ONE pointer, past what every door keeps.
@@ -202,8 +216,22 @@ impl Network {
         // in brings six facts, a tunnel coming up brings a row, and a cursor
         // past the end focuses nothing.
         self.net = s;
+        // THE HOTSPOT'S END takes the password's file away; the view only
+        // reads it (`network::View::show_sharing`).
+        self.view.show_sharing(crate::network::sharing::follow(
+            &mut self.hotspot_serving,
+            &self.net,
+        ));
         self.settle(ui);
         ui.ask_paint();
+    }
+
+    /// Asks resolved for the names of the addresses on screen that have
+    /// none yet — a batch on a thread, never on this loop.
+    fn ask_names(&mut self) {
+        if let (Some(list), Some(back)) = (self.watch.names_wanted(), self.lan_sender.clone()) {
+            crate::network::spawn(crate::network::Lan::Name(list), back);
+        }
     }
 
     /// A fresh reading of the two tunnels, or the end of an order.
@@ -215,11 +243,8 @@ impl Network {
                 ui.ask_paint();
             }
             ronoctua_tunnel::Event::Done { refused, .. } => {
-                if let Some(words) = refused {
-                    ui.message = Some(ui.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_REFUSED,
-                        &[("error", &words)],
-                    ));
+                if let Some(r) = refused {
+                    ui.say(crate::network_words::tunnel_refused(&r, &ui.texts));
                     ui.ask_paint();
                 }
             }
@@ -229,9 +254,10 @@ impl Network {
             // replaces this sentence with the one that says so.
             ronoctua_tunnel::Event::Login(url) => {
                 ui.launch(crate::network::OPEN, std::slice::from_ref(&url), None);
-                ui.message = Some(
+                ui.say_for(
                     ui.texts
                         .t_with(ronoctua_i18n::key::ECHO_NETWORK_LOGIN, &[("url", &url)]),
+                    crate::echo::Echo::Long,
                 );
                 ui.ask_paint();
             }
@@ -253,16 +279,17 @@ impl Network {
     fn apply(&mut self, ui: &mut Ui, errand: crate::network::Errand) {
         use crate::network::Errand;
         use ronoctua_i18n::key;
-        let refused = |e: &anyhow::Error, texts: &ronoctua_i18n::Texts| {
-            texts.t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())])
-        };
+        let refused = crate::network_words::refused;
         match errand {
             Errand::Nothing => {}
             // AN INFORMATIVE ROW COPIES ITSELF — see
             // `chrome::information_of`, and `chrome::copied` for the
             // one place the six doors share.
             Errand::Copy(text) => {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             Errand::Close => {
                 ui.quit = true;
@@ -275,33 +302,86 @@ impl Network {
                 ui.ask(crate::line::Line::new(question.id, question.secret, None));
             }
             Errand::NotATunnel(name) => {
-                ui.message = Some(
+                ui.say(
                     ui.texts
                         .t_with(key::ECHO_NETWORK_NOT_A_TUNNEL, &[("file", &name)]),
                 );
             }
+            Errand::Said(said) => ui.say(said),
+            // THE CLIPBOARD, off the loop, for the file picker (`pasted`).
+            Errand::Paste => ui.paste(),
             Errand::Bring(path, kind) => {
                 let name = ronoctua_network::vpn::name_of(&path);
-                ui.message = Some(match self.wire.import(&path, kind) {
+                let imported = self.wire.import(&path, kind);
+                ui.say(match &imported {
                     Ok(()) => ui
                         .texts
                         .t_with(key::ECHO_NETWORK_IMPORTED, &[("network", &name)]),
                     Err(e) => ui.texts.t_with(
                         key::ECHO_NETWORK_IMPORT_FAILED,
-                        &[("file", &name), ("reason", &e.to_string())],
+                        &[
+                            ("file", &name),
+                            ("reason", &crate::network_words::reason(e, &ui.texts)),
+                        ],
                     ),
                 });
+                // A VPN THAT ASKS FOR A PASSWORD asks for it NOW, on this
+                // window's line — the view decides (`after_bring`).
+                if let crate::network::Errand::Ask(question) =
+                    self.view.after_bring(imported.is_ok())
+                {
+                    ui.ask(crate::line::Line::new(question.id, question.secret, None));
+                }
             }
+            // THE VPN'S USER AND PASSWORD, stored in its profile: the
+            // password goes to NetworkManager in this one call and leaves
+            // this window with the errand.
+            Errand::VpnSecret {
+                tunnel,
+                user,
+                password,
+            } => {
+                ui.say(
+                    match self.wire.store_vpn_secret(&tunnel, &user, &password) {
+                        Ok(()) => ui
+                            .texts
+                            .t_with(key::ECHO_NETWORK_VPN_STORED, &[("network", &tunnel)]),
+                        Err(e) => ui.texts.t_with(
+                            key::ECHO_NETWORK_VPN_STORE_FAILED,
+                            &[("reason", &crate::network_words::reason(&e, &ui.texts))],
+                        ),
+                    },
+                );
+            }
+            // THE GATEWAY'S ROUND TRIP, on a thread: three echoes a fifth of
+            // a second apart are the better part of a second.
+            Errand::Measure(gateway) => match self.lan_sender.clone() {
+                Some(back) => {
+                    self.watch.measuring(gateway);
+                    crate::network::spawn(crate::network::Lan::Measure(gateway), back);
+                }
+                None => ui.say(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE)),
+            },
             // BECOMING THE NETWORK, from this door too: NetworkManager keeps
             // no per-client state, so the second telephone is not a second
             // truth.
             Errand::Hotspot(true) => {
                 let name = crate::network::hostname();
-                ui.message = Some(
+                ui.say_for(
                     match ronoctua_network::hotspot_password()
                         .and_then(|word| self.wire.hotspot(&name, &word).map(|()| word))
                     {
                         Ok(word) => {
+                            // THE PASSWORD WHERE BOTH DOORS READ IT
+                            // (`network::sharing`), born owner-only.
+                            if let Err(e) =
+                                crate::network::sharing::keep(&crate::network::sharing::Kept {
+                                    network: name.clone(),
+                                    password: word.clone(),
+                                })
+                            {
+                                tracing::warn!(error = %e, "the hotspot's password was not kept for the other door");
+                            }
                             self.view.sharing(Some(word.clone()));
                             ui.texts.t_with(
                                 key::ECHO_NETWORK_HOTSPOT,
@@ -310,14 +390,14 @@ impl Network {
                         }
                         Err(e) => ui.texts.t_with(
                             key::ECHO_NETWORK_HOTSPOT_FAILED,
-                            &[("reason", &e.to_string())],
+                            &[("reason", &crate::network_words::reason(&e, &ui.texts))],
                         ),
-                    },
-                );
+                    }, crate::echo::Echo::Long);
             }
             Errand::Hotspot(false) => {
+                crate::network::sharing::forget();
                 self.view.sharing(None);
-                ui.message = Some(
+                ui.say(
                     ui.texts.t(
                         if self
                             .wire
@@ -343,22 +423,15 @@ impl Network {
                 match (address, self.lan_sender.clone()) {
                     (Some(address), Some(echo)) => {
                         self.watch.sweeping(true);
-                        if let Err(e) = std::thread::Builder::new()
-                            .name("lan-sweep".to_owned())
-                            .spawn(move || {
-                                let found = ronoctua_lan::sweep(&address).unwrap_or_default();
-                                let _ = echo.send(found);
-                            })
-                        {
-                            tracing::warn!(error = %e, "no thread for the sweep");
+                        if !crate::network::spawn(crate::network::Lan::Sweep(address), echo) {
                             self.watch.sweeping(false);
                         }
                     }
-                    _ => ui.message = Some(ui.texts.t(key::ECHO_NETWORK_NO_LINK)),
+                    _ => ui.say(ui.texts.t(key::ECHO_NETWORK_NO_LINK)),
                 }
             }
             Errand::Radio(on) => {
-                ui.message = Some(ui.texts.t(match self.wire.radio(on) {
+                ui.say(ui.texts.t(match self.wire.radio(on) {
                     Ok(()) if on => key::ECHO_NETWORK_RADIO_ON,
                     Ok(()) => key::ECHO_NETWORK_RADIO_OFF,
                     Err(_) => key::ECHO_NETWORK_UNAVAILABLE,
@@ -366,19 +439,23 @@ impl Network {
             }
             Errand::Airplane(on) => {
                 if let Err(e) = self.wire.airplane(on) {
-                    ui.message = Some(refused(&e, &ui.texts));
+                    ui.say(refused(&e, &ui.texts));
                 }
             }
-            Errand::Disconnect(medium) => {
-                ui.message = Some(ui.texts.t(if self.wire.disconnect(medium).is_ok() {
-                    key::ECHO_NETWORK_DISCONNECTED
-                } else {
-                    key::ECHO_NETWORK_UNAVAILABLE
-                }));
+            Errand::Disconnect(medium, interface) => {
+                ui.say(
+                    ui.texts
+                        .t(if self.wire.disconnect_link(medium, &interface).is_ok() {
+                            key::ECHO_NETWORK_DISCONNECTED
+                        } else {
+                            key::ECHO_NETWORK_UNAVAILABLE
+                        }),
+                );
             }
             Errand::Facts => {
-                ui.message = Some(match crate::network::carrying(&self.net) {
-                    Some(l) if l.medium == ronoctua_network::Medium::Wired => ui.texts.t_with(
+                ui.say(match crate::network::carrying(&self.net) {
+                    // A CABLE AND A PHONE have no band and no signal to say.
+                    Some(l) if l.medium != ronoctua_network::Medium::Radio => ui.texts.t_with(
                         key::ECHO_NETWORK_LINK_WIRED,
                         &[
                             ("network", &l.interface),
@@ -398,7 +475,7 @@ impl Network {
                 });
             }
             Errand::Forget(ssid) => {
-                ui.message = Some(if self.wire.forget(&ssid).is_ok() {
+                ui.say(if self.wire.forget(&ssid).is_ok() {
                     ui.texts
                         .t_with(key::ECHO_NETWORK_FORGOTTEN, &[("network", &ssid)])
                 } else {
@@ -413,7 +490,7 @@ impl Network {
                 let result =
                     self.wire
                         .connect(&target.ssid, password.as_ref().map(|p| p.as_str()), false);
-                ui.message = Some(match result {
+                ui.say(match result {
                     Ok(()) => {
                         if let Some(typed) = password.filter(|_| target.secured) {
                             self.remember = Some((target.ssid.clone(), typed));
@@ -431,7 +508,10 @@ impl Network {
                     }
                     Err(e) => ui.texts.t_with(
                         key::ECHO_NETWORK_FAILED,
-                        &[("network", &target.ssid), ("reason", &e.to_string())],
+                        &[
+                            ("network", &target.ssid),
+                            ("reason", &crate::network_words::reason(&e, &ui.texts)),
+                        ],
                     ),
                 });
             }
@@ -439,7 +519,7 @@ impl Network {
             // window on BOTH answers, before anything can fail.
             Errand::Remember(ssid, yes) => {
                 let kept = self.remember.take();
-                ui.message = Some(if yes {
+                ui.say(if yes {
                     match kept.filter(|(named, _)| *named == ssid) {
                         Some((_, password)) => {
                             match self.wire.connect(&ssid, Some(password.as_str()), true) {
@@ -448,7 +528,7 @@ impl Network {
                                     .t_with(key::ECHO_NETWORK_STORED, &[("network", &ssid)]),
                                 Err(e) => ui.texts.t_with(
                                     key::ECHO_NETWORK_STORE_FAILED,
-                                    &[("reason", &e.to_string())],
+                                    &[("reason", &crate::network_words::reason(&e, &ui.texts))],
                                 ),
                             }
                         }
@@ -463,7 +543,7 @@ impl Network {
                     self.net.active.iter().find(|a| a.at == at).map(|a| &a.id),
                     &at,
                 );
-                ui.message = Some(match self.wire.drop_it(&at) {
+                ui.say(match self.wire.drop_it(&at) {
                     Ok(()) => ui
                         .texts
                         .t_with(key::ECHO_NETWORK_TUNNEL_DOWN, &[("network", &name)]),
@@ -475,7 +555,7 @@ impl Network {
                     self.net.saved.iter().find(|s| s.at == at).map(|s| &s.id),
                     &at,
                 );
-                ui.message = Some(match self.wire.raise(&at) {
+                ui.say(match self.wire.raise(&at) {
                     Ok(()) => ui
                         .texts
                         .t_with(key::ECHO_NETWORK_TUNNEL_UP, &[("network", &name)]),
@@ -488,7 +568,7 @@ impl Network {
             Errand::Tunnel(order) => match self.hand.as_ref() {
                 Some(h) => h.send(order),
                 None => {
-                    ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                    ui.say(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                 }
             },
             // TOR'S SETTINGS GO THROUGH THE SAME THREAD, and the sentence
@@ -505,21 +585,21 @@ impl Network {
                 match self.hand.as_ref() {
                     Some(h) => {
                         h.send(ronoctua_tunnel::Order::Configure(lines));
-                        ui.message = Some(ui.texts.t(if running {
+                        ui.say(ui.texts.t(if running {
                             key::ECHO_TOR_WRITTEN
                         } else {
                             key::ECHO_TOR_NOT_RUNNING
                         }));
                     }
                     None => {
-                        ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                        ui.say(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                     }
                 }
             }
             Errand::TorAutostart(on) => match self.hand.as_ref() {
                 Some(h) => h.send(ronoctua_tunnel::Order::Autostart(on)),
                 None => {
-                    ui.message = Some(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
+                    ui.say(ui.texts.t(key::ECHO_NETWORK_UNAVAILABLE));
                 }
             },
             Errand::Delete(at) => {
@@ -542,7 +622,7 @@ impl Network {
                 } else {
                     key::ECHO_NETWORK_DELETED
                 };
-                ui.message = Some(match self.wire.delete(&at) {
+                ui.say(match self.wire.delete(&at) {
                     Ok(()) => ui.texts.t_with(saying, &[("network", &name)]),
                     Err(e) => refused(&e, &ui.texts),
                 });
@@ -571,6 +651,7 @@ impl Network {
         }
         let errand = {
             let mut view = std::mem::take(&mut self.view);
+            view.page_is(ui.room_for_rows());
             let errand = view.key(press, &self.facts(), ui.columns, &ui.texts);
             self.view = view;
             errand
@@ -661,7 +742,175 @@ impl Network {
     }
 }
 
+/// The window over a PLANTED machine, for the photograph
+/// (`system_photograph`): no daemon, no thread, no kernel read — the rows the
+/// scene asks for, and the question its line opens, if any.
+///
+/// - `lan`: a cable and a radio up, the neighbours of both families with the
+///   names resolved gave, and the router's round trip measured;
+/// - `hotspot`: the radio serving, with the password both doors read;
+/// - `vpn`: an imported `.ovpn` that asks for a user — the line open on it.
+///
+/// # Errors
+///
+/// A scene this door does not know.
+pub fn photographed(scene: &str) -> Result<(impl Content, Option<crate::line::Line>)> {
+    use ronoctua_network::{Band, Link, Medium, Snapshot, State, Way};
+    let link = |medium: Medium, interface: &str, serving: bool| Link {
+        medium,
+        interface: interface.to_owned(),
+        network: (medium == Medium::Radio).then(|| "noctua-5g".to_owned()),
+        state: State::Connected,
+        rate_kbps: if medium == Medium::Wired {
+            1_000_000
+        } else {
+            866_000
+        },
+        signal: 78,
+        band: Band::Ghz5,
+        address: Some(
+            if medium == Medium::Wired {
+                "192.168.1.20/24"
+            } else {
+                "192.168.1.21/24"
+            }
+            .to_owned(),
+        ),
+        gateway: Some("192.168.1.1".to_owned()),
+        dns: vec!["192.168.1.1".to_owned()],
+        serving,
+    };
+    let net = Snapshot {
+        daemon: true,
+        networking: true,
+        radio: true,
+        way: Way::Full,
+        links: if scene == "phone" {
+            // A PHONE LENDING ITS CONNECTION over Bluetooth: the link is its
+            // IP side, `bnep0`, the name the Bluetooth view gives it too.
+            vec![Link {
+                medium: Medium::Phone,
+                interface: "bnep0".to_owned(),
+                network: Some("Pixel 8".to_owned()),
+                rate_kbps: 0,
+                address: Some("192.168.44.17/24".to_owned()),
+                gateway: Some("192.168.44.1".to_owned()),
+                dns: vec!["192.168.44.1".to_owned()],
+                ..link(Medium::Phone, "bnep0", false)
+            }]
+        } else {
+            vec![
+                link(Medium::Wired, "enp1s0", false),
+                link(Medium::Radio, "wlan0", scene == "hotspot"),
+            ]
+        },
+        active: Vec::new(),
+        saved: Vec::new(),
+    };
+    let mut watch = crate::network::Watch::default();
+    let mut view = crate::network::View::fresh();
+    let mut asking = None;
+    match scene {
+        "lan" => {
+            let v4 = |last: u8, hardware: &str| ronoctua_memory::net::Neighbour {
+                address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, last)),
+                hardware: hardware.to_owned(),
+                interface: "wlan0".to_owned(),
+                fresh: true,
+            };
+            let phone: std::net::Ipv6Addr = "fe80::1c3a:8bff:fe20:41d7".parse()?;
+            let router6: std::net::Ipv6Addr = "fe80::de08:daff:fe00:1".parse()?;
+            let six = |address, hardware: &str| {
+                (
+                    ronoctua_lan::neigh::Neighbour6 {
+                        address,
+                        hardware: hardware.to_owned(),
+                        interface: 3,
+                        fresh: true,
+                    },
+                    "wlan0".to_owned(),
+                )
+            };
+            watch.planted(
+                vec![
+                    v4(1, "02:00:00:00:00:01"),
+                    v4(34, "02:00:00:00:00:22"),
+                    v4(52, "02:00:00:00:00:34"),
+                ],
+                vec![
+                    six(router6, "02:00:00:00:00:01"),
+                    six(phone, "02:00:00:00:00:22"),
+                ],
+                vec![
+                    (
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+                        crate::network::Named::Known("router.lan".to_owned()),
+                    ),
+                    (
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 34)),
+                        crate::network::Named::Known("printer.lan".to_owned()),
+                    ),
+                    (
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 52)),
+                        crate::network::Named::Nameless,
+                    ),
+                    (
+                        std::net::IpAddr::V6(phone),
+                        crate::network::Named::Known("phone.local".to_owned()),
+                    ),
+                ],
+                Some((
+                    std::net::Ipv4Addr::new(192, 168, 1, 1),
+                    crate::network::Latency::Measured(ronoctua_lan::Measured {
+                        fastest: std::time::Duration::from_micros(1_400),
+                        slowest: std::time::Duration::from_micros(3_900),
+                        answered: 3,
+                    }),
+                )),
+            );
+        }
+        "hotspot" => view.sharing(Some("ab12cd34".to_owned())),
+        "phone" => {}
+        "vpn" => {
+            let text =
+                "client\nremote vpn.example.org 1194 udp\nauth-user-pass\nredirect-gateway def1\n";
+            let preview = ronoctua_network::vpn::preview("/home/me/Downloads/work.ovpn", text)
+                .context("the fixture is an ovpn")?;
+            view.looked_at("/home/me/Downloads/work.ovpn".to_owned(), preview);
+            asking = Some(crate::line::Line::new(
+                crate::network::Question::VPN_USER.id,
+                crate::network::Question::VPN_USER.secret,
+                Some("ana"),
+            ));
+        }
+        other => anyhow::bail!(
+            "`{other}` is not a scene of the network's window; the scenes are lan, hotspot, vpn and phone"
+        ),
+    }
+    Ok((
+        Network {
+            view,
+            wire: crate::network::Wire::planted(net.clone(), Vec::new()),
+            net,
+            watch,
+            lan_sender: None,
+            tunnels: ronoctua_tunnel::Scene::default(),
+            hand: None,
+            remember: None,
+            hotspot_serving: scene == "hotspot",
+        },
+        asking,
+    ))
+}
+
 impl Content for Network {
+    /// A thread of the window's woke the loop — the file picker's folder
+    /// moved, or its devices were read: its rows again, when they changed.
+    fn woken(&mut self, ui: &mut Ui) {
+        if self.view.look() {
+            ui.ask_paint();
+        }
+    }
     type Hand = Shelving;
 
     fn app_id(&self) -> &'static str {
@@ -675,11 +924,24 @@ impl Content for Network {
     /// A key, read against the view's table by its whole notation — the one
     /// reader the footer calls too (`network_words::press_of_key`).
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        if let Some(press) =
-            crate::door::keys::key_of(event, mods).and_then(crate::network_words::press_of_key)
-        {
+        let Some(key) = crate::door::keys::key_of(event, mods) else {
+            return;
+        };
+        // THE FILE PICKER, while it is up over the view, takes what it reads
+        // — every letter, and its own keys.
+        if self.view.picker_takes(key) {
+            self.pressed(ui, crate::network::Press::Pick(key));
+            return;
+        }
+        if let Some(press) = crate::network_words::press_of_key(key) {
             self.pressed(ui, press);
         }
+    }
+
+    /// The clipboard's text, read off the loop for the file picker's `C-v`.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        self.view.picker_pasted(text);
+        ui.ask_paint();
     }
 
     /// What was typed on this window's line: the same `View::answered` the
@@ -951,6 +1213,7 @@ mod tests {
             tunnels: ronoctua_tunnel::Scene::default(),
             hand: None,
             remember: None,
+            hotspot_serving: false,
         };
         (me, Ui::for_tests(texts))
     }
@@ -979,12 +1242,13 @@ mod tests {
         assert!(ui.orders().is_empty(), "the password went to the footer");
         assert!(ui.message.is_none(), "{:?}", ui.message);
 
-        // THE PATH of a tunnel's file, in the clear.
+        // A TUNNEL'S FILE is chosen in the picker, here, and never asked
+        // on a line: typing is the picker's.
         let (mut w, mut ui) = a_window();
         w.pressed(&mut ui, Press::Import);
-        let line = ui.asking.as_ref().expect("the path is asked here");
-        assert_eq!(line.id, Question::PATH.id);
-        assert!(!line.secret);
+        assert!(ui.asking.is_none(), "a line was opened for the file");
+        let key = ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Char('a'));
+        assert!(w.view.picker_takes(key), "a letter is not the picker's");
         assert!(ui.orders().is_empty());
 
         // A TOR VALUE that has no ring to turn.
@@ -1067,7 +1331,6 @@ mod tests {
         std::fs::write(&file, "[Interface]\nAddress = 198.51.100.2/32\n").unwrap();
         let (mut w, mut ui) = a_window();
         w.pressed(&mut ui, Press::Import);
-        ui.asking = None;
         // THE OFFLINE WIRE READS AS NO DAEMON after every order, so the
         // machine is put back where a real reading would have left it.
         w.net = machine();

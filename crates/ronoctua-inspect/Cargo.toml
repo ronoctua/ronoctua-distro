@@ -86,7 +86,12 @@ ronoctua-zip = { path = "../ronoctua-zip" }
 # hundred lines, and a lock entry for that is a dependency taken because it
 # exists rather than because it is needed.
 flate2 = "1.1"
-roxmltree = "0.21"
+# THE XML ITSELF, through the depth guard every reader of a file from outside
+# shares (`ronoctua_xml::parse_within`, with each format's ceiling measured
+# beside its reader): `roxmltree` recurses once per level, and a file made for
+# it would take the footer down on a preview. `roxmltree` is re-exported from
+# there, so its types are the ones the guard hands back.
+ronoctua-xml = { path = "../ronoctua-xml" }
 
 
 [lints]

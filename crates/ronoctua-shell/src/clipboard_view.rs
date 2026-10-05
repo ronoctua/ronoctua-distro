@@ -189,6 +189,47 @@ pub struct View {
     qr: Option<usize>,
 }
 
+/// Where the shown entry's picture — an image, or its QR code — goes: rows
+/// of the view's own list, left empty for it, in the right half.
+///
+/// # Why rows, and not "under the list" or "beside it at the top"
+///
+/// Because the region and the window both size and scroll by ROWS. The window
+/// drew the picture under the last row, so with a real history (fifty
+/// entries) `q` drew nothing and said nothing; the footer drew its preview at
+/// the top of the right half, over the item's own facts. Rows the view
+/// reserves are rows both doors already place, count and scroll — so the box
+/// is wherever the list is, in both, by one answer (`View::picture`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Picture {
+    /// The first row of the box, in the view's rows.
+    pub row: usize,
+    /// How many rows it takes.
+    pub rows: usize,
+    /// The column it starts at, as the view's fields count columns.
+    pub at: u16,
+    /// How many columns it takes.
+    pub columns: u16,
+    /// The first row whose right half is empty to the end of the list — the
+    /// box's second place, for a list scrolled past the first
+    /// (`picture_area`).
+    pub free_from: usize,
+    /// What goes in it.
+    pub shows: Shows,
+}
+
+/// What a [`Picture`] box holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shows {
+    /// Entry `n`'s QR code.
+    Qr(usize),
+    /// Entry `n`'s image.
+    Image(usize),
+}
+
+/// The preview's ceiling, in lines (`space.clipboard.previewLines`).
+const PREVIEW_LINES: usize = tokens::space::CLIPBOARD_PREVIEWLINES as usize;
+
 /// How wide the history column is, of a region this wide.
 ///
 /// Two fifths, with a floor — the same split the clipboard has always had, now
@@ -277,7 +318,8 @@ impl View {
         let right_room = columns.saturating_sub(right);
 
         let history = self.history_side(facts, left, left_room, texts);
-        let detail = Self::detail_side(facts, right, right_room, texts);
+        let shown = self.shown(&history, facts);
+        let detail = self.detail_side(facts, shown, right, right_room, texts);
 
         // THE TWO HALVES ARE ZIPPED INTO ONE LIST OF ROWS, and the longer one
         // decides how many there are. Drawing them as two independent things
@@ -419,9 +461,10 @@ impl View {
         }
     }
 
-    /// The right column: what the entry is, and how the sync is doing.
-    fn detail_side(
+    /// The right column's first rows: the item's heading and its facts.
+    fn item_rows(
         facts: &Facts<'_>,
+        shown: Option<usize>,
         at: u16,
         room: u16,
         texts: &ronoctua_i18n::Texts,
@@ -448,7 +491,11 @@ impl View {
             )],
             Target::Nothing,
         ));
-        match facts.queue.at(0) {
+        // THE ENTRY THE CURSOR IS ON — its facts, then what it holds. It was
+        // always entry zero, whichever row the cursor was on, and the
+        // footer's preview beside it was the cursor's: two entries described
+        // as one item.
+        match shown.and_then(|n| facts.queue.at(n)) {
             None => out.push((
                 vec![piece(
                     at,
@@ -482,11 +529,128 @@ impl View {
                 }
             }
         }
+        out
+    }
+
+    /// The right column: what the entry is, and how the sync is doing.
+    fn detail_side(
+        &self,
+        facts: &Facts<'_>,
+        shown: Option<usize>,
+        at: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<(Vec<Field>, Target)> {
+        let mut out = Self::item_rows(facts, shown, at, room, texts);
+        // WHAT IT HOLDS, under its facts: its text, or the rows its picture
+        // or its code is drawn in (`View::picture`).
+        out.extend(self.preview(facts, shown, at, room));
 
         // AIR, THEN THE SYNC'S ROWS — beside the name the left column drew.
         out.push((Vec::new(), Target::Nothing));
         out.extend(Self::sync_rows(facts.sync, at, room, texts));
         out
+    }
+
+    /// Which entry the right half describes: the one the cursor is on, or the
+    /// newest while the cursor is on something else.
+    ///
+    /// FROM THE LEFT HALF ALONE: the right half's length depends on this
+    /// answer, so asking the whole row list would ask itself.
+    fn shown(&self, history: &[(Vec<Field>, Target)], facts: &Facts<'_>) -> Option<usize> {
+        match history.get(self.cursor).map(|h| h.1) {
+            Some(Target::Entry(n)) => Some(n),
+            _ => (facts.queue.how_many() > 0).then_some(0),
+        }
+    }
+
+    /// The rows under the shown entry's facts: an air row, then its text
+    /// wrapped to the half, or empty rows for its picture — `PREVIEW_LINES`
+    /// at most either way.
+    fn preview(
+        &self,
+        facts: &Facts<'_>,
+        shown: Option<usize>,
+        at: u16,
+        room: u16,
+    ) -> Vec<(Vec<Field>, Target)> {
+        let Some(entry) = shown.and_then(|n| facts.queue.at(n)) else {
+            return Vec::new();
+        };
+        let blank = || (Vec::new(), Target::Nothing);
+        let mut out = vec![blank()];
+        let pictured = self.qr == shown || entry.image().is_some();
+        if pictured {
+            out.extend(std::iter::repeat_with(blank).take(PREVIEW_LINES));
+            return out;
+        }
+        let Some(text) = entry.text() else {
+            return Vec::new();
+        };
+        // THE SAME COLOURS THE FOOTER HAS ALWAYS GIVEN IT: one line at a
+        // time through the highlighter, each span a field at its own column.
+        let tongue = ronoctua_syntax::guess(text);
+        for line in layout::wrap(text, room, PREVIEW_LINES)
+            .into_iter()
+            .take(PREVIEW_LINES)
+        {
+            let fields = crate::surface::highlight_line(&line, tongue, 0, at)
+                .into_iter()
+                .map(|s| piece(s.column, s.text, s.color))
+                .collect();
+            out.push((fields, Target::Nothing));
+        }
+        out
+    }
+
+    /// Which entry the right half describes — what a door decodes a picture
+    /// for and what `clipboard-*` commands from the minibuffer act on.
+    #[must_use]
+    pub fn shown_entry(
+        &self,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<usize> {
+        let left = crate::chrome::INSET;
+        let left_room = history_columns(columns).saturating_sub(left);
+        self.shown(&self.history_side(facts, left, left_room, texts), facts)
+    }
+
+    /// Where the shown entry's picture or code goes, when it has one.
+    ///
+    /// ONE ANSWER FOR BOTH DOORS: each places the box at the rows the view
+    /// left for it, as it places every other row.
+    #[must_use]
+    pub fn picture(
+        &self,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Picture> {
+        let right = detail_at(columns);
+        let n = self.shown_entry(facts, columns, texts)?;
+        let entry = facts.queue.at(n)?;
+        let shows = if self.qr == Some(n) {
+            Shows::Qr(n)
+        } else if entry.image().is_some() {
+            Shows::Image(n)
+        } else {
+            return None;
+        };
+        // THE FACTS' LENGTH, then the air row: the box starts where
+        // `preview` began leaving rows empty.
+        let room = columns.saturating_sub(right);
+        let above = Self::item_rows(facts, Some(n), right, room, texts);
+        let free_from = self.detail_side(facts, Some(n), right, room, texts).len();
+        Some(Picture {
+            row: above.len() + 1,
+            rows: PREVIEW_LINES,
+            at: right,
+            columns: room,
+            free_from,
+            shows,
+        })
     }
 
     /// What ClipCascade is doing, in the words for it.
@@ -827,7 +991,8 @@ impl View {
         let left_room = history_columns(columns).saturating_sub(left);
         let right_room = columns.saturating_sub(right);
         let history = self.history_side(facts, left, left_room, texts);
-        let detail = Self::detail_side(facts, right, right_room, texts);
+        let shown = self.shown(&history, facts);
+        let detail = self.detail_side(facts, shown, right, right_room, texts);
         let lines = history.len().max(detail.len());
         (0..lines)
             .map(|n| {
@@ -849,6 +1014,90 @@ impl View {
     pub fn clicked(&mut self, row: usize) {
         self.cursor = row;
     }
+}
+
+/// Which rows of a list the [`Picture`] box is drawn on, of the ones a door
+/// shows — `None` when there is no room for it on screen.
+///
+/// # Two places, because the list scrolls
+///
+/// The rows the view LEFT for it sit under the item's facts, at the top of
+/// the right half. Scroll a long history down to its fortieth entry and they
+/// are gone off the top — and `q` would draw nothing and say nothing, the
+/// defect this replaces. But every row past the right half's last
+/// (`free_from`) is empty on that side too, so the box goes to whichever of
+/// the two shows more of it, the left rows first on a tie.
+#[must_use]
+pub fn picture_rows(picture: Picture, offset: usize, room: usize) -> Option<(usize, usize)> {
+    let end = offset + room;
+    let left = picture.row.max(offset)..(picture.row + picture.rows).min(end);
+    let tail_from = picture.free_from.max(offset);
+    let tail = tail_from..(tail_from + picture.rows).min(end);
+    let best = if tail.len() > left.len() { tail } else { left };
+    (!best.is_empty()).then_some((best.start, best.end))
+}
+
+/// The box in pixels, on the rows [`picture_rows`] chose.
+///
+/// `offset` is the first row shown and `room` how many are; `lead` is the
+/// door's own margin in cells, which both add to every field (`chrome::
+/// FIELDS_LEAD`); `y_of` turns a SHOWN line into a pixel. ONE FUNCTION FOR
+/// BOTH DOORS, so the box is where the view left room for it.
+#[must_use]
+pub fn picture_area(
+    picture: Picture,
+    offset: usize,
+    room: usize,
+    lead: u16,
+    cell: f32,
+    y_of: impl Fn(u16) -> f32,
+) -> Option<ronoctua_render::image::Area> {
+    let (first, last) = picture_rows(picture, offset, room)?;
+    let line = |row: usize| u16::try_from(row - offset).unwrap_or(u16::MAX);
+    let top = y_of(line(first));
+    let bottom = y_of(line(last));
+    Some(ronoctua_render::image::Area {
+        x: f32::from(lead + picture.at) * cell,
+        y: top,
+        width: f32::from(picture.columns) * cell,
+        height: (bottom - top).max(0.0),
+    })
+}
+
+/// A QR code in quads, one per dark module, on a light square with its quiet
+/// zone — the size of the module from the box's shorter side, so the code is
+/// as large as the box holds and never larger.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn qr_quads(
+    m: &ronoctua_clipboard::qr::Matrix,
+    area: ronoctua_render::image::Area,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let side = m.side as f32;
+    let module = (area.width.min(area.height) / (side + 2.0))
+        .floor()
+        .max(1.0);
+    let mut out = vec![ronoctua_render::quad::Quad {
+        x: area.x,
+        y: area.y,
+        width: (side + 2.0) * module,
+        height: (side + 2.0) * module,
+        color: tokens::color::TEXT_PRIMARY,
+    }];
+    for y in 0..m.side {
+        for x in 0..m.side {
+            if m.dark(x, y) {
+                out.push(ronoctua_render::quad::Quad {
+                    x: area.x + (x as f32 + 1.0) * module,
+                    y: area.y + (y as f32 + 1.0) * module,
+                    width: module,
+                    height: module,
+                    color: tokens::color::SURFACE_CHROME,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// One entry, in one line.

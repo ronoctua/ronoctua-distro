@@ -3,10 +3,12 @@
 
 use std::sync::{Mutex, PoisonError};
 
+use ronoctua_consent::Pass;
 use ronoctua_http::Reply;
 
 use crate::Why;
-use crate::ask::{Net, Request};
+use crate::ask::{Fetch, Net, Request, Web, covered};
+use crate::sources::{Address, Refused};
 
 /// Canned answers, each given once, to the request whose address is exactly
 /// the one named.
@@ -66,4 +68,42 @@ impl Net for Canned {
             .ok_or(Why::Unreachable)?;
         Ok(answers.remove(at).1)
     }
+}
+
+impl Web for Canned {
+    fn get(&self, pass: &Pass, fetch: &Fetch) -> Result<Reply, Refused> {
+        covered(pass, &fetch.url)?;
+        self.send(&Request {
+            source: crate::Source::Archive,
+            url: fetch.url.clone(),
+            gzip: fetch.gzip,
+            most_bytes: fetch.most_bytes,
+        })
+        .map_err(Refused::from)
+    }
+
+    fn get_own(&self, address: &Address, most_bytes: u64) -> Result<Reply, Refused> {
+        self.send(&Request {
+            source: crate::Source::Archive,
+            url: address.expose().to_owned(),
+            gzip: true,
+            most_bytes,
+        })
+        .map_err(Refused::from)
+    }
+}
+
+/// A pass for `host`, from a consent file of the test's own.
+#[cfg(feature = "net")]
+pub(crate) fn pass_for(host: &str, tag: &str) -> Pass {
+    let dir = std::env::temp_dir().join(format!(
+        "ronoctua-broadcast-pass-{}-{tag}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = ronoctua_consent::store_at(Some(dir.clone()));
+    ronoctua_consent::let_hosts_in(&store, &[host], true).expect("a consent file");
+    let pass = ronoctua_consent::pass_in(&store, host).expect("let");
+    let _ = std::fs::remove_dir_all(dir);
+    pass
 }

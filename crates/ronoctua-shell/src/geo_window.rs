@@ -71,7 +71,7 @@ impl GeoWindow {
                 ui.quit = true;
                 return;
             }
-            Errand::Speak(key) => ui.message = Some(ui.texts.t(key)),
+            Errand::Speak(key) => ui.say(ui.texts.t(key)),
             // THE FILTER IS ASKED ON THIS WINDOW'S OWN LINE, the question the
             // footer's minibuffer asks: every key is the line's until it is
             // answered (`answered`) or let go, `C-v` pastes into it, and `f`
@@ -84,7 +84,7 @@ impl GeoWindow {
                 let Some(into) =
                     ronoctua_xdg::data_dir().map(|d| ronoctua_atlas_packs::root_of(&d))
                 else {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::GEO_NO_HOME));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::GEO_NO_HOME));
                     ui.ask_paint();
                     return;
                 };
@@ -94,7 +94,7 @@ impl GeoWindow {
                     url,
                     into,
                 };
-                ui.message = Some(
+                ui.say(
                     match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
                         Ok(()) => ui.texts.t(ronoctua_i18n::key::GEO_QUEUED),
                         Err(e) => {

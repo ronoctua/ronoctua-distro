@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use anyhow::{Context as _, Result, bail};
 use ronoctua_compositor::{
     AccelProfile, Arity, Ask, ButtonMap, ClickMethod, Corner, Deed, DragLock, FingerDrag,
-    FocusFollows, KeyboardSetting, ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
+    FocusFollows, KeyboardSetting, Portion, ScrollMethod, SeatAsk, SendEvents, Setting, Transform,
 };
 
 /// The six bytes that start every message, in both directions.
@@ -196,6 +196,24 @@ pub fn corner_command(id: u64, corner: Corner, room: Room, decoration: (i64, i64
     format!(
         "[con_id={id}] floating enable, sticky enable, \
          resize set width {w} px height {h} px, move absolute position {x} px {y} px"
+    )
+}
+
+/// The commands that float a window in the MIDDLE of the room windows have,
+/// `portion` of it in size — the SAME words the generated rule that opens a
+/// floating window speaks (`floating::rules` in the shell): `ppt` of the
+/// workspace, which is the output less every exclusive zone (the footer, the
+/// right column), and `move position center` in it — the centring
+/// [`fitted_command`] relies on too. One unit for the window that opens
+/// floating and for the window floated again, so the two land on one size
+/// and one place. Not sticky: it stays on its workspace, unlike the corner's
+/// picture.
+#[must_use]
+pub fn centred_command(id: u64, portion: Portion) -> String {
+    let (w, h) = (portion.width_ppt.min(100), portion.height_ppt.min(100));
+    format!(
+        "[con_id={id}] floating enable, \
+         resize set width {w} ppt height {h} ppt, move position center"
     )
 }
 
@@ -756,6 +774,29 @@ mod tests {
             laid_command(7),
             "[con_id=7] sticky disable, floating disable"
         );
+    }
+
+    /// A window floated in the middle takes its portion of the room in the
+    /// rule's own words, and is centred in it.
+    #[test]
+    fn a_centred_window_is_a_portion_of_the_room() {
+        let portion = Portion {
+            width_ppt: 30,
+            height_ppt: 60,
+        };
+        assert_eq!(
+            centred_command(5, portion),
+            "[con_id=5] floating enable, resize set width 30 ppt height 60 ppt, \
+             move position center"
+        );
+        // NEVER LARGER THAN THE ROOM, whatever the table says.
+        let whole = Portion {
+            width_ppt: 250,
+            height_ppt: 100,
+        };
+        assert!(centred_command(5, whole).contains("width 100 ppt height 100 ppt"));
+        // AND NOT STICKY: it stays on its workspace.
+        assert!(!centred_command(5, portion).contains("sticky"));
     }
 
     /// One window out of the drawer, the one named — and one command, so

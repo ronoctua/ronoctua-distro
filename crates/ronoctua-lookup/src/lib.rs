@@ -1,4 +1,5 @@
-//! The player's online lookups, and the person's keys for them.
+//! The online lookups — the player's, and the security centre's checks — and
+//! the person's keys for them.
 //!
 //! # The one crate that talks to these hosts
 //!
@@ -7,8 +8,19 @@
 //! keyless), api.themoviedb.org (a film's synopsis and poster, with the
 //! person's token), api.opensubtitles.com and api.subdl.com (subtitles, with
 //! the person's key), and www.podnapisi.net, whose reader is here and asleep
-//! ([`podnapisi::AWAKE`]): the domain has not resolved since June 2026. Every
-//! first request goes to a [`Host`]; nothing else in the workspace names one.
+//! ([`podnapisi::AWAKE`]): the domain has not resolved since June 2026. And
+//! the security centre's three checks: www.virustotal.com (a file's hash, and
+//! the file itself only after a question that says what that shares —
+//! [`virustotal`]), api.xposedornot.com (an e-mail address in known
+//! breaches, [`breach`]) and api.pwnedpasswords.com (a password, by the first
+//! five digits of its SHA-1 alone, [`pwned`]). Every first request goes to a
+//! [`Host`]; nothing else in the workspace names one.
+//!
+//! # Whose each one is
+//!
+//! [`Service::scope`] and [`keys::Key::scope`] say it: the player's Internet
+//! page lists the player's services and keys and never the security
+//! centre's, and the other way round.
 //!
 //! # Typed answers and typed refusals
 //!
@@ -46,6 +58,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub mod ask;
+pub mod breach;
 pub mod coverart;
 pub mod found;
 pub mod keys;
@@ -56,11 +69,13 @@ pub mod opensubtitles;
 pub mod pace;
 pub mod picture;
 pub mod podnapisi;
+pub mod pwned;
 pub mod query;
 pub mod sponsorblock;
 pub mod subdl;
 pub mod suggestion;
 pub mod tmdb;
+pub mod virustotal;
 pub mod wikidata;
 
 #[cfg(feature = "net")]
@@ -114,11 +129,30 @@ pub enum Service {
     /// Subtitles, keyless — asleep ([`podnapisi::AWAKE`]).
     #[serde(rename = "podnapisi")]
     Podnapisi,
+    /// A file's verdict by many engines, with the person's key.
+    #[serde(rename = "virustotal")]
+    VirusTotal,
+    /// An e-mail address in known breaches, keyless.
+    #[serde(rename = "xposedornot")]
+    XposedOrNot,
+    /// A password in known breaches, by five digits of its hash, keyless.
+    #[serde(rename = "pwnedpasswords")]
+    PwnedPasswords,
+}
+
+/// Whose a service or a key is: which page lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Scope {
+    /// The player's Internet page.
+    Player,
+    /// The security centre's online checks.
+    Security,
 }
 
 impl Service {
     /// Every service, in the order the Internet page lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::Lrclib,
         Self::SponsorBlock,
         Self::MusicBrainz,
@@ -128,7 +162,19 @@ impl Service {
         Self::OpenSubtitles,
         Self::SubDl,
         Self::Podnapisi,
+        Self::VirusTotal,
+        Self::XposedOrNot,
+        Self::PwnedPasswords,
     ];
+
+    /// Whose it is.
+    #[must_use]
+    pub const fn scope(self) -> Scope {
+        match self {
+            Self::VirusTotal | Self::XposedOrNot | Self::PwnedPasswords => Scope::Security,
+            _ => Scope::Player,
+        }
+    }
 
     /// Its id: the serde name, and the tail of its text key
     /// (`player-service-<id>`).
@@ -144,6 +190,9 @@ impl Service {
             Self::OpenSubtitles => "opensubtitles",
             Self::SubDl => "subdl",
             Self::Podnapisi => "podnapisi",
+            Self::VirusTotal => "virustotal",
+            Self::XposedOrNot => "xposedornot",
+            Self::PwnedPasswords => "pwnedpasswords",
         }
     }
 
@@ -160,6 +209,23 @@ impl Service {
             Self::OpenSubtitles => &[Host::OpenSubtitles],
             Self::SubDl => &[Host::SubDl, Host::SubDlFiles],
             Self::Podnapisi => &[Host::Podnapisi],
+            Self::VirusTotal => &[Host::VirusTotal],
+            Self::XposedOrNot => &[Host::XposedOrNot],
+            Self::PwnedPasswords => &[Host::PwnedPasswords],
+        }
+    }
+
+    /// The domain it hands addresses out under, when it does: OpenSubtitles
+    /// answers a login with a session host (`vip-api.opensubtitles.com`) and
+    /// a download with a link on another (`www.opensubtitles.com`). A pass
+    /// names one host and these are named at run time, so the person's
+    /// consent to the service — its row's host let — lets the names under
+    /// this domain too (`ronoctua_http::web::request_under`).
+    #[must_use]
+    pub const fn domain(self) -> Option<&'static str> {
+        match self {
+            Self::OpenSubtitles => Some("opensubtitles.com"),
+            _ => None,
         }
     }
 
@@ -170,6 +236,7 @@ impl Service {
             Self::Tmdb => Some(keys::Key::Tmdb),
             Self::OpenSubtitles => Some(keys::Key::OpenSubtitles),
             Self::SubDl => Some(keys::Key::SubDl),
+            Self::VirusTotal => Some(keys::Key::VirusTotal),
             _ => None,
         }
     }
@@ -216,11 +283,17 @@ pub enum Host {
     SubDlFiles,
     /// `www.podnapisi.net`.
     Podnapisi,
+    /// `www.virustotal.com`.
+    VirusTotal,
+    /// `api.xposedornot.com`.
+    XposedOrNot,
+    /// `api.pwnedpasswords.com`.
+    PwnedPasswords,
 }
 
 impl Host {
     /// Every host.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 16] = [
         Self::Lrclib,
         Self::SponsorBlock,
         Self::MusicBrainz,
@@ -234,6 +307,9 @@ impl Host {
         Self::SubDl,
         Self::SubDlFiles,
         Self::Podnapisi,
+        Self::VirusTotal,
+        Self::XposedOrNot,
+        Self::PwnedPasswords,
     ];
 
     /// Its name, as the address carries it and a consent row shows it.
@@ -253,6 +329,9 @@ impl Host {
             Self::SubDl => "api.subdl.com",
             Self::SubDlFiles => "dl.subdl.com",
             Self::Podnapisi => "www.podnapisi.net",
+            Self::VirusTotal => "www.virustotal.com",
+            Self::XposedOrNot => "api.xposedornot.com",
+            Self::PwnedPasswords => "api.pwnedpasswords.com",
         }
     }
 
@@ -269,20 +348,26 @@ impl Host {
             Self::OpenSubtitles => Service::OpenSubtitles,
             Self::SubDl | Self::SubDlFiles => Service::SubDl,
             Self::Podnapisi => Service::Podnapisi,
+            Self::VirusTotal => Service::VirusTotal,
+            Self::XposedOrNot => Service::XposedOrNot,
+            Self::PwnedPasswords => Service::PwnedPasswords,
         }
     }
 
     /// The least time between two requests to it.
     ///
     /// MusicBrainz documents one a second per address and answers 503 above
-    /// it; Podnapisi documented nothing and was known to block bursts. The
-    /// rest are a quarter of a second: under every limit they publish
-    /// (OpenSubtitles was measured at five a second) and far above anything a
-    /// person pressing rows can ask.
+    /// it; Podnapisi documented nothing and was known to block bursts;
+    /// XposedOrNot asks for one a second. VirusTotal's free key is four
+    /// requests a MINUTE, so fifteen seconds apart — which is also what an
+    /// analysis is polled at. The rest are a quarter of a second: under every
+    /// limit they publish (OpenSubtitles was measured at five a second) and
+    /// far above anything a person pressing rows can ask.
     #[must_use]
     pub const fn every(self) -> Duration {
         match self {
-            Self::MusicBrainz | Self::Podnapisi => Duration::from_secs(1),
+            Self::MusicBrainz | Self::Podnapisi | Self::XposedOrNot => Duration::from_secs(1),
+            Self::VirusTotal => Duration::from_secs(15),
             _ => Duration::from_millis(250),
         }
     }
@@ -328,11 +413,14 @@ pub enum Why {
     TooSmall,
     /// The service is asleep in this build.
     Dormant,
+    /// The person has not let the host (`ronoctua-consent`): nothing was
+    /// sent.
+    NotLet,
 }
 
 impl Why {
     /// Every reason — one sentence each in the door.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::NoKey,
         Self::KeyRefused,
         Self::WrongKey,
@@ -347,6 +435,7 @@ impl Why {
         Self::Unreadable,
         Self::TooSmall,
         Self::Dormant,
+        Self::NotLet,
     ];
 
     /// Its id: the serde name, and the tail of its text key.
@@ -367,6 +456,7 @@ impl Why {
             Self::Unreadable => "unreadable",
             Self::TooSmall => "too-small",
             Self::Dormant => "dormant",
+            Self::NotLet => "not-let",
         }
     }
 }
@@ -444,6 +534,31 @@ mod tests {
                 format!("\"{}\"", why.id())
             );
         }
+    }
+
+    /// FAILS IF: a security check lands on the player's Internet page, or a
+    /// player's lookup in the security centre — or VirusTotal is asked faster
+    /// than its free key allows.
+    #[test]
+    fn each_service_is_one_pages() {
+        let security: Vec<Service> = Service::ALL
+            .into_iter()
+            .filter(|s| s.scope() == Scope::Security)
+            .collect();
+        assert_eq!(
+            security,
+            [
+                Service::VirusTotal,
+                Service::XposedOrNot,
+                Service::PwnedPasswords
+            ]
+        );
+        for s in Service::ALL {
+            if let Some(key) = s.key() {
+                assert_eq!(key.scope(), s.scope(), "{s:?}'s key is another page's");
+            }
+        }
+        assert!(Host::VirusTotal.every() >= Duration::from_secs(15));
     }
 
     #[test]

@@ -197,6 +197,21 @@
   # filled further: until then nothing new is there to free.
   reliefGapMinutes = 60;
 
+  # BELOW THIS MUCH FREE, THE DISK IS NEARLY FULL, in per cent — and never
+  # more than `diskWarnCapGiB`. While any filesystem the relief measures is
+  # under it, the brain keeps a mark on the modeline (the owner asked for
+  # exactly this, 2026-09-30).
+  #
+  # BELOW THE FLOOR, on purpose: under the floor the relief makes room by
+  # itself, and a mark there would come and go with every relief that worked
+  # — a modeline that speaks while nothing is asked of anybody. Under this
+  # line the relief has done what it could, or is racing something faster
+  # than it, and what fills the disk is the person's to choose. Five per cent
+  # is 12 GB of a 256 GB disk; the cap keeps a big disk from being "nearly
+  # full" with a hundred gigabytes free.
+  diskWarnPercent = 5;
+  diskWarnCapGiB = 20;
+
   # =======================================================================
   # THE PLAYER'S SUBTITLES, READ ONCE
   # =======================================================================
@@ -238,4 +253,148 @@
   # three megabytes), the TV index about three, a country's radio list a
   # quarter of one — an album's worth of covers and every list, with room.
   playerMib = 64;
+
+  # THE TRANSLATIONS A PROCESS KEEPS, in entries (`ronoctua_words::cache`):
+  # the player's daemon translating the lyrics of the songs that come round
+  # again, and the footer's search asking the same phrase as it is refined.
+  # In memory, and each entry is a song's lyrics at most (MyMemory's ceiling is
+  # five kilobytes of text a translation) — so the bound is about a megabyte,
+  # in a process that lives for months. Past it, the entry used longest ago
+  # goes. Asking again is not free: MyMemory counts the day's characters and
+  # DeepL the month's.
+  wordsCacheEntries = 256;
+
+  # THE EXCHANGE RATES' AGE, in hours, before a currency typed into the
+  # calculator asks for fresh ones (`$XDG_CACHE_HOME/ronoctua/rates.xml`,
+  # `ronoctua_calc::rates`). The ECB publishes once a working day, in the
+  # afternoon: twelve hours means a rate is at most a day behind, and a
+  # calculator used all day asks at most twice.
+  ratesStaleHours = 12;
+
+  # =======================================================================
+  # THE PLAYER'S CATALOGUE
+  # =======================================================================
+  #
+  # THE MOST THE PLAYER'S LOCAL CATALOGUE MAY HOLD, in MiB: its two SQLite
+  # files together (`$XDG_CACHE_HOME/ronoctua/player-catalog/`,
+  # `ronoctua_broadcast::catalog`), every source's categories and items. The
+  # catalogue enforces it itself — an ingest that would pass it is rolled back
+  # and the source keeps its old rows; a catalogue found over it is emptied —
+  # and it is apart from `playerMib`: a database is not a folder of files the
+  # least recently read of which can go, and the LRU there would cut it in
+  # half.
+  #
+  # Two hundred and fifty-six. Every listing is answered by an index that
+  # carries what it sorts and filters by, so an item costs about 1.8 KiB
+  # (measured: a provider's fifty thousand channels in two hundred groups,
+  # seven in ten filed under a theme, take 90 MiB; the timing test's
+  # catalogue — every item in three categories and six theme lists — 231
+  # MiB for fifty-two thousand). So this is two big IPTV providers and every
+  # default source at their bounds, with room.
+  playerCatalogMib = 256;
+
+  # THE VIDEO-METRICS THUMBNAILS, in MiB
+  # (`$XDG_CACHE_HOME/ronoctua/video-metrics/thumbs`,
+  # `ronoctua_video_metrics::thumbs`): YouTube's `mqdefault` picture of each
+  # catalogued video, fetched by the scanner alone. Past this, the picture
+  # written longest ago goes first and the catalogue forgets it; the next scan
+  # fetches it again only for the best two hundred.
+  #
+  # ITS OWN CEILING, for the player's reason above: `~/.cache/ronoctua` is
+  # touched every day, so the sweep never reaches what is under it.
+  #
+  # A hundred and twenty-eight: a thumbnail is ten to thirty kilobytes, so
+  # this holds seven to eight thousand — every video of a few dozen channels'
+  # months, and the best two hundred forty times over.
+  videoMetricsThumbsMib = 128;
+
+  # =======================================================================
+  # THE SUPER INDEX OF FAST-ACCESS
+  # =======================================================================
+  #
+  # `$XDG_CACHE_HOME/ronoctua/index`, written by `ronoctua-index.service`
+  # alone (`nix/modules/index.nix`); these reach it as the unit's arguments
+  # (`nix/index-args.nix`), never as constants in the Rust.
+  #
+  # THE MOST THE INDEX FOLDER MAY WEIGH, in MiB. Past it the CONTENTS of the
+  # oldest files go first — the names stay, which is what the index is for.
+  # A million names with a tenth of them read is 170 MiB (the bench's own
+  # synthetic home); a thousand is room for a home five times that with its
+  # documents read.
+  searchIndexMiB = 1024;
+
+  # A FILE LARGER THAN THIS, in MiB, is found by its name only: its text is
+  # not read at all. A book or a thesis is a few MiB; past sixteen it is a
+  # log or a dump, whose words are not how anybody looks for it.
+  searchContentFileMiB = 16;
+
+  # THE MOST TEXT KEPT OF ONE FILE, in KiB: what fast-access finds a file by
+  # when the name does not say it. Half a megabyte is a long book's worth of
+  # words; the rest of it adds postings, not answers.
+  searchContentKiB = 512;
+
+  # NEVER WALKED: a bare word is a NAME anywhere in a root, a word starting
+  # with `/` a PATH. Build trees and caches are machine output a person does
+  # not look for by name, and they churn: `target` alone rewrites thousands of
+  # files a build, each an inotify event and a document.
+  searchSkip = [
+    ".git"
+    "target"
+    "node_modules"
+    ".cache"
+    "/nix"
+  ];
+
+  # THE UNIT'S MEMORY, in MiB (`MemoryMax`): the writer's arena is an eighth
+  # of it, and the rest is the walk's notes (eight bytes a path), a document
+  # being read (a sixteen-MiB `.docx` parsed) and tantivy's merges.
+  searchMemoryMiB = 512;
+
+  # THE GIT BROWSER'S OLD VERSIONS (`C-o`): a file as a commit had it, copied
+  # read-only under `~/.cache/ronoctua/git-versions` to be opened — the most
+  # copies kept, the oldest going first. A copy is opened once and read; a
+  # few dozen is every version somebody compares in a sitting.
+  gitVersionsMost = 32;
+
+  # THE ARCHIVE LISTINGS A PROCESS KEEPS, in listings. Walking into an archive
+  # lists it with its program (7zz, bsdtar, unrar), which on a big one is
+  # seconds; kept, going up and back in again is free. Keyed by the archive's
+  # path, size and modification time, so one rewritten in place is listed
+  # again. Eight is the archives one goes back and forth between; each holds
+  # the members' names and sizes, not their contents.
+  archiveListings = 8;
+
+  # WHAT THE MEMBERS OPENED OUT OF ARCHIVES MAY WEIGH, in MiB
+  # (`~/.cache/ronoctua/archive`). Opening a member extracts it there first,
+  # and after every extraction the oldest archive's folder goes until the rest
+  # fit — the one just written is kept whole. The cache's age sweeps it too.
+  archiveOpenedMib = 1024;
+
+  # THE CALCULATOR'S HISTORY (`calc.json`), in answers kept: the newest this
+  # many, and the oldest goes as a new one comes. Two hundred is weeks of sums
+  # a person scrolls back through; past it a history is a log nobody reads,
+  # and every door that writes the file rewrites all of it.
+  calcHistoryEntries = 200;
+
+  # THE CATALOGUE'S POSTERS, in MiB (`player-catalog/posters/`): a poster is
+  # fetched only for an item a door shows, from a source whose posters switch
+  # is on, and is a picture of a few tens of KiB — 64 MiB is a couple of
+  # thousand, more than a person scrolls past in a week. Apart from
+  # `playerCatalogMib` (a folder of files the least read of which leave first,
+  # never a database cut in half) and from `playerMib` (the covers and the
+  # directories' lists, which a scroll through posters would push out).
+  playerPostersMib = 64;
+
+  # THE PICTURES OF YOUTUBE'S RESULTS (`/y`), in MiB
+  # (`~/.cache/ronoctua/fast-access/thumbs`): fetched from `i.ytimg.com` only
+  # for a video a search shows, with the person's consent, each a few tens of
+  # KiB — 64 MiB is a couple of thousand, weeks of searches. The oldest go
+  # first.
+  webThumbsMiB = 64;
+
+  # WHAT FAST-ACCESS REMEMBERS OF WHAT WAS OPENED FROM IT (`/r`, and the
+  # weight the index gives a result used before), in entries: the newest this
+  # many. Two hundred is months of what one person opens by searching.
+  fastAccessRecentMost = 200;
+
 }

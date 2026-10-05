@@ -36,6 +36,11 @@ pub use ronoctua_playlist::own;
 /// `wire::Trouble::Listing` carries, named here for the same reason.
 pub use ronoctua_ytdlp::Trouble as Listing;
 
+/// Why the lyrics were not translated — what `wire::Trouble::Translation`
+/// carries, the translating crate's closed set — named here for the same
+/// reason.
+pub use ronoctua_words::{Refusal as TranslationRefusal, Why as TranslationWhy};
+
 /// The player's name on the session bus for MPRIS:
 /// `org.mpris.MediaPlayer2.<instance>`, so the nested loop's player and the
 /// installed one are two players on the bus and not a fight over one name.

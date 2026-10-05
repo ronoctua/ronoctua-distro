@@ -565,26 +565,37 @@ mod tests {
         );
     }
 
-    /// OpenSubtitles' two published vectors. They need the published FILES —
-    /// `breakdance.avi` (12 909 756 bytes) and the `dummy.bin` inside
-    /// `dummy.rar` (4 295 033 000 bytes) — which are not in this tree, so the
-    /// test is ignored and asks for them by name: run it with
-    /// `RONOCTUA_OSHASH_BREAKDANCE=<file> RONOCTUA_OSHASH_DUMMY=<file> cargo
-    /// test -p ronoctua-lookup -- --ignored`. A missing variable FAILS it; it
-    /// never passes by having nothing to read.
+    /// One of OpenSubtitles' published vectors: the file `variable` names
+    /// hashes to `hex`. A missing variable FAILS it; it never passes by
+    /// having nothing to read.
+    fn published(variable: &str, size: u64, hex: &str) {
+        let path = std::env::var_os(variable)
+            .unwrap_or_else(|| panic!("{variable} names no file: set it to run this"));
+        let h = moviehash(Path::new(&path)).unwrap();
+        assert_eq!(h.size_bytes, size, "{variable} is not the published file");
+        assert_eq!(h.hex(), hex, "{variable}");
+    }
+
+    /// OpenSubtitles' published `breakdance.avi` (12 909 756 bytes), which
+    /// is not in this tree: ignored here, and run by
+    /// `moviehash-published-vectors` over a pinned copy
+    /// (`nix/test-vectors.nix`) — or by hand with
+    /// `RONOCTUA_OSHASH_BREAKDANCE=<file> cargo test -p ronoctua-lookup --
+    /// --ignored`.
     #[test]
-    #[ignore = "needs OpenSubtitles' published test files"]
-    fn the_published_vectors_hold() {
-        for (variable, size, hex) in [
-            ("RONOCTUA_OSHASH_BREAKDANCE", 12_909_756, "8e245d9679d31e12"),
-            ("RONOCTUA_OSHASH_DUMMY", 4_295_033_000, "61f7751fc2a72bfb"),
-        ] {
-            let path = std::env::var_os(variable)
-                .unwrap_or_else(|| panic!("{variable} names no file: set it to run this"));
-            let h = moviehash(Path::new(&path)).unwrap();
-            assert_eq!(h.size_bytes, size, "{variable} is not the published file");
-            assert_eq!(h.hex(), hex, "{variable}");
-        }
+    #[ignore = "needs OpenSubtitles' published breakdance.avi"]
+    fn the_breakdance_vector_holds() {
+        published("RONOCTUA_OSHASH_BREAKDANCE", 12_909_756, "8e245d9679d31e12");
+    }
+
+    /// The other published vector, the `dummy.bin` inside `dummy.rar`
+    /// (4 295 033 000 bytes): a file past 4 GiB, which no check downloads.
+    /// By hand: `RONOCTUA_OSHASH_DUMMY=<file> cargo test -p ronoctua-lookup
+    /// -- --ignored`.
+    #[test]
+    #[ignore = "needs OpenSubtitles' published dummy.bin, 4 GiB"]
+    fn the_dummy_vector_holds() {
+        published("RONOCTUA_OSHASH_DUMMY", 4_295_033_000, "61f7751fc2a72bfb");
     }
 
     #[test]

@@ -19,6 +19,9 @@
 #    nothing (`crates/ronoctua-cache-sweep/src/lib.rs`). A cache that has to
 #    be MOVED is moved only while the machine is booting, at most once per
 #    `keepDays` when it fails, and never for longer than the unit allows.
+#    Other modules add folders of the same kind (`ownSubvolumes`): where
+#    containers are on, `~/.local/share/containers` — every image layer the
+#    person pulled, which a snapshot of `/home` must not pin either.
 # 2. **The kernel reclaims unallocated space by itself.** From 6.11 btrfs can
 #    move nearly empty data block groups back to unallocated space as it runs
 #    short (`dynamic_reclaim`, `periodic_reclaim`), which is what a manual
@@ -29,7 +32,8 @@
 #    event.
 # 4. **No snapshot may hold the store or a cache.** Any snapper or btrbk target
 #    at or under `/nix`, holding `/nix` (a snapshot of `/` on a machine where
-#    `/nix` is not its own mount), or at a `.cache`, is refused at evaluation.
+#    `/nix` is not its own mount), at a `.cache` or at the containers'
+#    storage, is refused at evaluation.
 #
 # Machines without btrfs get none of the first three and are told nothing:
 # the predicate below is false and the steps are not there. The snapshot rule
@@ -47,8 +51,15 @@ let
   # EVERY NORMAL USER, from the configuration and never a literal (inv. 16).
   people = lib.filterAttrs (_: u: u.isNormalUser) config.users.users;
   cacheUnit = name: "ronoctua-cache-subvolume-${name}";
-  # WHERE A FAILED CONVERSION LEAVES ITS NOTE, one file per person.
+  # THE UNIT FOR EVERY FOLDER THAT IS A SUBVOLUME OF ITS OWN: the cache's
+  # keeps the name it always had, so a machine's journal and the checks read
+  # the same unit before and after the list grew.
+  subvolumeUnit =
+    key: name: if key == "cache" then cacheUnit name else "ronoctua-${key}-subvolume-${name}";
+  # WHERE A FAILED CONVERSION LEAVES ITS NOTE, one file per person (and per
+  # folder, past the cache's).
   noteDir = "ronoctua-cache-subvolume";
+  noteOf = key: name: "/var/lib/${noteDir}/${name}${lib.optionalString (key != "cache") ".${key}"}";
   # `keepDays` — how long a failed conversion waits (see the script).
   declared = import ../../assets/cache.nix;
 
@@ -95,17 +106,22 @@ let
       pkgs.gawk
     ];
     text = ''
-      if [ $# -ne 5 ]; then
-        echo "ERROR: usage: ronoctua-cache-subvolume <home> <user> <group> <note> <retry-days>" >&2
+      if [ $# -ne 6 ]; then
+        echo "ERROR: usage: ronoctua-cache-subvolume <home> <folder> <user> <group> <note> <retry-days>" >&2
         exit 2
       fi
-      home=$1 user=$2 group=$3 note=$4 retry_days=$5
+      home=$1 folder=$2 user=$3 group=$4 note=$5 retry_days=$6
       if ! [[ $retry_days =~ ^[1-9][0-9]*$ ]]; then
         echo "ERROR: <retry-days> must be a whole number of days, not '$retry_days'" >&2
         exit 2
       fi
-      cache=$home/.cache
-      moving=$home/.cache.subvolume-in-progress
+      # A folder under the home, named relative to it and going nowhere else.
+      if ! [[ $folder =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || [[ /$folder/ == */../* ]] || [[ /$folder/ == */./* ]]; then
+        echo "ERROR: <folder> must be a plain path under the home, not '$folder'" >&2
+        exit 2
+      fi
+      cache=$home/$folder
+      moving=$cache.subvolume-in-progress
 
       on_btrfs() { [ "$(stat --file-system --format=%T -- "$1")" = btrfs ]; }
       subvolume() { [ -d "$1" ] && [ ! -L "$1" ] && on_btrfs "$1" && [ "$(stat --format=%i -- "$1")" = 256 ]; }
@@ -149,8 +165,27 @@ let
       fi
 
       # NOTHING THERE YET: the subvolume is simply made, logged in or not —
-      # there is nothing of anybody's to move.
+      # there is nothing of anybody's to move. Every folder missing on the
+      # way is made the PERSON's (a `~/.local` made by root would be a home
+      # its owner cannot write), and a link on the way is somebody's
+      # arrangement: left as it is.
       if [ ! -e "$cache" ]; then
+        at=$home
+        IFS=/ read -r -a parts <<< "$(dirname -- "$folder")"
+        for part in "''${parts[@]}"; do
+          if [ "$part" = . ]; then
+            continue
+          fi
+          at=$at/$part
+          if [ -L "$at" ]; then
+            echo "$at is a link; $cache is left as it is"
+            exit 0
+          fi
+          if [ ! -e "$at" ]; then
+            mkdir -- "$at"
+            chown -- "$user:$group" "$at"
+          fi
+        done
         if btrfs subvolume create -- "$cache"; then
           chown -- "$user:$group" "$cache"
           chmod 0700 -- "$cache"
@@ -221,6 +256,49 @@ let
       rm -f -- "$note"
       echo "$cache is a subvolume of its own now; snapshots of $home no longer carry it"
     '';
+  };
+
+  # ONE UNIT PER PERSON AND FOLDER.
+  unitFor = key: folder: name: u: {
+    description = "Makes ${u.home}/${folder} a btrfs subvolume of its own";
+    # BEFORE ANY LOGIN: `systemd-user-sessions.service` is what lets
+    # logins in (the getty, a display manager and every user manager
+    # wait for it), so nothing of the person's has a file open in there.
+    # With the default dependencies and not before `sysinit.target`: a
+    # home mounted late — over the network, by a device that comes up
+    # late — would otherwise be an ordering cycle at boot, and the rest
+    # of the boot does not wait for a copy it has no stake in.
+    wantedBy = [ "multi-user.target" ];
+    before = [ "systemd-user-sessions.service" ];
+    unitConfig.RequiresMountsFor = [ u.home ];
+    # A switch does not re-run it under a live session; the boot does.
+    restartIfChanged = false;
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${cacheSubvolume}/bin/ronoctua-cache-subvolume ${
+        lib.escapeShellArgs [
+          u.home
+          folder
+          name
+          u.group
+          (noteOf key name)
+          (toString declared.keepDays)
+        ]
+      }";
+      # NEVER LONGER THAN THIS before the logins it holds back: a copy cut
+      # short is undone at the next boot and not tried again for
+      # `keepDays` (the note above).
+      TimeoutStartSec = "10min";
+      StateDirectory = noteDir;
+      # As root, because every file keeps its owner; and the home is the
+      # only thing it may write, beside its note.
+      ProtectSystem = "strict";
+      ReadWritePaths = [ "-${u.home}" ];
+      PrivateNetwork = true;
+      NoNewPrivileges = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+    };
   };
 
   # -----------------------------------------------------------------
@@ -313,6 +391,8 @@ let
       "/nix is not a mount of its own here, so a snapshot of / holds the Nix store"
     else if lib.elem ".cache" (lib.splitString "/" target) then
       "it is a cache"
+    else if lib.hasInfix "/.local/share/containers/" "${target}/" then
+      "it is the containers' storage"
     else
       null;
 
@@ -329,6 +409,20 @@ in
         Whether this machine has btrfs, and so the steps only btrfs can take: the
         cache subvolumes, the kernel's own reclaim of unallocated space and the
         scrub. The one predicate every one of them reads.
+      '';
+    };
+
+    ownSubvolumes = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.strMatching "[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*");
+      default = { };
+      example = {
+        containers = ".local/share/containers";
+      };
+      description = ''
+        Folders under every person's home that are btrfs subvolumes of their
+        own, by a short name (the unit is `ronoctua-<name>-subvolume-<user>`):
+        what a snapshot of `/home` must not hold. `cache` (`.cache`) is always
+        there; a module adds its own (`containers.nix`).
       '';
     };
 
@@ -365,6 +459,9 @@ in
 
       # One scrub per filesystem (nixpkgs dedups by device), monthly, at idle.
       services.btrfs.autoScrub.enable = lib.mkDefault cfg.btrfs;
+
+      # The cache's, always.
+      ronoctua.filesystem.ownSubvolumes.cache = ".cache";
     }
 
     (lib.mkIf cfg.btrfs {
@@ -375,49 +472,17 @@ in
         "w /sys/fs/btrfs/*/allocation/data/periodic_reclaim - - - - 1"
       ];
 
-      systemd.services = lib.mapAttrs' (
-        name: u:
-        lib.nameValuePair (cacheUnit name) {
-          description = "Makes ${u.home}/.cache a btrfs subvolume of its own";
-          # BEFORE ANY LOGIN: `systemd-user-sessions.service` is what lets
-          # logins in (the getty, a display manager and every user manager
-          # wait for it), so nothing of the person's has a file open in there.
-          # With the default dependencies and not before `sysinit.target`: a
-          # home mounted late — over the network, by a device that comes up
-          # late — would otherwise be an ordering cycle at boot, and the rest
-          # of the boot does not wait for a copy it has no stake in.
-          wantedBy = [ "multi-user.target" ];
-          before = [ "systemd-user-sessions.service" ];
-          unitConfig.RequiresMountsFor = [ u.home ];
-          # A switch does not re-run it under a live session; the boot does.
-          restartIfChanged = false;
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "${cacheSubvolume}/bin/ronoctua-cache-subvolume ${
-              lib.escapeShellArgs [
-                u.home
-                name
-                u.group
-                "/var/lib/${noteDir}/${name}"
-                (toString declared.keepDays)
-              ]
-            }";
-            # NEVER LONGER THAN THIS before the logins it holds back: a copy cut
-            # short is undone at the next boot and not tried again for
-            # `keepDays` (the note above).
-            TimeoutStartSec = "10min";
-            StateDirectory = noteDir;
-            # As root, because every file keeps its owner; and the home is the
-            # only thing it may write, beside its note.
-            ProtectSystem = "strict";
-            ReadWritePaths = [ "-${u.home}" ];
-            PrivateNetwork = true;
-            NoNewPrivileges = true;
-            RestrictAddressFamilies = [ "AF_UNIX" ];
-          };
-        }
-      ) people;
+      systemd.services = lib.listToAttrs (
+        lib.concatLists (
+          lib.mapAttrsToList (
+            key: folder:
+            lib.mapAttrsToList (name: u: {
+              name = subvolumeUnit key name;
+              value = unitFor key folder name u;
+            }) people
+          ) cfg.ownSubvolumes
+        )
+      );
     })
   ];
 }

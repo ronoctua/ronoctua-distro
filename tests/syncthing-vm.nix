@@ -201,7 +201,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the one privileged thing works, as the owner, with no agent"):
         # THIS IS WHAT THE POLKIT RULE IS FOR, and it is the only thing in the
         # whole view that needs one. No `sudo`, no `pkexec`, no polkit agent in
-        # the session — `nix/modules/update.nix` explains why there is none.
+        # the session — the update's `module.nix` explains why there is none.
         as_owner("${pkgs.systemd}/bin/systemctl stop syncthing.service")
         machine.wait_until_fails("systemctl is-active syncthing.service")
         as_owner("${pkgs.systemd}/bin/systemctl start syncthing.service")

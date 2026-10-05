@@ -172,6 +172,18 @@ impl Subtitles {
         None
     }
 
+    /// The languages `lane`'s file carries when it shows one of several (a
+    /// SAMI's), as the last answer for it read them — none otherwise.
+    pub(super) fn languages_of(&self, lane: LaneId) -> Vec<String> {
+        self.voices
+            .values()
+            .filter_map(|d| d.answer.as_ref())
+            .flat_map(|show| show.languages.iter())
+            .find(|(l, _)| *l == lane)
+            .map(|(_, all)| all.clone())
+            .unwrap_or_default()
+    }
+
     /// mpv's id for the merged script the voice `serial` shows.
     pub(super) fn merged_of(&self, serial: u64) -> Option<i64> {
         self.voices.get(&serial).and_then(|d| d.merged)
@@ -553,6 +565,7 @@ fn undress(v: &mut voice::Voice, d: &mut Dressed) {
             primary: Primary::Nothing,
             secondary: None,
             refused: Vec::new(),
+            languages: Vec::new(),
         },
     );
 }
@@ -648,7 +661,7 @@ fn prepare(plan: &Plan, cache: &mut Cache) -> Show {
         .wanted
         .iter()
         .map(|w| match &w.source {
-            Source::File(path) => Some(read_file(path, plan.rate, cache)),
+            Source::File(path) => Some(read_file(path, plan.rate, w.lang.as_deref(), cache)),
             Source::Address(url) => Some(Read::OnlyNative(Native::File(url.clone()))),
             Source::Streamed { track, .. } if w.is_image_track() => {
                 Some(Read::Image(Native::Track(*track)))
@@ -752,7 +765,7 @@ fn advance_permille() -> u32 {
 }
 
 /// A subtitle file on this disk, read.
-fn read_file(path: &str, rate: Option<FrameRate>, cache: &mut Cache) -> Read {
+fn read_file(path: &str, rate: Option<FrameRate>, tongue: Option<&str>, cache: &mut Cache) -> Read {
     let unreadable = || {
         Read::Refused(Trouble::Unreadable {
             path: path.to_owned(),
@@ -766,6 +779,7 @@ fn read_file(path: &str, rate: Option<FrameRate>, cache: &mut Cache) -> Read {
         bytes: meta.len(),
         modified: meta.modified().ok(),
         track: None,
+        tongue: tongue.map(ToOwned::to_owned),
     };
     if let Some(hit) = cache.get(&key) {
         return hit;
@@ -794,7 +808,7 @@ fn read_file(path: &str, rate: Option<FrameRate>, cache: &mut Cache) -> Read {
         return unreadable();
     }
     let extension = Path::new(path).extension().and_then(|e| e.to_str());
-    match subtitles_of(&bytes, extension, rate) {
+    match subtitles_of(&bytes, extension, rate, tongue) {
         Ok(Opened::Ours(track)) => {
             let ass = track.format == Format::Ass;
             let read = Read::Words {
@@ -860,11 +874,12 @@ fn subtitles_of(
     bytes: &[u8],
     extension: Option<&str>,
     rate: Option<FrameRate>,
+    tongue: Option<&str>,
 ) -> Result<Opened, Refusal> {
     if let Some(subtitles::Kind::Image(picture)) = subtitles::sniff::binary(bytes) {
         return Ok(Opened::Image(picture));
     }
-    subtitles::open(bytes, extension, rate)
+    subtitles::open_in(bytes, extension, rate, tongue)
 }
 
 /// The index mpv opens a VobSub by: the `.idx` itself, or the one beside a
@@ -897,6 +912,7 @@ fn read_inside(file: &str, n: usize, ass: Option<i64>, cache: &mut Cache) -> Rea
         bytes: meta.len(),
         modified: meta.modified().ok(),
         track: Some(n),
+        tongue: None,
     };
     let native = ass.map(Native::Track);
     if let Some(Read::Words { words, .. }) = cache.get(&key) {
@@ -1030,6 +1046,8 @@ struct Key {
     modified: Option<SystemTime>,
     /// The stream inside it, for a track; `None` for the file itself.
     track: Option<usize>,
+    /// The language read of a file of several (a SAMI's class).
+    tongue: Option<String>,
 }
 
 /// What was read, under its stamp, within a ceiling in bytes — the least
@@ -1165,6 +1183,7 @@ mod tests {
             bytes: 1,
             modified: None,
             track: None,
+            tongue: None,
         };
         let read = || Read::Refused(Trouble::NothingPlaying);
         let mut cache = Cache::new(100);
@@ -1241,7 +1260,7 @@ mod tests {
             let film = dir.join("film.mkv");
             std::fs::write(&film, b"not read").expect("film");
             for read in [
-                read_file(&at("a.jss"), None, &mut cache),
+                read_file(&at("a.jss"), None, None, &mut cache),
                 read_inside(&at("film.mkv"), 0, None, &mut cache),
             ] {
                 match read {
@@ -1252,7 +1271,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             return;
         };
-        match read_file(&at("a.jss"), None, &mut cache) {
+        match read_file(&at("a.jss"), None, None, &mut cache) {
             Read::Words { words, native } => {
                 assert_eq!(words.cues[0].text(), "hello there");
                 assert_eq!(words.cues[0].start_ms, 1000);
@@ -1298,6 +1317,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FAILS IF: a SAMI of two languages is read in the first whatever the
+    /// lane keeps, the cache hands one language's words to a lane that keeps
+    /// the other, or the languages it carries are not said for a door to
+    /// offer.
+    #[test]
+    fn a_sami_lane_is_read_in_the_language_it_keeps() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-subs-sami-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a folder");
+        let smi = dir.join("a.smi");
+        std::fs::write(
+            &smi,
+            "<SAMI><HEAD><STYLE><!--\n.ENCC {lang: en-US;}\n.PTCC {lang: pt-BR;}\n--></STYLE>\
+</HEAD><BODY>\n<SYNC Start=1000><P Class=ENCC>Hello<P Class=PTCC>Ola\n\
+<SYNC Start=2000><P Class=ENCC>&nbsp;\n</BODY></SAMI>",
+        )
+        .expect("smi");
+        let path = smi.to_string_lossy().into_owned();
+        let mut cache = Cache::new(1 << 20);
+        let words_of = |r: Read| match r {
+            Read::Words { words, .. } => (words.cues[0].text(), words.languages.clone()),
+            other => panic!("{other:?}"),
+        };
+        let (first, languages) = words_of(read_file(&path, None, None, &mut cache));
+        assert_eq!(first, "Hello");
+        assert_eq!(languages, vec!["en-US".to_owned(), "pt-BR".to_owned()]);
+        assert_eq!(
+            words_of(read_file(&path, None, Some("pt-BR"), &mut cache)).0,
+            "Ola"
+        );
+        // KEPT APART in the cache: asked again, each its own.
+        assert_eq!(
+            words_of(read_file(&path, None, None, &mut cache)).0,
+            "Hello"
+        );
+        assert_eq!(
+            words_of(read_file(&path, None, Some("pt"), &mut cache)).0,
+            "Ola"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FAILS IF: a file of words is not read, pictures are not told by their
     /// head, a VobSub without its index is shown, or a file that is not
     /// there is not said to be unreadable.
@@ -1331,7 +1392,7 @@ mod tests {
         .expect("sub");
         let mut cache = Cache::new(1 << 20);
         let at = |p: &Path| p.to_string_lossy().into_owned();
-        match read_file(&at(&srt), None, &mut cache) {
+        match read_file(&at(&srt), None, None, &mut cache) {
             Read::Words { words, native } => {
                 assert_eq!(words.cues[0].text(), "hello");
                 assert_eq!(native, None, "an SRT is merged even alone");
@@ -1345,18 +1406,19 @@ mod tests {
                     bytes: std::fs::metadata(&srt).expect("meta").len(),
                     modified: std::fs::metadata(&srt).expect("meta").modified().ok(),
                     track: None,
+                    tongue: None,
                 })
                 .is_some()
         );
-        match read_file(&at(&ass), None, &mut cache) {
+        match read_file(&at(&ass), None, None, &mut cache) {
             Read::Words { native, .. } => assert_eq!(native, Some(Native::File(at(&ass)))),
             other => panic!("{other:?}"),
         }
-        match read_file(&at(&sup), None, &mut cache) {
+        match read_file(&at(&sup), None, None, &mut cache) {
             Read::Image(Native::File(f)) => assert_eq!(f, at(&sup)),
             other => panic!("{other:?}"),
         }
-        match read_file(&at(&sub), None, &mut cache) {
+        match read_file(&at(&sub), None, None, &mut cache) {
             Read::Refused(Trouble::Subtitle { why, .. }) => assert_eq!(why, Refusal::NoIndex),
             other => panic!("{other:?}"),
         }
@@ -1365,11 +1427,11 @@ mod tests {
             "# VobSub index file, v7 (do not modify this line!)\n",
         )
         .expect("idx");
-        match read_file(&at(&sub), None, &mut cache) {
+        match read_file(&at(&sub), None, None, &mut cache) {
             Read::Image(Native::File(f)) => assert!(f.ends_with("b.idx"), "{f}"),
             other => panic!("{other:?}"),
         }
-        match read_file(&at(&dir.join("gone.srt")), None, &mut cache) {
+        match read_file(&at(&dir.join("gone.srt")), None, None, &mut cache) {
             Read::Refused(Trouble::Unreadable { .. }) => {}
             other => panic!("{other:?}"),
         }

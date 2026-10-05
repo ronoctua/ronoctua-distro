@@ -19,7 +19,9 @@
 //! - **Lyrics** — only when there are some, and a row saying where they came
 //!   from.
 //! - **Queue** — the outline the door keeps, as a tree whose groups fold
-//!   (`crate::player_queue`), and the glyph that empties it on its title.
+//!   (`crate::player_queue`), and the glyph that empties it on its title; a
+//!   long queue is a window around what plays and a row, "Queue · N", that
+//!   opens the whole of it on its own page.
 //! - **Listen and watch** — the files, the world radio, the world TV and the
 //!   channels by theme (`crate::player_directory`), and the ambient sounds
 //!   with what sounds now (`crate::player_ambience`).
@@ -36,14 +38,14 @@
 //!   (`crate::player_metadata`).
 
 use crate::player::{
-    LYRICS_AROUND, OF_THE_VIEW, PageId, Purpose, Target, TrackKind, VOLUME_MOST, View, clock,
-    loaded, node_of, now_playing, older, trouble_sentence,
+    Errand, LYRICS_AROUND, OF_THE_VIEW, PageId, Purpose, Target, TrackKind, VOLUME_MOST, View,
+    clock, loaded, node_of, now_playing, older, trouble_sentence,
 };
 use crate::player_queue::{lane_glyph, lane_name};
 use crate::player_rows::{Builder, Slid, on_off, share, trim_float};
 use ronoctua_i18n::key;
 use ronoctua_player::queue::{NodeKind, Outline};
-use ronoctua_player::wire::{LaneStatus, Repeat, State};
+use ronoctua_player::wire::{Ask, LaneStatus, Repeat, State, Trouble};
 use ronoctua_tokens as tokens;
 
 impl View {
@@ -73,29 +75,178 @@ impl View {
             no_room(b);
         }
         let outline = self.outline.as_deref();
-        now(s, outline, self.deck_in_now, b);
+        now(s, outline, self.deck_in_now, &self.prefs, b);
         media_in_the_file(s, b);
-        lyrics(s, b);
-        crate::player_queue::queue(self, s, outline, b);
+        lyrics(
+            s,
+            (
+                self.translator_let,
+                &crate::player_translator::hosts(&self.prefs),
+            ),
+            b,
+        );
+        crate::player_queue::queue(self, s, outline, false, b);
         listen_and_watch(b, Some(s));
         various(b, Some(s), outline);
         // THE METADATA, LAST (plan P7): what the file shown says of itself.
         crate::player_metadata::section(self, s, b);
     }
 
-    /// The "Now" title — with the swap's glyph beside it in the footer while
-    /// no media panel stands beside the rows to carry it in its transport.
+    /// The "Now" title — with the glyph that FOLDS THE PICTURE away, or
+    /// back, while the door shows one ([`View::picture_foldable`]), and the
+    /// swap's glyph at its edge in the footer while no media panel stands
+    /// beside the rows to carry it in its transport.
     fn now_heading(&self, b: &mut Builder<'_>) {
-        if self.swap && !self.panel {
-            b.heading_with(
+        // THE FOLD'S GLYPH IS DRAWN AS WHAT A PRESS DOES: fold, or unfold.
+        let fold = self.picture_fold.map(|folded| {
+            if folded {
+                tokens::icon::PLAYER_PICTURE_UNFOLD
+            } else {
+                tokens::icon::PLAYER_PICTURE_FOLD
+            }
+        });
+        // EACH CASE ITS OWN LITERAL CONTROLS, which the hint check reads. A
+        // PICTURE TO FOLD stands in a panel, and the footer's panel carries
+        // the swap in its transport: the title never draws both.
+        match (fold, self.swap && !self.panel) {
+            (Some(glyph), _) => b.heading_with(
+                key::PLAYER_HEADING_NOW,
+                glyph,
+                Target::FoldPicture,
+                "player-picture-fold",
+            ),
+            (None, true) => b.heading_with(
                 key::PLAYER_HEADING_NOW,
                 tokens::icon::PLAYER_WINDOW,
                 Target::Swap,
-            );
-        } else {
-            b.heading(key::PLAYER_HEADING_NOW);
+                "player-swap",
+            ),
+            (None, false) => b.heading(key::PLAYER_HEADING_NOW),
         }
     }
+}
+
+impl View {
+    /// `T` and the glyph on the Lyrics' title: the lyrics translated under
+    /// their verses, or no longer. The language they were in is kept when
+    /// the person chose one — turned off, and turned on again
+    /// (`View::lyrics_tongue`); the interface's is the default, and needs no
+    /// keeping. With no lyrics there is nothing to translate, and
+    /// that is said.
+    pub(crate) fn translate(&self, state: Option<&State>, texts: &ronoctua_i18n::Texts) -> Errand {
+        let Some(s) = state else {
+            return Errand::Said(texts.t(key::PLAYER_NOT_RUNNING));
+        };
+        if s.lyrics.is_empty() {
+            return Errand::Said(texts.t(key::PLAYER_LYRICS_NONE_TO_TRANSLATE));
+        }
+        // THE LANGUAGE CHOSEN, kept both ways: the one in use while on, and
+        // turned on again, the last one this door saw — never the
+        // interface's in its place.
+        let to = s
+            .lyrics_translation
+            .as_ref()
+            .map(|t| t.to.clone())
+            .or_else(|| self.lyrics_tongue.clone())
+            .filter(|to| to != texts.language());
+        Errand::Tell(Ask::LyricsTranslation {
+            on: s.lyrics_translation.is_none(),
+            to,
+        })
+    }
+
+    /// The translation's rows: its language's ring, the row that lets the
+    /// host a translation was refused for, and the Internet page's switch of
+    /// that host. `None` for a target that is none of those.
+    pub(crate) fn translation_turned(
+        &mut self,
+        target: &Target,
+        press: crate::player::Press,
+        state: Option<&State>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Errand> {
+        use crate::player::Press;
+        let chosen = || {
+            state
+                .and_then(|s| s.lyrics_translation.as_ref())
+                .map(|t| t.to.clone())
+                .filter(|to| to != texts.language())
+        };
+        match (target, press) {
+            // INTO WHICH LANGUAGE: the tongues' ring, from the one in use.
+            (Target::TranslateTo, Press::Less | Press::More | Press::Enter) => {
+                let now = state.and_then(|s| s.lyrics_translation.as_ref())?;
+                Some(Errand::Tell(Ask::LyricsTranslation {
+                    on: true,
+                    to: Some(next_tongue(&now.to, press != Press::Less).to_owned()),
+                }))
+            }
+            // A HOST THE QUEUE WAS REFUSED, let — the press is the consent —
+            // and said so: what was refused is the person's to put again.
+            (Target::LetHost(host), Press::Enter) => {
+                self.prefs.hosts =
+                    std::mem::take(&mut self.prefs.hosts).with(&[host.as_str()], true);
+                self.prefs_written();
+                Some(Errand::LetHosts {
+                    hosts: vec![host.clone()],
+                    on: true,
+                    then: Box::new(Errand::Said(
+                        texts.t_with(key::PLAYER_HOST_LET, &[("host", host.as_str())]),
+                    )),
+                })
+            }
+            // THE HOST NOT LET, let — the press is the consent — and the
+            // translation asked again after it.
+            (Target::LetTranslator(host), Press::Enter) => {
+                self.translator_let = true;
+                Some(Errand::LetHosts {
+                    hosts: crate::player_translator::to_let(
+                        &crate::player_translator::hosts(&self.prefs),
+                        host,
+                    ),
+                    on: true,
+                    then: Box::new(Errand::Tell(Ask::LyricsTranslation {
+                        on: true,
+                        to: chosen(),
+                    })),
+                })
+            }
+            // THE INTERNET PAGE'S SWITCH: the translator's host let, or no
+            // longer.
+            (Target::Translator, Press::Enter | Press::Less | Press::More) => {
+                let on = !self.translator_let;
+                self.translator_let = on;
+                Some(Errand::LetHosts {
+                    hosts: crate::player_translator::hosts(&self.prefs),
+                    on,
+                    then: Box::new(Errand::Nothing),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The tongue after `code` in the table — or before it, `forward` false —
+/// round the ring; from a code the table does not know, its first.
+#[must_use]
+pub fn next_tongue(code: &str, forward: bool) -> &'static str {
+    let all = &ronoctua_player::tongues::TONGUES;
+    let primary = code.split('-').next().unwrap_or(code);
+    let at = all
+        .iter()
+        .position(|t| t.code.eq_ignore_ascii_case(code))
+        .or_else(|| {
+            all.iter()
+                .position(|t| t.code.eq_ignore_ascii_case(primary))
+        });
+    let n = all.len();
+    let to = match at {
+        Some(i) if forward => (i + 1) % n,
+        Some(i) => (i + n - 1) % n,
+        None => 0,
+    };
+    all[to].code
 }
 
 /// A row that opens `page`: its label is the page's own key, the one it is
@@ -107,9 +258,29 @@ fn opens(b: &mut Builder<'_>, page: PageId, value: String) {
 /// NOW: what plays, and how — and, in the footer, a SET's lanes on one
 /// clock where its position would be: the deck as rows (`Builder::deck`), the
 /// footer having no block under a transport to draw it in.
-fn now(s: &State, outline: Option<&Outline>, deck: bool, b: &mut Builder<'_>) {
+fn now(
+    s: &State,
+    outline: Option<&Outline>,
+    deck: bool,
+    prefs: &ronoctua_player::prefs::Preferences,
+    b: &mut Builder<'_>,
+) {
     for t in &s.troubles {
         b.warning(&trouble_sentence(t, b.texts));
+        // A HOST NOT LET — a queued address the player would not reach for
+        // it: named on the row that lets it, the press being the consent.
+        // Gone once it is let; what was refused is put again by the person.
+        if let Trouble::Off { host } = t
+            && !prefs.allows_host(host)
+        {
+            b.pair(
+                b.texts
+                    .t_with(key::PLAYER_CONSENT_ASK, &[("hosts", host.as_str())]),
+                String::new(),
+                Target::LetHost(host.clone()),
+                &format!("let-host-{host}"),
+            );
+        }
     }
     if !loaded(s) {
         b.note(key::PLAYER_NOTHING);
@@ -231,13 +402,26 @@ fn media_in_the_file(s: &State, b: &mut Builder<'_>) {
     }
 }
 
-/// LYRICS: the line being sung in the accent, two on each side, and a row
-/// saying where they came from.
-fn lyrics(s: &State, b: &mut Builder<'_>) {
+/// LYRICS: the line being sung in the accent, two on each side — each
+/// with its translation under it, dimmer, while they are translated — a row
+/// saying where they came from, and the translation's own: its language, a
+/// ring, and who translated them, or why not.
+fn lyrics(s: &State, translator: (bool, &[String]), b: &mut Builder<'_>) {
     if s.lyrics.is_empty() {
         return;
     }
-    b.heading(key::PLAYER_HEADING_LYRICS);
+    let translation = s.lyrics_translation.as_ref();
+    // THE GLYPH SAYS WHAT A PRESS DOES: translate, or stop.
+    b.heading_with(
+        key::PLAYER_HEADING_LYRICS,
+        if translation.is_some() {
+            tokens::icon::PLAYER_LYRICS_UNTRANSLATE
+        } else {
+            tokens::icon::PLAYER_LYRICS_TRANSLATE
+        },
+        Target::Translate,
+        "player-lyrics-translate",
+    );
     let here = ronoctua_player::lyrics::current(&s.lyrics, s.position);
     let synced = s.lyrics.iter().any(|l| l.at.is_some());
     let (from, to) = match (here, synced) {
@@ -256,6 +440,21 @@ fn lyrics(s: &State, b: &mut Builder<'_>) {
         for line in crate::chrome::note_lines(&l.text, b.room) {
             b.inert(vec![Builder::piece(b.left, line, colour)]);
         }
+        // ITS TRANSLATION UNDER IT, as dim as a verse and in another hue:
+        // the song is what is sung, and this reads along. The prose tone
+        // (`chrome::Kind::Prose`, `text.subtle.default`) — the dim rung's
+        // contrast, so it is read, not guessed; the separator's
+        // (`text.subtle.faint`) only has to be told apart, and a line of
+        // words in it was barely there.
+        if let Some(said) = l.translated.as_deref().filter(|t| !t.trim().is_empty()) {
+            for line in crate::chrome::note_lines(said, b.room) {
+                b.inert(vec![Builder::piece(
+                    b.left,
+                    line,
+                    tokens::color::TEXT_SUBTLE_DEFAULT,
+                )]);
+            }
+        }
     }
     // WHERE THEY CAME FROM is a fact about them, a row of its own after air:
     // drawn dim under the lines, it read as the song's last line.
@@ -271,6 +470,82 @@ fn lyrics(s: &State, b: &mut Builder<'_>) {
             Target::Nothing,
             "lyrics-source",
         );
+    }
+    if let Some(t) = translation {
+        translation_rows(t, translator, b);
+    }
+}
+
+/// A language the lyrics are translated into, by its name in the person's
+/// language: the tongues' table by its code — or by its primary subtag, the
+/// interface's own being `en-GB` where the table says `en` — and the code as
+/// the player said it when the table knows neither (data).
+#[must_use]
+pub fn tongue_said(code: &str, texts: &ronoctua_i18n::Texts) -> String {
+    let primary = code.split('-').next().unwrap_or(code);
+    ronoctua_player::tongues::name_key(code)
+        .or_else(|| ronoctua_player::tongues::name_key(primary))
+        .map_or_else(|| code.to_owned(), |key| texts.t(key))
+}
+
+/// The TRANSLATION'S rows, under the lyrics: into which language — a ring
+/// over the tongues — and how it goes: being asked, who translated it, or
+/// the refusal in a sentence, with the row that lets the host when that is
+/// why.
+fn translation_rows(
+    t: &ronoctua_player::wire::Translation,
+    (translator_let, chosen_hosts): (bool, &[String]),
+    b: &mut Builder<'_>,
+) {
+    use ronoctua_player::wire::{TranslationStatus, Trouble};
+    b.pair(
+        b.t(key::PLAYER_LYRICS_TRANSLATE_TO),
+        tongue_said(&t.to, b.texts),
+        Target::TranslateTo,
+        "lyrics-translate-to",
+    );
+    match &t.status {
+        TranslationStatus::Translating => b.note(key::PLAYER_LYRICS_TRANSLATING),
+        TranslationStatus::Translated { by } => b.pair(
+            b.t(key::PLAYER_LYRICS_TRANSLATED_BY),
+            crate::player_translator::name_of(by, b.texts),
+            Target::Nothing,
+            "lyrics-translated-by",
+        ),
+        TranslationStatus::Refused(trouble) => {
+            b.warning(&trouble_sentence(trouble, b.texts));
+            // THE HOST NOT LET, named on the row that lets it — the press is
+            // the consent, and the translation is asked again after it.
+            if let Trouble::Off { host } = trouble
+                && !translator_let
+            {
+                let named = crate::player_translator::to_let(chosen_hosts, host)
+                    .join(&b.t(key::PLAYER_SET_JOINER));
+                b.pair(
+                    b.texts
+                        .t_with(key::PLAYER_LYRICS_LET, &[("host", named.as_str())]),
+                    String::new(),
+                    Target::LetTranslator(host.clone()),
+                    "lyrics-let",
+                );
+            }
+        }
+    }
+    // A TRANSLATION THAT DID NOT COME BACK VERSE BY VERSE: under no verse —
+    // it would be the wrong one — but whole, after the rows, said for what it
+    // is and in the tone of the lines that read along.
+    if let Some(whole) = t.unsynced.as_deref().filter(|w| !w.trim().is_empty()) {
+        b.inert(crate::chrome::AIR);
+        b.note(key::PLAYER_LYRICS_UNSYNCED);
+        for text in whole.lines() {
+            for line in crate::chrome::note_lines(text, b.room) {
+                b.inert(vec![Builder::piece(
+                    b.left,
+                    line,
+                    tokens::color::TEXT_SUBTLE_DEFAULT,
+                )]);
+            }
+        }
     }
 }
 
@@ -298,10 +573,15 @@ fn lyrics_source(from: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
 /// which there are.
 fn listen_and_watch(b: &mut Builder<'_>, s: Option<&State>) {
     b.heading(key::PLAYER_HEADING_LISTEN);
-    opens(b, PageId::Files(Purpose::Queue), String::new());
+    opens(b, PageId::Pick(Purpose::Queue), String::new());
+    // A VIDEO FROM A WEBSITE: its own page — an address is not a file.
+    opens(b, PageId::Website, String::new());
     for page in [PageId::Radio, PageId::Tv, PageId::Channels] {
         opens(b, page, String::new());
     }
+    // THE RANKING of the video catalogue: the person's channels' videos,
+    // best first (`crate::player_ranking`).
+    opens(b, PageId::Ranking, String::new());
     if let Some(s) = s {
         opens(
             b,
@@ -385,7 +665,7 @@ fn various(b: &mut Builder<'_>, s: Option<&State>, outline: Option<&Outline>) {
             "save-queue",
         );
     }
-    opens(b, PageId::Files(Purpose::Open), String::new());
+    opens(b, PageId::Pick(Purpose::Open), String::new());
     if s.is_some_and(|s| s.current.is_some()) {
         b.pair(
             b.t(key::PLAYER_FEATURE_RENAME),
@@ -425,7 +705,7 @@ pub(crate) fn together(s: &State, b: &mut Builder<'_>) {
         let name = lane_name(lane, &s.lanes, b.texts, b.room);
         let now = s.lane_states.iter().find(|l| l.lane == lane.id);
         let value = match now.map(|l| &l.status) {
-            None => b.t(key::PLAYER_LANE_SWITCHED_OFF),
+            None => crate::player::switched_off(s, lane.id, b.texts),
             Some(LaneStatus::Pending) => b.t(key::PLAYER_LANE_PENDING),
             Some(LaneStatus::Ended) => b.t(key::PLAYER_LANE_ENDED),
             Some(LaneStatus::Preparing) => b.t(key::PLAYER_LANE_PREPARING),
@@ -453,7 +733,7 @@ pub(crate) fn together(s: &State, b: &mut Builder<'_>) {
     // THE SAME PICKER as the files, for another purpose: the file chosen
     // plays together with what plays, and a path or an address can be typed
     // there too.
-    opens(b, PageId::Files(Purpose::Lane), String::new());
+    opens(b, PageId::Pick(Purpose::Lane), String::new());
 }
 
 #[cfg(test)]
@@ -473,6 +753,7 @@ mod tests {
             lyrics: vec![LyricLine {
                 at: Some(70.0),
                 text: "a line".into(),
+                translated: None,
             }],
             lyrics_from: Some("file".into()),
             ..alone("/music/one.flac", vec![track(1, Kind::Audio, None, true)])
@@ -485,6 +766,90 @@ mod tests {
             .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// FAILS IF: a queued address refused because its host is not let says
+    /// so and offers nothing — the person had no row to let it — or the row
+    /// stays once the host is let, or its press does not let that host.
+    #[test]
+    fn a_host_the_queue_was_refused_is_let_from_its_row() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let mut s = playing();
+            let host = "archive.org".to_owned();
+            s.troubles = vec![Trouble::Off { host: host.clone() }];
+            let mut v = View::blank(None);
+            let rows = v.rows(Some(&s), 80, &t);
+            let n = rows
+                .iter()
+                .position(|r| r.target == Target::LetHost(host.clone()))
+                .expect("the row that lets it");
+            assert!(rows[n].fields[0].text.contains(&host));
+            v.clicked(n, &rows);
+            let Errand::LetHosts { hosts, on, then } = v.key(Press::Enter, Some(&s), 80, &t) else {
+                panic!("the host was not let");
+            };
+            assert_eq!((hosts, on), (vec![host.clone()], true));
+            assert!(matches!(*then, Errand::Said(_)));
+            assert!(
+                !v.rows(Some(&s), 80, &t)
+                    .iter()
+                    .any(|r| r.target == Target::LetHost(host.clone())),
+                "let: the row goes"
+            );
+        }
+    }
+
+    /// FAILS IF: a control on a title — the glyph that empties the queue,
+    /// the swap — says nothing under the pointer in either language, is not
+    /// read back where it is drawn (`player_rows::control_under`), stops
+    /// standing at the edge of its room, or has a title's words run under it.
+    #[test]
+    fn every_title_control_has_a_sentence() {
+        let mut seen = std::collections::BTreeSet::new();
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            for s in [None, Some(playing()), Some(idle())] {
+                for door in [View::blank(None), View::blank(None).in_the_footer()] {
+                    for columns in [80, 40, 24] {
+                        let rows = door.rows(s.as_ref(), columns, &t);
+                        let (left, room) = crate::power::extent(columns);
+                        for (n, row) in rows.iter().enumerate().filter(|(_, r)| r.heading) {
+                            for cell in row.cells.iter().filter(|c| c.control) {
+                                let about = cell.about.unwrap_or_else(|| {
+                                    panic!("{language} at {columns}: a title's control with no sentence")
+                                });
+                                assert!(
+                                    crate::chrome::hint_sentence(about, &t).is_some(),
+                                    "{language}: `{about}` explains nothing"
+                                );
+                                assert_eq!(
+                                    crate::player_rows::control_under(&rows, n, cell.from),
+                                    Some(about),
+                                    "{language} at {columns}: not read where it is drawn"
+                                );
+                                assert!(
+                                    cell.from + cell.width <= left + room,
+                                    "{language} at {columns}: `{about}` past the edge"
+                                );
+                                for f in row.fields.iter().filter(|f| f.at < cell.from) {
+                                    assert!(
+                                        f.at + ronoctua_render::layout::width(&f.text) < cell.from,
+                                        "{language} at {columns}: {:?} runs under `{about}`",
+                                        f.text
+                                    );
+                                }
+                                seen.insert(about);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            seen.contains("player-clear") && seen.contains("player-swap"),
+            "the two title controls were not both reached: {seen:?}"
+        );
     }
 
     /// FAILS IF: a sentence that EXPLAINS — what a page is for, why a
@@ -716,7 +1081,7 @@ mod tests {
         let rows = v.rows(Some(&film), 80, &t);
         assert!(
             rows.iter()
-                .any(|r| r.target == Target::Go(PageId::Files(Purpose::Lane)))
+                .any(|r| r.target == Target::Go(PageId::Pick(Purpose::Lane)))
         );
         let lanes: Vec<&Target> = rows
             .iter()
@@ -811,5 +1176,224 @@ mod tests {
         ])));
         assert_eq!(decked(&footer, &alone), 0);
         assert!(position(&footer, &alone));
+    }
+
+    /// FAILS IF: the "Now" title stops carrying the glyph that folds the
+    /// picture while a door shows one — drawn as what a press does, saying
+    /// so under the pointer — or carries it where there is none; or `z` and
+    /// the glyph stop being the door's errand, or say nothing where there
+    /// is no picture; or the swap stops standing at the edge in the footer.
+    #[test]
+    fn the_now_title_folds_the_picture() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let s = playing();
+        let now_title = |v: &View| {
+            let rows = v.rows(Some(&s), 80, &t);
+            rows.into_iter()
+                .find(|r| {
+                    r.heading
+                        && r.fields
+                            .first()
+                            .is_some_and(|f| f.text == t.t(key::PLAYER_HEADING_NOW))
+                })
+                .expect("the Now title")
+        };
+        let mut v = View::blank(None);
+        assert!(now_title(&v).cells.is_empty(), "no picture, no glyph");
+        assert_eq!(
+            v.key(Press::FoldPicture, Some(&s), 80, &t),
+            Errand::Said(t.t(key::PLAYER_NO_PICTURE_TO_FOLD))
+        );
+        for (folded, glyph) in [
+            (false, tokens::icon::PLAYER_PICTURE_FOLD),
+            (true, tokens::icon::PLAYER_PICTURE_UNFOLD),
+        ] {
+            assert!(v.picture_foldable(Some(folded)));
+            let title = now_title(&v);
+            let cell = title
+                .cells
+                .iter()
+                .find(|c| c.about == Some("player-picture-fold"))
+                .expect("the fold's glyph");
+            assert!(
+                title
+                    .fields
+                    .iter()
+                    .any(|f| f.text == glyph.to_string() && f.at == cell.from)
+            );
+            assert!(crate::chrome::hint_sentence("player-picture-fold", &t).is_some());
+            assert_eq!(
+                v.key(Press::FoldPicture, Some(&s), 80, &t),
+                Errand::FoldPicture
+            );
+        }
+        // THE FOOTER as it stands: the panel beside the rows carries the swap
+        // in its transport, and "Now" only the fold; with no panel, no
+        // picture folds, and "Now" carries the swap.
+        let abouts = |v: &View| -> Vec<&'static str> {
+            now_title(v).cells.iter().filter_map(|c| c.about).collect()
+        };
+        let mut footer = View::blank(None).in_the_footer();
+        footer.beside_the_panel(true);
+        footer.picture_foldable(Some(false));
+        assert_eq!(abouts(&footer), ["player-picture-fold"]);
+        footer.beside_the_panel(false);
+        footer.picture_foldable(None);
+        assert_eq!(abouts(&footer), ["player-swap"]);
+    }
+
+    /// FAILS IF: the lyrics' title stops carrying the glyph that translates
+    /// them — `T` too — asking the player to translate, or to stop, keeping
+    /// a language the person chose; or a translated line stops sitting
+    /// under its verse, dimmer than any verse; or the language's ring stops
+    /// turning it; or a refusal for a host not let stops being said with the
+    /// row that lets it, which asks again.
+    #[test]
+    fn the_lyrics_are_translated_under_their_verses() {
+        use ronoctua_player::wire::{Translation, TranslationStatus, Trouble};
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let mut v = View::blank(None);
+            let mut s = playing();
+            // OFF: the glyph translates, into no language chosen.
+            let rows = v.rows(Some(&s), 80, &t);
+            assert!(rows.iter().any(|r| {
+                r.cells
+                    .iter()
+                    .any(|c| c.about == Some("player-lyrics-translate"))
+            }));
+            assert_eq!(
+                v.key(Press::Translate, Some(&s), 80, &t),
+                Errand::Tell(ronoctua_player::wire::Ask::LyricsTranslation { on: true, to: None })
+            );
+            // ON, into Portuguese of Portugal, translated.
+            s.lyrics[0].translated = Some("eine Zeile".into());
+            s.lyrics_translation = Some(Translation {
+                to: "pt-PT".into(),
+                from: Some("en".into()),
+                status: TranslationStatus::Translated {
+                    by: "MyMemory".into(),
+                },
+                unsynced: None,
+            });
+            let rows = v.rows(Some(&s), 80, &t);
+            let verse = rows
+                .iter()
+                .position(|r| r.fields.iter().any(|f| f.text == "a line"))
+                .expect("the verse");
+            let under = &rows[verse + 1].fields[0];
+            assert_eq!(under.text, "eine Zeile");
+            assert_eq!(under.color, tokens::color::TEXT_SUBTLE_DEFAULT);
+            let words = said(&rows);
+            assert!(words.contains("MyMemory"), "{language}: {words}");
+            // A TRANSLATION THAT CAME BACK WHOLE: said apart, after the rows,
+            // in the tone of the lines that read along — and under no verse.
+            if let Some(tr) = s.lyrics_translation.as_mut() {
+                tr.unsynced = Some("uma linha\noutra linha".into());
+            }
+            let rows = v.rows(Some(&s), 80, &t);
+            let whole = rows
+                .iter()
+                .position(|r| r.fields.iter().any(|f| f.text == "outra linha"))
+                .expect("the translation as a whole");
+            assert_eq!(
+                rows[whole].fields[0].color,
+                tokens::color::TEXT_SUBTLE_DEFAULT
+            );
+            assert!(
+                said(&rows).contains(&t.t(key::PLAYER_LYRICS_UNSYNCED)),
+                "{language}: the whole translation is not said for what it is"
+            );
+            assert!(
+                whole > verse + 1,
+                "{language}: the whole block sits under a verse"
+            );
+            if let Some(tr) = s.lyrics_translation.as_mut() {
+                tr.unsynced = None;
+            }
+            // THE RING turns the language.
+            v.follow("lyrics-translate-to", Some(&s), 80, &t);
+            match v.key(Press::More, Some(&s), 80, &t) {
+                Errand::Tell(ronoctua_player::wire::Ask::LyricsTranslation {
+                    on: true,
+                    to: Some(to),
+                }) => assert_ne!(to, "pt-PT"),
+                other => panic!("{other:?}"),
+            }
+            // STOPPED, the language chosen kept.
+            assert_eq!(
+                v.key(Press::Translate, Some(&s), 80, &t),
+                Errand::Tell(ronoctua_player::wire::Ask::LyricsTranslation {
+                    on: false,
+                    to: Some("pt-PT".into())
+                })
+            );
+            // AND ON AGAIN once the state says it is off: the same language,
+            // not the interface's.
+            v.settle_in(Some(&s), 80, &t);
+            let mut off = s.clone();
+            off.lyrics_translation = None;
+            off.lyrics[0].translated = None;
+            v.settle_in(Some(&off), 80, &t);
+            assert_eq!(
+                v.key(Press::Translate, Some(&off), 80, &t),
+                Errand::Tell(ronoctua_player::wire::Ask::LyricsTranslation {
+                    on: true,
+                    to: Some("pt-PT".into())
+                })
+            );
+            // REFUSED FOR A HOST NOT LET: said, and the row that lets it.
+            let host = ronoctua_words::MYMEMORY_HOST.to_owned();
+            s.lyrics[0].translated = None;
+            s.lyrics_translation = Some(Translation {
+                to: "pt-PT".into(),
+                from: None,
+                status: TranslationStatus::Refused(Trouble::Off { host: host.clone() }),
+                unsynced: None,
+            });
+            let rows = v.rows(Some(&s), 80, &t);
+            assert!(said(&rows).contains(&host), "{language}");
+            v.follow("lyrics-let", Some(&s), 80, &t);
+            match v.key(Press::Enter, Some(&s), 80, &t) {
+                Errand::LetHosts {
+                    hosts,
+                    on: true,
+                    then,
+                } => {
+                    assert_eq!(hosts, std::slice::from_ref(&host));
+                    assert!(matches!(
+                        *then,
+                        Errand::Tell(ronoctua_player::wire::Ask::LyricsTranslation {
+                            on: true,
+                            ..
+                        })
+                    ));
+                }
+                other => panic!("{other:?}"),
+            }
+            // LET, the row goes.
+            assert!(
+                !v.rows(Some(&s), 80, &t)
+                    .iter()
+                    .any(|r| r.spot == "lyrics-let")
+            );
+        }
+    }
+
+    /// FAILS IF: a language the lyrics go into is said as a code the table
+    /// knows by its primary subtag — the interface's `en-GB` — or the ring
+    /// stops going round.
+    #[test]
+    fn the_translation_s_language_is_named_and_turns() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        assert_eq!(tongue_said("en-GB", &t), tongue_said("en", &t));
+        assert_ne!(tongue_said("en", &t), "en");
+        assert_eq!(tongue_said("xx-YY", &t), "xx-YY");
+        let all = &ronoctua_player::tongues::TONGUES;
+        let first = all[0].code;
+        let last = all[all.len() - 1].code;
+        assert_eq!(next_tongue(last, true), first);
+        assert_eq!(next_tongue(first, false), last);
+        assert_eq!(next_tongue("unknown", true), first);
     }
 }

@@ -21,6 +21,10 @@ use crate::{AppKey, Failure, Refusal, Roots};
 
 /// The catalogue's address.
 pub const FEED: &str = "https://appimage.github.io/feed.json";
+
+/// The hosts this catalogue asks — its feed and database, and GitHub's API
+/// for the releases it points at — as the person's consent row lets them.
+pub const HOSTS: &[&str] = &["appimage.github.io", "api.github.com"];
 /// What an item's relative icon path is relative to.
 pub const DATABASE: &str = "https://appimage.github.io/database/";
 /// The most the feed may be: 4 MiB, five times what it is.

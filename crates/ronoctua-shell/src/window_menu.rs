@@ -447,7 +447,7 @@ impl View {
                     Entry {
                         key: "D",
                         label: texts.t(key::WINDOW_MENU_CLOSE_OTHERS),
-                        about: Some(texts.t("cmd-wm-close-others")),
+                        about: Some(texts.t(ronoctua_i18n::key::CMD_WM_CLOSE_OTHERS)),
                         does: Does::Enter(Level::Confirm(Danger::CloseOthers)),
                         stays: false,
                         aimed: true,
@@ -836,7 +836,7 @@ impl View {
                         },
                         &[("n", &shown)],
                     ),
-                    about: Some(texts.t("cmd-wm-trail-number")),
+                    about: Some(texts.t(ronoctua_i18n::key::CMD_WM_TRAIL_NUMBER)),
                     does: Does::RunWith("wm-trail-number", n.to_string()),
                     stays: true,
                     aimed: false,
@@ -857,7 +857,7 @@ impl View {
             out.push(Entry {
                 key: "D",
                 label: texts.t(key::WINDOW_MENU_TRAIL_DELETE),
-                about: Some(texts.t("cmd-wm-trail-delete")),
+                about: Some(texts.t(ronoctua_i18n::key::CMD_WM_TRAIL_DELETE)),
                 does: Does::Enter(Level::Confirm(Danger::DeleteTrail)),
                 stays: false,
                 aimed: true,

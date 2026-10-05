@@ -11,7 +11,7 @@ use crate::{
     Ink, Mark, Marks, Point, Pose, Tongue, Trouble,
     baked::{Atlas, CELLS_LAT, CELLS_LON, MAGIC, VERSION, cell_of, lat_to, lon_to},
     framing,
-    lookup::{address, anchor_of, country_name, place_near},
+    lookup::{address, anchor_of, country_name, folded, place_named, place_near},
     placed, project, tier,
 };
 
@@ -160,7 +160,15 @@ fn world() -> Vec<u8> {
         (1, section(&[country])),
         (2, section(&[region])),
         (3, section(&[])),
-        (4, places(&[(2.0, 2.0, "Near"), (40.0, 40.0, "Far")])),
+        (
+            4,
+            places(&[
+                (2.0, 2.0, "Near"),
+                (40.0, 40.0, "Far"),
+                (8.0, 8.0, "Écouen"),
+                (40.0, 41.0, "Écouen"),
+            ]),
+        ),
         (6, b"GeoNames (CC BY 4.0)".to_vec()),
         (
             7,
@@ -264,6 +272,62 @@ fn the_nearest_place_is_the_nearest() {
         (10_000..20_000).contains(&metres),
         "two tenths of a degree read as {metres} m"
     );
+}
+
+/// FAILS IF: a place is found by its name in another country than the one
+/// asked — two places share a name — or not found when a feed leaves its
+/// marks out, or a name no place of the country bears is placed anyway.
+#[test]
+fn a_place_is_found_by_its_name_within_its_country() {
+    let bytes = world();
+    let atlas = Atlas::open(&bytes).expect("an atlas");
+    let at = place_named(&atlas, *b"XY", "Ecouen").expect("in Squareland");
+    assert!(
+        (at.lat - 8.0).abs() < 0.1 && (at.lon - 8.0).abs() < 0.1,
+        "{at:?}"
+    );
+    assert!(place_named(&atlas, *b"XY", "ÉCOUEN").is_some(), "any case");
+    assert_eq!(
+        place_named(&atlas, *b"XY", "Far"),
+        None,
+        "Far is in no country"
+    );
+    assert_eq!(
+        place_named(&atlas, *b"ZZ", "Near"),
+        None,
+        "Near is not ZZ's"
+    );
+    assert_eq!(place_named(&atlas, *b"XY", ""), None);
+    assert_eq!(folded(" Saint-Étienne "), "saint etienne");
+    // ROMANIAN's comma below, Turkish's breve and dotless i, the letters
+    // that are two, and a name written decomposed.
+    assert_eq!(folded("Brașov"), "brasov");
+    assert_eq!(folded("Timişoara"), folded("Timișoara"));
+    assert_eq!(folded("Constanța"), "constanta");
+    assert_eq!(folded("Muğla"), "mugla");
+    assert_eq!(folded("Diyarbakır"), "diyarbakir");
+    assert_eq!(folded("İzmir"), "izmir");
+    assert_eq!(folded("Gießen"), "giessen");
+    assert_eq!(folded("Ærøskøbing"), "aeroskobing");
+    assert_eq!(folded("Đakovo"), "dakovo");
+    assert_eq!(folded("Mal\u{e0}ga"), folded("Mala\u{300}ga"));
+    // A HARBOUR just off the drawn coast is its country's.
+    assert!(crate::in_country(
+        &atlas,
+        Point {
+            lat: 5.0,
+            lon: 10.1
+        },
+        *b"XY"
+    ));
+    assert!(!crate::in_country(
+        &atlas,
+        Point {
+            lat: 5.0,
+            lon: 11.0
+        },
+        *b"XY"
+    ));
 }
 
 /// FAILS IF: the attribution stops travelling inside the file.
@@ -606,4 +670,63 @@ fn the_drawing_paints_the_marks_it_answers_with() {
             .iter()
             .all(|s| s.ink != Ink::Chosen && s.ink != Ink::Dot)
     );
+}
+
+/// FAILS IF: the coordinate lights a country by its BOX — the London test.
+///
+/// Three countries the way the real table has them: Great Britain round
+/// London; the Netherlands with an island in the Caribbean, so its box spans
+/// the Atlantic and holds London; and Russia across the antimeridian, so its
+/// box is every longitude. Only Great Britain's ring may light.
+#[test]
+fn a_coordinate_in_london_lights_only_great_britain() {
+    let gb: &[(f32, f32)] = &[(-6.0, 50.0), (2.0, 50.0), (2.0, 59.0), (-6.0, 59.0)];
+    let nl_home: &[(f32, f32)] = &[(3.5, 51.0), (7.0, 51.0), (7.0, 53.5), (3.5, 53.5)];
+    let nl_island: &[(f32, f32)] = &[(-69.0, 12.0), (-68.0, 12.0), (-68.0, 12.5), (-69.0, 12.5)];
+    let ru_west: &[(f32, f32)] = &[(20.0, 41.0), (179.0, 41.0), (179.0, 81.0), (20.0, 81.0)];
+    let ru_east: &[(f32, f32)] = &[
+        (-180.0, 60.0),
+        (-170.0, 60.0),
+        (-170.0, 70.0),
+        (-180.0, 70.0),
+    ];
+    let head = |iso: &[u8; 2], name: &str| {
+        let mut h = iso.to_vec();
+        h.extend_from_slice(&short(name));
+        h.extend_from_slice(&short(name));
+        h
+    };
+    let bytes = atlas_of(&[(
+        1,
+        section(&[
+            feature(&head(b"NL", "Netherlands"), &[nl_home, nl_island]),
+            feature(&head(b"RU", "Russia"), &[ru_west, ru_east]),
+            feature(&head(b"GB", "United Kingdom"), &[gb]),
+        ]),
+    )]);
+    let atlas = Atlas::open(&bytes).expect("an atlas");
+    let london = Point {
+        lat: 51.507,
+        lon: -0.128,
+    };
+    let lit = crate::globe::home_rings(&atlas, london);
+    assert_eq!(
+        lit.len(),
+        1,
+        "London lit {} rings, not Great Britain's one",
+        lit.len()
+    );
+    for (lon, lat) in &lit[0] {
+        assert!(
+            (-6.1..=2.1).contains(lon) && (49.9..=59.1).contains(lat),
+            "a lit point ({lon}, {lat}) is outside Great Britain"
+        );
+    }
+    // AND THE SEA LIGHTS NOTHING: a point in no country's rings, inside two
+    // countries' boxes.
+    let atlantic = Point {
+        lat: 45.0,
+        lon: -30.0,
+    };
+    assert!(crate::globe::home_rings(&atlas, atlantic).is_empty());
 }

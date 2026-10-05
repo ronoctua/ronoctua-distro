@@ -28,7 +28,11 @@
     # ---- the everyday ones ----
     zip
     unzip
-    p7zip # `7z`: also opens .iso, .dmg, .msi, .cab
+    # `7zz`: 7-Zip itself (also .iso, .dmg, .msi, .cab). Not `p7zip`, a fork
+    # frozen at 16.02 — this is the one `ronoctua-archive` runs, by store path
+    # (`nix/archive-tools.nix`), so the terminal and the file manager open an
+    # archive with the same program.
+    _7zz
     unrar # not free software, and the only thing that opens .rar properly
 
     # ---- the dispatchers ----

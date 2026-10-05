@@ -289,6 +289,21 @@ pub fn filesystem(path: &str) -> Option<(u64, u64)> {
     Some((s.f_blocks * block, s.f_bavail * block))
 }
 
+/// This boot's id, as the kernel gives it (`/proc/sys/kernel/random/boot_id`,
+/// a uuid with its dashes), or `None` when it could not be read.
+///
+/// # Why it is here
+///
+/// Because this crate is the only border with `/proc`. The brain's watch on
+/// the journal tells THIS boot's errors from an earlier one's by it — the
+/// journal stamps every entry with the same id, without the dashes.
+#[must_use]
+pub fn boot_id(p: &Places) -> Option<String> {
+    read(&p.procfs.join("sys/kernel/random/boot_id"))
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +460,77 @@ mod tests {
         assert_eq!(bytes_of(&s, Gauge::AppCurrent), Some(2_517_630_976));
         // `max` is not a number — see `parse_cgroup_value`.
         assert_eq!(bytes_of(&s, Gauge::AppCeiling), None);
+    }
+}
+
+/// Stall waiting for memory, from `/proc/pressure/memory` — `None`, and not
+/// zeros, when the file is not there.
+///
+/// [`pressure`] gives zeros on a kernel without PSI, which is right for a
+/// survey whose screen says separately whether the file exists. A caller that
+/// puts the figure in a sentence of its own ("the machine was stalling 0% of
+/// the time") has no such screen beside it, and would say a stall was
+/// measured that never was.
+#[must_use]
+pub fn memory_pressure(p: &Places) -> Option<ronoctua_protocol::Pressure> {
+    read(&p.procfs.join("pressure/memory"))
+        .as_deref()
+        .map(crate::parse_pressure)
+}
+
+#[cfg(test)]
+mod boot {
+    use super::*;
+    use crate::machine::tempdir;
+
+    #[test]
+    fn the_boot_id_is_read_from_proc_and_none_when_it_is_not_there() {
+        let dir = tempdir::Dir::fresh();
+        let procfs = dir.path().join("proc");
+        let places = Places {
+            procfs: procfs.clone(),
+            ..Places::default()
+        };
+        assert_eq!(boot_id(&places), None, "a boot id where there is none");
+        std::fs::create_dir_all(procfs.join("sys/kernel/random")).expect("mkdir");
+        std::fs::write(
+            procfs.join("sys/kernel/random/boot_id"),
+            "0123abcd-4567-89ab-cdef-0123456789ab\n",
+        )
+        .expect("write");
+        assert_eq!(
+            boot_id(&places).as_deref(),
+            Some("0123abcd-4567-89ab-cdef-0123456789ab")
+        );
+    }
+
+    #[test]
+    fn the_memory_stall_is_none_where_the_kernel_has_no_psi() {
+        let dir = tempdir::Dir::fresh();
+        let procfs = dir.path().join("proc");
+        let places = Places {
+            procfs: procfs.clone(),
+            ..Places::default()
+        };
+        assert_eq!(
+            memory_pressure(&places),
+            None,
+            "a stall where none is measured"
+        );
+        std::fs::create_dir_all(procfs.join("pressure")).expect("mkdir");
+        std::fs::write(
+            procfs.join("pressure/memory"),
+            "some avg10=12.50 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+        )
+        .expect("write");
+        let read = memory_pressure(&places).expect("the file is there");
+        assert_eq!(
+            read,
+            crate::parse_pressure(
+                "some avg10=12.50 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+            )
+        );
+        assert!(read.some10 > 0, "the stall was not read");
     }
 }
 

@@ -230,6 +230,9 @@ pub enum Press {
     More,
     /// Turn it back.
     Less,
+    /// A key the FILE PICKER up over the view takes — every letter, and its
+    /// own keys ([`View::picker_takes`]).
+    Pick(ronoctua_keymap::Key),
 }
 
 /// What `RET` on a row does.
@@ -244,7 +247,7 @@ pub enum Target {
     /// Join this network.
     Wireless(Box<Network>),
     /// Drop the link of this medium.
-    Link(Medium),
+    Link(Medium, String),
     /// Take this connection down; the string is its object path.
     Tunnel(String),
     /// Bring this stored profile up; the string is its object path.
@@ -275,6 +278,11 @@ pub enum Target {
     TorAutostart(bool),
     /// The answer to "keep this network's password?" — `true` seals it.
     Remember(bool),
+    /// A row or a cell of the file picker, while it is up.
+    Pick(crate::file_picker::Target),
+    /// Measure the round trip to this gateway — ON DEMAND, the row's own
+    /// `RET` (see `ronoctua_lan::measure` for why a sweep never does).
+    Latency(String),
 }
 
 /// One of the switches the two tunnel sections carry.
@@ -383,7 +391,7 @@ pub enum Errand {
     /// Enter aeroplane mode, or leave it.
     Airplane(bool),
     /// Drop the link of this medium.
-    Disconnect(Medium),
+    Disconnect(Medium, String),
     /// Ask the radio to look again.
     Scan,
     /// Say the link's facts on the message line.
@@ -407,6 +415,10 @@ pub enum Errand {
     /// The typed path is not a tunnel's file; the string is the file's name,
     /// for the sentence that says so.
     NotATunnel(String),
+    /// Say this; it is already a sentence.
+    Said(String),
+    /// Read the clipboard for the file picker ([`View::picker_pasted`]).
+    Paste,
     /// Become an access point, or stop being one.
     Hotspot(bool),
     /// Write Tor's fragment, and make a running Tor re-read it.
@@ -417,6 +429,19 @@ pub enum Errand {
     /// with the password sealed, `false` leaves nothing stored. The DOOR holds
     /// the password — the view never does — and lets go of it on both.
     Remember(String, bool),
+    /// Measure the round trip to this gateway, on a thread ([`Lan::Measure`]).
+    Measure(std::net::Ipv4Addr),
+    /// Store a VPN profile's user and password, so it comes up without
+    /// asking — what an imported `.ovpn` with `auth-user-pass` needs once.
+    /// The DOOR holds the password only for the call that stores it.
+    VpnSecret {
+        /// The profile's name — the file's, as it was imported.
+        tunnel: String,
+        /// The user, typed in the clear.
+        user: String,
+        /// The password, typed hidden.
+        password: Password,
+    },
     /// Close the view.
     Close,
 }
@@ -443,9 +468,16 @@ impl Question {
     /// left up would take an answer for a question nobody is asking.
     #[must_use]
     pub fn is_the_views(id: &str) -> bool {
-        [Self::PASSWORD, Self::PATH, Self::TOR_VALUE, Self::TOR_LINE]
-            .iter()
-            .any(|q| q.id == id)
+        [
+            Self::PASSWORD,
+            Self::PATH,
+            Self::TOR_VALUE,
+            Self::TOR_LINE,
+            Self::VPN_USER,
+            Self::VPN_PASSWORD,
+        ]
+        .iter()
+        .any(|q| q.id == id)
     }
 
     /// The password of a secured network with no profile.
@@ -470,6 +502,18 @@ impl Question {
     pub const TOR_LINE: Self = Self {
         id: "tor-lines",
         secret: false,
+    };
+    /// The user of a VPN just brought in, which asks for one — in the clear:
+    /// a name is typed to be read back.
+    pub const VPN_USER: Self = Self {
+        id: "network-vpn-user",
+        secret: false,
+    };
+    /// That VPN's password, hidden. With the user it is STORED in the
+    /// profile ([`Errand::VpnSecret`]) — the one secret this view writes.
+    pub const VPN_PASSWORD: Self = Self {
+        id: "network-vpn-password",
+        secret: true,
     };
 }
 
@@ -510,6 +554,10 @@ enum Asking {
     Password(Box<Network>),
     /// This Tor setting's value.
     Tor(&'static str),
+    /// The user of the VPN just brought in, by its name.
+    VpnUser(String),
+    /// Its password: the VPN, and the user typed a moment ago.
+    VpnPassword(String, String),
 }
 
 /// The question after a typed password: keep it, or not.
@@ -571,6 +619,262 @@ pub struct Watch {
     vendors: std::sync::Arc<ronoctua_lan::oui::Vendors>,
     /// Which sample this is, so the dear half runs on some of them.
     beat: u8,
+    /// The IPv6 neighbours, out of netlink (`ronoctua_lan::neigh`), each
+    /// with its interface's name — the half `/proc/net/arp` cannot say.
+    neighbours6: Vec<(ronoctua_lan::neigh::Neighbour6, String)>,
+    /// What resolved said each address is called — asked for the rows the
+    /// shelf shows, on a thread ([`Watch::names_wanted`]), and kept: a name
+    /// is asked once a session, not once a second.
+    names: std::collections::BTreeMap<std::net::IpAddr, Named>,
+    /// Is a batch of names being asked? One at a time: resolved answers in
+    /// up to seconds per address, and a second thread would ask again what
+    /// the first is still asking.
+    naming: bool,
+    /// When resolved last REFUSED (not "no name": could not answer). A
+    /// refusal is not an answer, so it is not kept like one: after
+    /// [`ASK_AGAIN_AFTER`] — and at every opening of the view — the refused
+    /// addresses are asked again, and the warning under the shelf goes once
+    /// resolved answers.
+    refused_at: Option<std::time::Instant>,
+    /// The gateway's round trip, measured on demand: the address and what
+    /// the measurement says.
+    latency: Option<(std::net::Ipv4Addr, Latency)>,
+}
+
+/// How long a refusal of resolved stands before its addresses are asked
+/// again. Not a clock of its own: the view's sample, which runs only while
+/// the view is open, is what looks at it.
+pub const ASK_AGAIN_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The sentence of one refusal of the network crate — one key per variant.
+#[must_use]
+pub const fn network_why_key(why: ronoctua_network::Refusal) -> &'static str {
+    use ronoctua_i18n::key;
+    match why {
+        ronoctua_network::Refusal::NoPhone => key::NETWORK_REFUSAL_NO_PHONE,
+        ronoctua_network::Refusal::NoVpn => key::NETWORK_REFUSAL_NO_VPN,
+        ronoctua_network::Refusal::NotVpn => key::NETWORK_REFUSAL_NOT_VPN,
+    }
+}
+
+/// The sentence of one refusal of resolved — one generated key per
+/// variant, so a refusal without a sentence is a compile error, not a key
+/// looked up at run time.
+#[must_use]
+pub const fn resolve_why_key(why: ronoctua_resolve::Refusal) -> &'static str {
+    use ronoctua_i18n::key;
+    match why {
+        ronoctua_resolve::Refusal::NoBus => key::LAN_RESOLVE_WHY_NO_BUS,
+        ronoctua_resolve::Refusal::NoResolved => key::LAN_RESOLVE_WHY_NO_RESOLVED,
+        ronoctua_resolve::Refusal::Failed => key::LAN_RESOLVE_WHY_FAILED,
+    }
+}
+
+/// What resolved said one address is called.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Named {
+    /// Being asked.
+    Asking,
+    /// This name.
+    Known(String),
+    /// No name — most addresses have none, and that is not a failure.
+    Nameless,
+    /// resolved could not answer, and why.
+    Refused(ronoctua_resolve::Refusal),
+}
+
+/// The gateway's round trip, as the row draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Latency {
+    /// The echoes are out.
+    Measuring,
+    /// What came back.
+    Measured(ronoctua_lan::Measured),
+    /// Nothing came back.
+    Silent,
+    /// The kernel would not give a socket — its words.
+    Refused(String),
+}
+
+/// What the network view sends to a thread: the work that takes the network's
+/// time — a sweep, the names, a measurement — and never the loop's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lan {
+    /// Sweep the network of this address (with its prefix).
+    Sweep(String),
+    /// Ask resolved what these are called.
+    Name(Vec<std::net::IpAddr>),
+    /// Measure the round trip to this gateway.
+    Measure(std::net::Ipv4Addr),
+}
+
+/// What a thread of the view's brings back, to [`Watch::heard`].
+#[derive(Debug, Clone)]
+pub enum Heard {
+    /// A sweep ended.
+    Swept(ronoctua_lan::Found),
+    /// A batch of names came back.
+    Named(
+        Vec<(
+            std::net::IpAddr,
+            Result<Option<String>, ronoctua_resolve::Refusal>,
+        )>,
+    ),
+    /// The gateway was measured.
+    Measured(
+        std::net::Ipv4Addr,
+        Result<Option<ronoctua_lan::Measured>, String>,
+    ),
+}
+
+/// Runs one piece of the view's slow work on a thread, and sends what it
+/// found back to the door's loop.
+///
+/// ONE FUNCTION FOR BOTH DOORS: the footer and the window hand it their own
+/// channel, and nothing else differs — the work, the thread's name and what
+/// comes back are the view's. Answers whether the thread started; a door
+/// that could not start one says so rather than wait for nothing.
+pub fn spawn(
+    work: Lan,
+    back: smithay_client_toolkit::reexports::calloop::channel::Sender<Heard>,
+) -> bool {
+    let name = match &work {
+        Lan::Sweep(_) => "lan-sweep",
+        Lan::Name(_) => "lan-names",
+        Lan::Measure(_) => "lan-latency",
+    };
+    let started = std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let heard = match work {
+                Lan::Sweep(address) => {
+                    Heard::Swept(ronoctua_lan::sweep(&address).unwrap_or_default())
+                }
+                Lan::Name(addresses) => Heard::Named(ronoctua_resolve::names(&addresses)),
+                Lan::Measure(address) => Heard::Measured(
+                    address,
+                    ronoctua_lan::measure(address).map_err(|e| e.to_string()),
+                ),
+            };
+            let _ = back.send(heard);
+        });
+    if let Err(e) = &started {
+        tracing::warn!(error = %e, thread = name, "no thread for the network view's work");
+    }
+    started.is_ok()
+}
+
+/// The hotspot's password, kept where BOTH doors read it.
+///
+/// # Why a file, and why this one
+///
+/// The password lived on the view of the door that turned the hotspot on,
+/// so the other door said "this machine is the network now" without it, and
+/// reopening the footer's view lost it. Asking NetworkManager for it
+/// (`GetSecrets`) can need an authorisation for a system profile, and
+/// nothing the system does on its own may ask. So the door that starts the
+/// hotspot writes the password HERE — `$XDG_RUNTIME_DIR`, a tmpfs that is the
+/// person's alone, in a file born `0600` (`create_new` + mode, never a
+/// `chmod` after) — and the door that sees it stop takes it away. It is the
+/// shape `bluetooth::standing` gave a pairing question.
+pub mod sharing {
+    /// The file's name, after the instance.
+    const LEAF: &str = "hotspot.json";
+
+    /// What the file holds.
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub struct Kept {
+        /// The hotspot's name.
+        pub network: String,
+        /// Its password.
+        pub password: String,
+    }
+
+    /// `$XDG_RUNTIME_DIR/<name>-hotspot.json` — per instance and not per
+    /// display: the hotspot is the machine's, whichever screen started it.
+    #[must_use]
+    pub fn path() -> Option<std::path::PathBuf> {
+        ronoctua_xdg::runtime_file(LEAF)
+    }
+
+    /// Writes the hotspot that is up, whole and owner-only: a draft born
+    /// `0600`, renamed over the file.
+    ///
+    /// # Errors
+    ///
+    /// No runtime directory, or the draft could not be written.
+    pub fn keep(kept: &Kept) -> std::io::Result<()> {
+        let path = path().ok_or_else(|| std::io::Error::other("no runtime directory"))?;
+        keep_at(&path, kept)
+    }
+
+    /// [`keep`], at a path the caller gives — the tests' own.
+    ///
+    /// # Errors
+    ///
+    /// The draft could not be written or renamed.
+    pub fn keep_at(path: &std::path::Path, kept: &Kept) -> std::io::Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let draft = path.with_extension(format!("json.{}", std::process::id()));
+        // A DRAFT LEFT BY A DOOR THAT DIED is this process's name only if
+        // the PID came round again; `create_new` refuses it, so it goes first.
+        let _ = std::fs::remove_file(&draft);
+        let text = serde_json::to_string(kept).map_err(std::io::Error::other)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&draft)?;
+        f.write_all(text.as_bytes())?;
+        drop(f);
+        std::fs::rename(&draft, path)
+    }
+
+    /// The hotspot that is up, as the file says it.
+    #[must_use]
+    pub fn read() -> Option<Kept> {
+        read_at(&path()?)
+    }
+
+    /// [`read`], at a path the caller gives.
+    #[must_use]
+    pub fn read_at(path: &std::path::Path) -> Option<Kept> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Follows the hotspot over one reading of the daemon: when a hotspot
+    /// that was up is NOT up any more, the file goes. `was` is the caller's
+    /// memory of the last reading — the footer keeps one whether or not its
+    /// view is open, so the password never outlives the hotspot. A reading
+    /// that has never seen it up deletes nothing: the door that has just
+    /// started it, a moment before the daemon says so, keeps its file.
+    pub fn follow(was: &mut bool, net: &ronoctua_network::Snapshot) -> bool {
+        let serving = net.links.iter().any(|l| l.serving);
+        if *was && !serving {
+            forget();
+        }
+        *was = serving;
+        serving
+    }
+
+    /// Takes the file away — the hotspot is down. Nothing there is not an
+    /// error.
+    pub fn forget() {
+        if let Some(path) = path() {
+            forget_at(&path);
+        }
+    }
+
+    /// [`forget`], at a path the caller gives.
+    pub fn forget_at(path: &std::path::Path) {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(error = %e, "the hotspot's password could not be taken away"),
+        }
+    }
 }
 
 /// One reading of the sockets every this many of the counters — see
@@ -605,6 +909,10 @@ impl Watch {
         if self.beat.is_multiple_of(SOCKETS_EVERY) {
             self.sockets = ronoctua_memory::net::sockets(&self.places);
             self.neighbours = ronoctua_memory::net::neighbours(&self.places);
+            // AND THE OTHER FAMILY, out of netlink: one dump of the kernel's
+            // own table, no network touched — the same promise as the ARP
+            // file's, on the same beat.
+            self.neighbours6 = ronoctua_lan::neigh::neighbours6().unwrap_or_default();
         }
         self.beat = self.beat.wrapping_add(1);
         let fresh = ronoctua_memory::net::counters(&self.places);
@@ -676,6 +984,15 @@ impl Watch {
         self.last = None;
         self.rates.clear();
         self.beat = 0;
+        // A REFUSAL IS ASKED AGAIN at every opening: resolved may be back.
+        self.forget_refusals();
+    }
+
+    /// Drops what resolved refused, so its addresses are asked again — the
+    /// names that WERE answered (a name, or "no name") stay.
+    fn forget_refusals(&mut self) {
+        self.names.retain(|_, n| !matches!(n, Named::Refused(_)));
+        self.refused_at = None;
     }
 
     /// The kernel's neighbour table, as of the last sample.
@@ -691,6 +1008,9 @@ impl Watch {
 
     /// What a finished sweep found.
     pub fn found(&mut self, found: ronoctua_lan::Found) {
+        if let Some(words) = &found.refused {
+            tracing::info!(%words, "the kernel refused the sweep's socket");
+        }
         self.found = Some(found);
         self.sweeping = false;
     }
@@ -712,6 +1032,132 @@ impl Watch {
         if let Some(table) = ronoctua_lan::oui::table() {
             self.vendors = std::sync::Arc::new(ronoctua_lan::oui::Vendors::read(&table));
         }
+    }
+
+    /// The IPv6 neighbours of the last sample, with their interfaces' names.
+    #[must_use]
+    pub fn neighbours6(&self) -> &[(ronoctua_lan::neigh::Neighbour6, String)] {
+        &self.neighbours6
+    }
+
+    /// What an address is called, when resolved has said.
+    #[must_use]
+    pub fn name_of(&self, address: std::net::IpAddr) -> Option<&Named> {
+        self.names.get(&address)
+    }
+
+    /// The addresses whose names are worth asking for NOW — the fresh
+    /// neighbours of both families and what the last sweep found, that have
+    /// never been asked — marked as being asked, so the next sample does not
+    /// ask again. `None` while a batch is out, or when there is nothing new.
+    pub fn names_wanted(&mut self) -> Option<Vec<std::net::IpAddr>> {
+        self.names_wanted_at(std::time::Instant::now())
+    }
+
+    /// [`Watch::names_wanted`], at a given moment — so a test does not wait
+    /// [`ASK_AGAIN_AFTER`].
+    pub fn names_wanted_at(&mut self, now: std::time::Instant) -> Option<Vec<std::net::IpAddr>> {
+        if self.naming {
+            return None;
+        }
+        if self
+            .refused_at
+            .is_some_and(|at| now.saturating_duration_since(at) >= ASK_AGAIN_AFTER)
+        {
+            self.forget_refusals();
+        }
+        let mut wanted: Vec<std::net::IpAddr> = self
+            .neighbours
+            .iter()
+            .filter(|n| n.fresh)
+            .map(|n| n.address)
+            .chain(
+                self.neighbours6
+                    .iter()
+                    .filter(|(n, _)| n.fresh)
+                    .map(|(n, _)| std::net::IpAddr::V6(n.address)),
+            )
+            .chain(
+                self.found
+                    .iter()
+                    .flat_map(|f| f.replies.iter())
+                    .map(|r| std::net::IpAddr::V4(r.address)),
+            )
+            .filter(|a| !self.names.contains_key(a))
+            .collect();
+        wanted.sort();
+        wanted.dedup();
+        if wanted.is_empty() {
+            return None;
+        }
+        for a in &wanted {
+            self.names.insert(*a, Named::Asking);
+        }
+        self.naming = true;
+        Some(wanted)
+    }
+
+    /// The gateway's measurement, when this is the gateway it was taken of.
+    #[must_use]
+    pub fn latency_of(&self, gateway: std::net::Ipv4Addr) -> Option<&Latency> {
+        self.latency
+            .as_ref()
+            .filter(|(at, _)| *at == gateway)
+            .map(|(_, l)| l)
+    }
+
+    /// A measurement of this gateway is out.
+    pub fn measuring(&mut self, gateway: std::net::Ipv4Addr) {
+        self.latency = Some((gateway, Latency::Measuring));
+    }
+
+    /// What one of the view's threads brought back.
+    pub fn heard(&mut self, heard: Heard) {
+        match heard {
+            Heard::Swept(found) => self.found(found),
+            Heard::Named(answers) => {
+                self.naming = false;
+                for (address, said) in answers {
+                    self.names.insert(
+                        address,
+                        match said {
+                            Ok(Some(name)) => Named::Known(name),
+                            Ok(None) => Named::Nameless,
+                            Err(why) => {
+                                self.refused_at = Some(std::time::Instant::now());
+                                Named::Refused(why)
+                            }
+                        },
+                    );
+                }
+            }
+            Heard::Measured(gateway, said) => {
+                self.latency = Some((
+                    gateway,
+                    match said {
+                        Ok(Some(m)) => Latency::Measured(m),
+                        Ok(None) => Latency::Silent,
+                        Err(e) => Latency::Refused(e),
+                    },
+                ));
+            }
+        }
+    }
+
+    /// Sets what the tests and the photograph draw from — the neighbours of
+    /// both families, the names and the gateway's measurement — without a
+    /// kernel or a resolver behind them.
+    pub fn planted(
+        &mut self,
+        neighbours: Vec<ronoctua_memory::net::Neighbour>,
+        neighbours6: Vec<(ronoctua_lan::neigh::Neighbour6, String)>,
+        names: Vec<(std::net::IpAddr, Named)>,
+        latency: Option<(std::net::Ipv4Addr, Latency)>,
+    ) {
+        self.neighbours = neighbours;
+        self.neighbours6 = neighbours6;
+        self.names = names.into_iter().collect();
+        self.latency = latency;
     }
 }
 
@@ -787,7 +1233,34 @@ pub struct View {
     /// THE NAME AND NOT THE PASSWORD: the view is drawn by two doors, and the
     /// password stays in the one that typed it.
     remembering: Option<Remembering>,
+    /// The file picker, while it is up over the view's rows: a tunnel's file
+    /// to bring in (`crate::file_picker::Hosted`).
+    picking: Option<crate::file_picker::Hosted<()>>,
+    /// The door's wake, for the file picker ([`View::watch_with`]).
+    wake: Option<crate::player_subtitles::Wake>,
+    /// The VPN just brought in that asks for a user and a password, by its
+    /// name — asked by [`View::after_bring`] once the import has worked.
+    bringing_secret: Option<String>,
 }
+
+/// The files a tunnel is brought in from, as the file picker shows them: a
+/// WireGuard `.conf`, an OpenVPN `.ovpn` — by the name, which is what a
+/// folder says of a file before it is read; the reading decides
+/// ([`read_tunnel`]).
+const TUNNEL: crate::file_picker::Filter = crate::file_picker::Filter {
+    label: ronoctua_i18n::key::FILE_PICKER_FILTER_TUNNELS,
+    keeps: |path, _| {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(extension.as_str(), "conf" | "ovpn").then_some(tokens::icon::FILE)
+    },
+};
+
+/// The ring of a tunnel's file.
+const TUNNEL_FILES: &[crate::file_picker::Filter] = &[TUNNEL, crate::file_picker::Filter::ANY];
 
 /// Where a row's cells begin and how wide they are, in the ROW's cells —
 /// both doors add `chrome::FIELDS_LEAD`; see `notifications::extent_of`.
@@ -840,6 +1313,34 @@ pub fn band_text(band: ronoctua_network::Band, texts: &ronoctua_i18n::Texts) -> 
         || texts.t(key::NETWORK_BAND_UNKNOWN),
         |ghz| texts.t_args(key::NETWORK_BAND, &[("ghz", Arg::Fraction(ghz))]),
     )
+}
+
+/// The gateway's round trip, as its row says it.
+///
+/// MILLISECONDS WITH A FRACTION, in the person's own decimal mark: a router
+/// in the next room answers in a fraction of one, and a whole count said
+/// `0`. The fastest and the slowest of the three, because a link is a range.
+#[must_use]
+pub fn latency_text(latency: Option<&Latency>, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::{Arg, key};
+    let ms = |d: std::time::Duration| (d.as_secs_f64() * 1000.0 * 10.0).round() / 10.0;
+    match latency {
+        None => texts.t(key::NETWORK_LATENCY_MEASURE),
+        Some(Latency::Measuring) => texts.t(key::NETWORK_LATENCY_MEASURING),
+        Some(Latency::Measured(m)) => texts.t_args(
+            key::NETWORK_LATENCY_MS,
+            &[
+                ("fastest", Arg::Fraction(ms(m.fastest))),
+                ("slowest", Arg::Fraction(ms(m.slowest))),
+                ("answered", Arg::Number(i64::from(m.answered))),
+                ("asked", Arg::Number(i64::from(ronoctua_lan::ECHOES))),
+            ],
+        ),
+        Some(Latency::Silent) => texts.t(key::NETWORK_LATENCY_SILENT),
+        Some(Latency::Refused(why)) => {
+            texts.t_with(key::NETWORK_LATENCY_REFUSED, &[("error", why.as_str())])
+        }
+    }
 }
 
 /// What to call the hotspot: this machine's own name.
@@ -948,7 +1449,7 @@ pub fn carrying(net: &Snapshot) -> Option<&Link> {
     net.links
         .iter()
         .filter(|e| e.state == State::Connected)
-        .min_by_key(|e| u8::from(e.medium == Medium::Radio))
+        .min_by_key(|e| e.medium.rank())
 }
 
 /// Does this machine have a radio at all?
@@ -982,6 +1483,32 @@ impl View {
             shelves: std::collections::BTreeMap::new(),
             asking: None,
             remembering: None,
+            picking: None,
+            wake: None,
+            bringing_secret: None,
+        }
+    }
+
+    /// The door's wake, for the file picker's folder and devices: a door
+    /// with a loop hands it once, and every picker this view opens after is
+    /// watched through it (`file_picker::FilePicker::watch_with`).
+    pub fn watch_with(&mut self, wake: crate::player_subtitles::Wake) {
+        self.wake = Some(wake);
+    }
+
+    /// What the wake brought the file picker, taken — `true` when its rows
+    /// changed and the door draws again.
+    pub fn look(&mut self) -> bool {
+        self.picking
+            .as_mut()
+            .is_some_and(crate::file_picker::Hosted::look)
+    }
+
+    /// How many lines of rows the door shows, for the file picker's `PgUp`
+    /// and `PgDn` — told before a key is handed over.
+    pub fn page_is(&self, lines: usize) {
+        if let Some(h) = self.picking.as_ref() {
+            h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
         }
     }
 
@@ -1159,6 +1686,9 @@ impl View {
     /// doors. Without it there is nothing on screen that says `f` forgets.
     #[must_use]
     pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
+        if let Some(h) = self.picking.as_ref() {
+            return h.picker.hint(texts);
+        }
         // THE HINT TEACHES THE LEVEL. A sheet that went on offering `s` to
         // scan and `f` to forget would teach six keys that do nothing where
         // you are — which is what the owner photographed on the radio.
@@ -1217,27 +1747,27 @@ impl View {
                 Some(Asking::Password(n)) => Errand::Connect(n, Some(Password::typed(text))),
                 _ => Errand::Nothing,
             },
-            "network-import" => {
-                let home = std::env::var("HOME").ok();
-                match read_tunnel(text, home.as_deref()) {
-                    Ok((path, preview)) => {
-                        self.looked_at(path, preview);
-                        let rows = self.rows(facts, columns, texts);
-                        // THE CURSOR AND NOT AN ANCHOR: both doors follow
-                        // the cursor after an answer, which brings `bring it
-                        // in` onto the screen with the file's reading above
-                        // it — where a title pinned to the top of a
-                        // twelve-line region could push it off the bottom.
-                        if let Some(i) = rows.iter().position(|r| r.target == Target::Bring) {
-                            self.cursor = i;
-                        }
-                        Errand::Nothing
-                    }
-                    Err(name) => Errand::NotATunnel(name),
-                }
-            }
+            "network-import" => self.import(text, facts, columns, texts),
             "tor-setting" | "tor-lines" => match asked {
                 Some(Asking::Tor(setting)) => self.tor_answered(facts, setting, text),
+                _ => Errand::Nothing,
+            },
+            // THE VPN'S USER, then its password — two lines, because one is
+            // read back and the other is hidden. An empty user is never mind:
+            // nothing is stored, and the tunnel asks when it comes up.
+            "network-vpn-user" => match asked {
+                Some(Asking::VpnUser(tunnel)) if !text.trim().is_empty() => {
+                    self.asking = Some(Asking::VpnPassword(tunnel, text.trim().to_owned()));
+                    Errand::Ask(Question::VPN_PASSWORD)
+                }
+                _ => Errand::Nothing,
+            },
+            "network-vpn-password" => match asked {
+                Some(Asking::VpnPassword(tunnel, user)) if !text.is_empty() => Errand::VpnSecret {
+                    tunnel,
+                    user,
+                    password: Password::typed(text),
+                },
                 _ => Errand::Nothing,
             },
             _ => Errand::Nothing,
@@ -1386,6 +1916,31 @@ impl View {
         self.sharing = password;
     }
 
+    /// The hotspot's password, from the file both doors read
+    /// ([`sharing`]), while this machine serves — whichever door started it.
+    ///
+    /// ONLY READS. Following the hotspot's end, which takes the file away,
+    /// is the DOOR's ([`sharing::follow`], with a flag the door keeps
+    /// whether the view is open or not): a flag on the view went stale while
+    /// the view was closed, and the password outlived the hotspot.
+    pub fn show_sharing(&mut self, serving: bool) {
+        self.sharing = serving.then(sharing::read).flatten().map(|k| k.password);
+    }
+
+    /// What follows an import, in either door: the VPN that asks for a user
+    /// and a password asks for them NOW, on the door's line — first the
+    /// user, then ([`View::answered`]) the password. Anything else, and an
+    /// import that failed, follows with nothing.
+    pub fn after_bring(&mut self, imported: bool) -> Errand {
+        match self.bringing_secret.take() {
+            Some(tunnel) if imported => {
+                self.asking = Some(Asking::VpnUser(tunnel));
+                Errand::Ask(Question::VPN_USER)
+            }
+            _ => Errand::Nothing,
+        }
+    }
+
     /// Is a file waiting to be brought in?
     ///
     /// Read by the tests, and by whoever asks the view where it is without
@@ -1401,6 +1956,15 @@ impl View {
     /// Answers whether the cursor was ALREADY on that row: that is the second
     /// click, which the door turns into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        // A ROW OF THE PICKER is chosen there: its cursor, and the second
+        // click its `RET`.
+        if let (Some(h), Some(Target::Pick(t))) =
+            (self.picking.as_mut(), rows.get(n).map(|r| &r.target))
+        {
+            let again = h.clicked(t.clone());
+            self.cursor = n;
+            return again;
+        }
         if rows.get(n).is_some_and(|r| !r.heading) {
             let again = self.cursor == n;
             self.cursor = n;
@@ -1454,6 +2018,23 @@ impl View {
         // go here — a cancelled password does not wait for an answer that is
         // not coming.
         self.asking = None;
+        // THE PICKER takes its own keys, and the view's that walk, answer
+        // and go back — a second click's `RET`, a command's arrows, the
+        // pointer's way back.
+        if self.picking.is_some() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match press {
+                Press::Pick(key) => key,
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Less => Key::simple(Sym::Left),
+                Press::More => Key::simple(Sym::Right),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                _ => return Errand::Nothing,
+            };
+            return self.pick_key(key, facts, columns, texts);
+        }
         let rows = self.rows(facts, columns, texts);
         self.settle(&rows);
         let target = rows
@@ -1572,11 +2153,31 @@ impl View {
             // cannot draw it, and the next `Esc` would have been swallowed
             // clearing state nobody could see.
             Press::Import if !net.daemon => Errand::Nothing,
-            Press::Import => Errand::Ask(Question::PATH),
+            // A TUNNEL'S FILE IS CHOSEN, not typed: the picker, up over the
+            // view.
+            Press::Import => {
+                self.picking = Some(crate::file_picker::Hosted::open(
+                    crate::file_picker::Request {
+                        purpose: "network-tunnel",
+                        mode: crate::file_picker::Mode::Open { many: false },
+                        filters: TUNNEL_FILES,
+                        start: crate::file_picker::Start::Place(crate::file_picker::Xdg::DOWNLOAD),
+                        addresses: false,
+                        extras: &[],
+                        alternate: None,
+                    },
+                    (),
+                    ronoctua_i18n::key::NETWORK_PICK_TUNNEL,
+                    self.wake.as_ref(),
+                ));
+                self.settle_the_picker(facts, columns, texts);
+                Errand::Nothing
+            }
+            Press::Pick(_) => Errand::Nothing,
             Press::Radio => Errand::Radio(!net.radio),
             Press::Airplane => Errand::Airplane(!net.airplane()),
             Press::Disconnect => match carrying(net) {
-                Some(l) => Errand::Disconnect(l.medium),
+                Some(l) => Errand::Disconnect(l.medium, l.interface.clone()),
                 None => Errand::Nothing,
             },
             // `f` FORGETS WHAT IS UNDER THE CURSOR, and the two things that
@@ -1612,14 +2213,19 @@ impl View {
                 }
                 Target::Wireless(n) => Errand::Connect(n, None),
                 Target::Remember(yes) => self.remembered(yes),
-                Target::Link(medium) => Errand::Disconnect(medium),
+                Target::Link(medium, interface) => Errand::Disconnect(medium, interface),
                 Target::Tunnel(at) => Errand::Drop(at),
                 Target::Saved(at) => Errand::Raise(at),
                 // THE FILE THAT HAS BEEN LOOKED AT, and only now brought
                 // in: the reading is what the person answered `RET` to.
                 Target::Hotspot(on) => Errand::Hotspot(on),
                 Target::Bring => match self.bringing.take() {
-                    Some((path, preview)) => Errand::Bring(path, preview.kind),
+                    Some((path, preview)) => {
+                        // A PASSWORD IS WANTED AFTERWARDS, once the import
+                        // worked — the door asks `after_bring`.
+                        self.bringing_secret = preview.needs_secret.then(|| preview.name.clone());
+                        Errand::Bring(path, preview.kind)
+                    }
                     None => Errand::Nothing,
                 },
                 Target::Drop => {
@@ -1663,14 +2269,121 @@ impl View {
                         == Some(id.clone());
                     Errand::Tunnel(ronoctua_tunnel::Order::ExitNode((!same).then_some(id)))
                 }
+                // A PICKER'S ROW reaches here only when none is up.
+                Target::Pick(_) => Errand::Nothing,
+                // THE ROUND TRIP, ON DEMAND: an IPv4 gateway is measured by
+                // the door, on a thread; anything else has nothing to send
+                // an echo to.
+                Target::Latency(gateway) => gateway
+                    .parse::<std::net::Ipv4Addr>()
+                    .map_or(Errand::Nothing, Errand::Measure),
             },
         }
+    }
+
+    /// A tunnel's file, typed or picked: read and looked at, and the cursor
+    /// on the row that brings it in — or why it is none.
+    fn import(
+        &mut self,
+        text: &str,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        // A PATH TYPED — `LEADER :` with an argument — puts the picker down
+        // as a pick does.
+        self.picking = None;
+        let home = std::env::var("HOME").ok();
+        match read_tunnel(text, home.as_deref()) {
+            Ok((path, preview)) => {
+                self.looked_at(path, preview);
+                let rows = self.rows(facts, columns, texts);
+                // THE CURSOR AND NOT AN ANCHOR: both doors follow the cursor
+                // after an answer, which brings `bring it in` onto the screen
+                // with the file's reading above it — where a title pinned to
+                // the top of a twelve-line region could push it off the
+                // bottom.
+                if let Some(i) = rows.iter().position(|r| r.target == Target::Bring) {
+                    self.cursor = i;
+                }
+                Errand::Nothing
+            }
+            Err(name) => Errand::NotATunnel(name),
+        }
+    }
+
+    /// Whether the file picker is up and takes `key` — the door hands it as
+    /// [`Press::Pick`] before anything else reads it.
+    #[must_use]
+    pub fn picker_takes(&self, key: ronoctua_keymap::Key) -> bool {
+        self.picking.as_ref().is_some_and(|h| h.picker.claims(key))
+    }
+
+    /// What was copied, for the file picker.
+    pub fn picker_pasted(&mut self, text: &str) {
+        if let Some(h) = self.picking.as_mut() {
+            let _ = h.pasted(text);
+        }
+    }
+
+    /// The view's cursor on the picker's own.
+    fn settle_the_picker(&mut self, facts: &Facts<'_>, columns: u16, texts: &ronoctua_i18n::Texts) {
+        if self.picking.is_some() {
+            let rows = self.rows(facts, columns, texts);
+            self.cursor = rows.iter().position(|r| r.focused).unwrap_or(0);
+        }
+    }
+
+    /// A key for the file picker: the file chosen is read and looked at, as a
+    /// typed one is, and the view's rows come back.
+    fn pick_key(
+        &mut self,
+        key: ronoctua_keymap::Key,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::file_picker::{Hosting, Picked};
+        let Some(h) = self.picking.as_mut() else {
+            return Errand::Nothing;
+        };
+        let errand = match h.key(key) {
+            Hosting::Nothing => Errand::Nothing,
+            Hosting::Back => {
+                self.picking = None;
+                Errand::Nothing
+            }
+            Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Paste => Errand::Paste,
+            Hosting::Picked((), Picked::Paths { paths, .. }) => {
+                self.picking = None;
+                let typed = paths
+                    .first()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                return self.import(&typed, facts, columns, texts);
+            }
+            Hosting::Picked(..) => Errand::Nothing,
+        };
+        self.settle_the_picker(facts, columns, texts);
+        errand
     }
 
     /// The rows to draw, for the width given.
     #[must_use]
     pub fn rows(&self, facts: &Facts<'_>, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
         use ronoctua_i18n::key;
+        // THE PICKER'S ROWS while it is up, as this view's own.
+        if let Some(h) = self.picking.as_ref() {
+            return h.rows(columns, texts, |p| Row {
+                fields: p.fields,
+                focused: p.focused,
+                heading: p.heading,
+                target: Target::Pick(p.target),
+                disabled: false,
+                shelf: None,
+            });
+        }
         let (net, seen) = (facts.net, facts.seen);
         let (left, room) = extent(columns);
         let mut b = Builder {
@@ -1735,7 +2448,7 @@ impl View {
                 b.note(key::NETWORK_NO_LINK);
             }
             for link in &net.links {
-                Self::link_rows(&mut b, link);
+                Self::link_rows(&mut b, link, facts.watch);
             }
 
             // 3. THE WI-FI.
@@ -1823,8 +2536,10 @@ impl View {
                 // THE PASSWORD STAYS ON SCREEN while the hotspot is up, because
                 // it is typed on somebody else's phone from across a room. It is
                 // shown ON PURPOSE — a hotspot whose password nobody can read is
-                // a hotspot nobody can join.
-                if let Some(word) = &self.sharing {
+                // a hotspot nobody can join. IN BOTH DOORS, whichever started
+                // it: it comes from the runtime file (`sharing`), and only
+                // while a link serves.
+                if serving && let Some(word) = &self.sharing {
                     b.fact(key::NETWORK_HOTSPOT_PASSWORD, word.clone());
                 }
             }
@@ -2569,6 +3284,11 @@ impl View {
 
         let fresh: Vec<&ronoctua_memory::net::Neighbour> =
             watch.neighbours().iter().filter(|n| n.fresh).collect();
+        let fresh6: Vec<&(ronoctua_lan::neigh::Neighbour6, String)> = watch
+            .neighbours6()
+            .iter()
+            .filter(|(n, _)| n.fresh)
+            .collect();
         // ON A SHELF, and this machine sits on it too: the neighbour table
         // answers a little differently every second — an entry goes stale, a
         // sweep fills it — and a list free to grow moved the two sections
@@ -2592,27 +3312,65 @@ impl View {
             // It said "nobody has been spoken to yet" directly above a shelf
             // listing this machine, which is why it now waits for BOTH to be
             // empty.
-            if fresh.is_empty() && mine.is_empty() {
+            if fresh.is_empty() && fresh6.is_empty() && mine.is_empty() {
                 b.note(key::NETWORK_LAN_NOBODY);
             }
-            for one in fresh {
-                let address = one.address.to_string();
+            // ONE ROW SHAPE FOR BOTH FAMILIES: the name resolved knows FIRST —
+            // it is what a person recognises, where an address and a maker
+            // are what a person has to work out — then the router, the maker
+            // and the interface.
+            let row = |b: &mut Builder<'_>,
+                       address: std::net::IpAddr,
+                       hardware: &str,
+                       interface: &str| {
+                let text = address.to_string();
                 let mut said = Vec::new();
-                if gateways.contains(&address) {
+                if let Some(Named::Known(name)) = watch.name_of(address) {
+                    said.push(name.clone());
+                }
+                if gateways.contains(&text) {
                     said.push(b.texts.t(key::NETWORK_LAN_GATEWAY));
                 }
-                if let Some(maker) = vendors.of_address(&one.hardware) {
+                if let Some(maker) = vendors.of_address(hardware) {
                     said.push(maker.to_owned());
                 }
-                said.push(one.interface.clone());
+                said.push(interface.to_owned());
                 b.pair(
-                    address,
+                    text,
                     said.join(&format!(" {} ", tokens::mark::SEPARATOR)),
                     Target::Nothing,
                     false,
                 );
+            };
+            for one in fresh {
+                row(b, one.address, &one.hardware, &one.interface);
+            }
+            // AND THE OTHER FAMILY, out of netlink: what `/proc/net/arp` could
+            // not say. After the IPv4 rows, the order the kernel keeps them in.
+            for (one, interface) in &fresh6 {
+                row(
+                    b,
+                    std::net::IpAddr::V6(one.address),
+                    &one.hardware,
+                    interface,
+                );
             }
         });
+        // A RESOLVER THAT COULD NOT ANSWER is said once, under the shelf —
+        // not a word on every row, and not a silence that reads as "nobody
+        // here has a name".
+        if let Some(why) = watch.names.values().find_map(|n| match n {
+            Named::Refused(why) => Some(*why),
+            _ => None,
+        }) {
+            b.sentence_coloured(
+                b.texts.t_with(
+                    key::NETWORK_LAN_NAMES_REFUSED,
+                    &[("why", &b.texts.t(resolve_why_key(why)))],
+                ),
+                tokens::color::STATE_WARNING,
+            );
+        }
         if watch.sweeping {
             b.note(key::NETWORK_LAN_LOOKING);
             return;
@@ -2641,9 +3399,12 @@ impl View {
         // A REFUSED SOCKET IS NOT AN EMPTY NETWORK, and the two must not
         // read the same: `ping_group_range` can be narrowed, and then no
         // sweep can ever answer.
-        if let Some(why) = &found.refused {
+        // THE KERNEL'S WORDS ARE ENGLISH: they went to the log when the
+        // sweep came back (`Watch::found`), and the row says it in the
+        // person's language.
+        if found.refused.is_some() {
             b.sentence_coloured(
-                b.texts.t_with(key::NETWORK_LAN_REFUSED, &[("error", why)]),
+                b.texts.t(key::NETWORK_LAN_REFUSED),
                 tokens::color::STATE_WARNING,
             );
             return;
@@ -2666,9 +3427,16 @@ impl View {
         );
         b.sentence(said);
         for address in extra {
+            let mut said = Vec::new();
+            if let Ok(ip) = address.parse::<std::net::IpAddr>()
+                && let Some(Named::Known(name)) = watch.name_of(ip)
+            {
+                said.push(name.clone());
+            }
+            said.push(b.texts.t(key::NETWORK_LAN_ANSWERED));
             b.pair(
                 address,
-                b.texts.t(key::NETWORK_LAN_ANSWERED),
+                said.join(&format!(" {} ", tokens::mark::SEPARATOR)),
                 Target::Nothing,
                 false,
             );
@@ -2709,12 +3477,12 @@ impl View {
     }
 
     /// One link, and the facts under it.
-    fn link_rows(b: &mut Builder<'_>, link: &Link) {
+    fn link_rows(b: &mut Builder<'_>, link: &Link, watch: &Watch) {
         use ronoctua_i18n::key;
-        let glyph = if link.medium == Medium::Wired {
-            tokens::icon::ETHERNET
-        } else {
-            bars_glyph(link.signal)
+        let glyph = match link.medium {
+            Medium::Wired => tokens::icon::ETHERNET,
+            Medium::Radio => bars_glyph(link.signal),
+            Medium::Phone => tokens::icon::BLUETOOTH,
         };
         let connected = link.state == State::Connected;
         let state = b.texts.t(match link.state {
@@ -2726,7 +3494,7 @@ impl View {
             format!("{glyph} {}", link.interface),
             state,
             if connected {
-                Target::Link(link.medium)
+                Target::Link(link.medium, link.interface.clone())
             } else {
                 Target::Nothing
             },
@@ -2735,8 +3503,17 @@ impl View {
         if !connected {
             return;
         }
+        // A PHONE'S NAME IS THE PHONE, not a Wi-Fi network: the link is
+        // the phone's own connection, lent over Bluetooth.
         if let Some(name) = &link.network {
-            b.fact(key::NETWORK_FACT_NETWORK, name.clone());
+            b.fact(
+                if link.medium == Medium::Phone {
+                    key::NETWORK_FACT_PHONE
+                } else {
+                    key::NETWORK_FACT_NETWORK
+                },
+                name.clone(),
+            );
         }
         if link.medium == Medium::Radio {
             b.fact(key::NETWORK_FACT_BAND, band_text(link.band, b.texts));
@@ -2750,6 +3527,18 @@ impl View {
         }
         if let Some(gateway) = &link.gateway {
             b.fact(key::NETWORK_FACT_GATEWAY, gateway.clone());
+            // THE ROUND TRIP TO IT, ON DEMAND. Never measured by itself — a
+            // sweep's first packet waits for ARP and would read as a terrible
+            // link (`ronoctua_lan::measure`) — and asked here, where a number
+            // is honest: the gateway is already in the kernel's table.
+            if let Ok(at) = gateway.parse::<std::net::Ipv4Addr>() {
+                b.pair(
+                    b.texts.t(key::NETWORK_LATENCY),
+                    latency_text(watch.latency_of(at), b.texts),
+                    Target::Latency(gateway.clone()),
+                    false,
+                );
+            }
         }
         if !link.dns.is_empty() {
             let joined = link.dns.join(&format!(" {} ", tokens::mark::SEPARATOR));
@@ -2805,6 +3594,9 @@ impl View {
 pub struct Wire {
     manager: Option<Manager>,
     seen: Vec<Network>,
+    /// What a wire with no daemon answers to `look` — the photograph's
+    /// planted machine; nothing for a test's offline wire.
+    planted: Option<Snapshot>,
 }
 
 impl Wire {
@@ -2814,20 +3606,33 @@ impl Wire {
         let mut w = Self {
             manager: Manager::fresh().ok(),
             seen: Vec::new(),
+            planted: None,
         };
         w.reread();
         w
     }
 
     /// A wire with no daemon behind it, holding `seen` — what a test hands a
-    /// door: every order is refused as NetworkManager's absence, and nothing
-    /// reaches the machine's bus.
+    /// door: every order is refused as NetworkManager's
+    /// absence, and nothing reaches the machine's bus.
     #[cfg(test)]
     #[must_use]
     pub fn offline(seen: Vec<Network>) -> Self {
         Self {
             manager: None,
             seen,
+            planted: None,
+        }
+    }
+
+    /// The same, answering `look` with a planted machine — the photograph's,
+    /// so a key pressed in it re-reads what was planted and not an absence.
+    #[must_use]
+    pub fn planted(net: Snapshot, seen: Vec<Network>) -> Self {
+        Self {
+            manager: None,
+            seen,
+            planted: Some(net),
         }
     }
 
@@ -2842,7 +3647,7 @@ impl Wire {
     pub fn look(&self) -> Snapshot {
         self.manager
             .as_ref()
-            .map_or_else(Snapshot::default, Manager::look)
+            .map_or_else(|| self.planted.clone().unwrap_or_default(), Manager::look)
     }
 
     /// Re-reads the access point list without asking for a new scan.
@@ -2899,6 +3704,18 @@ impl Wire {
     /// There is no device of that medium, or the bus refused.
     pub fn disconnect(&mut self, medium: Medium) -> anyhow::Result<()> {
         self.wire()?.disconnect(medium)?;
+        self.reread();
+        Ok(())
+    }
+
+    /// Disconnects ONE link, by its interface
+    /// (`ronoctua_network::Manager::disconnect_link`).
+    ///
+    /// # Errors
+    ///
+    /// No device of that medium has that interface, or the bus refused.
+    pub fn disconnect_link(&mut self, medium: Medium, interface: &str) -> anyhow::Result<()> {
+        self.wire()?.disconnect_link(medium, interface)?;
         self.reread();
         Ok(())
     }
@@ -2964,6 +3781,21 @@ impl Wire {
         self.wire()?.import(path, kind)?;
         self.reread();
         Ok(())
+    }
+
+    /// Stores a VPN's user and password in its profile.
+    ///
+    /// # Errors
+    ///
+    /// There is no VPN by that name, or NetworkManager refused.
+    pub fn store_vpn_secret(
+        &mut self,
+        tunnel: &str,
+        user: &str,
+        password: &Password,
+    ) -> anyhow::Result<()> {
+        self.wire()?
+            .store_vpn_secret(tunnel, user, password.as_str())
     }
 
     /// Deletes one stored profile.
@@ -3322,31 +4154,10 @@ impl Builder<'_> {
     }
 }
 
-/// `44220000000` -> `44,2 GB`.
-///
-/// One decimal place, like the link's rate: the total transferred grows all
-/// the time, and the second place would be a digit flickering without
-/// informing anything.
-///
-/// THE SEPARATOR IS THE LANGUAGE'S and comes in from
-/// [`ronoctua_i18n::Texts::decimal_mark`]. It was a comma written into the
-/// format string, so an English screen said `44,2 GB` — which in English is
-/// forty-four thousand two hundred gigabytes.
-#[must_use]
-pub fn readable_bytes(bytes: u64, mark: char) -> String {
-    const K: u64 = 1_000;
-    const M: u64 = K * 1_000;
-    const G: u64 = M * 1_000;
-    match bytes {
-        0..=999 => format!("{bytes} B"),
-        1_000..=999_999 => format!("{} kB", bytes / K),
-        1_000_000..=999_999_999 => format!("{} MB", bytes / M),
-        _ => {
-            let tenth = (bytes + G / 20) / (G / 10);
-            format!("{}{mark}{} GB", tenth / 10, tenth % 10)
-        }
-    }
-}
+/// `44220000000` -> `44,2 GB` — see [`crate::sizes`], where it moved so the
+/// brain's records can be formatted in `ronoctua-render-png`, which links that
+/// file and not this one.
+pub use crate::sizes::readable_bytes;
 
 /// How many bars the signal lights, from 0 to 4.
 ///
@@ -3992,7 +4803,7 @@ mod tests {
         );
         assert_eq!(
             v.key(Press::Disconnect, &facts(&snap, &[]), DECIDING_WIDTH, &t),
-            Errand::Disconnect(Medium::Wired)
+            Errand::Disconnect(Medium::Wired, "enp1s0".to_owned())
         );
         assert_eq!(
             v.key(Press::Scan, &facts(&snap, &[]), DECIDING_WIDTH, &t),
@@ -4161,10 +4972,17 @@ mod tests {
         )
         .unwrap();
         let mut v = View::fresh();
+        // THE FILE IS CHOSEN IN THE PICKER: up over the view.
         assert_eq!(
             v.key(Press::Import, &facts(&snap, &[]), DECIDING_WIDTH, &t),
-            Errand::Ask(Question::PATH)
+            Errand::Nothing
         );
+        let rows = v.rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        assert!(
+            rows.iter().any(|r| matches!(r.target, Target::Pick(_))),
+            "the picker is not up"
+        );
+        // A PATH TYPED from `LEADER :` is the same answer, and puts it down.
         const { assert!(!Question::PATH.secret, "a path is typed to be read back") };
         let answer = v.answered(
             "network-import",
@@ -4896,6 +5714,44 @@ mod tests {
     }
 
     #[test]
+    fn a_phone_link_is_named_as_a_phone_and_disconnected_by_its_interface() {
+        // The network view's half of "both views agree about bnep0": the
+        // phone's link is the IP side, its name is the PHONE's (never a
+        // "Wi-Fi network"), and `RET` on it takes down that link and no
+        // other Bluetooth device's.
+        let t = texts();
+        let mut snap = machine();
+        let mut phone = link_of(Medium::Phone, State::Connected, 0);
+        phone.interface = "bnep0".to_owned();
+        phone.network = Some("Ana's phone".to_owned());
+        snap.links.push(phone);
+        let rows = View::fresh().rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        let at = rows
+            .iter()
+            .position(|r| matches!(&r.target, Target::Link(Medium::Phone, i) if i == "bnep0"))
+            .expect("no phone link row");
+        let named = rows
+            .iter()
+            .find(|r| r.fields.iter().any(|f| f.text == "Ana's phone"))
+            .expect("the phone's name is not drawn");
+        assert_eq!(
+            named.fields[0].text,
+            t.t(ronoctua_i18n::key::NETWORK_FACT_PHONE),
+            "the phone's name is labelled as something else"
+        );
+        assert_ne!(
+            t.t(ronoctua_i18n::key::NETWORK_FACT_PHONE),
+            t.t(ronoctua_i18n::key::NETWORK_FACT_NETWORK)
+        );
+        let mut v = View::fresh();
+        v.clicked(at, &rows);
+        assert_eq!(
+            v.key(Press::Enter, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Disconnect(Medium::Phone, "bnep0".to_owned())
+        );
+    }
+
+    #[test]
     fn a_machine_with_neither_daemon_draws_neither_heading() {
         // AN EMPTY SECTION UNDER A TITLE is a thing to look at that does not
         // exist, and on an ordinary install both of these are absent.
@@ -5163,6 +6019,350 @@ mod tests {
         assert!(said("10.0.0.2"), "this machine's own address is missing");
     }
 
+    /// FAILS IF: a neighbour's name stops coming FIRST on its row, the IPv6
+    /// neighbours stop being listed, a stale one of them is listed, or a
+    /// resolver that could not answer goes unsaid.
+    #[test]
+    fn a_neighbour_is_named_and_the_other_family_is_listed_too() {
+        let t = texts();
+        let snap = machine();
+        let mut watch = Watch::default();
+        let phone: std::net::Ipv6Addr = "fe80::1:2".parse().unwrap();
+        let gone: std::net::Ipv6Addr = "fe80::dead".parse().unwrap();
+        watch.planted(
+            vec![ronoctua_memory::net::Neighbour {
+                address: "10.0.0.7".parse().unwrap(),
+                hardware: "aa:bb:cc:dd:ee:07".to_owned(),
+                interface: "wlan0".to_owned(),
+                fresh: true,
+            }],
+            vec![
+                (
+                    ronoctua_lan::neigh::Neighbour6 {
+                        address: phone,
+                        hardware: "aa:bb:cc:dd:ee:08".to_owned(),
+                        interface: 3,
+                        fresh: true,
+                    },
+                    "wlan0".to_owned(),
+                ),
+                (
+                    ronoctua_lan::neigh::Neighbour6 {
+                        address: gone,
+                        hardware: String::new(),
+                        interface: 3,
+                        fresh: false,
+                    },
+                    "wlan0".to_owned(),
+                ),
+            ],
+            vec![
+                (
+                    "10.0.0.7".parse().unwrap(),
+                    Named::Known("printer.lan".to_owned()),
+                ),
+                (std::net::IpAddr::V6(phone), Named::Nameless),
+            ],
+            None,
+        );
+        let facts = Facts {
+            net: &snap,
+            seen: &[],
+            watch: &watch,
+            tunnels: &ronoctua_tunnel::Scene::default(),
+        };
+        let rows = View::fresh().rows(&facts, 80, &t);
+        let row_of = |needle: &str| {
+            rows.iter()
+                .find(|r| r.fields.iter().any(|f| f.text.contains(needle)))
+                .map(|r| r.fields.iter().map(|f| f.text.clone()).collect::<Vec<_>>())
+        };
+        let printer = row_of("10.0.0.7").expect("the IPv4 neighbour");
+        assert!(
+            printer.iter().any(|f| f.starts_with("printer.lan")),
+            "the name is not first: {printer:?}"
+        );
+        assert!(
+            row_of("fe80::1:2").is_some(),
+            "the IPv6 neighbour is missing"
+        );
+        assert!(
+            row_of("fe80::dead").is_none(),
+            "a stale IPv6 entry was listed"
+        );
+
+        // AND A RESOLVER THAT COULD NOT ANSWER IS SAID, once.
+        watch.heard(Heard::Named(vec![(
+            "10.0.0.9".parse().unwrap(),
+            Err(ronoctua_resolve::Refusal::NoResolved),
+        )]));
+        let facts = Facts {
+            net: &snap,
+            seen: &[],
+            watch: &watch,
+            tunnels: &ronoctua_tunnel::Scene::default(),
+        };
+        let rows = View::fresh().rows(&facts, 200, &t);
+        let why = t.t(ronoctua_i18n::key::LAN_RESOLVE_WHY_NO_RESOLVED);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.fields.iter().any(|f| f.text.contains(&why)))
+                .count(),
+            1
+        );
+    }
+
+    /// FAILS IF: a refusal of resolved is kept like an answer — the address
+    /// never asked again, the warning under the shelf for the whole session.
+    #[test]
+    fn a_refused_name_is_asked_again_and_an_answer_is_not() {
+        let mut watch = Watch::default();
+        let refused: std::net::IpAddr = "10.0.0.7".parse().unwrap();
+        let answered: std::net::IpAddr = "10.0.0.8".parse().unwrap();
+        watch.planted(
+            [refused, answered]
+                .into_iter()
+                .map(|address| ronoctua_memory::net::Neighbour {
+                    address,
+                    hardware: "02:00:00:00:00:07".to_owned(),
+                    interface: "wlan0".to_owned(),
+                    fresh: true,
+                })
+                .collect(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        let start = std::time::Instant::now();
+        assert_eq!(watch.names_wanted_at(start), Some(vec![refused, answered]));
+        watch.heard(Heard::Named(vec![
+            (refused, Err(ronoctua_resolve::Refusal::NoResolved)),
+            (answered, Ok(None)),
+        ]));
+        assert_eq!(
+            watch.names_wanted_at(std::time::Instant::now()),
+            None,
+            "a refusal was asked again at once"
+        );
+        assert_eq!(
+            watch.names_wanted_at(std::time::Instant::now() + ASK_AGAIN_AFTER),
+            Some(vec![refused]),
+            "the refused address was not asked again, or the answered one was"
+        );
+        watch.heard(Heard::Named(vec![(refused, Ok(Some("pc.lan".to_owned())))]));
+        assert_eq!(
+            watch.name_of(refused),
+            Some(&Named::Known("pc.lan".to_owned()))
+        );
+        // AND AN OPENING ASKS AGAIN, without waiting.
+        watch.heard(Heard::Named(vec![(
+            answered,
+            Err(ronoctua_resolve::Refusal::Failed),
+        )]));
+        watch.restart();
+        assert_eq!(watch.names_wanted_at(start), Some(vec![answered]));
+    }
+
+    /// Every refusal of the network crate is said in the person's
+    /// language, and an error that is none of them is said as the unnamed
+    /// refusal — the daemon's words go to the log, never to the line.
+    #[test]
+    fn a_network_refusal_is_said_in_the_language() {
+        for lang in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(lang).unwrap();
+            for why in ronoctua_network::Refusal::ALL {
+                let said = crate::network_words::reason(&anyhow::Error::new(why), &t);
+                assert_eq!(said, t.t(network_why_key(why)));
+                assert_ne!(said, why.to_string(), "{why:?} reached {lang} in English");
+            }
+        }
+        let t = texts();
+        assert_eq!(
+            crate::network_words::reason(&anyhow::anyhow!("the daemon said no"), &t),
+            t.t(ronoctua_i18n::key::NETWORK_REFUSED_OTHER)
+        );
+    }
+
+    /// Every refusal of resolved has a sentence in both languages.
+    #[test]
+    fn every_resolve_refusal_is_said() {
+        for lang in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(lang).unwrap();
+            for why in ronoctua_resolve::Refusal::ALL {
+                let key = resolve_why_key(why);
+                assert_ne!(t.t(key), key, "{why:?} has no sentence in {lang}");
+            }
+        }
+    }
+
+    /// FAILS IF: an address is asked for its name twice, or while a batch is
+    /// still out — resolved answers in up to seconds per address.
+    #[test]
+    fn a_name_is_asked_once_and_one_batch_at_a_time() {
+        let mut watch = Watch::default();
+        watch.planted(
+            vec![ronoctua_memory::net::Neighbour {
+                address: "10.0.0.7".parse().unwrap(),
+                hardware: String::new(),
+                interface: "wlan0".to_owned(),
+                fresh: true,
+            }],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        let first = watch.names_wanted().expect("one to ask");
+        assert_eq!(first, ["10.0.0.7".parse::<std::net::IpAddr>().unwrap()]);
+        assert_eq!(
+            watch.names_wanted(),
+            None,
+            "a second batch while one is out"
+        );
+        watch.heard(Heard::Named(vec![(first[0], Ok(None))]));
+        assert_eq!(watch.name_of(first[0]), Some(&Named::Nameless));
+        assert_eq!(watch.names_wanted(), None, "the same address asked again");
+    }
+
+    /// FAILS IF: the gateway's round trip stops being a row `RET` measures,
+    /// or what the measurement says is not drawn on it.
+    #[test]
+    fn the_gateway_is_measured_on_demand_and_says_what_came_back() {
+        let t = texts();
+        let snap = machine();
+        let mut v = View::fresh();
+        let rows = v.rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Latency("10.0.0.1".to_owned()))
+            .expect("the gateway's round-trip row");
+        assert!(
+            rows[at]
+                .fields
+                .iter()
+                .any(|f| f.text == t.t(ronoctua_i18n::key::NETWORK_LATENCY_MEASURE))
+        );
+        v.cursor = at;
+        assert_eq!(
+            v.key(Press::Enter, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::Measure("10.0.0.1".parse().unwrap())
+        );
+        // WHAT CAME BACK is drawn on the row, in milliseconds with a fraction.
+        let mut watch = Watch::default();
+        watch.heard(Heard::Measured(
+            "10.0.0.1".parse().unwrap(),
+            Ok(Some(ronoctua_lan::Measured {
+                fastest: std::time::Duration::from_micros(400),
+                slowest: std::time::Duration::from_micros(2_100),
+                answered: 3,
+            })),
+        ));
+        let facts = Facts {
+            net: &snap,
+            seen: &[],
+            watch: &watch,
+            tunnels: &ronoctua_tunnel::Scene::default(),
+        };
+        let rows = View::fresh().rows(&facts, DECIDING_WIDTH, &t);
+        let drawn: String = rows
+            .iter()
+            .filter(|r| matches!(r.target, Target::Latency(_)))
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(drawn.contains("0.4") && drawn.contains("2.1"), "{drawn}");
+    }
+
+    /// FAILS IF: a VPN whose file asks for a password stops asking after the
+    /// import, the password is asked before the user, or the answers do not
+    /// come back as the one errand that stores them.
+    #[test]
+    fn a_vpn_that_asks_for_a_password_asks_after_the_import_and_stores_it() {
+        let t = texts();
+        let snap = machine();
+        let f = facts(&snap, &[]);
+        let mut v = View::fresh();
+        v.looked_at(
+            "/x/work.ovpn".to_owned(),
+            ronoctua_network::vpn::preview(
+                "/x/work.ovpn",
+                "client\nremote vpn.example.org 1194\nauth-user-pass\n",
+            )
+            .expect("an ovpn"),
+        );
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        v.cursor = rows
+            .iter()
+            .position(|r| r.target == Target::Bring)
+            .expect("bring it in");
+        assert!(matches!(
+            v.key(Press::Enter, &f, DECIDING_WIDTH, &t),
+            Errand::Bring(_, ronoctua_network::vpn::Kind::OpenVpn)
+        ));
+        // A FAILED IMPORT ASKS NOTHING.
+        let mut failed = v.clone();
+        assert_eq!(failed.after_bring(false), Errand::Nothing);
+        assert_eq!(v.after_bring(true), Errand::Ask(Question::VPN_USER));
+        assert_eq!(
+            v.answered("network-vpn-user", "ana", &f, DECIDING_WIDTH, &t),
+            Errand::Ask(Question::VPN_PASSWORD)
+        );
+        // THE PASSWORD IS ASKED HIDDEN, the user in the open.
+        const { assert!(Question::VPN_PASSWORD.secret && !Question::VPN_USER.secret) };
+        assert_eq!(
+            v.answered("network-vpn-password", "s3cret", &f, DECIDING_WIDTH, &t),
+            Errand::VpnSecret {
+                tunnel: "work".to_owned(),
+                user: "ana".to_owned(),
+                password: Password::typed("s3cret"),
+            }
+        );
+        // AND THE PASSWORD NEVER REACHES A LOG through the errand.
+        let logged = format!(
+            "{:?}",
+            Errand::VpnSecret {
+                tunnel: "work".to_owned(),
+                user: "ana".to_owned(),
+                password: Password::typed("s3cret"),
+            }
+        );
+        assert!(!logged.contains("s3cret"), "{logged}");
+        // AN EMPTY USER is never mind: nothing is stored.
+        let mut w = View::fresh();
+        w.asking = Some(Asking::VpnUser("work".to_owned()));
+        assert_eq!(
+            w.answered("network-vpn-user", "  ", &f, DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+    }
+
+    /// FAILS IF: the hotspot's password file is born readable by anybody but
+    /// its owner, is not read back whole, or is not taken away when the
+    /// hotspot that was up stops.
+    #[test]
+    fn the_hotspot_password_file_is_the_owners_and_goes_with_the_hotspot() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("ronoctua-hotspot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hotspot.json");
+        let kept = sharing::Kept {
+            network: "noctua".to_owned(),
+            password: "abc12345".to_owned(),
+        };
+        sharing::keep_at(&path, &kept).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "born {mode:o}");
+        assert_eq!(sharing::read_at(&path), Some(kept.clone()));
+        // WRITTEN AGAIN over the old one, still owner-only.
+        sharing::keep_at(&path, &kept).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        sharing::forget_at(&path);
+        assert_eq!(sharing::read_at(&path), None);
+        sharing::forget_at(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_sweep_says_it_is_running_and_then_what_it_found() {
         // A KEY THAT TAKES A SECOND has to say so, or it looks broken.
@@ -5237,12 +6437,18 @@ mod tests {
             80,
             &t,
         );
+        let said = |needle: &str| {
+            rows.iter()
+                .any(|r| r.fields.iter().any(|f| f.text.contains(needle)))
+        };
         assert!(
-            rows.iter().any(|r| r
-                .fields
-                .iter()
-                .any(|f| f.text.contains("no unprivileged ICMP socket"))),
+            said(&t.t(ronoctua_i18n::key::NETWORK_LAN_REFUSED)),
             "a refused sweep reads as an empty network"
+        );
+        // AND THE KERNEL'S ENGLISH stays in the log.
+        assert!(
+            !said("no unprivileged ICMP socket"),
+            "the kernel's words reached the row"
         );
     }
 

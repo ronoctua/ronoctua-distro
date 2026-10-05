@@ -66,6 +66,13 @@ let
 
   generationsUnit = "ronoctua-system-generations.service";
 
+  # AND THE SAME TRIM, REHEARSED: the program without `--execute`, which
+  # reads the profile and the boot menus for real and says which generations
+  # it would remove, removing none. What the update's rehearsal starts in the
+  # trim's place (its step's `rehearsal`), so rehearsing the update rehearses
+  # the trim too — and a trim that would fail fails the rehearsal.
+  rehearsalUnit = "ronoctua-system-generations-rehearsal.service";
+
   # THE SAME TRIM AT EVERY ACTIVATION — boot and every switch — which may
   # not fail the switch (see the unit below).
   activationUnit = "ronoctua-system-generations-at-activation";
@@ -432,16 +439,16 @@ let
     ++ map (b: b.path) config.boot.loader.generic-extlinux-compatible.mirroredBoots
   );
 
-  # THE TRIM, as both units run it.
-  trimCommand = lib.concatStringsSep " " (
-    [
-      "${generationsProgram}/bin/ronoctua-system-generations"
-      "--profile ${systemProfile}"
-      "--keep ${toString cfg.systemGenerations}"
-    ]
-    ++ map (m: "--menu ${lib.escapeShellArg m}") menus
-    ++ [ "--execute" ]
-  );
+  # THE TRIM, as both units run it — and its rehearsal, the same words
+  # without the one that acts.
+  trimArguments = [
+    "${generationsProgram}/bin/ronoctua-system-generations"
+    "--profile ${systemProfile}"
+    "--keep ${toString cfg.systemGenerations}"
+  ]
+  ++ map (m: "--menu ${lib.escapeShellArg m}") menus;
+  trimCommand = lib.concatStringsSep " " (trimArguments ++ [ "--execute" ]);
+  trimRehearsal = lib.concatStringsSep " " trimArguments;
 
   # WHAT BOTH UNITS SHARE: idle, and never re-run half way through the switch
   # that changed them.
@@ -498,6 +505,14 @@ in
       internal = true;
       default = "${activationUnit}.service";
       description = "The unit that trims them after every activation, and never fails it.";
+    };
+
+    generationsRehearsalUnit = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = rehearsalUnit;
+      description = "The unit that rehearses the trim: it says what would go, and removes nothing.";
     };
 
     programs = lib.mkOption {
@@ -596,6 +611,16 @@ in
     systemd.services.${lib.removeSuffix ".service" generationsUnit} = lib.recursiveUpdate trimUnit {
       description = "Trims the system's generations to the newest ones, the running and the booted";
       serviceConfig.ExecStart = trimCommand;
+    };
+
+    # AND ITS REHEARSAL, which the update's rehearsal starts in its place: the
+    # same program, the same profile, count and menus, and no `--execute`. As
+    # root like the trim, because the menus it reads may be root's alone —
+    # and started by root only (the update's rehearsing half), so no polkit
+    # rule names it.
+    systemd.services.${lib.removeSuffix ".service" rehearsalUnit} = lib.recursiveUpdate trimUnit {
+      description = "Rehearses the trim of the system's generations: says what would go, removes nothing";
+      serviceConfig.ExecStart = trimRehearsal;
     };
 
     # AND THE SAME TRIM AT EVERY ACTIVATION — boot, the event, and every

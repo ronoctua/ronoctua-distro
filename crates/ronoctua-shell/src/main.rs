@@ -126,12 +126,12 @@ mod pasting;
 mod photograph;
 mod player;
 mod player_ambience;
-mod player_browse;
 mod player_directory;
 mod player_find;
 mod player_globe;
 mod player_home;
 mod player_internet;
+mod player_kinds;
 mod player_lane;
 mod player_layout;
 mod player_machines;
@@ -187,12 +187,118 @@ mod workspaces;
 mod world;
 // `LEADER s u`: the animated mark on the modeline, the door that starts a
 // run, and the view that watches it happen — in the footer and in a window.
-// It knows no step: the sequence is `assets/updates.nix`.
+// It knows no step: the sequence is its brain module's declaration.
 mod cursor_shape;
 mod text_select;
 mod update_window;
 mod virtual_keys;
 mod virtual_pointer;
+
+// A SIZE AS A PERSON READS IT — one arithmetic for the footer and for the
+// photograph of the brain's page, which links this file by `#[path]`.
+mod sizes;
+
+// THE FILE MANAGER'S WINDOW IN A PNG, the player's camera's neighbour.
+mod files_photograph;
+// THE PREVIEW AND THE FACTS OF ONE FILE — the file manager's two panels, as a
+// part of their own that any door showing a file can hold.
+mod inspection;
+mod inspection_sheet;
+
+mod text_area;
+
+// THE KEYS PACKAGE (2026-09-30): the maximum alert bar, the classes of a
+// message's life, and the footer's own settings in both doors.
+mod alert;
+mod echo;
+mod footer_settings;
+mod footer_settings_window;
+
+// THE ONE FILE PICKER every door asks for a file, a folder or a name to
+// save under (`crate::file_picker`).
+mod file_picker;
+
+// Everything the info panel can change — the tags through their own
+// program, the details and the place through `ronoctua_inspect::amend`.
+mod inspection_edit;
+
+// THE GIT LINE under the file manager's path, and the history `C-h` opens —
+// the view, its window, and its camera.
+mod git_browser;
+mod git_browser_window;
+mod git_line;
+mod git_photograph;
+
+// The file manager's archives and encrypted disks: what the view asks the
+// door, what comes back, and the sheet `compress` opens.
+mod files_archive;
+
+mod icons;
+mod icons_page;
+mod icons_photograph;
+mod icons_window;
+
+// THE CALCULATOR (`LEADER =`): one view, its keypad and its converter, its
+// window — and the table of the windows that open floating, which its
+// window's place is read from too.
+mod calc;
+mod calc_convert;
+mod calc_keypad;
+mod calc_window;
+mod floating;
+
+mod player_website;
+
+mod player_catalog;
+mod player_posters;
+mod player_sources;
+
+mod video_metrics;
+mod video_metrics_feed;
+mod video_metrics_photograph;
+mod video_metrics_window;
+mod video_metrics_words;
+
+// THE SECURITY CENTRE (`LEADER s e`): the view, its window, and its words.
+mod security;
+mod security_window;
+mod security_words;
+
+mod containers;
+mod containers_feed;
+mod containers_photograph;
+mod containers_window;
+mod containers_words;
+
+mod belongings;
+mod belongings_photograph;
+mod belongings_window;
+mod belongings_words;
+
+mod consent_rows;
+mod fast_access;
+mod fast_access_detail;
+mod fast_access_online;
+mod fast_access_photograph;
+mod fast_access_rows;
+mod fast_access_search;
+mod fast_access_videos;
+mod fast_access_window;
+
+// THE RANKING of the video catalogue, a page of the player (`LEADER p k`).
+mod player_ranking;
+
+mod clipboard_window;
+mod clipboard_wire;
+mod footer_photograph;
+mod scene_photograph;
+mod watchdog;
+
+// THE CAMERA OF FOUR SYSTEM WINDOWS over planted machines: the network,
+// Bluetooth, the language and region, the camera's settings.
+mod system_photograph;
+
+mod player_translator;
 
 /// The layer-shell surface's namespace.
 ///
@@ -256,7 +362,13 @@ fn main() -> Result<()> {
             } else {
                 format!("command {id} {}", rest.join(" "))
             };
-            return leader::send_it(&line).with_context(|| format!("send `{id}`"));
+            let sent = leader::send_it(&line);
+            // A KEY THE FOOTER ASKED THE COMPOSITOR FOR, and no footer to take
+            // it: the keys go back to the windows (`fold::nobody_took`).
+            if sent.is_err() {
+                fold::nobody_took(&id);
+            }
+            return sent.with_context(|| format!("send `{id}`"));
         }
         // WHAT A BUFFER DECLARES, asked of the buffer's own process.
         //
@@ -317,6 +429,10 @@ fn main() -> Result<()> {
             let prefix = std::env::args()
                 .nth(2)
                 .context("usage: ronoctua-shell export-binds <prefix>")?;
+            // THIS BINARY, BY NAME, first: a deed that runs one of our
+            // commands (`wm-fold-keys-hold`) is text fixed at build time, and
+            // it names the binary through this variable.
+            println!("{}", actions::shell_variable());
             for chord in actions::full_chords() {
                 for (key, said) in chord.binds_for(&prefix) {
                     // `Shift+1` becomes `Mod+Shift+1`: the prefix goes in
@@ -384,7 +500,7 @@ fn main() -> Result<()> {
         Some("capture") => {
             return capture::host_it().context("the screen capture");
         }
-        // THE SCREEN RESIZER'S KEEPER (`LEADER d r`): it measures the screen
+        // THE SCREEN RESIZER'S KEEPER (`LEADER / r`): it measures the screen
         // with the focus, raises the two curtains and ends both when either
         // ends — see `resizer`. The footer starts it and reads how it ended.
         Some("resizer") => {
@@ -513,6 +629,9 @@ fn main() -> Result<()> {
                 Some("only") => player_window::Stage::Only,
                 Some("maximized") => player_window::Stage::Maximized,
                 Some("pip") => player_window::Stage::Small,
+                // A LISTING OF THE CATALOGUE on the whole screen, on the one
+                // the door that asked handed over (`player_catalog`).
+                Some("listing") => player_window::Stage::Listing,
                 _ => player_window::Stage::Off,
             };
             let screen = match words.get(1..) {
@@ -561,6 +680,7 @@ fn main() -> Result<()> {
                 into: None,
                 play: true,
                 replace: false,
+                once: false,
             })?;
             // A COLUMN ALREADY UP, on any workspace, is left where it is.
             if right_column::holder(right_column::Tenant::Player).is_none() {
@@ -588,6 +708,10 @@ fn main() -> Result<()> {
                 )
             })?;
             return match opening.tenant {
+                right_column::Tenant::FastAccess => {
+                    fast_access_window::host_column(&opening, None).context("the search's column")
+                }
+
                 right_column::Tenant::Player => {
                     player_window::host_column(&opening).context("the player's column")
                 }
@@ -765,12 +889,19 @@ fn main() -> Result<()> {
             // the reason for each. It is that constant and not a literal here
             // because the TEST beside it reads the same list, and two literals
             // would be two answers the day one of them moved.
+            //
+            // AND EVERY BRAIN MODULE'S ACTION (`leader::a_module_action`),
+            // generated from the modules' folders, for the reason written
+            // there.
             let by_name_only = leader::BY_NAME_ONLY;
             let orphans: Vec<&str> = registry
                 .all_ones()
                 .map(|c| c.id)
                 .filter(|id| {
-                    !id.starts_with("wm-") && !by_name_only.contains(id) && !reachable.contains(id)
+                    !id.starts_with("wm-")
+                        && !by_name_only.contains(id)
+                        && !leader::a_module_action(id)
+                        && !reachable.contains(id)
                 })
                 .collect();
             anyhow::ensure!(
@@ -789,6 +920,151 @@ fn main() -> Result<()> {
             );
             return Ok(());
         }
+
+        // `ronoctua-shell footer-settings` — the footer's own settings in a
+        // window (`LEADER s r w`). The SAME `footer_settings::View` the
+        // footer's region draws, and every change is a command the footer
+        // runs.
+        Some("footer-settings") => {
+            return footer_settings_window::host_it().context("host the footer's settings");
+        }
+
+        // `ronoctua-shell git-browser [<folder>]` — the history of the
+        // repository the folder is in (`C-h` in the file manager's window).
+        // The SAME `git_browser::View` the footer's region draws.
+        Some("git-browser") => {
+            let dir = std::env::args()
+                .nth(2)
+                .map_or_else(std::env::current_dir, |d| Ok(std::path::PathBuf::from(d)))
+                .context("no folder to read the history of")?;
+            return git_browser_window::host_it(&dir).context("host the git browser");
+        }
+
+        // `ronoctua-shell icons [nerd-fonts|lucide|unicode]` — the icons app
+        // in a window (`LEADER m i w`), on the screen named: the SAME
+        // `icons::View` the footer's region draws.
+        Some("icons") => {
+            let screen = std::env::args()
+                .nth(2)
+                .map(|w| {
+                    icons::screen_named(&w).with_context(|| {
+                        format!(
+                            "`{w}` is not a screen; the screens are nerd-fonts, lucide and unicode"
+                        )
+                    })
+                })
+                .transpose()?
+                .unwrap_or(ronoctua_iconset::Collection::NerdFonts);
+            return icons_window::host_it(screen).context("host the icons app");
+        }
+
+        // `ronoctua-shell calc` — the calculator in a window (`LEADER = w`),
+        // the SAME `calc::View` the footer's region draws.
+        Some("calc") => {
+            return calc_window::host_it().context("host the calculator");
+        }
+
+        // `ronoctua-shell unlock-check` — the adult catalogue's lock asked as
+        // a door asks it (`player_catalog::unlock`): this session's user, the
+        // `ronoctua-unlock` service, the password read from STANDARD INPUT
+        // (never an argument: an argv is every process's to read) into the
+        // `Secret` that wipes it. It prints `open` or the refusal's name, and
+        // fails unless open — what `player-vm` proves the declared service
+        // with, and what a person runs to see why the lock answers as it does.
+        Some("unlock-check") => {
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .context("read the password from standard input")?;
+            let kept = line.trim_end_matches(['\n', '\r']).len();
+            line.truncate(kept);
+            let secret = ronoctua_consent::keys::Secret::new(line);
+            let answer = player_catalog::unlock(&secret);
+            drop(secret);
+            match answer {
+                Ok(()) => {
+                    println!("open");
+                    return Ok(());
+                }
+                Err(refusal) => {
+                    println!("{}", refusal.id());
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // `ronoctua-shell video-metrics [page]` — the video catalogue in a window
+        // (`LEADER v w`). The SAME `video_metrics::View` the footer's region draws.
+        Some("video-metrics") => {
+            let said: Vec<String> = std::env::args().skip(2).collect();
+            let word = said.join(" ");
+            let page = video_metrics_window::opening_of(&word).with_context(|| {
+                format!(
+                    "usage: ronoctua-shell video-metrics [{}]",
+                    video_metrics_window::OPENINGS.join(" | ")
+                )
+            })?;
+            return video_metrics_window::host_it(page).context("host the video catalogue");
+        }
+
+        // `ronoctua-shell security [section]` — the security centre in a window
+        // (`LEADER s e w`): the SAME `security::View` the footer's region draws.
+        Some("security") => {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            let (section, check) = security_window::words_of(&words)?;
+            return security_window::host_it(section, check).context("host the security centre");
+        }
+
+        // `ronoctua-shell containers` — the person's containers in a window
+        // (`LEADER s o w`). The SAME `containers::View` the footer's region
+        // draws, over its own threads.
+        Some("containers") => {
+            return containers_window::host_it().context("host the containers");
+        }
+
+        // `ronoctua-shell belongings` — the belongings in a window
+        // (`LEADER s v w`). The SAME `belongings::View` the footer's region
+        // draws.
+        Some("belongings") => {
+            return belongings_window::host_it().context("host the belongings");
+        }
+
+        // `ronoctua-shell opener <file>…` — what opening each file reaches,
+        // one line per file: the entry's id, `editor`, or `nothing <type>`.
+        // The answer both file doors act on (`files::opener_of`), over the
+        // catalogue and the `mimeapps.list` defaults of this environment —
+        // what `models-open-in-orca` asks, with no window.
+        Some("opener") => {
+            let paths: Vec<std::path::PathBuf> =
+                std::env::args_os().skip(2).map(Into::into).collect();
+            anyhow::ensure!(!paths.is_empty(), "usage: ronoctua-shell opener <file>...");
+            let catalogue: apps::Catalogue = std::sync::Arc::new(ronoctua_apps::scan("en_GB"));
+            for path in &paths {
+                let said = match files::opener_of(&catalogue, path) {
+                    files::Opener::App(entry) => entry.id,
+                    files::Opener::Editor => "editor".to_owned(),
+                    files::Opener::Nothing(of_type) => format!("nothing {of_type}"),
+                };
+                println!("{}\t{said}", path.display());
+            }
+            return Ok(());
+        }
+
+        // `ronoctua-shell fast-access [--float|--column] [query]` — the search
+        // in a window (`LEADER d w`), floating over the whole room
+        // (`LEADER SPC`), or in the column (`LEADER d c`). The SAME
+        // `fast_access::View` the footer's region draws (`LEADER d d`).
+        Some("fast-access") => {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            return fast_access_window::invoked(&words).context("host the search");
+        }
+
+        // THE CLIPBOARD'S HISTORY in a window: the footer's, followed over
+        // the control socket (`clipboard_window`).
+        Some("clipboard") => {
+            return clipboard_window::host_it().context("host the clipboard's window");
+        }
+
         _ => {}
     }
 
@@ -927,7 +1203,7 @@ pub struct Marks<'a> {
     pub recording: bool,
     /// Hand gestures are on: the camera reads hands (`LEADER m g`).
     pub gestures: bool,
-    /// The screen is cut by the resizer (`LEADER d r`): what everything is
+    /// The screen is cut by the resizer (`LEADER / r`): what everything is
     /// laid out in is not the whole monitor.
     pub resizer: bool,
     /// The player has something loaded: the play/pause glyph of its pair,
@@ -973,6 +1249,13 @@ pub struct Marks<'a> {
     pub tailscale: bool,
     /// Tor has a circuit.
     pub tor: bool,
+    /// What the brain's modules marked, each as it published it — already
+    /// drawn by `brain::marks`, and empty at rest (invariant 14).
+    pub brain: &'a [brain::Drawn],
+    // ── end of brain-ui ──
+    /// The passwordless window's end, drawn as it is — the unlocked glyph and
+    /// the hour — while one is open (`security::modeline_until`).
+    pub security_until: Option<&'a str>,
 }
 
 /// The modeline's segments, with section 4.2's priority order.
@@ -1497,6 +1780,38 @@ pub fn segments(
             removable: true,
         });
     }
+
+    // WHAT THE BRAIN'S MODULES MARKED, `brain:<module>/<mark>` — the disk
+    // nearly full, a reminder ringing, a service that keeps failing. Beside the
+    // profile and at its rung: each is a fact about the machine that stays
+    // until it stops being true, and none of them is louder than the battery.
+    // Drawn only while a module publishes one: at rest there is nothing here.
+    for mark in marks.brain {
+        out.push(Segment {
+            id: mark.id,
+            text: mark.text.clone(),
+            priority: 9,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+
+    // THE PASSWORDLESS WINDOW'S END, beside the brain's shield: the HOUR it
+    // ends, never a countdown. Absent at rest (invariant 14).
+    if let Some(text) = marks.security_until {
+        out.push(Segment {
+            id: "security-until",
+            text: text.to_owned(),
+            priority: 8,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
+
     // The name only exists if there is a buffer. `removable: false` still holds
     // for when it does exist: then it elides in the middle, but does not disappear.
     if !name.is_empty() {
@@ -1637,6 +1952,30 @@ mod tests {
                 alarmed: i == 0,
             })
             .collect();
+        // AND TWO MARKS OF THE BRAIN'S MODULES, one with a count: a disk
+        // nearly full and a service that keeps failing are on the fullest
+        // line as well.
+        let brain_marks: Vec<crate::brain::Drawn> = [("full", 0_u32), ("errors", 12)]
+            .into_iter()
+            .map(|(name, count)| crate::brain::Drawn {
+                id: if count > 0 {
+                    "brain:fixture/errors"
+                } else {
+                    "brain:fixture/full"
+                },
+                module: "fixture".to_owned(),
+                text: if count > 0 {
+                    format!("{} {count}", tokens::icon::BRAIN)
+                } else {
+                    tokens::icon::BRAIN.to_string()
+                },
+                tone: ronoctua_brain::module::Tone::Danger,
+                hint: format!("fixture-mark-{name}"),
+                count,
+                act: None,
+                opens: None,
+            })
+            .collect();
         for columns in [20_u16, 40, 80, 200] {
             for c in layout::resolve(
                 columns,
@@ -1704,6 +2043,13 @@ mod tests {
                             active: Some(0),
                             marked: 4,
                         },
+                        brain: &brain_marks,
+                        // AND THE PASSWORDLESS WINDOW'S END, the glyph and
+                        // an hour: a mark the fullest line has to carry too.
+                        security_until: Some(&format!(
+                            "{} 23:45",
+                            tokens::icon::SECURITY_SUDO_OPEN
+                        )),
                     },
                 ),
             ) {

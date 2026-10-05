@@ -921,14 +921,21 @@ mod tests {
                 Question::WifiPassword => {
                     panic!("the password showed up with no network chosen")
                 }
+                // The belongings: nothing typed, which is an answer — no
+                // repository yet.
+                Question::Belongings => {
+                    e.key(KeyCode::Enter, &t);
+                }
                 Question::ResumeOffset => panic!("the TUI does not ask for the offset"),
             }
         }
         assert_eq!(e.screen, Screen::Reviewing);
-        // TWELVE screens for whoever goes by cable: the fourteen questions minus
+        // THIRTEEN screens for whoever goes by cable: the fifteen questions minus
         // the offset, which is computed, and the Wi-Fi password, which is skipped
         // with no network. The asserts below are what hold those two.
-        assert_eq!(views.len(), 12, "the TUI showed {views:?}");
+        assert_eq!(views.len(), 13, "the TUI showed {views:?}");
+        assert!(views.contains(&Question::Belongings));
+        assert!(e.answers.belongings.is_empty());
         assert!(!views.contains(&Question::ResumeOffset));
         assert!(
             !views.contains(&Question::WifiPassword),
@@ -1013,6 +1020,23 @@ mod tests {
                     }
                     e.key(KeyCode::Enter, &t);
                 }
+                // A repository WITH a password in it first: refused, and the
+                // screen stays; then the address alone.
+                Question::Belongings => {
+                    for c in "https://me:pw@example.org/b.git".chars() {
+                        e.key(KeyCode::Char(c), &t);
+                    }
+                    e.key(KeyCode::Enter, &t);
+                    assert_eq!(e.question_of(), Some(Question::Belongings));
+                    assert!(e.error.is_some(), "a credential in the address was taken");
+                    for _ in 0.."https://me:pw@example.org/b.git".len() {
+                        e.key(KeyCode::Backspace, &t);
+                    }
+                    for c in "git@example.org:me/b.git".chars() {
+                        e.key(KeyCode::Char(c), &t);
+                    }
+                    e.key(KeyCode::Enter, &t);
+                }
                 Question::ResumeOffset => panic!("the TUI does not ask for the offset"),
             }
         }
@@ -1023,6 +1047,7 @@ mod tests {
         );
         assert_eq!(e.answers.wifi_ssid, "home-5g");
         assert_eq!(e.answers.wifi_password, "Zq7-test-phrase");
+        assert_eq!(e.answers.belongings, "git@example.org:me/b.git");
     }
 
     /// Walks to `wanted`, taking the pre-selected answer on every list before it.

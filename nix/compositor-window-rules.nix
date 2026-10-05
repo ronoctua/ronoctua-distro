@@ -2,10 +2,12 @@
 #
 # # What is in here
 #
-# One rule: the process monitor's window opens FLOATING. The shell does not
-# place windows (invariant 4) — it sets the window's `app_id` and the compositor
-# decides. The two ends of that agreement are one string, and it is written in
-# `crates/ronoctua-shell/src/terminal.rs` (`APP_ID_MONITOR`).
+# The windows that open FLOATING — the monitor, the rescue console, the camera
+# and the calculator — one rule each. The shell does not place windows
+# (invariant 4) — it sets the window's `app_id` and the compositor decides. The
+# two ends of that agreement are one string, and the table of them is
+# `crates/ronoctua-shell/src/floating.rs` (`FLOATING`), which the calculator's
+# own toggle reads too.
 #
 # # Why generated, and not written in the two configs
 #

@@ -172,7 +172,15 @@ pub struct Wanted {
     pub position: Option<Spot>,
     /// Whether the refresh rate varies.
     pub vary: bool,
+    /// How many bits per colour the compositor renders this monitor at —
+    /// one of [`DEPTHS`] — or `None` for its own choice (8, and 10 under HDR).
+    pub depth: Option<u8>,
 }
+
+/// The render depths the compositor takes (`output <name> render_bit_depth
+/// 6|8|10`, `scroll-output.5`): any other number is refused at parse and takes
+/// the whole fragment down with it, so nothing else is ever written.
+pub const DEPTHS: [u8; 3] = [6, 8, 10];
 
 impl Wanted {
     /// Whether anything was chosen at all.
@@ -290,6 +298,11 @@ pub fn text_of(screens: &BTreeMap<String, Wanted>) -> String {
         }
         if w.vary {
             out.push_str("    adaptive_sync on\n");
+        }
+        // ONLY A DEPTH THE COMPOSITOR TAKES, for the reason the scale is
+        // sieved: one it refuses fails the parse of the whole file.
+        if let Some(d) = w.depth.filter(|d| DEPTHS.contains(d)) {
+            let _ = writeln!(out, "    render_bit_depth {d}");
         }
         out.push_str("}\n");
     }
@@ -437,6 +450,7 @@ mod tests {
                     transform: Transform::R270,
                     position: Some(Spot { x: -1920, y: 120 }),
                     vary: true,
+                    depth: None,
                 },
             ),
             (
@@ -475,6 +489,7 @@ output "Other Model-2 ABC123" {
             transform: Transform::R270,
             position: Some(Spot { x: -1920, y: 120 }),
             vary: true,
+            depth: None,
         });
         // The header is prose and its length is not the subject here, so the
         // body is taken from the first node rather than by counting lines.
@@ -572,6 +587,7 @@ output "Other Model-2 ABC123" {
             transform: Transform::Flipped180,
             position: Some(Spot { x: 0, y: -1080 }),
             vary: true,
+            depth: None,
         };
         let text = serde_json::to_string(&w).unwrap();
         assert_eq!(serde_json::from_str::<Wanted>(&text).unwrap(), w);
@@ -621,5 +637,34 @@ output "Other Model-2 ABC123" {
             said.contains("    disable\n"),
             "and the dark one says so:\n{said}"
         );
+    }
+
+    /// FAILS IF: a render depth is written that the compositor would refuse
+    /// — which fails the parse of the whole fragment — or a chosen one is
+    /// left out.
+    #[test]
+    fn a_render_depth_is_written_only_when_the_compositor_takes_it() {
+        for d in DEPTHS {
+            let out = one(Wanted {
+                depth: Some(d),
+                ..Wanted::default()
+            });
+            assert!(
+                out.contains(&format!("    render_bit_depth {d}\n")),
+                "{out}"
+            );
+        }
+        let odd = one(Wanted {
+            depth: Some(12),
+            mode: None,
+            vary: true,
+            ..Wanted::default()
+        });
+        assert!(!odd.contains("render_bit_depth"), "{odd}");
+        let none = one(Wanted {
+            vary: true,
+            ..Wanted::default()
+        });
+        assert!(!none.contains("render_bit_depth"), "{none}");
     }
 }

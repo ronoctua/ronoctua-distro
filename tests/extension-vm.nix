@@ -26,6 +26,22 @@
 #      packed manifest and `update.xml` carry the same `<base>.<n>`, a restart
 #      with the same build keeps it, and another build takes `n + 1`.
 #
+#   6. THE ID SURVIVES A BOOT, from `/persist`. The key lives in
+#      `/var/lib/ronoctua-browser`, which the wipe of `@root` would take at
+#      every boot — a new key, a new id, another extension to Chrome. The
+#      machine here imports `persist.nix` and binds its `/persist`, reboots,
+#      and the id is the one it had, read from the copy under `/persist`.
+#
+#   7. THE KEY ALREADY ON THE ROOT SURVIVES THE SWITCH THAT ADDS THE LINE.
+#      An installed machine (no wipe) gets `/var/lib/ronoctua-browser` in
+#      the list by a `nixos-rebuild switch`: its key is on the root, and the
+#      switch's `systemd-tmpfiles-resetup` makes the `/persist` copy EMPTY
+#      before any new unit starts. The machine is put back in that state —
+#      the bind down, the key on the root, the copy emptied by `tmpfiles` —
+#      and the extension is restarted ON ITS OWN, so the mount is pulled by its
+#      `RequiresMountsFor=` alone, the transaction the seed was missing from.
+#      The id is the one it had, and `/persist` now holds the key.
+#
 # And the two hosts are called THE WAY CHROME CALLS THEM: the extension's
 # origin as the first argument, read from the manifest — never a word of our
 # own, which is how the queue's host died under a real browser while this
@@ -168,57 +184,88 @@ in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-extension";
 
-  nodes.machine = {
-    imports = [
-      ../nix/modules/browser-extension.nix
-      # The module hangs off the browser's own switch, and the browser is NOT
-      # installed here: a VM that pulled Chrome in would spend four hundred
-      # megabytes to check a JSON file. So the option is declared on its own,
-      # in its own module — mixing `options` and bare configuration in one
-      # attribute set is what NixOS refuses with a message about `_module`.
-      (
-        { lib, ... }:
+  nodes.machine =
+    { config, ... }:
+    {
+      imports = [
+        ../nix/modules/browser-extension.nix
+        # THE ROUTING TO /persist, so the reboot below proves the key is kept
+        # where the wipe does not reach.
+        ../nix/modules/persist.nix
+        # The module hangs off the browser's own switch, and the browser is NOT
+        # installed here: a VM that pulled Chrome in would spend four hundred
+        # megabytes to check a JSON file. So the option is declared on its own,
+        # in its own module — mixing `options` and bare configuration in one
+        # attribute set is what NixOS refuses with a message about `_module`.
+        (
+          { lib, ... }:
+          {
+            options.ronoctua.browser.enable = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "The browser — here only the key the module reads.";
+            };
+          }
+        )
+      ];
+
+      virtualisation.memorySize = 1024;
+      virtualisation.cores = 2;
+
+      # `/persist` ON A DISK OF ITS OWN, and the bind of the browser's state
+      # from it. A test VM's file systems are `virtualisation.fileSystems`
+      # (they REPLACE `fileSystems`), so the bind `persist.nix` declares is
+      # carried here — read from the module's own list, so a list that lost the
+      # directory fails the evaluation of this test, not just the boot after.
+      virtualisation.emptyDiskImages = [ 64 ];
+      virtualisation.fileSystems =
+        let
+          persisted = lib.elem "/var/lib/ronoctua-browser" config.ronoctua.persist.directories;
+        in
+        assert lib.assertMsg persisted "persist.nix does not keep /var/lib/ronoctua-browser";
         {
-          options.ronoctua.browser.enable = lib.mkOption {
-            type = lib.types.bool;
-            default = true;
-            description = "The browser — here only the key the module reads.";
+          "/persist" = {
+            device = "/dev/vdb";
+            fsType = "ext4";
+            autoFormat = true;
+            neededForBoot = true;
           };
-        }
-      )
-    ];
+          # THE MODULE'S OWN BIND, seed and all (`ronoctua.persist.binds`):
+          # one written here would prove a mount this test invented.
+          "/var/lib/ronoctua-browser" = config.ronoctua.persist.binds."/var/lib/ronoctua-browser";
+        };
+      # Nothing here is wiped: the other entries of the list are not this
+      # test's question, and only the browser's directory is bound.
+      ronoctua.persist.wipeRoot = false;
 
-    virtualisation.memorySize = 1024;
-    virtualisation.cores = 2;
-
-    _module.args.ronoctua = {
-      transfers = ronoctua-transfers;
-      browser = ronoctua-browser;
-      inherit extension;
-    };
-
-    # The same machine with another build of the extension: `switch-to-
-    # configuration` restarts the unit (its script cites the build), which
-    # is the path a rebuild takes.
-    specialisation.rebuilt.configuration = {
-      _module.args.ronoctua = lib.mkForce {
+      _module.args.ronoctua = {
         transfers = ronoctua-transfers;
         browser = ronoctua-browser;
-        extension = rebuilt;
+        inherit extension;
       };
+
+      # The same machine with another build of the extension: `switch-to-
+      # configuration` restarts the unit (its script cites the build), which
+      # is the path a rebuild takes.
+      specialisation.rebuilt.configuration = {
+        _module.args.ronoctua = lib.mkForce {
+          transfers = ronoctua-transfers;
+          browser = ronoctua-browser;
+          extension = rebuilt;
+        };
+      };
+
+      environment.systemPackages = [
+        pkgs.python3
+        pkgs.openssl
+      ];
+
+      # `display-manager.service` is what the module orders itself before, and
+      # there is none here. Without this the unit is ordered before a unit that
+      # does not exist, which systemd accepts — but saying so out loud is what
+      # keeps the test honest about what it is running.
+      systemd.services.ronoctua-browser-extension.before = lib.mkForce [ ];
     };
-
-    environment.systemPackages = [
-      pkgs.python3
-      pkgs.openssl
-    ];
-
-    # `display-manager.service` is what the module orders itself before, and
-    # there is none here. Without this the unit is ordered before a unit that
-    # does not exist, which systemd accepts — but saying so out loud is what
-    # keeps the test honest about what it is running.
-    systemd.services.ronoctua-browser-extension.before = lib.mkForce [ ];
-  };
 
   testScript = ''
     import re
@@ -316,5 +363,43 @@ pkgs.testers.runNixOSTest {
         "print('OK: the kiosk host speaks the framing and takes only the origin')\n"
         "PY"
     )
+
+    # 6. THE ID SURVIVES A BOOT, kept where the wipe does not reach. The
+    #    directory is a bind from `/persist`, seeded before it was bound
+    #    (`ronoctua-persist-seed`); after a reboot the id is the one it was,
+    #    and the copy under `/persist` is the same file.
+    source = machine.succeed("findmnt -n -o SOURCE /var/lib/ronoctua-browser").strip()
+    assert "/persist" in source or "vdb" in source, f"not bound from /persist: {source!r}"
+    kept = machine.succeed("cat /persist/var/lib/ronoctua-browser/id").strip()
+    first_boot = machine.succeed("cat /var/lib/ronoctua-browser/id").strip()
+    assert kept == first_boot, f"/persist holds {kept}, the directory {first_boot}"
+    machine.shutdown()
+    machine.start()
+    machine.wait_for_unit("ronoctua-browser-extension.service")
+    second_boot = machine.succeed("cat /var/lib/ronoctua-browser/id").strip()
+    assert second_boot == first_boot, f"the id changed over a boot: {first_boot} -> {second_boot}"
+    print(f"OK: the extension is {second_boot} on both boots, kept in /persist")
+
+    # 7. THE SWITCH THAT ADDS THE LINE, on a machine whose key is on the root.
+    #    `systemctl stop` on the mount takes the extension down with it (its
+    #    `RequiresMountsFor=`); the key goes onto the root, the `/persist`
+    #    copy is emptied, and `tmpfiles` runs as the switch's resetup does.
+    machine.succeed(
+        "systemctl stop 'var-lib-ronoctua\\x2dbrowser.mount'",
+        "! mountpoint -q /var/lib/ronoctua-browser",
+        "cp -a /persist/var/lib/ronoctua-browser/. /var/lib/ronoctua-browser/",
+        "find /persist/var/lib/ronoctua-browser -mindepth 1 -delete",
+        "systemd-tmpfiles --create",
+        "test -d /persist/var/lib/ronoctua-browser",
+        "test -z \"$(ls -A /persist/var/lib/ronoctua-browser)\"",
+        "test -s /var/lib/ronoctua-browser/id",
+    )
+    machine.succeed("systemctl restart ronoctua-browser-extension.service")
+    machine.succeed("mountpoint -q /var/lib/ronoctua-browser")
+    switched = machine.succeed("cat /var/lib/ronoctua-browser/id").strip()
+    assert switched == first_boot, f"the switch made a new id: {first_boot} -> {switched}"
+    seeded = machine.succeed("cat /persist/var/lib/ronoctua-browser/id").strip()
+    assert seeded == first_boot, f"/persist was not seeded from the root: {seeded}"
+    print(f"OK: the key on the root was seeded into an empty /persist, and the id is still {switched}")
   '';
 }

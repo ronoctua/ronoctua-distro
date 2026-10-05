@@ -143,7 +143,9 @@ impl Selection {
                 let mut cell = run.column;
                 for cluster in cells_of(&run.text) {
                     let wide = cells_of_one(cluster).max(1);
-                    if cell >= s.from && cell < s.to && at_cell.is_none_or(|a| cell >= a) {
+                    if crate::chrome::in_cell(cell, s.from, s.to.saturating_sub(s.from))
+                        && at_cell.is_none_or(|a| cell >= a)
+                    {
                         // THE GAP BETWEEN TWO RUNS IS SPACES: two runs a cell
                         // apart read as two words.
                         if let Some(a) = at_cell {

@@ -447,6 +447,191 @@ pub fn playable(identifier: &str, files: &[Value]) -> Vec<Playable> {
     out.into_iter().map(|(_, p)| p).collect()
 }
 
+// ---------------------------------------------------------------------------
+// A WHOLE COLLECTION, for the catalogue
+// ---------------------------------------------------------------------------
+
+/// What of a collection is asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Media {
+    /// Films: `mediatype:(movies)`.
+    Movies,
+    /// Recordings of sound: `mediatype:(audio)` (LibriVox).
+    Audio,
+    /// Either — a person's collection, whose kind is not declared.
+    Either,
+}
+
+/// The most rows one page of a collection may hold.
+pub const COLLECTION_ROWS_CEILING: u32 = 1000;
+
+/// One page of a collection, asked for the catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Collection<'a> {
+    /// Its identifier.
+    pub identifier: &'a str,
+    /// What of it.
+    pub media: Media,
+    /// Subjects that narrow it; all of it when empty.
+    pub subjects: &'a [&'a str],
+    /// Which page, from 1.
+    pub page: u32,
+    /// How many rows a page holds (at most [`COLLECTION_ROWS_CEILING`]).
+    pub rows: u32,
+}
+
+/// The query of a collection's page: its items of that media — never its
+/// sub-collections — narrowed by its subjects. Pure.
+///
+/// # Errors
+///
+/// [`Why::NotAName`] for an identifier that is not shaped like one.
+pub fn collection_query(c: &Collection<'_>) -> Result<String, Why> {
+    if !is_identifier(c.identifier) {
+        return Err(Why::NotAName);
+    }
+    let media = match c.media {
+        Media::Movies => "mediatype:(movies)",
+        Media::Audio => "mediatype:(audio)",
+        Media::Either => "mediatype:(movies OR audio)",
+    };
+    let mut q = format!("collection:({}) AND {media}", c.identifier);
+    let subjects: Vec<String> = c
+        .subjects
+        .iter()
+        .filter_map(|s| words(s, WORDS_MOST))
+        .map(|s| format!("\"{}\"", lucene(&s)))
+        .collect();
+    if !subjects.is_empty() {
+        q.push_str(&format!(" AND subject:({})", subjects.join(" OR ")));
+    }
+    Ok(q)
+}
+
+/// The address of a collection's page, the most downloaded first. Pure.
+///
+/// # Errors
+///
+/// As [`collection_query`].
+pub fn collection_address(c: &Collection<'_>) -> Result<String, Why> {
+    let q = collection_query(c)?;
+    let fields = [
+        "identifier",
+        "title",
+        "year",
+        "downloads",
+        "licenseurl",
+        "description",
+        "subject",
+        "language",
+        "mediatype",
+    ]
+    .iter()
+    .map(|f| format!("&fl%5B%5D={f}"))
+    .collect::<String>();
+    Ok(format!(
+        "https://{HOST}/advancedsearch.php?q={}{fields}&sort%5B%5D=downloads%20desc&rows={}&page={}&output=json",
+        escape(&q),
+        c.rows.clamp(1, COLLECTION_ROWS_CEILING),
+        c.page.max(1)
+    ))
+}
+
+/// The address of an item's picture, which the archive serves for every
+/// item from its own host.
+#[must_use]
+pub fn poster_address(identifier: &str) -> Option<String> {
+    is_identifier(identifier).then(|| format!("https://{HOST}/services/img/{identifier}"))
+}
+
+/// One item of a collection, as the catalogue keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holding {
+    /// The item, as a search finds it.
+    pub item: Item,
+    /// What it says about itself, markup off, when it says.
+    pub description: Option<String>,
+    /// Its subjects.
+    pub subjects: Vec<String>,
+    /// Its language, as the archive writes it.
+    pub language: Option<String>,
+    /// It is sound only (`mediatype: audio`).
+    pub audio: bool,
+}
+
+/// One page of a collection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holdings {
+    /// Its items, the most downloaded first.
+    pub items: Vec<Holding>,
+    /// How many the collection has in all.
+    pub total: u64,
+    /// Whether there is a page after this one.
+    pub more: bool,
+}
+
+/// A page of a collection, read. Pure.
+///
+/// # Errors
+///
+/// [`Why::Malformed`] for what is not the archive's answer.
+pub fn parse_collection(bytes: &[u8], page: u32, rows: u32) -> Result<Holdings, Refusal> {
+    let top = value(Source::Archive, bytes)?;
+    let response = top
+        .get("response")
+        .filter(|r| r.is_object())
+        .ok_or(refused(Why::Malformed))?;
+    let Some(docs) = response.get("docs").and_then(Value::as_array) else {
+        return Err(refused(Why::Malformed));
+    };
+    let items: Vec<Holding> = docs
+        .iter()
+        .filter_map(|d| {
+            let identifier = text(d, "identifier").filter(|i| is_identifier(i))?;
+            Some(Holding {
+                item: Item {
+                    title: text(d, "title").unwrap_or_else(|| identifier.clone()),
+                    year: year_of(d),
+                    downloads: whole(d, "downloads").unwrap_or(0),
+                    license_url: text(d, "licenseurl"),
+                    identifier,
+                },
+                description: text(d, "description")
+                    .map(|h| crate::sources::feed::plain(&h))
+                    .filter(|h| !h.is_empty()),
+                subjects: crate::json::texts(d, "subject"),
+                language: text(d, "language"),
+                audio: text(d, "mediatype").as_deref() == Some("audio"),
+            })
+        })
+        .collect();
+    let total = whole(response, "numFound").unwrap_or(items.len() as u64);
+    let seen = u64::from(page.max(1)) * u64::from(rows.clamp(1, COLLECTION_ROWS_CEILING));
+    Ok(Holdings {
+        items,
+        total,
+        more: seen < total,
+    })
+}
+
+/// Asks one page of a collection, on the person's consent for the archive.
+///
+/// # Errors
+///
+/// [`Refused::NotLet`], [`Refused::NotAnAddress`] for an identifier that is
+/// not one (nothing is sent), the network's refusals, [`Refused::Malformed`].
+#[cfg(feature = "net")]
+pub fn collection(
+    web: &dyn crate::ask::Web,
+    pass: &ronoctua_consent::Pass,
+    c: &Collection<'_>,
+) -> Result<Holdings, crate::sources::Refused> {
+    let url = collection_address(c).map_err(crate::sources::Refused::from)?;
+    let body = crate::ask::fetched(web, pass, &crate::ask::Fetch::json(url).most(16 << 20))?;
+    parse_collection(&body, c.page, c.rows).map_err(|r| crate::sources::Refused::from(r.why))
+}
+
 /// The address of an item's own page.
 ///
 /// # Errors
@@ -820,6 +1005,67 @@ mod tests {
         let nothing = Canned::new(&[]);
         assert_eq!(open(&nothing, "../x").unwrap_err().why, Why::NotAName);
         assert!(nothing.asked().is_empty());
+    }
+
+    /// FAILS IF: a collection's page asks for its sub-collections, or its
+    /// items lose their description, subjects or kind.
+    ///
+    /// The answer is HAND-WRITTEN in the shape `advancedsearch.php` answers
+    /// (`response.numFound`, `docs[]` whose fields come as strings or lists).
+    #[test]
+    fn a_collection_asks_its_items_and_reads_them_whole() {
+        let c = Collection {
+            identifier: "librivoxaudio",
+            media: Media::Audio,
+            subjects: &[],
+            page: 2,
+            rows: 5000,
+        };
+        assert_eq!(
+            collection_query(&c).unwrap(),
+            "collection:(librivoxaudio) AND mediatype:(audio)"
+        );
+        let url = collection_address(&c).unwrap();
+        assert!(url.contains("&rows=1000&page=2"), "{url}");
+        assert!(url.contains("&fl%5B%5D=description&fl%5B%5D=subject"));
+        let narrowed = Collection {
+            identifier: "feature_films",
+            media: Media::Movies,
+            subjects: &["action"],
+            ..c
+        };
+        assert_eq!(
+            collection_query(&narrowed).unwrap(),
+            "collection:(feature_films) AND mediatype:(movies) AND subject:(\"action\")"
+        );
+        let bad = Collection {
+            identifier: "a) OR (b",
+            ..c
+        };
+        assert_eq!(collection_query(&bad), Err(Why::NotAName));
+
+        let body = br#"{"response":{"numFound":3,"docs":[
+            {"identifier":"pride_prejudice_librivox","title":"Pride and Prejudice","year":"2006",
+             "downloads":1234,"description":"<p>A <b>novel</b></p>",
+             "subject":["fiction","romance"],"language":"English","mediatype":"audio"},
+            {"identifier":"Duck_and_Cover","title":["Duck and Cover"],"mediatype":"movies",
+             "subject":"civil defense; cold war"},
+            {"identifier":"../x"}
+        ]}}"#;
+        let found = parse_collection(body, 1, 2).unwrap();
+        assert_eq!(found.items.len(), 2);
+        assert!(found.more);
+        let book = &found.items[0];
+        assert!(book.audio);
+        assert_eq!(book.description.as_deref(), Some("A novel"));
+        assert_eq!(book.subjects, ["fiction", "romance"]);
+        assert_eq!(book.item.year, Some(2006));
+        assert!(!found.items[1].audio);
+        assert_eq!(
+            poster_address("Duck_and_Cover").as_deref(),
+            Some("https://archive.org/services/img/Duck_and_Cover")
+        );
+        assert_eq!(poster_address("../x"), None);
     }
 
     /// FAILS IF: a whole item stops being told from one of its files — the

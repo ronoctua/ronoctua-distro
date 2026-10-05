@@ -77,11 +77,7 @@ impl View {
                 location: self.meta.location(s)?,
                 words,
             },
-            DeskKind::Radio
-            | DeskKind::Television
-            | DeskKind::Channels
-            | DeskKind::Archive
-            | DeskKind::Lives => return None,
+            DeskKind::Radio | DeskKind::Television => return None,
         })
     }
 
@@ -968,8 +964,8 @@ pub(crate) mod tests {
             a.left + a.cells + tokens::space::PLAYER_COVERGAP,
             "not side by side"
         );
-        assert!(v.picture(&s, &a.key).is_some(), "the suggested one");
-        assert!(v.picture(&s, &b.key).is_some(), "the file's own");
+        assert!(v.picture(Some(&s), &a.key).is_some(), "the suggested one");
+        assert!(v.picture(Some(&s), &b.key).is_some(), "the file's own");
         assert_ne!(a.key, b.key);
         let second_box = b.left;
         // IN A NARROW DOOR the boxes are as tall as the pictures in them —

@@ -128,16 +128,43 @@ mod tests {
         let mut disk = volume("sdb", "");
         disk.holds.partition = false;
         disk.holds.partition_table = true;
-        let mut luks = volume("sdc1", "crypto_LUKS");
-        luks.holds.encrypted = true;
+        // AN OPEN CONTAINER — something lives inside it right now — and the
+        // system's own: neither is a target.
+        let mut open = volume("sdc1", "crypto_LUKS");
+        open.holds.encrypted = true;
+        open.cleartext = Some("/block/dm-4".to_owned());
+        let mut root = volume("sdd1", "crypto_LUKS");
+        root.holds.encrypted = true;
+        root.system = true;
 
         let rack = ronoctua_disks::Rack {
-            volumes: vec![disk, luks],
+            volumes: vec![disk, open, root],
             drives: Vec::new(),
         };
         let over = rack_of(&rack, 1000, &ronoctua_i18n::Texts::from_env());
         assert_eq!(over.devices.len(), 1, "LUKS should not cross over");
         assert!(over.devices[0].whole);
+    }
+
+    #[test]
+    fn a_locked_stick_crosses_to_be_formatted_again() {
+        // LOCKED, NOBODY'S AND NOTHING INSIDE IT ALIVE: an encrypted stick
+        // somebody wants back as a plain one is the ordinary case, and its
+        // one partition is the target.
+        let mut locked = volume("sde1", "crypto_LUKS");
+        locked.holds.encrypted = true;
+        locked.holds.filesystem = false;
+        let rack = ronoctua_disks::Rack {
+            volumes: vec![locked],
+            drives: Vec::new(),
+        };
+        let over = rack_of(&rack, 1000, &ronoctua_i18n::Texts::from_env());
+        assert_eq!(
+            over.devices.len(),
+            1,
+            "a locked stick cannot be formatted again"
+        );
+        assert_eq!(over.devices[0].kind, "crypto_LUKS");
     }
 
     #[test]

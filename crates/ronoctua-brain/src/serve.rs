@@ -15,26 +15,13 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
-use crate::mind::Shared;
-use crate::prefs::Where;
-use crate::registry::Registry;
-use crate::task::Step;
+use crate::hub::{Core, Refused};
 use crate::wire::{Ask, Say, read_line, write_line};
 
-/// Everything the socket needs to answer.
-///
-/// A struct and not four arguments, because every answer needs the same four
-/// things and a function that took them one by one would grow a fifth the first
-/// time anything did.
-pub struct Desk {
-    /// The state.
-    pub shared: Arc<Shared>,
-    /// What tasks exist — so an id nobody answers to is refused HERE, with a
-    /// sentence, rather than sitting in a queue nothing will ever take.
-    pub tasks: Arc<Registry>,
-    /// Where the preferences are written.
-    pub store: Where,
-}
+/// Everything the socket needs to answer: the brain's one core — the same
+/// registry the runner runs and the watch thread feeds, so what a person asks
+/// of a module here is asked of the module that runs.
+pub type Desk = Core;
 
 /// Takes the socket and answers on it until the listener dies.
 ///
@@ -115,39 +102,41 @@ fn serve(desk: &Arc<Desk>, stream: UnixStream) {
 ///
 /// Every one of them answers with the WHOLE mind, so that whoever asked sees
 /// what their ask did without a second round trip — and so there is one shape
-/// to draw instead of one per message.
+/// to draw instead of one per message. The two exceptions are the streams
+/// (`Watch`, `Tail`) and a module's page (`Screen`), which is never in the
+/// mind.
 fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
-    match ask {
-        Ask::Look => {}
+    let done = match ask {
+        Ask::Look => Ok(()),
         Ask::Watch => return stream_it(desk, out),
         Ask::Tail => return tail_it(out),
-        Ask::Run { task, rehearsal } => {
-            if let Some(why) = unknown(desk, task) {
-                return write_line(out, &Say::Refused { why });
-            }
-            if *rehearsal {
-                // The rehearsal flag rides with the ASK and not with the task,
-                // for the reason `Report::is_rehearsal` gives: it is a property
-                // of this run. The runner reads it from here when it starts.
-                desk.shared.change(|m| m.rehearsing = Some(task.clone()));
-            }
-            desk.shared.queue_up(task);
+        Ask::Screen { module } => {
+            return match desk.screen(module) {
+                Ok((generation, screen)) => write_line(
+                    out,
+                    &Say::Screen {
+                        module: module.clone(),
+                        generation,
+                        screen,
+                    },
+                ),
+                Err(why) => write_line(out, &Say::Refused { why }),
+            };
         }
-        Ask::Abort { task } => {
-            if let Some(why) = unknown(desk, task) {
-                return write_line(out, &Say::Refused { why });
-            }
-            desk.shared.abort(task);
-        }
+        Ask::Run { task, rehearsal } => run(desk, task, *rehearsal),
+        Ask::Abort { task } => desk.module(task).map(|_| desk.shared.abort(task)),
         // PROCEED IS THE DEADLINE MOVED, and not a second way to start
         // something. Everything else about a run — the gate, the queue, the
         // journal — stays exactly where it was, so there is one path into a run
         // and not two.
-        Ask::Proceed => desk.shared.change(|m| {
-            if let Some(a) = m.announcement.as_mut() {
-                a.deadline = m.now;
-            }
-        }),
+        Ask::Proceed => {
+            desk.shared.change(|m| {
+                if let Some(a) = m.announcement.as_mut() {
+                    a.deadline = m.now;
+                }
+            });
+            Ok(())
+        }
         // NOT NOW — and it has to mean something, or the tick half a minute
         // later asks again. It leaves the queue here, and the RUNNER writes it
         // down as an event: what moves the next moment is the journal, and the
@@ -162,42 +151,55 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                 desk.shared.unqueue(&task);
                 desk.shared.change(|m| m.postponed = Some(task.clone()));
             }
+            Ok(())
         }
-        Ask::Toggle { task, step } => {
-            if let Some(why) = unknown(desk, task) {
-                return write_line(out, &Say::Refused { why });
+        // THE OLD STEP ASKS, through `Set`: one path that knows the module's
+        // steps and its declared defaults.
+        Ask::Toggle { task, step } => desk.toggle(task, step),
+        Ask::Reset { task } => desk.set(task, &crate::wire::Knob::ResetSteps),
+        Ask::Set { task, knob } => desk.set(task, knob),
+        Ask::Gate { gate } => {
+            desk.gate(*gate);
+            Ok(())
+        }
+        Ask::Act {
+            module,
+            action,
+            row,
+            answer,
+        } => match desk.act(module, action, row.clone(), answer.clone()) {
+            Ok(()) => Ok(()),
+            Err(Refused::Ask(why)) => Err(why),
+            // THE MODULE DECLINED: its key, in a case of its own, for the
+            // door to translate — and what it did first is published anyway.
+            Err(Refused::Key(key)) => {
+                desk.refresh();
+                return write_line(out, &Say::Declined { key });
             }
-            // A STEP THE TASK DOES NOT HAVE is refused too, and for the same
-            // reason: the person's file would grow an id that nothing matches,
-            // and it would sit there for ever switching nothing off.
-            if !has_step(desk, task, step) {
-                return write_line(
-                    out,
-                    &Say::Refused {
-                        why: format!("`{task}` has no step called `{step}`"),
-                    },
-                );
-            }
-            desk.shared.change(|m| {
-                let mine = m.prefs.mine(task);
-                if !mine.steps_flipped.remove(step) {
-                    mine.steps_flipped.insert(step.clone());
-                }
-            });
-            keep(desk);
-        }
-        Ask::Reset { task } => {
-            if let Some(why) = unknown(desk, task) {
-                return write_line(out, &Say::Refused { why });
-            }
-            desk.shared
-                .change(|m| m.prefs.mine(task).steps_flipped.clear());
-            keep(desk);
-        }
-        Ask::Tune { prefs } => {
-            desk.shared.change(|m| m.prefs = (**prefs).clone());
-            keep(desk);
-        }
+        },
+        Ask::Dismiss { module, notice } => desk.dismiss(module, notice),
+        Ask::Snooze {
+            module,
+            notice,
+            minutes,
+        } => desk.snooze(module, notice, *minutes),
+    };
+    if let Err(why) = done {
+        // A REFUSAL IS A SENTENCE, never a dropped line: a client that sent
+        // something learns why nothing happened.
+        return write_line(out, &Say::Refused { why });
+    }
+    // WHAT CHANGED IS DRAWN BEFORE THE ANSWER: the rows follow the new
+    // preferences, and a module's face what it just did — with the pulse the
+    // runner last took, since this thread has no meter.
+    if matches!(
+        ask,
+        Ask::Toggle { .. } | Ask::Reset { .. } | Ask::Set { .. } | Ask::Gate { .. }
+    ) {
+        let pulse = desk.shared.snapshot().0.pulse;
+        desk.publish(desk.now(), pulse);
+    } else {
+        desk.refresh();
     }
     let (mind, _) = desk.shared.snapshot();
     write_line(
@@ -208,38 +210,25 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
     )
 }
 
-/// The sentence for an id nothing answers to, or `None` when it is known.
-fn unknown(desk: &Arc<Desk>, task: &str) -> Option<String> {
-    if desk.tasks.find(task).is_some() {
-        return None;
+/// Puts a module's run in the queue, or says why not.
+fn run(desk: &Arc<Desk>, task: &str, rehearsal: bool) -> Result<(), String> {
+    let m = desk.module(task)?;
+    // SWITCHED OFF BY THE SYSTEM: its units are gone with it, and the refusal
+    // is the key of its row's own word.
+    desk.system_off(m)?;
+    // A WATCH HAS NO RUN: queued, it would wait for ever in front of every
+    // run behind it.
+    if m.scheduled().is_none() {
+        return Err(format!("`{task}` only watches; it has no run of its own"));
     }
-    // Naming what DOES exist, because the caller is usually somebody at a
-    // keyboard typing into `socat` — and a refusal that only says no is a
-    // refusal they have to go and read the source about.
-    let known: Vec<&str> = desk.tasks.all().map(crate::task::Task::id).collect();
-    Some(format!(
-        "I do not know the task `{task}`; I know: {}",
-        known.join(", ")
-    ))
-}
-
-/// Whether a task really has that step.
-fn has_step(desk: &Arc<Desk>, task: &str, step: &str) -> bool {
-    desk.tasks
-        .find(task)
-        .is_some_and(|t| t.steps().iter().any(|s: &Step| s.id == step))
-}
-
-/// Writes the preferences down, and says so when it cannot.
-///
-/// Not fatal: a read-only home is not a reason for the brain to stop deciding.
-/// It is loud, because what is lost is a choice the person made, and the
-/// symptom would be it coming back on the next start.
-fn keep(desk: &Arc<Desk>) {
-    let (mind, _) = desk.shared.snapshot();
-    if let Err(e) = desk.store.save(&mind.prefs) {
-        tracing::error!(error = %e, "could not write the brain's preferences");
+    if rehearsal {
+        // The rehearsal flag rides with the ASK and not with the module, for
+        // the reason `Report::is_rehearsal` gives: it is a property of this
+        // run. The runner reads it from here when it starts.
+        desk.shared.change(|m| m.rehearsing = Some(task.to_owned()));
     }
+    desk.shared.queue_up(task);
+    Ok(())
 }
 
 /// The whole mind now, and again on every change, until the client goes.
@@ -296,10 +285,17 @@ fn tail_it(out: &mut impl Write) -> Result<()> {
 mod tests {
     use super::*;
     use crate::client;
-    use crate::mind::Mind;
-    use crate::prefs::Prefs;
-    use crate::tasks;
+    use crate::fake::{Fake, Hand, manifest};
+    use crate::mind::{Mind, Shared};
+    use crate::module::{
+        Acted, Face, Level, Manifest, Module, Notice, NoticeKind, Screen, Section,
+    };
+    use crate::prefs::{Prefs, Where};
+    use crate::registry::Registry;
+    use crate::task::Step;
+    use crate::wire::Knob;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     fn scratch(name: &str) -> PathBuf {
@@ -310,16 +306,95 @@ mod tests {
         dir
     }
 
+    static STEPS: &[Step] = &[Step {
+        id: "extra",
+        command: "x",
+        needs_root: false,
+        on_by_default: true,
+        name_key: "",
+        does_key: "",
+    }];
+
+    static DUE: NoticeKind = NoticeKind {
+        id: "due",
+        level: Level::Alarm,
+        dismiss: true,
+        snooze: &[10],
+    };
+
+    /// An action the ringer always declines.
+    static NOPE: crate::module::Action = crate::module::Action {
+        id: "nope",
+        command: "ringer-nope",
+        label: "cmd-ringer-nope",
+        row: false,
+        asks: None,
+    };
+
+    /// How many times the stepped module was told its preferences moved.
+    static SAVED: AtomicUsize = AtomicUsize::new(0);
+
+    /// A stepped routine that counts its `prefs_saved`, and a watch with an
+    /// alarm and a page.
+    fn modules() -> Vec<Box<dyn Module>> {
+        struct Stepped(Fake);
+        impl Module for Stepped {
+            fn manifest(&self) -> &'static Manifest {
+                self.0.manifest()
+            }
+            fn steps(&self) -> &'static [Step] {
+                STEPS
+            }
+            fn scheduled(&self) -> Option<&dyn crate::module::Scheduled> {
+                self.0.scheduled()
+            }
+            fn prefs_saved(&self, _: &crate::prefs::TaskPrefs, _: &Where) -> std::io::Result<()> {
+                SAVED.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+        vec![
+            Box::new(Stepped(Fake::routine("stepped"))),
+            Fake::new(Manifest {
+                schedule: None,
+                notices: std::slice::from_ref(&DUE),
+                actions: std::slice::from_ref(&NOPE),
+                ..manifest("ringer")
+            })
+            .face(|_| Face {
+                notices: vec![Notice::of(&DUE, "ringer-says-due", 50)],
+                screen: 4,
+                ..Face::default()
+            })
+            .screen(|_| Screen {
+                sections: vec![Section {
+                    heading: "ringer-heading".into(),
+                    rows: Vec::new(),
+                }],
+            })
+            .acts(|act, _| {
+                if act.action == NOPE.id {
+                    Acted::Refused("rehearsing")
+                } else {
+                    Acted::Done
+                }
+            })
+            .boxed(),
+        ]
+    }
+
     fn a_desk(root: &Path) -> Arc<Desk> {
-        let zone: Arc<dyn crate::moment::Offset> = Arc::new(crate::moment::Fixed(0));
-        Arc::new(Desk {
-            shared: Arc::new(Shared::of(Prefs::default())),
-            tasks: Arc::new(Registry::of(tasks::tasks(zone)).expect("the registry")),
-            store: Where {
+        let desk = Arc::new(Core::new(
+            Arc::new(Shared::of(Prefs::default())),
+            Registry::of(modules()).expect("the registry"),
+            Where {
                 config: Some(root.to_path_buf()),
                 state: Some(root.to_path_buf()),
             },
-        })
+            Box::new(Hand::at(1000)),
+        ));
+        desk.publish(1000, crate::pulse::Pulse::default());
+        desk
     }
 
     /// A brain on a socket of its own, and the path to reach it.
@@ -345,6 +420,13 @@ mod tests {
         match client::ask_at(socket, ask).expect("ask") {
             Say::Mind { mind } => *mind,
             other => panic!("not a mind: {other:?}"),
+        }
+    }
+
+    fn refused(socket: &Path, ask: &Ask) -> String {
+        match client::ask_at(socket, ask).expect("ask") {
+            Say::Refused { why } => why,
+            other => panic!("not refused: {other:?}"),
         }
     }
 
@@ -387,12 +469,7 @@ mod tests {
         let root = scratch("second");
         let (_desk, socket) = a_brain(&root);
         let second = a_desk(&root);
-        // It comes back at once, and it comes back Ok: leaving is not an error.
         listen_on(&socket, &second).expect("the second one should leave in peace");
-        // And the first one is still answering — which is the whole point:
-        // the second daemon left, and nothing that was in flight lost its
-        // watcher. (The task ROWS are the runner's to build, and this test
-        // raises no runner: what is being proved here is the socket.)
         let mind = mind_of(&socket, &Ask::Look);
         assert_eq!(mind.prefs, Prefs::default());
         let _ = std::fs::remove_dir_all(&root);
@@ -402,97 +479,181 @@ mod tests {
     fn an_id_nobody_answers_to_is_refused_with_the_list() {
         let root = scratch("unknown");
         let (_desk, socket) = a_brain(&root);
-        let said = client::ask_at(
+        let why = refused(
             &socket,
             &Ask::Run {
                 task: "does-not-exist".to_owned(),
                 rehearsal: false,
             },
-        )
-        .expect("ask");
-        match said {
-            Say::Refused { why } => {
-                assert!(why.contains("system-update"), "{why}");
-            }
-            other => panic!("{other:?}"),
-        }
-        // And nothing was queued: a refusal that still queued would be a row
-        // waiting for a task that does not exist.
+        );
+        assert!(why.contains("stepped") && why.contains("ringer"), "{why}");
+        // A WATCH HAS NO RUN, and is refused rather than queued for ever.
+        let why = refused(
+            &socket,
+            &Ask::Run {
+                task: "ringer".to_owned(),
+                rehearsal: false,
+            },
+        );
+        assert!(why.contains("only watches"), "{why}");
         assert!(mind_of(&socket, &Ask::Look).queue.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn a_step_toggles_both_ways_and_is_written_down() {
-        let root = scratch("toggle");
+    fn a_knob_is_set_written_down_and_handed_to_the_module() {
+        // `Set` IS ANSWERED FOR REAL: the preference moves, the file is written
+        // at once, and the module keeping a view of it is told.
+        let root = scratch("set");
         let (_desk, socket) = a_brain(&root);
-        // THE ID COMES FROM THE TABLE, and is not written here.
-        //
-        // It was `"system-rebuild"`, spelled out — which is a second place the
-        // sequence is named, and the second place is exactly what this project
-        // just spent a day removing: the brain used to declare three steps of
-        // its own and they came out disjoint from the twelve that actually run.
-        // `update-has-one-list` refuses a step's name anywhere outside the
-        // declaration, and it refused this line, in a test, correctly.
-        let step = crate::tasks::update::steps()
-            .first()
-            .expect("the table declares at least one step")
-            .id;
-        let off = Ask::Toggle {
-            task: crate::tasks::update::ID.to_owned(),
-            step: step.to_owned(),
-        };
-        let mind = mind_of(&socket, &off);
+        let before = SAVED.load(Ordering::Relaxed);
+        let mind = mind_of(
+            &socket,
+            &Ask::Set {
+                task: "stepped".to_owned(),
+                knob: Knob::Step {
+                    id: "extra".to_owned(),
+                    on: false,
+                },
+            },
+        );
+        // THE ANSWER ALREADY DRAWS IT: the row, not only the preferences.
+        let row = mind.task("stepped").expect("row");
+        assert!(!row.steps[0].on, "the answer still drew the step on");
         assert!(
-            mind.prefs
-                .of(crate::tasks::update::ID)
+            crate::prefs::read_from(&root).tasks["stepped"]
                 .steps_flipped
-                .contains(step),
-            "it did not switch off"
+                .contains("extra")
         );
-        // The file is written at once: a choice that only lives in memory is a
-        // choice that is gone the next time the daemon starts.
-        assert_eq!(
-            crate::prefs::read_from(&root)
-                .of("system-update")
-                .steps_flipped
-                .len(),
-            1
-        );
-        let mind = mind_of(&socket, &off);
         assert!(
-            mind.prefs.of("system-update").steps_flipped.is_empty(),
-            "the same key did not switch it back on"
+            SAVED.load(Ordering::Relaxed) > before,
+            "the module was not told"
         );
-
-        // A step the task does not have is refused rather than written down.
-        let said = client::ask_at(
+        // AND THE OLD TOGGLE is the same path, both ways.
+        let mind = mind_of(
             &socket,
             &Ask::Toggle {
-                task: "system-update".to_owned(),
-                step: "does-not-exist".to_owned(),
+                task: "stepped".to_owned(),
+                step: "extra".to_owned(),
             },
-        )
-        .expect("ask");
-        assert!(matches!(said, Say::Refused { .. }));
+        );
+        assert!(mind.task("stepped").expect("row").steps[0].on);
+        let why = refused(
+            &socket,
+            &Ask::Toggle {
+                task: "stepped".to_owned(),
+                step: "nope".to_owned(),
+            },
+        );
+        assert!(why.contains("no step"), "{why}");
+        let why = refused(
+            &socket,
+            &Ask::Set {
+                task: "ringer".to_owned(),
+                knob: Knob::IntervalDays(2),
+            },
+        );
+        assert!(why.contains("no calendar"), "{why}");
+        // THE GATE, whole.
+        let gate = crate::prefs::Gate {
+            ram_ceiling_pct: 55,
+            ..crate::prefs::Gate::default()
+        };
+        let mind = mind_of(&socket, &Ask::Gate { gate });
+        assert_eq!(mind.prefs.gate.ram_ceiling_pct, 55);
+        assert_eq!(crate::prefs::read_from(&root).gate.ram_ceiling_pct, 55);
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn tuning_replaces_the_preferences_and_keeps_them() {
-        let root = scratch("tune");
+    fn a_notice_is_put_away_and_a_page_is_asked_for_over_the_socket() {
+        let root = scratch("modules");
         let (_desk, socket) = a_brain(&root);
-        let mut wanted = Prefs::default();
-        wanted.mine("system-update").interval_days = 1;
-        wanted.gate.ram_ceiling_pct = 55;
-        let mind = mind_of(
+        assert_eq!(mind_of(&socket, &Ask::Look).notices.len(), 1);
+        let why = refused(
             &socket,
-            &Ask::Tune {
-                prefs: Box::new(wanted.clone()),
+            &Ask::Snooze {
+                module: "ringer".to_owned(),
+                notice: "due".to_owned(),
+                minutes: 11,
             },
         );
-        assert_eq!(mind.prefs, wanted);
-        assert_eq!(crate::prefs::read_from(&root), wanted);
+        assert!(why.contains("11 minutes"), "{why}");
+        let mind = mind_of(
+            &socket,
+            &Ask::Snooze {
+                module: "ringer".to_owned(),
+                notice: "due".to_owned(),
+                minutes: 10,
+            },
+        );
+        assert!(mind.notices.is_empty(), "a snoozed notice is still up");
+        // THE PAGE: its generation and its rows, never in the mind.
+        match client::ask_at(
+            &socket,
+            &Ask::Screen {
+                module: "ringer".to_owned(),
+            },
+        )
+        .expect("ask")
+        {
+            Say::Screen {
+                module,
+                generation,
+                screen,
+            } => {
+                assert_eq!(module, "ringer");
+                assert_eq!(generation, 4);
+                assert_eq!(screen.sections[0].heading, "ringer-heading");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            client::ask_at(
+                &socket,
+                &Ask::Screen {
+                    module: "nobody".to_owned()
+                }
+            )
+            .expect("ask"),
+            Say::Refused { .. }
+        ));
+        // AN ACTION NOBODY DECLARED is refused; the module is never asked.
+        let why = refused(
+            &socket,
+            &Ask::Act {
+                module: "ringer".to_owned(),
+                action: "fly".to_owned(),
+                row: None,
+                answer: None,
+            },
+        );
+        assert!(why.contains("no action"), "{why}");
+        // AND ONE THE MODULE DECLINES is its KEY, in a case of its own — a
+        // door can tell what to translate from what to show as it came.
+        assert_eq!(
+            client::ask_at(
+                &socket,
+                &Ask::Act {
+                    module: "ringer".to_owned(),
+                    action: "nope".to_owned(),
+                    row: None,
+                    answer: None,
+                },
+            )
+            .expect("ask"),
+            Say::Declined {
+                key: "brain-why-rehearsing".to_owned()
+            }
+        );
+        let why = refused(
+            &socket,
+            &Ask::Dismiss {
+                module: "ringer".to_owned(),
+                notice: "gone".to_owned(),
+            },
+        );
+        assert!(why.contains("declares no"), "{why}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -504,7 +665,7 @@ mod tests {
         // look identical.
         let root = scratch("watch");
         let (desk, socket) = a_brain(&root);
-        desk.shared.queue_up("system-update");
+        desk.shared.queue_up("stepped");
 
         let stream = UnixStream::connect(&socket).expect("connect");
         let mut out = BufWriter::new(stream.try_clone().expect("duplicate"));
@@ -514,7 +675,7 @@ mod tests {
             .expect("read")
             .expect("nothing in the first frame");
         match first {
-            Say::Mind { mind } => assert_eq!(mind.queue, vec!["system-update".to_owned()]),
+            Say::Mind { mind } => assert_eq!(mind.queue, vec!["stepped".to_owned()]),
             other => panic!("{other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);

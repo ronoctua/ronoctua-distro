@@ -110,6 +110,11 @@ mod key {
     pub const ENGINE_FETCH: &str = "transfers-engine-fetch";
     pub const ENGINE_MEDIA: &str = "transfers-engine-media";
     pub const ENGINE_TORRENT: &str = "transfers-engine-torrent";
+    pub const ENGINE_ATLAS: &str = "transfers-engine-atlas";
+    pub const ENGINE_SOFTWARE: &str = "transfers-engine-software";
+    pub const ENGINE_SCAN: &str = "transfers-engine-scan";
+    pub const ENGINE_CONTAINER: &str = "transfers-engine-container";
+    pub const ENGINE_BELONGINGS: &str = "transfers-engine-belongings";
 
     pub const STAGE_WEIGHING: &str = "transfers-stage-weighing";
     pub const STAGE_RUNNING: &str = "transfers-stage-running";
@@ -132,6 +137,10 @@ mod key {
     pub const WORK_AUDIO: &str = "transfers-work-audio";
     pub const WORK_SUBTITLES: &str = "transfers-work-subtitles";
     pub const WORK_TORRENT: &str = "transfers-work-torrent";
+    pub const WORK_ARCHIVE_ADD: &str = "transfers-work-archive-add";
+    pub const WORK_ARCHIVE_REMOVE: &str = "transfers-work-archive-remove";
+    pub const WORK_ARCHIVE_TEST: &str = "transfers-work-archive-test";
+    pub const WORK_ARCHIVE_CONVERT: &str = "transfers-work-archive-convert";
 }
 
 /// The keys this window answers to — the queue's ONE table, the footer
@@ -275,6 +284,11 @@ const fn engine_key(e: Engine) -> &'static str {
         Engine::Fetch => key::ENGINE_FETCH,
         Engine::Media => key::ENGINE_MEDIA,
         Engine::Torrent => key::ENGINE_TORRENT,
+        Engine::Atlas => key::ENGINE_ATLAS,
+        Engine::Software => key::ENGINE_SOFTWARE,
+        Engine::Scan => key::ENGINE_SCAN,
+        Engine::Container => key::ENGINE_CONTAINER,
+        Engine::Belongings => key::ENGINE_BELONGINGS,
     }
 }
 
@@ -305,6 +319,10 @@ const fn errand_key(e: Errand) -> &'static str {
         Errand::Audio => key::WORK_AUDIO,
         Errand::Subtitles => key::WORK_SUBTITLES,
         Errand::Torrent => key::WORK_TORRENT,
+        Errand::ArchiveAdd => key::WORK_ARCHIVE_ADD,
+        Errand::ArchiveRemove => key::WORK_ARCHIVE_REMOVE,
+        Errand::ArchiveTest => key::WORK_ARCHIVE_TEST,
+        Errand::ArchiveConvert => key::WORK_ARCHIVE_CONVERT,
     }
 }
 
@@ -371,6 +389,11 @@ const fn engine_icon(e: Engine) -> Icon {
         Engine::Fetch => Icon::EngineFetch,
         Engine::Media => Icon::EngineMedia,
         Engine::Torrent => Icon::EngineTorrent,
+        Engine::Atlas => Icon::EngineAtlas,
+        Engine::Software => Icon::EngineSoftware,
+        Engine::Scan => Icon::EngineScan,
+        Engine::Container => Icon::EngineContainer,
+        Engine::Belongings => Icon::EngineBelongings,
     }
 }
 
@@ -517,7 +540,7 @@ mod width {
     /// `Icon`.
     pub const BAR: u16 = 12;
 
-    /// The errand: which of fourteen operations this row is.
+    /// The errand: which of eighteen operations this row is.
     ///
     /// Eleven cells, which is what it has always had. The longest errand runs
     /// to twenty-three (`put back from the trash`) and the HOST elides it — a
@@ -1558,6 +1581,108 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// AN ARCHIVE'S WORK IS DRAWN BY ITS OWN WORD — a test is not "extract",
+    /// and adding is not "compress" — and its refusal, a sentence the host
+    /// wrote in its language, takes the subject's place like any failure.
+    #[test]
+    fn an_archive_s_work_is_drawn_by_its_own_word_and_its_refusal_as_a_sentence() {
+        let said = "photos.zip is encrypted and needs its password";
+        let cases = [
+            (Errand::ArchiveAdd, key::WORK_ARCHIVE_ADD),
+            (Errand::ArchiveRemove, key::WORK_ARCHIVE_REMOVE),
+            (Errand::ArchiveTest, key::WORK_ARCHIVE_TEST),
+            (Errand::ArchiveConvert, key::WORK_ARCHIVE_CONVERT),
+        ];
+        for (errand, word) in cases {
+            assert_eq!(errand_key(errand), word);
+            for columns in [46u16, 80, 110] {
+                let mut refused = job(1, Stage::Failed, 0, 0);
+                refused.errand = errand;
+                refused.subject = "/home/a/photos.zip".to_owned();
+                refused.trouble = said.to_owned();
+                let screen = drawn(
+                    Face::List,
+                    vec![refused],
+                    Some(1),
+                    false,
+                    &context(columns, 8),
+                );
+                screen
+                    .check()
+                    .unwrap_or_else(|e| panic!("{word} at {columns}: {e}"));
+                let out = screen.finish_wit();
+                let drew = |wanted: &dyn Fn(&Text) -> bool| {
+                    out.iter()
+                        .any(|c| matches!(c, Command::Text(t) if wanted(&t.content)))
+                };
+                assert!(
+                    drew(&|t| matches!(t, Text::Key(k) if k == word)),
+                    "{word} at {columns}: the row does not name its work"
+                );
+                assert!(
+                    drew(
+                        &|t| matches!(t, Text::Data(d) if said.starts_with(d.trim_end_matches('…')))
+                    ),
+                    "{word} at {columns}: the refusal is not where the subject goes"
+                );
+                assert!(
+                    !drew(
+                        &|t| matches!(t, Text::Data(d) if d.contains("photos.zip") && !said.starts_with(d.trim_end_matches('…')))
+                    ),
+                    "{word} at {columns}: the subject is drawn beside the refusal"
+                );
+            }
+        }
+        let mut words: Vec<&str> = cases.iter().map(|(_, w)| *w).collect();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(
+            words.len(),
+            cases.len(),
+            "two of an archive's works share a word"
+        );
+    }
+
+    /// FAILS IF: an engine of the queue is drawn by another's word or
+    /// glyph — the five that joined the WIT (`atlas`, `software`, `scan`,
+    /// `container`, `belongings`) used to cross as `local`.
+    #[test]
+    fn every_engine_is_drawn_by_its_own_word_and_glyph() {
+        let all = [
+            Engine::Local,
+            Engine::Fetch,
+            Engine::Media,
+            Engine::Torrent,
+            Engine::Atlas,
+            Engine::Software,
+            Engine::Scan,
+            Engine::Container,
+            Engine::Belongings,
+        ];
+        let mut words: Vec<&str> = all.iter().map(|e| engine_key(*e)).collect();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(words.len(), all.len(), "two engines share a word");
+        let mut glyphs: Vec<Icon> = all.iter().map(|e| engine_icon(*e)).collect();
+        glyphs.sort_unstable_by_key(|i| format!("{i:?}"));
+        glyphs.dedup();
+        assert_eq!(glyphs.len(), all.len(), "two engines share a glyph");
+        for engine in all {
+            let mut one = job(1, Stage::Running, 1, 2);
+            one.engine = engine;
+            let screen = drawn(Face::Detail, vec![one], Some(1), false, &context(80, 16));
+            screen.check().unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+            let out = screen.finish_wit();
+            assert!(
+                out.iter().any(|c| matches!(
+                    c,
+                    Command::Text(t) if matches!(&t.content, Text::Key(k) if k == engine_key(engine))
+                )),
+                "{engine:?}: the page does not name its engine"
+            );
         }
     }
 

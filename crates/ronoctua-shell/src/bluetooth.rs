@@ -281,6 +281,9 @@ pub enum Target {
     /// keyboard it is the setting that decides whether pressing a key can
     /// bring the machine back at all.
     Wake(String, bool),
+    /// Use this phone's internet, or stop — its hardware address, and what
+    /// `RET` sets (the PAN; see [`Errand::Tether`]).
+    Tether(String, bool),
 }
 
 /// How much one press of an arrow moves a volume.
@@ -392,6 +395,24 @@ pub enum Errand {
     Volume(u32, u8),
     /// Silence a sink, or give it back.
     Mute(u32, bool),
+    /// Use a phone's internet over Bluetooth (PAN), or stop — by its
+    /// hardware address, which is the one name BlueZ and NetworkManager
+    /// share.
+    ///
+    /// NOT an `Ask`: the orders thread speaks to BlueZ, and the link is
+    /// NETWORKMANAGER's to make. BlueZ alone gives `bnep0` and no address;
+    /// NetworkManager asks BlueZ for the link, runs DHCP on it and routes
+    /// through it — so both views agree on who owns `bnep0`
+    /// (`ronoctua_network::Manager::tether`, and [`tethered`], which both
+    /// doors call).
+    Tether {
+        /// The phone's hardware address.
+        address: String,
+        /// Its name, for the sentence.
+        name: String,
+        /// Use it, or stop.
+        on: bool,
+    },
     /// Put this device's card in a profile — PipeWire's id, and the index.
     ///
     /// NOT an `Ask`: the orders thread speaks to BlueZ, and this is
@@ -462,6 +483,33 @@ pub struct View {
     /// what the text becomes. The next key that reaches the view lets it go —
     /// while a line asks, every key is the line's, in both doors.
     renaming: Option<String>,
+}
+
+/// Uses a phone's internet, or stops, through NetworkManager — and the
+/// sentence the message line says about it. ONE FUNCTION FOR BOTH DOORS: the
+/// footer and the window call it with the same errand and say the same
+/// words. A call to the system bus that returns at once (the activation runs
+/// in the daemon), so it does not hold the loop.
+#[must_use]
+pub fn tethered(address: &str, name: &str, on: bool, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::key;
+    match ronoctua_network::Manager::fresh().and_then(|m| m.tether(address, on)) {
+        Ok(()) => texts.t_with(
+            if on {
+                key::ECHO_BLUETOOTH_INTERNET_ON
+            } else {
+                key::ECHO_BLUETOOTH_INTERNET_OFF
+            },
+            &[("device", name)],
+        ),
+        Err(e) => texts.t_with(
+            key::ECHO_BLUETOOTH_INTERNET_FAILED,
+            &[
+                ("device", name),
+                ("reason", &crate::network_words::reason(&e, texts)),
+            ],
+        ),
+    }
 }
 
 /// The line a door opens for a new name — the command whose argument it is.
@@ -1039,6 +1087,15 @@ impl View {
                 Target::Timeout(seconds) => Errand::Order(Ask::DiscoverableTimeout(seconds)),
                 Target::PairableTimeout(seconds) => Errand::Order(Ask::PairableTimeout(seconds)),
                 Target::Wake(at, on) => Errand::Order(Ask::Wake(at, on)),
+                Target::Tether(address, on) => Errand::Tether {
+                    name: scene
+                        .devices
+                        .iter()
+                        .find(|d| d.address == address)
+                        .map_or_else(|| address.clone(), |d| d.label.clone()),
+                    address,
+                    on,
+                },
                 // `RET` ON A VOLUME IS ONE STEP UP, and then it wraps to
                 // nothing: a row that only ever goes up is a row you cannot
                 // undo without reaching for the arrows. The arrows are the
@@ -1602,6 +1659,30 @@ impl View {
                 b.texts.t(key::BLUETOOTH_FACT_WAKE),
                 yes_no(wake),
                 Target::Wake(d.at.clone(), !wake),
+                !d.paired,
+            );
+        }
+        // ITS INTERNET, when it shares one (a phone's PAN): a switch, because
+        // it is something this machine can DO with the device — and the
+        // value names the interface while it is up, `bnep0`, the name the
+        // network's view lists the same link under.
+        if d.shares_internet() {
+            let up = d.pan.as_ref().filter(|p| p.connected);
+            b.about_key(key::BLUETOOTH_ABOUT_INTERNET);
+            b.pair(
+                b.texts.t(key::BLUETOOTH_FACT_INTERNET),
+                up.map_or_else(
+                    || yes_no(false),
+                    |p| {
+                        texts.t_with(
+                            key::BLUETOOTH_INTERNET_THROUGH,
+                            &[("interface", p.interface.as_str())],
+                        )
+                    },
+                ),
+                Target::Tether(d.address.clone(), up.is_none()),
+                // ONLY A PAIRED PHONE: NetworkManager has no device for one
+                // that is not, and the row says so by being dim.
                 !d.paired,
             );
         }
@@ -2938,6 +3019,51 @@ mod tests {
         let audio = at(|t| matches!(t, Target::Audio(_, _))).expect("the audio profile is drawn");
         assert!(wake < facts, "the wake switch left the facts");
         assert!(audio < facts, "the audio profile left the facts");
+    }
+
+    /// FAILS IF: a phone that shares its internet has no row for it, the
+    /// row does not name the interface while the link is up, or `RET` on it
+    /// is not the errand both doors hand to NetworkManager.
+    #[test]
+    fn a_phone_that_shares_its_internet_has_a_switch_naming_bnep0() {
+        let t = texts();
+        let mut phone = a_device("/d/9", Kind::Phone, true, None);
+        phone.address = "00:00:00:00:00:09".to_owned();
+        phone.uuids = vec![ronoctua_bluetooth::NAP.to_owned()];
+        let mut scene = a_scene();
+        scene.devices.push(phone.clone());
+        let mut v = View::fresh_at("/d/9");
+        let rows = v.rows(&scene, 80, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.target == Target::Tether(phone.address.clone(), true))
+            .expect("the internet switch is drawn");
+        v.cursor = at;
+        assert_eq!(
+            v.key(Press::Enter, &scene, 80, &t),
+            Errand::Tether {
+                address: phone.address.clone(),
+                name: phone.label.clone(),
+                on: true,
+            }
+        );
+        // UP, IT NAMES THE INTERFACE — the one the network's view lists —
+        // and `RET` takes it down.
+        phone.pan = Some(ronoctua_bluetooth::Pan {
+            connected: true,
+            interface: "bnep0".to_owned(),
+        });
+        scene.devices.pop();
+        scene.devices.push(phone.clone());
+        let rows = View::fresh_at("/d/9").rows(&scene, 80, &t);
+        let row = rows
+            .iter()
+            .find(|r| r.target == Target::Tether(phone.address.clone(), false))
+            .expect("the switch, up");
+        assert!(row.fields.iter().any(|f| f.text.contains("bnep0")));
+        // AND A DEVICE THAT SHARES NOTHING has no such row.
+        let rows = View::fresh_at("/d/1").rows(&a_scene(), 80, &t);
+        assert!(!rows.iter().any(|r| matches!(r.target, Target::Tether(..))));
     }
 
     fn a_scene() -> Scene {

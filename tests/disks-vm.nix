@@ -51,7 +51,22 @@ pkgs.testers.runNixOSTest {
       # A disk of its own to format and offer to udisks. Virtio, so the kernel
       # calls it FIXED — which is the point here: it is the `HintSystem = true`
       # case, and the refusal is what is being measured.
-      virtualisation.emptyDiskImages = [ 64 ];
+      #
+      # AND A SECOND ONE, `vdc`, that plays a STICK for the encrypted subtests
+      # (archive-luks). udisks' `update_hints` starts every block at
+      # `HintSystem = true` and clears it only for a drive that is removable
+      # or on USB, FireWire or a memory card — a virtio disk is none of them,
+      # and a container that is the system's is not a row the sidebar opens
+      # (`Volume::encrypted`). `UDISKS_SYSTEM=0` is the override udisks reads
+      # after all of that; the subtest asserts it arrived before relying on it.
+      # 64 MiB: LUKS2's header takes 16 of them.
+      virtualisation.emptyDiskImages = [
+        64
+        64
+      ];
+      services.udev.extraRules = ''
+        SUBSYSTEM=="block", KERNEL=="vdc*", ENV{UDISKS_SYSTEM}="0"
+      '';
       networking.hostName = lib.mkForce "noctua-disks";
       # No /persist in this VM — the same reason as the file manager's and the
       # rescue's: `base.nix` points the password hash there and nothing here
@@ -61,7 +76,12 @@ pkgs.testers.runNixOSTest {
         password = "";
       };
       users.users.root.hashedPassword = lib.mkForce null;
-      environment.systemPackages = [ pkgs.dosfstools ];
+      # `cryptsetup` to READ what was written (`luksDump`), never to write it:
+      # the writing is udisks', through the same calls the shell makes.
+      environment.systemPackages = [
+        pkgs.dosfstools
+        pkgs.cryptsetup
+      ];
     };
 
   testScript =
@@ -126,7 +146,7 @@ pkgs.testers.runNixOSTest {
           )
 
       with subtest("and no polkit rule of ours speaks of udisks"):
-          # The inverse of `files-polkit-is-narrow`, and read from the BUILT
+          # The inverse of `rescue-polkit-is-narrow`, and read from the BUILT
           # system rather than from the source: upstream's rule already splits
           # on `HintSystem`, and ours could only widen it.
           rules = machine.succeed(
@@ -232,8 +252,84 @@ pkgs.testers.runNixOSTest {
               "`update-partition-type` did not reach udisks"
           )
 
+      # ── archive-luks: AN ENCRYPTED STICK, end to end ──
+      #
+      # WHAT THIS PROVES THAT NO UNIT TEST CAN: that udisks writes LUKS2 when
+      # `encrypt.passphrase` and `encrypt.type` ride the format call; that its
+      # answer to a wrong passphrase is read as one (udisks names it no
+      # differently from any other failure — `ronoctua_disks::wrong_passphrase`
+      # reads its words); that the container's row gives its place to what came
+      # out of it while it is open; and that ejecting locks it again. The
+      # passphrase travels on stdin to the helper and in the bus call to udisks
+      # — never in an argument, which this script could otherwise read back.
+      fd = "${formatDisk}/bin/ronoctua-format-disk"
+      phrase = "cofre secreto 42"
+
+      with subtest("the stick's disk is not the system's, or nothing below measures a stick"):
+          # THE PRECONDITION, by its own name: without it every subtest below
+          # fails as "not a locked row" and the cause is three screens up.
+          info = machine.succeed("udisksctl info -b /dev/vdc")
+          assert re.search(r"HintSystem:\s+false", info), (
+              f"the udev rule did not reach udisks: /dev/vdc is a system disk, and "
+              f"its container would be the system's own:\n{info}"
+          )
+
+      with subtest("upstream's policy lets the active session unlock a stick, and not the system's"):
+          assert allow_active("encrypted-unlock") == "yes", (
+              "unlocking a removable disk stopped being free for the active session"
+          )
+          assert allow_active("encrypted-unlock-system") == "auth_admin_keep", (
+              "unlocking a system disk stopped asking for the administrator"
+          )
+
+      with subtest("formatting with a passphrase writes LUKS2, and the row is locked"):
+          machine.succeed(f"printf '%s\\n' '{phrase}' | {fd} /dev/vdc ext4 COFRE --encrypt")
+          machine.succeed("udevadm settle")
+          dump = machine.succeed("cryptsetup luksDump /dev/vdc1")
+          version = re.search(r"^Version:\s*(\d+)", dump, re.M)
+          assert version and version.group(1) == "2", f"not LUKS2:\n{dump[:400]}"
+          # WHETHER udisks LEFT IT OPEN after writing the filesystem inside is
+          # udisks' business; for what follows it is locked.
+          rows = machine.succeed(f"{fd} rows")
+          if "/dev/vdc1 locked" not in rows:
+              machine.succeed(f"{fd} lock /dev/vdc1")
+              machine.succeed("udevadm settle")
+              rows = machine.succeed(f"{fd} rows")
+          assert "/dev/vdc1 locked" in rows, f"the container is not a locked row:\n{rows}"
+
+      with subtest("a wrong passphrase is refused BY NAME, and nothing opens"):
+          said = machine.fail(f"printf '%s\\n' 'not the one' | {fd} unlock /dev/vdc1 2>&1")
+          assert "WrongPassphrase" in said, (
+              f"udisks' refusal of a wrong passphrase was not read as one:\n{said}"
+          )
+          assert "/dev/vdc1 locked" in machine.succeed(f"{fd} rows")
+
+      with subtest("unlocked, what came out takes the row; mounted; ejected locks it again"):
+          clear = machine.succeed(f"printf '%s\\n' '{phrase}' | {fd} unlock /dev/vdc1").strip()
+          assert clear.startswith("/dev/dm-"), f"the cleartext is {clear!r}"
+          machine.succeed("udevadm settle")
+          rows = machine.succeed(f"{fd} rows")
+          assert f"{clear} unlocked" in rows, f"what came out is not an open row:\n{rows}"
+          assert "/dev/vdc1 " not in rows, f"the open container is still a row:\n{rows}"
+          at = machine.succeed(f"{fd} mount {clear}").strip()
+          machine.succeed(f"echo inside > '{at}/note.txt'")
+          # EJECT: unmount, lock — and the power, which a virtio disk cannot
+          # cut, is left alone rather than refused (`Drive.CanPowerOff`).
+          machine.succeed(f"{fd} eject {clear}")
+          machine.succeed("udevadm settle")
+          machine.fail(f"test -e {clear}")
+          rows = machine.succeed(f"{fd} rows")
+          assert "/dev/vdc1 locked" in rows, f"ejecting did not lock it:\n{rows}"
+          # AND WHAT WAS WRITTEN IS THERE, behind the passphrase.
+          clear = machine.succeed(f"printf '%s\\n' '{phrase}' | {fd} unlock /dev/vdc1").strip()
+          at = machine.succeed(f"{fd} mount {clear}").strip()
+          assert machine.succeed(f"cat '{at}/note.txt'").strip() == "inside"
+          machine.succeed(f"{fd} lock {clear}")
+
       print("OK: udisks answers, the policy is upstream's, the hints arrive, "
             "whoever has no active session is refused by name without hanging, "
-            "and formatting writes the label and the partition type")
+            "formatting writes the label and the partition type, and an encrypted "
+            "stick is written as LUKS2, refuses a wrong passphrase by name, opens, "
+            "mounts, and is locked again by ejecting")
     '';
 }

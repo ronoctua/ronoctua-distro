@@ -1,12 +1,13 @@
 //! Reading a directory, and the order it comes out in.
 //!
-//! # Hidden files are SHOWN, and that is the owner's rule
+//! # Hidden files are SHOWN, always, and that is the owner's rule
 //!
 //! Unix's only definition of hidden is "the name starts with a dot", and it
 //! exists because an early `ls` filtered `.` and `..` by prefix. Everything
 //! built on top of that accident is convention. Here the whole directory is
-//! shown and `.` toggles it — a file manager that hides half of `$HOME` by
-//! default is a file manager one cannot use to fix a dotfile.
+//! shown and there is no key that hides part of it — a file manager that hides
+//! half of `$HOME` is a file manager one cannot use to fix a dotfile, and a
+//! toggle is a way to end up in that state without knowing it.
 
 use std::path::{Path, PathBuf};
 
@@ -167,7 +168,30 @@ fn is_place(e: &Entry) -> bool {
 /// `ronoctua_apps::fold` and not `to_lowercase`, for the reason that crate
 /// gives: without it `Ágil` sorts after `Zebra`, which is where nobody looks.
 fn folded(e: &Entry) -> String {
-    ronoctua_apps::fold::fold(&e.name)
+    // WHAT IS DRAWN, which is what a person sorts by eye: a trashed file from a
+    // stick sorts among the others by its name, not by where the stick is.
+    ronoctua_apps::fold::fold(e.shown())
+}
+
+/// A directory's entries WITHOUT the way back — for a listing that gathers
+/// several directories into one (the merged trash), where each one's `..`
+/// would be a way out of somewhere the person is not.
+///
+/// Each name is the entry's WHOLE PATH (see [`Entry::shown`]).
+///
+/// # Errors
+///
+/// When the directory cannot be opened.
+pub fn gathered_from(dir: &Path) -> Result<Vec<Entry>> {
+    let handle =
+        std::fs::read_dir(dir).with_context(|| format!("could not list {}", dir.display()))?;
+    Ok(handle
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            Entry::of_path(path.to_string_lossy().into_owned(), &path)
+        })
+        .collect())
 }
 
 /// The directory's own modification time, for "has this changed since I looked".
@@ -240,6 +264,29 @@ mod tests {
             target: None,
             aims_at: None,
         }
+    }
+
+    #[test]
+    fn a_gathered_entry_is_its_whole_path_and_sorts_by_its_name() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-gathered-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("zeta.txt"), b"z").unwrap();
+        let found = gathered_from(&dir).unwrap();
+        // NO WAY BACK: a gathered listing has no one folder to go up from.
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, dir.join("zeta.txt").to_string_lossy());
+        assert_eq!(found[0].shown(), "zeta.txt");
+        // And `join` with it is the file, which is what every door computes.
+        assert_eq!(
+            Path::new("/elsewhere").join(&found[0].name),
+            dir.join("zeta.txt")
+        );
+        // SORTED BY WHAT IS DRAWN: `/tmp/...zeta` does not come before `alpha`.
+        let mut both = vec![found[0].clone(), entry("alpha.txt", Kind::File, 1, 0)];
+        sort_entries(&mut both, Sort::default());
+        assert_eq!(both[0].shown(), "alpha.txt");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

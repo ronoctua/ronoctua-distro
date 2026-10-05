@@ -117,9 +117,9 @@ let
     print(data.decode().strip())
   '';
 
-  # NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF, NOR MAKES ROOM ON ITS
-  # DISK (`tests/compositor-xvfb.nix`).
-  brainPrefs = pkgs.writeText "brain.json" ''{"tasks":{"system-update":{"enabled":false},"disk-space":{"enabled":false}}}'';
+  # NOTHING THE BRAIN DOES STARTS BY ITSELF — no rebuild, no relief of the
+  # disk — and no module is named to say so (`tests/compositor-xvfb.nix`).
+  brainPrefs = pkgs.writeText "brain.json" ''{"quiet":true}'';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-kiosk";
@@ -135,7 +135,11 @@ pkgs.testers.runNixOSTest {
     {
       imports = [
         ../nix/modules/base.nix
-        ../nix/modules/update.nix
+        # THE BRAIN'S MODULES' NIXOS HALVES, for the options they declare —
+        # `ronoctua.update.steps` is answered by modules imported here — and
+        # nothing else: the brain is off below, and every module's `config`
+        # with it.
+        ../nix/modules/brain.nix
         ../nix/modules/transfers.nix
         ../nix/modules/media.nix
         ../nix/modules/scroll.nix
@@ -161,6 +165,7 @@ pkgs.testers.runNixOSTest {
       ronoctua.media.enable = false;
       ronoctua.icons.superpack = false;
       ronoctua.update.enable = false;
+      ronoctua.brain.enable = false;
       # THE REAL CHROME, at the stable path everything opens it by.
       ronoctua.browser.package = chrome;
       # The variable the software tools give the footer when the browser is

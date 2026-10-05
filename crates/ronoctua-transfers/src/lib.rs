@@ -39,13 +39,17 @@
 pub mod aria2;
 pub mod atlas;
 pub mod auth;
+pub mod belongings;
 pub mod browser;
 pub mod client;
+pub mod container;
 pub mod engine;
 pub mod job;
 pub mod ledger;
 pub mod local;
 pub mod media;
+pub mod scan;
+pub mod secrets;
 pub mod serve;
 pub mod software;
 pub mod torrent;

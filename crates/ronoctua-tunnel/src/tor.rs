@@ -359,20 +359,25 @@ impl Control {
     /// There is no socket, the cookie is not readable — which is what an
     /// owner outside the `tor` group meets — or the daemon refused.
     pub fn open(socket: &Path, cookie: &Path) -> anyhow::Result<Self> {
+        // THE I/O ERROR STAYS IN THE CHAIN: its kind is what says whether
+        // the daemon is not running or the socket is not this person's.
         let stream = UnixStream::connect(socket)
-            .map_err(|e| anyhow::anyhow!("{}: {e}", socket.display()))?;
+            .map_err(|e| anyhow::Error::from(e).context(socket.display().to_string()))?;
         stream.set_read_timeout(Some(ronoctua_http::PATIENCE))?;
         stream.set_write_timeout(Some(ronoctua_http::PATIENCE))?;
         let reader = BufReader::new(stream.try_clone()?);
         let mut me = Self { stream, reader };
-        let bytes =
-            std::fs::read(cookie).map_err(|e| anyhow::anyhow!("{}: {e}", cookie.display()))?;
+        let bytes = std::fs::read(cookie)
+            .map_err(|e| anyhow::Error::from(e).context(cookie.display().to_string()))?;
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let answer = me.ask(&format!("AUTHENTICATE {hex}"))?;
-        anyhow::ensure!(
-            answer.starts_with("250"),
-            "the control socket refused the cookie: {answer}"
-        );
+        if !answer.starts_with("250") {
+            return Err(crate::Said {
+                why: crate::Refusal::NotAuthorized,
+                words: format!("the control socket refused the cookie: {answer}"),
+            }
+            .into());
+        }
         Ok(me)
     }
 
@@ -428,12 +433,16 @@ impl Control {
     /// cannot parse looks like, and the message carries its words.
     pub fn reload(&mut self) -> anyhow::Result<()> {
         let answer = self.ask("SIGNAL RELOAD")?;
-        anyhow::ensure!(
-            answer.starts_with("250"),
-            "Tor would not reload its configuration: {}",
-            answer.trim()
-        );
-        Ok(())
+        if answer.starts_with("250") {
+            return Ok(());
+        }
+        // NAMED, with Tor's answer as the words: the door says the refusal
+        // in the person's language and gives back the line Tor quoted.
+        Err(crate::Said {
+            why: crate::Refusal::ConfigRefused,
+            words: answer.trim().to_owned(),
+        }
+        .into())
     }
 
     /// What the daemon says an option is set to, right now.

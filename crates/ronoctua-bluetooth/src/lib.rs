@@ -429,9 +429,33 @@ pub struct Device {
     pub reconnect: Option<String>,
     /// Its audio streams, when it has any.
     pub transports: Vec<Transport>,
+    /// Its shared network (PAN), when BlueZ offers one — a phone that can
+    /// give this machine its connection.
+    pub pan: Option<Pan>,
 }
 
+/// A device's shared network, as BlueZ's `Network1` says it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Pan {
+    /// Is the link up?
+    pub connected: bool,
+    /// The interface it made — `bnep0` — while it is up. The network view
+    /// names the same one, out of NetworkManager.
+    pub interface: String,
+}
+
+/// The service id a phone announces when it shares its connection: the
+/// Network Access Point.
+pub const NAP: &str = "00001116-0000-1000-8000-00805f9b34fb";
+
 impl Device {
+    /// Can this device share its internet with this machine? It announces
+    /// the access point, or BlueZ already holds its network object.
+    #[must_use]
+    pub fn shares_internet(&self) -> bool {
+        self.pan.is_some() || self.uuids.iter().any(|u| u.eq_ignore_ascii_case(NAP))
+    }
+
     /// Does the battery deserve a number beside the glyph?
     #[must_use]
     pub fn shows_percent(&self) -> bool {
@@ -628,6 +652,10 @@ impl Scene {
                         .get(bluez::INPUT)
                         .and_then(|i| bluez::maybe_text(i, "ReconnectMode")),
                     transports: Vec::new(),
+                    pan: faces.get(bluez::NETWORK).map(|n| Pan {
+                        connected: bluez::flag(n, "Connected"),
+                        interface: bluez::text(n, "Interface"),
+                    }),
                     name,
                     alias,
                 });
@@ -721,7 +749,12 @@ pub enum Refusal {
     Busy,
     /// The other side said no.
     Rejected,
-    /// Anything else; the words travel alongside.
+    /// The daemon did not answer in time.
+    TimedOut,
+    /// The system bus itself could not be reached.
+    NoBus,
+    /// Anything else. Its words go to the log, never to the screen: they are
+    /// BlueZ's English (invariant 8).
     Other,
 }
 
@@ -761,6 +794,12 @@ pub fn refusal(e: &anyhow::Error) -> Refusal {
         | "org.bluez.Error.AuthenticationFailed"
         | "org.bluez.Error.Rejected"
         | "org.bluez.Error.Canceled" => Refusal::Rejected,
+        "org.freedesktop.DBus.Error.NoReply"
+        | "org.freedesktop.DBus.Error.Timeout"
+        | "org.freedesktop.DBus.Error.TimedOut" => Refusal::TimedOut,
+        "org.freedesktop.DBus.Error.NoServer"
+        | "org.freedesktop.DBus.Error.Disconnected"
+        | "org.freedesktop.DBus.Error.NoNetwork" => Refusal::NoBus,
         _ => Refusal::Other,
     };
     for cause in e.chain() {
@@ -775,8 +814,15 @@ pub fn refusal(e: &anyhow::Error) -> Refusal {
                 F::ServiceUnknown(_) | F::UnknownObject(_) | F::UnknownMethod(_) => {
                     Refusal::NotAvailable
                 }
+                F::NoReply(_) | F::Timeout(_) | F::TimedOut(_) => Refusal::TimedOut,
+                F::NoServer(_) | F::Disconnected(_) | F::NoNetwork(_) => Refusal::NoBus,
                 _ => Refusal::Other,
             };
+        }
+        if let Some(zbus::Error::InputOutput(_) | zbus::Error::Address(_)) =
+            cause.downcast_ref::<zbus::Error>()
+        {
+            return Refusal::NoBus;
         }
     }
     Refusal::Other
@@ -1252,6 +1298,44 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_phone_that_shares_its_network_says_so_and_names_its_interface() {
+        // `Network1` READ, and the NAP service id: what the PAN row stands
+        // on. The interface is the one NetworkManager's link carries too.
+        let s = Scene::of(&managed(vec![(
+            "/org/bluez/hci0/dev_00_00_00_00_00_09",
+            vec![
+                (
+                    bluez::DEVICE,
+                    vec![
+                        ("Address", Value::from("00:00:00:00:00:09")),
+                        ("Alias", Value::from("a phone")),
+                        ("Paired", Value::from(true)),
+                        ("UUIDs", Value::from(vec![NAP.to_owned()])),
+                    ],
+                ),
+                (
+                    bluez::NETWORK,
+                    vec![
+                        ("Connected", Value::from(true)),
+                        ("Interface", Value::from("bnep0")),
+                    ],
+                ),
+            ],
+        )]));
+        let phone = &s.devices[0];
+        assert!(phone.shares_internet());
+        assert_eq!(
+            phone.pan,
+            Some(Pan {
+                connected: true,
+                interface: "bnep0".to_owned()
+            })
+        );
+        // AND A DEVICE WITH NEITHER does not offer what it cannot do.
+        assert!(!Device::default().shares_internet());
+    }
+
     fn a_keyboard() -> bluez::Managed {
         managed(vec![
             (
@@ -1668,6 +1752,10 @@ mod tests {
         assert_eq!(
             refusal(&anyhow::anyhow!("nothing of the bus")),
             Refusal::Other
+        );
+        assert_eq!(
+            refusal(&wrapped("org.freedesktop.DBus.Error.NoReply")),
+            Refusal::TimedOut
         );
     }
 }

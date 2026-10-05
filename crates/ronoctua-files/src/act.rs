@@ -20,8 +20,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-/// `bsdtar`, which reads and writes more formats than the rest together.
-const BSDTAR: Option<&str> = option_env!("RONOCTUA_BSDTAR");
 /// `fstrim`, for the discard step of an overwriting delete.
 const FSTRIM: Option<&str> = option_env!("RONOCTUA_FSTRIM");
 
@@ -194,6 +192,39 @@ pub fn chgrp(path: &Path, gid: u32) -> Result<()> {
     .with_context(|| format!("change the group of {}", path.display()))
 }
 
+/// Sets when a file was last modified, and nothing else.
+///
+/// `utimensat` with the access time OMITTED: a person who corrects the date a
+/// photograph was changed is not saying anything about when it was last read,
+/// and writing "now" there too would be a second change nobody asked for.
+/// NOFOLLOW, for [`chgrp`]'s reason — the date the listing shows is the
+/// entry's own, a link's included, and changing the target's behind it would
+/// change a row the panel was not pointing at.
+///
+/// # Errors
+///
+/// When the kernel refuses — a file somebody else owns, a read-only mount.
+pub fn set_modified(path: &Path, secs: i64) -> Result<()> {
+    let omit = rustix::fs::Timespec {
+        tv_sec: 0,
+        tv_nsec: rustix::fs::UTIME_OMIT,
+    };
+    let times = rustix::fs::Timestamps {
+        last_access: omit,
+        last_modification: rustix::fs::Timespec {
+            tv_sec: secs,
+            tv_nsec: 0,
+        },
+    };
+    rustix::fs::utimensat(
+        rustix::fs::CWD,
+        path,
+        &times,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .with_context(|| format!("change when {} was modified", path.display()))
+}
+
 /// What the privileged unit knows how to do. Four verbs, and no more.
 ///
 /// Deleting and moving are NOT here on purpose: they are the two that cannot be
@@ -299,66 +330,6 @@ impl Staged {
     }
 }
 
-/// The archive formats offered, as `(extension, text key)`.
-///
-/// Three, and each is here for a reason somebody would give out loud: `.tar.zst`
-/// is what one keeps, `.tar.gz` is what one sends to a stranger, `.zip` is what
-/// one sends to somebody on Windows. A menu of eleven formats is a menu nobody
-/// reads.
-pub const FORMATS: [(&str, &str); 3] = [
-    ("tar.zst", ronoctua_i18n::key::FILES_FORMAT_ZSTD),
-    ("tar.gz", ronoctua_i18n::key::FILES_FORMAT_GZIP),
-    ("zip", ronoctua_i18n::key::FILES_FORMAT_ZIP),
-];
-
-/// The command that packs `names` (relative to `directory`) into `archive`.
-///
-/// Returns the command rather than running it: what runs a child process and
-/// waits for it is the shell, on a thread, for the reason
-/// `systemd-run --scope` already taught this project — blocking the loop that
-/// draws is how the footer stops responding.
-///
-/// # Errors
-///
-/// When `bsdtar` was not wired up.
-pub fn packing(
-    directory: &Path,
-    names: &[String],
-    archive: &Path,
-) -> Result<std::process::Command> {
-    let bsdtar = BSDTAR.ok_or(Trouble::Missing("RONOCTUA_BSDTAR"))?;
-    let mut cmd = std::process::Command::new(bsdtar);
-    // `-a` picks the compression from the NAME, which is what makes one code
-    // path serve all three formats.
-    cmd.arg("-a").arg("-c").arg("-f").arg(archive);
-    // `--` and then the names, so a file called `-C` is a file and not a flag.
-    cmd.arg("-C").arg(directory).arg("--");
-    for n in names {
-        cmd.arg(n);
-    }
-    Ok(cmd)
-}
-
-/// The command that unpacks `archive` into `directory`.
-///
-/// # Errors
-///
-/// When `bsdtar` was not wired up.
-pub fn unpacking(archive: &Path, directory: &Path) -> Result<std::process::Command> {
-    let bsdtar = BSDTAR.ok_or(Trouble::Missing("RONOCTUA_BSDTAR"))?;
-    let mut cmd = std::process::Command::new(bsdtar);
-    cmd.arg("-x")
-        .arg("-f")
-        .arg(archive)
-        .arg("-C")
-        .arg(directory);
-    // An archive that contains `../..` writes outside the directory it was
-    // opened in. `bsdtar` strips those by default and says so; asking for it
-    // explicitly is what keeps a future flag change from opening it silently.
-    cmd.arg("--no-absolute-paths");
-    Ok(cmd)
-}
-
 /// How much a directory tree occupies.
 ///
 /// `symlink_metadata` throughout, so a link into a large tree is twelve bytes
@@ -431,6 +402,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the test directory");
         dir
+    }
+
+    #[test]
+    fn the_modified_date_moves_and_the_access_date_stays() {
+        use std::os::unix::fs::MetadataExt as _;
+        let root = scratch("modified");
+        let file = root.join("photo.jpg");
+        std::fs::write(&file, b"x").unwrap();
+        let before = std::fs::metadata(&file).unwrap();
+        set_modified(&file, 1_000_000_000).expect("the date changes");
+        let after = std::fs::metadata(&file).unwrap();
+        assert_eq!(after.mtime(), 1_000_000_000);
+        assert_eq!(
+            (after.atime(), after.atime_nsec()),
+            (before.atime(), before.atime_nsec()),
+            "the access time is not the person's to change here"
+        );
+        // And a file that is not there is an error, not a silence.
+        assert!(set_modified(&root.join("gone"), 0).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -574,13 +565,5 @@ mod tests {
             );
         }
         assert_eq!(Verb::ALL.len(), 4);
-    }
-
-    #[test]
-    fn every_format_has_a_key_and_an_extension() {
-        for (extension, label) in FORMATS {
-            assert!(!extension.is_empty());
-            assert!(!label.is_empty());
-        }
     }
 }

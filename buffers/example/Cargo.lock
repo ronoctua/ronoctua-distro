@@ -122,6 +122,7 @@ name = "ronoctua-buffer-example"
 version = "0.1.0"
 dependencies = [
  "ronoctua-design",
+ "ronoctua-syntax",
 ]
 
 [[package]]
@@ -129,6 +130,7 @@ name = "ronoctua-design"
 version = "0.1.0"
 dependencies = [
  "ronoctua-protocol",
+ "ronoctua-syntax",
  "wit-bindgen",
 ]
 
@@ -138,6 +140,10 @@ version = "0.1.0"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "ronoctua-syntax"
+version = "0.1.0"
 
 [[package]]
 name = "semver"

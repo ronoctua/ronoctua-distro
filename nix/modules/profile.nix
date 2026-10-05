@@ -30,6 +30,17 @@
 # 23,2 GiB. The four groups below are ~6,5 GiB (Android), ~4,0 GiB (toolchains),
 # ~4,6 GiB (font variants and icon superpack) and ~2,0 GiB (browser, editor,
 # media).
+#
+# Measured on 2026-09-30, what the two newest groups ADD to it — `nix
+# path-info -rS` of each package, minus every path the full profile's other
+# packages already bring (their closures read from cache.nixos.org, so a
+# dependency shared with one of our own packages counts as added: these are
+# ceilings): Blender 2,55 GiB (its closure is 3,69, most of it LLVM and
+# clang's libraries, OpenUSD and MaterialX), OrcaSlicer 0,89 GiB (2,11;
+# OpenCASCADE and WebKitGTK), the two together 3,33 GiB (they share Python,
+# OpenVDB and Boost); Codex 0,30 GiB and Claude Code 0,22 GiB (0,31; unfree,
+# not on the cache — measured on a local build). All four: ~3,9 GiB, so the
+# full profile is ~26,7 GiB with them (`docs/INSTALL.md`'s table).
 { config, lib, ... }:
 
 let
@@ -97,5 +108,24 @@ in
     # which is the one thing a reduced machine cannot do without.
     software.appimage = lib.mkDefault full;
     software.android = lib.mkDefault full;
+
+    # THE OFFLINE ENGLISH DICTIONARY, 17 MB converted from the Open English
+    # WordNet (`nix/wordsgen.nix`). Without it English is asked online, with
+    # consent, like every other language — a reduced machine loses the offline
+    # answer, not the answer.
+    words.offline = lib.mkDefault full;
+
+    # THE PERSON'S CONTAINERS: Podman is a toolchain one installs to USE —
+    # podman, conmon, crun, netavark, passt and `podman-compose` — and the
+    # images it pulls land in the home, not the closure.
+    containers.enable = lib.mkDefault full;
+
+    # THE CODING AGENTS, Claude Code and Codex (~0,5 GiB together, measured
+    # above), and THE WORKSHOP, Blender and OrcaSlicer (~3,3 GiB): programs
+    # one installs to USE. A reduced machine that opens a `.stl` gets the
+    # sentence that nothing opens it, and one line in `host.nix` changes it:
+    # `ronoctua.workshop.enable = true;`, `ronoctua.dev.agents = true;`.
+    dev.agents = lib.mkDefault full;
+    workshop.enable = lib.mkDefault full;
   };
 }

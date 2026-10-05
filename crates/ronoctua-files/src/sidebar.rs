@@ -147,6 +147,20 @@ pub enum Gone {
     Missing,
 }
 
+/// Whether an encrypted device is open.
+///
+/// Carried as a fact, like [`Row::needed`]: this crate does not know what a
+/// LUKS container is — the disk border does, and it hands the answer in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seal {
+    /// Locked: what is inside cannot be reached until its passphrase opens
+    /// it. Mounting asks for it first.
+    Locked,
+    /// Open: this row is what came out of the container, and ejecting locks
+    /// it again before the power goes.
+    Unlocked,
+}
+
 /// One row, resolved and ready to be drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -166,8 +180,10 @@ pub struct Row {
     pub mounted: Option<bool>,
     /// Where a mounted device is, if it is anywhere.
     pub at: Option<PathBuf>,
-    /// udisks said not to put this in front of somebody. It rides the same key
-    /// that already reveals dotfiles.
+    /// udisks said not to put this in front of somebody (`HintIgnore`: the
+    /// ESP, a stick's little EFI helper). It is LISTED anyway — last in its
+    /// block, in the quiet register — because a row nobody can bring back is a
+    /// row somebody needed once; there is no key that hides it.
     pub quiet: bool,
     /// For a device: does udisks say it belongs to the machine?
     ///
@@ -192,6 +208,9 @@ pub struct Row {
     pub removable: bool,
     /// It comes from the distro: it can be hidden, never removed.
     pub built_in: bool,
+    /// For an encrypted device: locked, or open. `None` for everything that
+    /// is not encrypted.
+    pub seal: Option<Seal>,
 }
 
 /// The sidebar's whole state.
@@ -272,6 +291,7 @@ impl Sidebar {
                     needed: None,
                     removable: false,
                     built_in: true,
+                    seal: None,
                 });
             }
         }
@@ -289,6 +309,7 @@ impl Sidebar {
                 needed: None,
                 removable: false,
                 built_in: true,
+                seal: None,
             });
         }
         side.assemble();
@@ -332,14 +353,15 @@ impl Sidebar {
     /// Never leading and never trailing — a gap at the top would just be the
     /// sidebar starting one line lower than the listing, which reads as a bug.
     ///
-    /// `quiet` rides the key that already reveals dotfiles: udisks marks the
-    /// ESP and a stick's little EFI helper, and filtering on that alone would
-    /// take away rows somebody asked for with no way to ask again.
+    /// EVERY row, the quiet ones included: they come last in their block
+    /// ([`Sidebar::assemble`]) and the host draws them in the quiet register.
+    /// Filtering them out took away rows somebody asked for, and the key that
+    /// brought them back is gone with the one that hid dotfiles.
     #[must_use]
-    pub fn shown(&self, show_quiet: bool) -> Vec<Option<&Row>> {
+    pub fn shown(&self) -> Vec<Option<&Row>> {
         let mut out: Vec<Option<&Row>> = Vec::new();
         let mut last: Option<Section> = None;
-        for row in self.rows.iter().filter(|r| show_quiet || !r.quiet) {
+        for row in &self.rows {
             if last.is_some_and(|s| s != row.section) {
                 out.push(None);
             }
@@ -351,8 +373,8 @@ impl Sidebar {
 
     /// How many ROWS are on screen — the gaps do not count.
     #[must_use]
-    pub fn how_many(&self, show_quiet: bool) -> usize {
-        self.rows.iter().filter(|r| show_quiet || !r.quiet).count()
+    pub fn how_many(&self) -> usize {
+        self.rows.len()
     }
 
     /// Is the sidebar on screen at all?
@@ -519,9 +541,14 @@ impl Sidebar {
                 needed: None,
                 removable: false,
                 built_in: false,
+                seal: None,
             });
         }
-        rows.extend(self.devices.iter().cloned());
+        // THE QUIET DEVICES LAST, in the order the disk border gave them
+        // otherwise: a stick is what one reaches for, the ESP beside it is what
+        // one reaches for once a year.
+        rows.extend(self.devices.iter().filter(|r| !r.quiet).cloned());
+        rows.extend(self.devices.iter().filter(|r| r.quiet).cloned());
         rows.extend(self.bin.iter().cloned());
 
         // The adjustments go on LAST, over everything — a device can be hidden
@@ -679,6 +706,7 @@ mod tests {
             needed: None,
             removable: true,
             built_in: true,
+            seal: None,
         }
     }
 
@@ -743,10 +771,10 @@ mod tests {
         );
         side.devices_are(vec![a_device("stick", true, false)]);
         // Three blocks, three rows, two gaps: place · gap · device · gap · trash.
-        let lines = side.shown(false);
+        let lines = side.shown();
         let shape: Vec<bool> = lines.iter().map(Option::is_some).collect();
         assert_eq!(shape, [true, false, true, false, true]);
-        assert_eq!(side.how_many(false), 3, "the gaps are not content lines");
+        assert_eq!(side.how_many(), 3, "the gaps are not content lines");
 
         // ONE BLOCK, NO GAP. A leading or trailing blank would just be the
         // sidebar starting a line lower or ending a line later than the
@@ -758,12 +786,12 @@ mod tests {
             Preferences::fresh(),
             None,
         );
-        assert_eq!(alone.shown(false).len(), 1);
-        assert!(alone.shown(false)[0].is_some());
+        assert_eq!(alone.shown().len(), 1);
+        assert!(alone.shown()[0].is_some());
 
         // AND NOTHING AT ALL IS NOTHING, not a stray blank.
         let empty = Sidebar::of(&[], None, None, Preferences::fresh(), None);
-        assert!(empty.shown(false).is_empty());
+        assert!(empty.shown().is_empty());
     }
 
     #[test]
@@ -877,18 +905,29 @@ mod tests {
     }
 
     #[test]
-    fn a_quiet_device_needs_the_key_that_shows_dotfiles() {
+    fn quiet_devices_come_last() {
         let tree = Tree::fresh("quiet");
         let mut side = Sidebar::of(&[], Some(&tree.root), None, Preferences::fresh(), None);
+        // THE QUIET ONE FIRST, as udisks may well list it.
         side.devices_are(vec![
-            a_device("stick", true, false),
             a_device("efi-helper", false, true),
+            a_device("stick", true, false),
+            a_device("backup", false, false),
         ]);
-        assert_eq!(side.how_many(false), 1);
-        assert_eq!(side.how_many(true), 2);
-        // And a quiet row is still a ROW — it is in `rows()`, so the count that
-        // decides the region's height does not change under a key.
-        assert_eq!(side.rows().len(), 2);
+        // LISTED, every one: there is no key that hides a row any more.
+        assert_eq!(side.how_many(), 3);
+        assert_eq!(side.shown().len(), 3, "one block, no gap");
+        // And the quiet one is LAST in its block, the others in udisks' order.
+        let order: Vec<&str> = side
+            .shown()
+            .into_iter()
+            .flatten()
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            ["device:stick", "device:backup", "device:efi-helper"]
+        );
     }
 
     #[test]

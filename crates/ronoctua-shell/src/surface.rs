@@ -77,16 +77,13 @@ use crate::leader::{Effect, Leader, Order};
 /// Where a native buffer's component is — read from the ENVIRONMENT, by the
 /// name of the variable that carries it.
 ///
-/// The six that exist: `RONOCTUA_BUFFER_GLYPHS` (`LEADER i n`), `_EDITOR`
-/// (which had a key and no longer does — see `foreign::editor`), `_UNICODE`
-/// (`i u`), `_LUCIDE`, `_MEMORY` and `_TRANSFERS`.
-/// The last three carry something the others do not: Lucide (`i l`) also
-/// depends on a FACE — the `RONOCTUA_FONT_LUCIDE` embedded in the renderer, and
-/// the two come out of the same derivation, without which the 1,668 icons would
-/// be tofu —, and the memory panel (`LEADER s m`) and the queue (`LEADER t w`)
-/// embed no database at all: everything they draw is read by their host at that
-/// moment and pushed in, which is what `capability::system` and
-/// `capability::transfers` exist for.
+/// `RONOCTUA_BUFFER_MEMORY`, `_TRANSFERS` and the rest `nix/buffers.nix`
+/// names (the editor's had a key and no longer does — see `foreign::editor`).
+/// The three icon browsers are no buffers any more: they are the
+/// native icons app (`crate::icons`). The memory panel (`LEADER s m`) and the
+/// queue (`LEADER t w`) embed no database at all: everything they draw is read
+/// by their host at that moment and pushed in, which is what
+/// `capability::system` and `capability::transfers` exist for.
 ///
 /// # Why not `option_env!`, which is what this was
 ///
@@ -440,6 +437,9 @@ struct Footer {
     /// One at a time, the rest waiting. It lives in the daemon, like the
     /// compositor's state and for the same reason of section 9.2.
     notifications: ronoctua_notify::Queue,
+    /// The kills heard from oomd's bus signal and from the brain, so one kill
+    /// told by both is one notification (`ronoctua_notify::oom::Kills`).
+    kills: ronoctua_notify::oom::Kills,
     /// The catalogue, the distro's filters and the person's.
     ///
     /// It decides how every notification appears. Read once at startup: the
@@ -676,6 +676,10 @@ struct Footer {
     /// It is pruned against the compositor's window list, so it holds at most
     /// one entry per open window. See [`Footer::states_arrived`].
     states: std::collections::HashMap<u32, String>,
+    /// The TONE each of those states declared, by the same pid — the colour
+    /// the modeline draws it in (`state_colour`). Kept beside `states` and
+    /// pruned with it.
+    state_tones: std::collections::HashMap<u32, ronoctua_protocol::Tone>,
     /// `SPC w s` is open and the next key picks a state.
     ///
     /// A flag and not a pending sequence, because the level is exactly ONE deep:
@@ -778,10 +782,10 @@ struct Footer {
     pair_sender: Option<calloop::channel::Sender<crate::player_machines::Paired>>,
     /// Where the capture overlay's answer comes back: the file it wrote, or
     /// why it could not. `None` for a capture given up.
-    capture_sender: Option<calloop::channel::Sender<Result<std::path::PathBuf, String>>>,
+    capture_sender: Option<calloop::channel::Sender<crate::capture::Outcome>>,
     /// Is the capture overlay up?
     capturing: bool,
-    /// THE SCREEN RESIZER (`LEADER d r`), while it is on: the cut its file
+    /// THE SCREEN RESIZER (`LEADER / r`), while it is on: the cut its file
     /// says — the room everything is laid out in (`crate::resizer`).
     resizer: Option<crate::resizer::State>,
     /// The watch on the resizer's file, which is the broadcast: it is how a
@@ -863,8 +867,9 @@ struct Footer {
     /// never otherwise — a rate nobody is looking at is four pseudo-files a
     /// second for nothing.
     network_watch: crate::network::Watch,
-    /// Where a finished sweep of the local network reports.
-    lan_sender: Option<channel::Sender<ronoctua_lan::Found>>,
+    /// Where the network view's threads report — a sweep, the names, the
+    /// gateway's round trip (`network::spawn`).
+    lan_sender: Option<channel::Sender<crate::network::Heard>>,
     /// What the two tunnels say. Kept with the view closed, because the
     /// modeline draws a mark for each — and empty on a machine that has
     /// neither, which is what draws nothing.
@@ -1110,6 +1115,9 @@ struct Footer {
     /// done — the folder beside the film (`player_subtitles::Beside`). `None`
     /// outside the event loop (tests): the view reads in place.
     player_wake: Option<crate::player_subtitles::Wake>,
+    /// The wake of the file picker in the views that host it
+    /// (`Footer::picker_woken`).
+    picker_wake: Option<crate::player_subtitles::Wake>,
     /// Which programs have a camera open, from `/proc` every two seconds.
     camera_holders: Vec<String>,
     /// The compositor's key mode, while one is on (`actions::modes`).
@@ -1272,16 +1280,6 @@ struct Footer {
     files: Option<crate::files::View>,
     /// Where the manager's threads hand their result back.
     files_sender: Option<calloop::channel::Sender<crate::files::Report>>,
-    /// Where an ask for a preview and its facts is posted.
-    ///
-    /// Raised with the channel and not per open: the thread sleeps on a
-    /// blocking `recv` while nobody asks, which costs nothing, and raising it
-    /// per open would leave one running per open. `None` when it could not be
-    /// raised — the panels then draw the type's glyph, which is what they draw
-    /// for a file that has no picture anyway.
-    files_looking: Option<std::sync::mpsc::Sender<crate::files::Ask>>,
-    /// The thread that follows a moving file, when there is one to follow.
-    files_playing: Option<crate::motion::Player>,
     /// The loop — for the keyboard that REPEATS, and for the one armed clock.
     ///
     /// `Option` because the seat may announce itself before the loop exists —
@@ -1300,8 +1298,6 @@ struct Footer {
     /// tick when none is. Without the flag, every frame drawn while a long
     /// name is on screen would hang another timer on the loop.
     walk_armed: bool,
-    /// The thread that draws a shape at the angle it is being looked at.
-    files_turning: Option<crate::stage::Stage>,
     /// The thread that draws the globe. One per DOOR — see the window's twin.
     files_globe: Option<crate::globe::Stage>,
     /// The hands that make thumbnails, when the entries are side by side.
@@ -1365,6 +1361,187 @@ struct Footer {
     icons_requested: std::collections::HashSet<String>,
     /// The icon thread's queue.
     icon_queue: Option<std::sync::mpsc::Sender<crate::apps::Request>>,
+    /// Where the brain's answer to a change comes back from its thread
+    /// (`brain::put`) — said on the minibuffer's line when it arrives, the
+    /// refusal included.
+    brain_answers: Option<channel::Sender<crate::brain::Answer>>,
+    // ── end of brain-ui ──
+    /// The file manager's panels' threads — the inspector, the film and the
+    /// shape (`inspection::Threads`).
+    ///
+    /// Raised with the loop and not per open: each sleeps on a blocking `recv`
+    /// while nobody asks, which costs nothing, and raising them per open would
+    /// leave three running per open.
+    files_threads: crate::inspection::Threads,
+    /// The CONTROL of a row of the player's view under the pointer — a
+    /// title's glyph — by the command id whose sentence the message line
+    /// says. Read from [`Footer::player_controls_placed`] on the pointer's
+    /// motion AND after every frame (the rows move under a resting hand),
+    /// and read by the hover sentence: never a question the footer asks its
+    /// own region (`the-footer-does-not-ask-itself`).
+    player_control_under: Option<&'static str>,
+    /// Where the frame PLACED the controls of the player's rows: the line of
+    /// the page, the cell, its width and its sentence's id — written by the
+    /// paint, read by the pointer, so what is explained is what was drawn
+    /// and what a click takes (`player_rows::control_under`, the same cells).
+    ///
+    /// A CELL because the paint writes it while the frame's own borrows of
+    /// the footer are held.
+    player_controls_placed: std::cell::RefCell<Vec<(usize, u16, u16, &'static str)>>,
+
+    /// THE FOOTER'S OWN SETTINGS (`LEADER s r r`), while the view is open.
+    /// What it draws is read from `modeline` — the file both doors draw.
+    footer_settings: Option<crate::footer_settings::View>,
+    /// THE MAXIMUM ALERT BAR (`crate::alert`): what is up, and what a hand
+    /// closed. While one is up it takes the notification band's place.
+    alerts: crate::alert::Alerts,
+    /// Which of the alert's two roles it wears now (`alert::roles`).
+    alert_phase: bool,
+    /// Whether the clock that flips `alert_phase` is armed — only while an
+    /// alert is up (event, not clock).
+    alert_clock: bool,
+    /// Whether the minute's timer of the free minibuffer's hours is armed —
+    /// only while the hours are asked for and the line is free.
+    clock_armed: bool,
+    /// Whether the last frame drew the hours: what arms that timer.
+    clock_drawn: bool,
+    /// A HINT TOO LONG FOR THE MINIBUFFER'S LINE, kept while the pointer
+    /// travels from the mark it explains to the line and its chevron: the
+    /// line would otherwise empty the moment the pointer left the mark, and
+    /// take the chevron that opens the rest of it with it.
+    lingering_hint: Option<String>,
+    /// The room the minibuffer's line gave its text on the last frame, in
+    /// cells — what says a hint does not fit (`Footer::lingers`).
+    minibuffer_room: u16,
+    /// Whether the compositor holds the transient `Ctrl+↑/↓` bind that walks
+    /// the minibuffer's line (`wm-fold-keys-hold`) — asked only while a cut
+    /// hint is on the line, and given back when it goes.
+    fold_keys_held: bool,
+    /// How many rows the minibuffer's drawer took at the last frame — what
+    /// says by how much it moved the pointer it holds still
+    /// (`Footer::pointer_follows_the_drawer`).
+    fold_rows_seen: u16,
+
+    /// THE GIT BROWSER in the region (`crate::git_browser`), opened by the
+    /// file manager's `C-h` — which waits behind it in `git_behind` and comes
+    /// back when it closes, so no branch of this footer that asks the manager
+    /// draws a listing under the browser.
+    git_view: Option<crate::git_browser::View>,
+    git_behind: Option<crate::files::View>,
+    /// The repository the browser reads, and the watch that says it moved.
+    git_repo: Option<ronoctua_git::Repo>,
+    git_watch: Option<ronoctua_files::notice::Notice>,
+    /// Where the browser's threads hand back — hung on the loop the first
+    /// time it opens.
+    git_sender: Option<channel::Sender<crate::git_browser_window::Back>>,
+    /// The file manager's git line's keeper (`crate::git_line`), raised the
+    /// first time the manager follows a folder.
+    files_git: Option<crate::git_line::Keeper>,
+    /// Whether the queue has sent a list yet. The first one is the whole
+    /// history, and none of it ended now; after it an EMPTY list is an answer
+    /// like any other (`transfers::ended`).
+    jobs_heard: bool,
+    /// THE ICONS APP (`LEADER m i`, `crate::icons`), while it is open in the
+    /// region — and the channel its tables arrive on, hung on the loop while
+    /// they are read.
+    icons_app: Option<crate::icons::View>,
+    icons_app_source: Option<calloop::RegistrationToken>,
+    /// The calculator (`LEADER = =`, `crate::calc`), while it is open in the
+    /// region.
+    calc: Option<crate::calc::View>,
+    /// The watch on `calc.json` while the calculator is open — the file is
+    /// the broadcast, and the window keeps answers too.
+    calc_watch: Option<ronoctua_files::notice::Notice>,
+    /// THE PLAYER'S PICTURE FOLDED AWAY in the panel beside the rows (`z`,
+    /// the glyph on "Now"): the panel keeps only its transport and time bar
+    /// (`player_media::FOLDED_LINES`). A STORED field, and the one the
+    /// metric reads — what the region holds is never asked there
+    /// (`the-footer-does-not-ask-itself`); this footer's own, never written.
+    player_folded: bool,
+    /// WHETHER A WORLD PAGE'S GLOBE stands in the panel, in the picture's
+    /// place (`player_globe`): no picture there to fold, and the fold kept
+    /// for when one comes back — folding would take the globe with it.
+    /// Stored by `player_room_follows`, every frame, for the metric.
+    player_globe: bool,
+
+    /// The video-metrics view, when open — `LEADER v v` (`crate::video_metrics`).
+    video_metrics: Option<crate::video_metrics::View>,
+    /// What the video catalogue said, kept with the view closed: the next
+    /// opening draws at once while its feed reads again.
+    video_metrics_readings: crate::video_metrics::Readings,
+    /// The view's feed — one thread for the catalogue and the errands that leave
+    /// the view — while it is open.
+    video_metrics_feed: Option<crate::video_metrics_feed::Feed>,
+    /// Where the feed and the clipboard wake this loop: hung on the loop the
+    /// first time the view opens, and kept.
+    video_metrics_wake: Option<channel::Sender<crate::video_metrics_feed::Woke>>,
+    /// The thumbnails of the rows on screen, by the key their rows name — what
+    /// the region's picture pass reads (`Footer::expansion`'s covers), the
+    /// player's arrangement for a picture over rows.
+    video_metrics_covers: std::collections::HashMap<String, crate::player_find::Picture>,
+
+    /// THE SECURITY CENTRE (`LEADER s e`, `crate::security`). The view lives
+    /// even while it is not shown: a leader command run with it closed (`s e
+    /// r`) may still need the password question, and the work waits in it.
+    security: crate::security::View,
+    /// Whether the view is shown in the region.
+    security_shown: bool,
+    /// What it draws, as its thread last read it.
+    security_scene: crate::security::Scene,
+    /// The way back from its threads, made the first time one starts.
+    security_sender: Option<channel::Sender<crate::security::Came>>,
+    /// The folders it watches — only while it is shown.
+    security_watches: Vec<ronoctua_files::notice::Notice>,
+    /// A change only root may make in the file manager, waiting for the
+    /// password the sudo door asked for (`files::ROOT_PASSWORD`).
+    files_root_waiting: Option<crate::files::Root>,
+    /// THE PERSON'S CONTAINERS (`LEADER s o o`, `crate::containers`), while
+    /// the view is open: the view, what it reads, its threads (podman's
+    /// events, a log and the stats while their tab is shown) and the bell they
+    /// ring on the loop — all of it gone when the view closes.
+    containers: Option<crate::containers::View>,
+    containers_readings: crate::containers::Readings,
+    containers_feed: Option<crate::containers_feed::Feed>,
+    containers_bell: Option<calloop::RegistrationToken>,
+    /// A registry's login waiting for its password (`containers::LOGIN`).
+    containers_login: Option<crate::containers::Login>,
+    /// The belongings (`LEADER s v`, `crate::belongings`) while their view
+    /// is open: the view, what it reads, and the watches that keep it current
+    /// — hung only while it is open.
+    belongings: Option<crate::belongings::Open>,
+
+    /// THE SEARCH OVER EVERYTHING (`LEADER d d`, `crate::fast_access`), while
+    /// it is open in the region — with the channels hung on the loop while it
+    /// is (its threads' answers, its settings' watch) and the file panel's
+    /// threads, raised once and kept between openings.
+    fast_access: Option<crate::fast_access_window::Search>,
+    fast_access_sources: Vec<calloop::RegistrationToken>,
+    fast_access_watch: Option<ronoctua_files::notice::Notice>,
+    fast_access_threads: Option<crate::inspection::Threads>,
+    /// What the search asks this footer to run — a command, an opening —
+    /// taken on the NEXT turn of the loop, after the view closed: hung once
+    /// and kept, so an order sent as the view closes is still heard.
+    fast_access_orders: Option<channel::Sender<(String, Option<String>)>>,
+
+    /// The clipboard's windows following the history (`crate::clipboard_wire`):
+    /// one sender each, to the thread that writes that window's connection.
+    clip_followers: Vec<std::sync::mpsc::Sender<std::sync::Arc<crate::clipboard_wire::Shot>>>,
+    /// Which history the clipboard holds: it moves when the ENTRIES change —
+    /// not on a ClipCascade reading, which moves no index — and a window's
+    /// act names the one it was shown.
+    clip_generation: u64,
+    /// While a clipboard window's act is carried out, what the footer would
+    /// have said on its own line goes here instead, and back to the window
+    /// (`Footer::clipboard_asked`): the act was that door's, so its answer is.
+    clip_answering: Option<Vec<String>>,
+    /// systemd's watchdog, petted on the loop's one-second tick
+    /// (`crate::watchdog`): a footer that hangs is one that dies.
+    watchdog: crate::watchdog::Watchdog,
+    /// Was a hotspot up at the last reading of the daemon? Its END takes the
+    /// password's file away (`network::sharing::follow`). ONE flag, updated
+    /// by every reading whether the network view is open or not — the view
+    /// only reads the file — so the password never outlives the hotspot.
+    hotspot_serving: bool,
 }
 
 /// Who a paste read off the loop is for — a window's `PasteFor`, in the
@@ -1379,6 +1556,21 @@ enum PasteFor {
     Software,
     /// The manuals' filter.
     Manual,
+    /// The text being edited in the player's view (`player::Errand::Paste`).
+    Player,
+    /// The launcher's query.
+    Applications,
+    /// The file manager's filter, or the query of its question.
+    Files,
+    /// The file picker up over a view of the region — Syncthing's, the
+    /// network's, the camera's (`crate::file_picker::Hosted`).
+    Picker,
+    /// The icons app's search (`crate::icons`).
+    Icons,
+    /// The calculator's expression line.
+    Calc,
+    /// The search's box (`crate::fast_access`).
+    FastAccess,
 }
 
 /// What a paste thread hands back to the loop.
@@ -1459,13 +1651,17 @@ struct PerSeat {
     /// the two halves scroll apart, and the drag keeps answering the one it
     /// started on (`notifications::BarBox`).
     dragging_record: Option<crate::notifications::Half>,
+    /// Which of the git browser's bars is held (`git_browser::BarBox`).
+    dragging_git: Option<crate::git_browser::BarBox>,
     /// Which ROW of the player's view has its bar held — the position's or
     /// the volume's (`player_rows::slider_at`) — so the drag keeps turning it
     /// wherever the pointer goes.
     dragging_player: Option<usize>,
-    /// When the player's picture was last clicked: a second click soon after
-    /// is a DOUBLE click, which puts it on the whole screen.
-    picture_clicked: Option<std::time::Instant>,
+    /// The clicks on the player's picture, one after the other: a second
+    /// soon after is a DOUBLE click — in the middle the whole screen, on a
+    /// side ten seconds — and more on that side seek again
+    /// (`player_media::PictureClicks`).
+    picture_clicked: crate::player_media::PictureClicks,
     /// The button of the player's media panel under the pointer: lit, and
     /// said on the message line (`player_media::button_at`).
     player_button_under: Option<&'static str>,
@@ -1535,6 +1731,23 @@ struct PerSeat {
     spinning: Option<(f64, f64)>,
     /// Is the pointer OVER the footer right now?
     under_pointer: bool,
+}
+
+/// Whether the region TYPES TEXT where Caps Lock means capitals — what a
+/// window answers with `Content::types_capitals`, for the view the region
+/// shows: a text being edited (`crate::text_area`), in the player or in
+/// video-metrics. Everywhere else a letter is a key of the view, and the
+/// Lock is undone (the owner's rule of 2026-09-27: both doors type the same).
+fn region_types_capitals(
+    view: ViewState,
+    player: Option<&crate::player::View>,
+    video_metrics: Option<&crate::video_metrics::View>,
+) -> bool {
+    match view {
+        ViewState::Player => player.is_some_and(crate::player::View::editing_text),
+        ViewState::VideoMetrics => video_metrics.is_some_and(crate::video_metrics::View::editing),
+        _ => false,
+    }
 }
 
 /// What the expanded region is showing RIGHT NOW.
@@ -1652,6 +1865,38 @@ enum ViewState {
     /// What can be done to the focused window — the modeline's app name,
     /// clicked. A grid of cells, the leader's, with submenus.
     WindowMenu,
+
+    /// The footer's own settings — the bars, the free minibuffer, the kiosk
+    /// (`LEADER s r r`, `crate::footer_settings`).
+    FooterSettings,
+
+    /// The history of a repository — the file manager's `C-h`
+    /// (`crate::git_browser`).
+    Git,
+
+    /// The icons app — Nerd Fonts, Lucide and Unicode (`LEADER m i`,
+    /// `crate::icons`).
+    Icons,
+
+    /// The calculator (`LEADER = =`, `crate::calc`): a sum, a keypad, a
+    /// converter and the answers kept.
+    Calc,
+
+    /// The video-metrics view (`LEADER v v`, `crate::video_metrics`).
+    VideoMetrics,
+
+    /// The security centre (`LEADER s e e`, `crate::security`).
+    Security,
+
+    /// The person's containers (`LEADER s o o`, `crate::containers`).
+    Containers,
+
+    /// The belongings (`LEADER s v v`, `crate::belongings`).
+    Belongings,
+
+    /// The search over everything (`LEADER d d`, `crate::fast_access`).
+    FastAccess,
+
     /// The region is closed.
     NoneOf,
 }
@@ -1800,6 +2045,11 @@ struct Screen {
     quads: Option<ronoctua_render::quad::Quads>,
     /// The preview of the copied image. One per screen, and one at a time.
     images: Option<ronoctua_render::image::Images>,
+    /// Whether this screen is a PHOTOGRAPH's (`crate::footer_photograph`): its
+    /// frame is kept in `photographed` instead of being presented.
+    photographing: bool,
+    /// The last frame kept, composed by the paint that presents a screen's.
+    photographed: Option<crate::door::Composed>,
 }
 
 /// One line of the expanded region, ready to draw.
@@ -1905,6 +2155,16 @@ struct ExpansionRow {
     /// ground under each glyph is painted with `chrome::chip`, the drawing a
     /// window paints too.
     chips: Vec<u16>,
+    /// The cell a TEXT CARET stands before, on a line of a text being edited
+    /// among the player's rows (`player_rows::Row::caret`) — painted with
+    /// `chrome::caret`, the drawing a window paints too.
+    caret: Option<u16>,
+    /// THE CONTROLS a click on this line takes among the player's rows —
+    /// a title's glyph: cell, width and the id of what it says under the
+    /// pointer (`player_rows::control_under`, the row a continuation line
+    /// belongs to). The paint writes them down for the pointer
+    /// (`player_controls_placed`).
+    controls: Vec<(u16, u16, &'static str)>,
     /// A LINE OF A DECK among the player's rows (`player_rows::DeckRow`):
     /// its shapes are painted under its words, the playhead one line across
     /// the deck's lines on screen — `Deck::quads`, the window's drawing.
@@ -1928,15 +2188,15 @@ struct ExpansionRow {
     continues: bool,
 }
 
-/// How long a message stays on screen — BOTH doors.
+/// How long a NORMAL message stays on screen — BOTH doors, in whole
+/// seconds, for the windows that arm a one-shot of their own
+/// (`FilesWindow::say`).
 ///
-/// Three seconds: time to read a short line without it becoming permanent
-/// noise. In this door the one-second timer that expires a notification wipes
-/// it too, so there is no second clock; the window door has no clock at all and
-/// arms a one-shot per message (see `FilesWindow::say`). Two mechanisms, and
-/// they have to agree about the number or "how long is a message on screen"
-/// would have two answers.
-pub(crate) const ECHO_SECONDS: u64 = 3;
+/// It is the `normal` class's token (`crate::echo`), and not a number of its
+/// own: two mechanisms that disagreed about "how long is a message on
+/// screen" would give that question two answers.
+#[allow(clippy::cast_lossless)]
+pub(crate) const ECHO_SECONDS: u64 = tokens::space::ECHO_NORMALTENTHS as u64 / 10;
 
 /// How long the leader's list waits for the hand to stop, with the bars
 /// hidden and a key that opened it — see `crate::leader::Patience`.
@@ -1953,10 +2213,10 @@ enum Click {
     /// Uniform on purpose: on a group, it goes down one level; on a command, it
     /// runs. Node new path, and nothing that only the mouse reaches.
     Key(ronoctua_keymap::Key),
-    /// The leader again — the root's row that hides the bars or brings them
-    /// back (`crate::hidden::bars_row`). No tree has the leader as a key, so
-    /// pressing the row's key is the leader ARRIVING, which is what this does.
-    Leader,
+    /// The root's row that walks the bars' modes — normal, push, cover
+    /// (`crate::hidden::bars_row`). Its key is a tap of `Ctrl`, which no tree
+    /// holds, so the click runs the cycle the tap runs.
+    Bars,
     /// Choose the candidate at index `n` in the finder and confirm.
     Candidate(usize),
     /// A row of the shell history's view, by its place in the drawn list.
@@ -2059,6 +2319,23 @@ enum Click {
     Display(usize),
     /// A row of the bluetooth view.
     Bluetooth(usize),
+    /// A row of the footer's own settings.
+    FooterSettings(usize),
+    /// A line of the git browser's region: the view says, from the cell,
+    /// which column and row (`git_browser::View::clicked`).
+    Git(usize),
+    /// A line of the calculator, by its place among the view's lines — what
+    /// it reaches is the cell under the pointer's (`calc::Line::target_at`).
+    Calc(usize),
+    /// A row of the video-metrics view, or a line of a row (a shelf of its
+    /// grid): its cell is read from the pointer (`cell_under_pointer`).
+    VideoMetrics(usize),
+    /// A row of the security centre.
+    Security(usize),
+    /// A line of the containers' view; the cell says which stretch.
+    Containers(usize),
+    /// A row of the belongings.
+    Belongings(usize),
     /// Put the focus on line `n` of the network list.
     ///
     /// Its own variant for the same reason as `Application`: the lists share the
@@ -2110,6 +2387,8 @@ impl ExpansionRow {
             fields: Vec::new(),
             foot: false,
             chips: Vec::new(),
+            caret: None,
+            controls: Vec::new(),
             deck: None,
             schematic: None,
             covers: Vec::new(),
@@ -2235,7 +2514,7 @@ enum Navigation {
 /// — the same border the buffers' colors already respect. One map, because the
 /// file manager's preview reads it too, and two would be the two panels
 /// colouring the same Rust differently.
-fn highlight_line(
+pub(crate) fn highlight_line(
     line: &str,
     tongue: Option<ronoctua_syntax::Language>,
     y: u16,
@@ -2502,6 +2781,27 @@ fn grid_for(widths: &[Measure], screen_columns: u16, ceiling: usize, in_columns:
         colon,
         icon,
     }
+}
+
+/// Which kill a brain's kill event is: the cgroup the bus names (empty for
+/// the kernel's, which the bus never announces), and its own second, by the
+/// journal — the bus's arrival is compared with that, never with when the
+/// brain got round to telling. A kill with no second is now.
+fn kill_of(e: &crate::events::Event) -> (&str, std::time::SystemTime) {
+    let cgroup = e
+        .args
+        .iter()
+        .find(|(name, _)| *name == ronoctua_notify::oom::CGROUP_ARG)
+        .map_or("", |(_, v)| v.as_str());
+    let at = e
+        .counts
+        .iter()
+        .find(|(name, _)| *name == ronoctua_notify::oom::EPOCH_ARG)
+        .and_then(|(_, s)| u64::try_from(*s).ok())
+        .map_or_else(std::time::SystemTime::now, |s| {
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(s)
+        });
+    (cgroup, at)
 }
 
 /// The tag that makes the catalogue recognise the out-of-memory notification.
@@ -2879,51 +3179,33 @@ fn kiosk_bridge() -> Option<String> {
         .ok()
 }
 
-pub fn run() -> Result<()> {
-    let conn = Connection::connect_to_env()
-        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
-    let (globals, mut queue) = registry_queue_init(&conn).context("Wayland's registry")?;
-    let qh: QueueHandle<Footer> = queue.handle();
-
-    let compositor = CompositorState::bind(&globals, &qh)
-        .context("the compositor does not expose wl_compositor")?;
-    let layer_shell = LayerShell::bind(&globals, &qh).context(
-        "the compositor does not expose zwlr_layer_shell_v1.\n\
-         \n\
-         ronoctua-distro's integration with the compositor is EXCLUSIVELY through\n\
-             wlr-layer-shell and IPC (invariant 3). With no layer-shell there is no footer,\n\
-         and working around that would violate the invariant.",
-    )?;
-
-    let footer_height = tokens::metrics::footer_height(tokens::text::size()).ceil() as u32;
-
-    // The keymap is assembled BEFORE the surface comes up. A collision here is a
-    // program error, and failing at startup is better than failing on the first leader.
-    let (tree, registry) = crate::leader::default_of().context("default keymap")?;
-
-    // THE COPY CHANNEL IS BORN BEFORE the state, because the `Sender` lives
-    // inside it — and the reading thread needs a copy of it.
-    let (copies_sender, copies) = channel::channel::<ronoctua_clipboard::Entry>();
-    // THE WATCHER COMES UP WITH ITS OWN CONNECTION, in a thread. See
-    // `crate::clipboard`: the SCTK `wl_data_device` only hands the selection to
-    // whoever has FOCUS, and the footer at rest never has it — that is why the
-    // protocol is `zwlr_data_control`, which exists precisely for a clipboard
-    // manager.
-    crate::clipboard::watch(copies_sender);
-
-    // THE TWO DIRECTORIES, found once and handed to everything that persists.
-    let notes = ronoctua_notify::store::Where::of_env();
-    // THE MODELINE'S SWITCHES, `None` when the file does not parse.
-    let modeline_at_start = crate::adapt::store().parsed();
-    let modeline_refused = modeline_at_start.is_none();
-    let mut state = Footer {
+/// The footer's state, ASSEMBLED and nothing more: every field at its first
+/// value, over the Wayland globals already bound — no thread started, no
+/// source hung, no surface made. `run` hangs the rest on it; a photograph
+/// (`crate::footer_photograph`) draws it detached, over a compositor that
+/// answers only what binding needs.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines, unused_mut)]
+fn assemble(
+    conn: &Connection,
+    globals: &wayland_client::globals::GlobalList,
+    qh: &QueueHandle<Footer>,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    footer_height: u32,
+    tree: crate::leader::Trees,
+    registry: ronoctua_cmd::Registry,
+    notes: ronoctua_notify::store::Where,
+    modeline_at_start: Option<crate::adapt::Prefs>,
+    modeline_refused: bool,
+) -> Footer {
+    Footer {
         conn: conn.clone(),
         // THE DRAG-AND-DROP MACHINERY. `None` where the compositor has no
         // `wl_data_device_manager` — absence is not an error, and everything
         // else goes on working.
-        carrying: crate::carry::Carrying::bind(&globals, &qh),
-        registry: RegistryState::new(&globals),
-        outputs: OutputState::new(&globals, &qh),
+        carrying: crate::carry::Carrying::bind(globals, qh),
+        registry: RegistryState::new(globals),
+        outputs: OutputState::new(globals, qh),
         _compositor: compositor,
         layer_shell,
         requested_height: footer_height,
@@ -2931,7 +3213,7 @@ pub fn run() -> Result<()> {
         quit: false,
         owes_paint: false,
         windows: ronoctua_compositor::State::default(),
-        seats: SeatState::new(&globals, &qh),
+        seats: SeatState::new(globals, qh),
         keyboards: crate::seats::Seats::default(),
         mods: Modifiers::default(),
         inheritance: Inheritance::default(),
@@ -2945,6 +3227,7 @@ pub fn run() -> Result<()> {
         buffer_pending: Vec::new(),
         local_runs_here: None,
         notifications: ronoctua_notify::Queue::with_history(notes.history()),
+        kills: ronoctua_notify::oom::Kills::fresh_one(),
         book: {
             // THE DISTRO'S, PLUS THE PERSON'S. A broken preferences file leaves
             // the distro's standing rather than taking the shell down — see
@@ -2972,9 +3255,9 @@ pub fn run() -> Result<()> {
         brain_placed: None,
         brain_hint: None,
         osk: None,
-        osk_keys: crate::virtual_keys::Keys::bind(&globals, &qh),
+        osk_keys: crate::virtual_keys::Keys::bind(globals, qh),
         gestures: None,
-        gesture_pointer: crate::virtual_pointer::Pointer::bind(&globals, &qh),
+        gesture_pointer: crate::virtual_pointer::Pointer::bind(globals, qh),
         hands_sender: None,
         queue: qh.clone(),
         osk_placed: Vec::new(),
@@ -3007,11 +3290,12 @@ pub fn run() -> Result<()> {
         event_line: crate::events::Line::default(),
         mx: crate::minibuffer::Minibuffer::default(),
         pointers: crate::seats::Seats::default(),
-        shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
+        shapes: crate::cursor_shape::Shapes::bind(globals, qh),
         here: PerSeat::default(),
         transfers: None,
         jobs: Vec::new(),
         states: std::collections::HashMap::new(),
+        state_tones: std::collections::HashMap::new(),
         modeline_placed: Vec::new(),
         state_pending: false,
         state_menu: Vec::new(),
@@ -3084,6 +3368,7 @@ pub fn run() -> Result<()> {
         player_dragged: None,
         player_globe_drawn: std::cell::RefCell::new(Vec::new()),
         player_wake: None,
+        picker_wake: None,
         column_child: None,
         player: None,
         player_outline: None,
@@ -3180,11 +3465,8 @@ pub fn run() -> Result<()> {
         net: ronoctua_network::Snapshot::default(),
         files: None,
         files_sender: None,
-        files_looking: None,
-        files_playing: None,
         repeat: None,
         walk_armed: false,
-        files_turning: None,
         files_globe: None,
         files_thumbing: None,
         files_winding: None,
@@ -3214,7 +3496,226 @@ pub fn run() -> Result<()> {
         icons: std::collections::HashMap::new(),
         icons_requested: std::collections::HashSet::new(),
         icon_queue: None,
-    };
+        brain_answers: None,
+        // ── end of brain-ui ──
+        files_threads: crate::inspection::Threads::none(),
+        player_control_under: None,
+        player_controls_placed: std::cell::RefCell::new(Vec::new()),
+
+        footer_settings: None,
+        alerts: crate::alert::Alerts::default(),
+        alert_phase: false,
+        alert_clock: false,
+        clock_armed: false,
+        clock_drawn: false,
+        lingering_hint: None,
+        // NOTHING IS CUT before a frame has measured the line.
+        minibuffer_room: u16::MAX,
+        // HELD, as far as this footer knows, until its first frame gives the
+        // keys back: a footer that died while a cut hint was on its line left
+        // `Ctrl+↑/↓` bound to commands of a footer that is gone.
+        fold_keys_held: true,
+        fold_rows_seen: 0,
+
+        git_view: None,
+        git_behind: None,
+        git_repo: None,
+        git_watch: None,
+        git_sender: None,
+        files_git: None,
+        jobs_heard: false,
+        icons_app: None,
+        icons_app_source: None,
+        calc: None,
+        calc_watch: None,
+        player_folded: false,
+        player_globe: false,
+
+        video_metrics: None,
+        video_metrics_readings: crate::video_metrics::Readings::default(),
+        video_metrics_feed: None,
+        video_metrics_wake: None,
+        video_metrics_covers: std::collections::HashMap::new(),
+
+        security: crate::security::View::fresh(),
+        security_shown: false,
+        security_scene: crate::security::Scene::default(),
+        security_sender: None,
+        security_watches: Vec::new(),
+        files_root_waiting: None,
+        containers: None,
+        containers_readings: crate::containers::Readings::default(),
+        containers_feed: None,
+        containers_bell: None,
+        containers_login: None,
+        belongings: None,
+
+        fast_access: None,
+        fast_access_sources: Vec::new(),
+        fast_access_watch: None,
+        fast_access_threads: None,
+        fast_access_orders: None,
+
+        clip_followers: Vec::new(),
+        clip_generation: 0,
+        clip_answering: None,
+        watchdog: crate::watchdog::Watchdog::from_env(),
+        hotspot_serving: false,
+    }
+}
+
+/// THE FOOTER IN A PNG (`crate::footer_photograph`): the production footer,
+/// assembled by [`assemble`] as [`run`] assembles it, over a connection a
+/// stand-in compositor answers — one output, and a `configure` for every
+/// height the footer asks — then walked down the paths a person's leader, key
+/// and command take, and its last frame KEPT instead of presented
+/// (`Screen::photographing`).
+///
+/// What the footer would read from the machine is the scene's: the window in
+/// focus arrives as the compositor's event would bring it, the screens as the
+/// display thread's reading, the history as the clipboard's own queue. No
+/// thread, socket or watch of `run` exists here, so nothing leaves.
+///
+/// # Errors
+///
+/// The stand-in's registry lacks a global the footer cannot live without, or
+/// no frame was composed.
+pub(crate) fn photographed(
+    conn: &Connection,
+    scene: crate::footer_photograph::Scene,
+) -> Result<crate::footer_photograph::Taken> {
+    let (globals, mut queue) = registry_queue_init(conn).context("the stand-in's registry")?;
+    let qh: QueueHandle<Footer> = queue.handle();
+    let compositor =
+        CompositorState::bind(&globals, &qh).context("the stand-in lacks wl_compositor")?;
+    let layer_shell =
+        LayerShell::bind(&globals, &qh).context("the stand-in lacks zwlr_layer_shell_v1")?;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let footer_height = tokens::metrics::footer_height(tokens::text::size()).ceil() as u32;
+    let (tree, registry) = crate::leader::default_of().context("default keymap")?;
+    let mut state = assemble(
+        conn,
+        &globals,
+        &qh,
+        compositor,
+        layer_shell,
+        footer_height,
+        tree,
+        registry,
+        ronoctua_notify::store::Where::of_env(),
+        Some(crate::adapt::Prefs::default()),
+        false,
+    );
+    state.texts = std::rc::Rc::new(scene.texts);
+    state.ensure_screens(&qh);
+    anyhow::ensure!(
+        !state.screens.is_empty(),
+        "the stand-in compositor announced no output"
+    );
+    // BEFORE THE FIRST CONFIGURE: it is what `configure` paints on.
+    for s in &mut state.screens {
+        s.photographing = true;
+        s.scale = scene.scale;
+        s.scale_told = scene.scale;
+        s.output_height = scene.output.1;
+    }
+    queue
+        .roundtrip(&mut state)
+        .context("the stand-in's first configure")?;
+    if let Some(w) = scene.window {
+        state
+            .windows
+            .apply_to(&ronoctua_compositor::Event::Windows(vec![w]));
+        state.states_arrived();
+    }
+    if let Some(s) = scene.screens {
+        state.display_event(ronoctua_display::Event::Snapshot(Box::new(s)));
+    }
+    if !scene.clipboard.is_empty() {
+        state.clipboard = ronoctua_clipboard::Queue::of_entries(scene.clipboard);
+    }
+    state.draw_and_paint();
+    queue.roundtrip(&mut state).context("a frame")?;
+    for step in scene.steps {
+        match step {
+            crate::footer_photograph::Step::Leader => {
+                state.activate_leader(crate::leader::Opener::Key);
+            }
+            crate::footer_photograph::Step::Key(key) => state.key_arrived(key),
+            crate::footer_photograph::Step::Command(id) => {
+                state.run_with(&id, None);
+                state.draw_and_paint();
+            }
+        }
+        // WHAT THE STEP ASKED OF THE COMPOSITOR is answered before the next:
+        // a height comes back as a `configure`, which paints.
+        queue.roundtrip(&mut state).context("a step's frame")?;
+    }
+    state.draw();
+    state.paint();
+    let said = state.echo.as_ref().map(|(s, _)| s.clone());
+    let screen = state.screens.first_mut().context("no screen")?;
+    let composed = screen
+        .photographed
+        .take()
+        .context("the footer composed no frame")?;
+    Ok(crate::footer_photograph::Taken {
+        composed,
+        logical: (screen.width, screen.height),
+        said,
+    })
+}
+
+pub fn run() -> Result<()> {
+    let conn = Connection::connect_to_env()
+        .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
+    let (globals, mut queue) = registry_queue_init(&conn).context("Wayland's registry")?;
+    let qh: QueueHandle<Footer> = queue.handle();
+
+    let compositor = CompositorState::bind(&globals, &qh)
+        .context("the compositor does not expose wl_compositor")?;
+    let layer_shell = LayerShell::bind(&globals, &qh).context(
+        "the compositor does not expose zwlr_layer_shell_v1.\n\
+         \n\
+         ronoctua-distro's integration with the compositor is EXCLUSIVELY through\n\
+             wlr-layer-shell and IPC (invariant 3). With no layer-shell there is no footer,\n\
+         and working around that would violate the invariant.",
+    )?;
+
+    let footer_height = tokens::metrics::footer_height(tokens::text::size()).ceil() as u32;
+
+    // The keymap is assembled BEFORE the surface comes up. A collision here is a
+    // program error, and failing at startup is better than failing on the first leader.
+    let (tree, registry) = crate::leader::default_of().context("default keymap")?;
+
+    // THE COPY CHANNEL IS BORN BEFORE the state, because the `Sender` lives
+    // inside it — and the reading thread needs a copy of it.
+    let (copies_sender, copies) = channel::channel::<ronoctua_clipboard::Entry>();
+    // THE WATCHER COMES UP WITH ITS OWN CONNECTION, in a thread. See
+    // `crate::clipboard`: the SCTK `wl_data_device` only hands the selection to
+    // whoever has FOCUS, and the footer at rest never has it — that is why the
+    // protocol is `zwlr_data_control`, which exists precisely for a clipboard
+    // manager.
+    crate::clipboard::watch(copies_sender);
+
+    // THE TWO DIRECTORIES, found once and handed to everything that persists.
+    let notes = ronoctua_notify::store::Where::of_env();
+    // THE MODELINE'S SWITCHES, `None` when the file does not parse.
+    let modeline_at_start = crate::adapt::store().parsed();
+    let modeline_refused = modeline_at_start.is_none();
+    let mut state = assemble(
+        &conn,
+        &globals,
+        &qh,
+        compositor,
+        layer_shell,
+        footer_height,
+        tree,
+        registry,
+        notes,
+        modeline_at_start,
+        modeline_refused,
+    );
 
     // THE SURFACE IS ONLY CREATED WHEN THERE IS AN OUTPUT.
     //
@@ -3291,6 +3792,24 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the player view's wake: {e}"))?;
 
+    // THE FILE PICKER'S FOLDER, WATCHED in the views that host it — the
+    // programs', Syncthing's, the network's, the camera's — and its devices
+    // read: one wake for the four, handed to each view where it is made.
+    let (woke, wakes) = channel::channel::<()>();
+    let woke = std::sync::Mutex::new(woke);
+    state.picker_wake = Some(crate::player_subtitles::Wake::new(move || {
+        if let Ok(w) = woke.lock() {
+            let _ = w.send(());
+        }
+    }));
+    handle
+        .insert_source(wakes, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.picker_woken();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the file picker's wake: {e}"))?;
+
     let (told_sender, answers) = channel::channel::<crate::player::Told>();
     state.told_sender = Some(told_sender);
     handle
@@ -3310,20 +3829,42 @@ pub fn run() -> Result<()> {
             // THE VIEW'S SHARE of it — a list refused at once is its page's
             // to say, a key that was not kept read again.
             let columns = state.player_columns();
+            let mut took = false;
             if let Some(v) = state.player_view.as_mut()
-                && v.told(&answer)
+                && v.told(&answer, &state.texts)
             {
+                took = true;
                 v.settle_in(state.player.as_ref(), columns, &state.texts);
                 state.region_resized();
                 state.draw_and_paint();
             }
-            if let Some(said) = crate::player::told_sentence(
+            // A QUESTION THE VIEW ASKS is on the region, "no" first: what the
+            // order put on the minibuffer ("added…", "saved again") is taken
+            // back — it was not done — and under the picture alone the rows
+            // come back, for the question is drawn there. With no view to
+            // ask it, the refusal is said. The window's answer, read from the
+            // same place (`player::heard`).
+            match crate::player::heard(
+                took,
                 &answer,
                 state.player.as_ref().is_some_and(crate::player::older),
                 &state.texts,
             ) {
-                state.echo_message(said);
-                state.draw_and_paint();
+                crate::player::Heard::Asked => {
+                    state.echo = None;
+                    if state.player_only {
+                        state.player_only = false;
+                        state.player_room_follows();
+                        state.region_resized();
+                        state.follow_cursor();
+                    }
+                    state.draw_and_paint();
+                }
+                crate::player::Heard::Said(Some(said)) => {
+                    state.echo_message(said);
+                    state.draw_and_paint();
+                }
+                crate::player::Heard::Said(None) => {}
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the player's answers: {e}"))?;
@@ -3346,7 +3887,7 @@ pub fn run() -> Result<()> {
     // WHAT THE CAPTURE OVERLAY WROTE. It is another process (`capture`),
     // and a thread waits for it — a capture is chosen by a person, which can
     // take a minute, and the loop that draws cannot wait that long.
-    let (capture_sender, captures) = channel::channel::<Result<std::path::PathBuf, String>>();
+    let (capture_sender, captures) = channel::channel::<crate::capture::Outcome>();
     state.capture_sender = Some(capture_sender);
     handle
         .insert_source(captures, |event, (), state: &mut Footer| {
@@ -3396,10 +3937,6 @@ pub fn run() -> Result<()> {
     // `systemd-run --scope` already taught this project what that costs. The
     // channel is built here and always; the threads are raised per operation.
     let (files_sender, files) = channel::channel::<crate::files::Report>();
-    // AND THE ONE THAT LOOKS INSIDE A FILE, on the same channel back. Decoding
-    // a photograph or seeking a video frame is a child process, and waiting for
-    // one inside the loop that draws is the trap this project already paid for.
-    state.files_looking = crate::files::inspector(files_sender.clone());
     state.files_sender = Some(files_sender);
     handle
         .insert_source(files, |event, (), state: &mut Footer| {
@@ -3525,43 +4062,20 @@ pub fn run() -> Result<()> {
     // network, in which case nothing here opens a socket at all.
     state._world_thread = ronoctua_world::fetch::watch();
 
-    // THE FRAMES OF A MOVING FILE, on a channel of their own — see the window
-    // door's twin for why they are not on the reports': a frame arrives ten
-    // times a second, and the reports' channel wakes the parts that read a
-    // directory.
+    // THE PANELS' THREADS: what is inside a file, the frames of a moving one
+    // and the views of a shape, each on a channel of its own and all three
+    // heard in one place (`inspection::Threads`, `Footer::files_heard`). Their
+    // own and not the reports': a frame arrives ten times a second, and the
+    // reports' channel wakes the parts that read a directory. Decoding a
+    // photograph or seeking a video frame is a child process, and waiting for
+    // one inside the loop that draws is the trap this project already paid for.
     //
     // AND THE FRAME ARRIVING IS THE CLOCK. This door has a one-second timer
     // and it is nowhere near fast enough; rather than a second timer that
     // would have to be told when to run, the player sleeps for the frame's own
     // delay and sends it. When it stops, the wake-ups stop with it.
-    let (frames_sender, frames) = channel::channel::<crate::motion::Beat>();
-    state.files_playing = crate::motion::player(frames_sender);
-    handle
-        .insert_source(frames, |event, (), state: &mut Footer| {
-            if let channel::Event::Msg(f) = event {
-                if let Some(v) = state.files.as_mut() {
-                    v.played(f);
-                }
-                state.owes_paint = true;
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the motion channel: {e}"))?;
-
-    // AND THE VIEWS OF A SHAPE, on a channel of their own too, for the reason
-    // written above about frames: a drag emits one every few tens of
-    // milliseconds and none of them is news about a directory.
-    let (turns_sender, turns) = channel::channel::<crate::stage::Beat>();
-    state.files_turning = crate::stage::stage(turns_sender);
-    handle
-        .insert_source(turns, |event, (), state: &mut Footer| {
-            if let channel::Event::Msg(b) = event {
-                if let Some(v) = state.files.as_mut() {
-                    v.drew(b);
-                }
-                state.owes_paint = true;
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the stage channel: {e}"))?;
+    state.files_threads =
+        crate::inspection::Threads::raise(&handle, |state: &mut Footer, h| state.files_heard(h))?;
 
     // AND THE GLOBE'S, on a third — a drag across the world emits a picture
     // every few tens of milliseconds, and none of them is news about anything
@@ -3820,15 +4334,23 @@ pub fn run() -> Result<()> {
                     // state behind another window changes no pixel, and repainting
                     // for it would put a frame on the screen per key pressed in a
                     // window nobody is looking at.
-                    Order::State { pid, id } => {
-                        let showing = state.states.get(&pid) != Some(&id);
+                    Order::State { pid, id, tone } => {
+                        let showing = state.states.get(&pid) != Some(&id)
+                            || state.state_tones.get(&pid) != Some(&tone);
                         state.states.insert(pid, id);
+                        state.state_tones.insert(pid, tone);
                         if showing
                             && state.windows.focused().and_then(|w| w.pid)
                                 == i32::try_from(pid).ok()
                         {
                             state.draw_and_paint();
                         }
+                    }
+                    // THE CLIPBOARD'S WINDOW: a follower, told the history at
+                    // once and after every change; and what its keys ask.
+                    Order::Follow(stream) => state.clipboard_followed(stream),
+                    Order::Clipboard { generation, act } => {
+                        state.clipboard_asked(generation, act);
                     }
                 }
             }
@@ -3852,6 +4374,7 @@ pub fn run() -> Result<()> {
                     .flatten();
                 if state.clipboard.register(e) {
                     tracing::debug!(bytes, "new entry in the clipboard history");
+                    state.clipboard_moved();
                     if let Some(text) = leaving {
                         state.tell_clipcascade(ronoctua_clipcascade::Order::Send(text));
                     }
@@ -3877,8 +4400,13 @@ pub fn run() -> Result<()> {
     // It is started BEFORE the session daemon so that a boot in which the footer
     // comes up first still registers the match: the rule is filed with the bus,
     // and the signal arrives whenever `systemd-oomd` takes the name.
-    ronoctua_notify::oom::listen(raw_tx.clone());
-    if ronoctua_notify::dbus::listen(raw_tx) {
+    //
+    // THE BRIDGE SERVES EITHER: with no session bus (or another daemon on it)
+    // the session listener fails, and a bridge started only for it left
+    // oomd's kills heard on the system bus and never delivered.
+    let oomd = ronoctua_notify::oom::listen(raw_tx.clone());
+    let session = ronoctua_notify::dbus::listen(raw_tx);
+    if oomd || session {
         // A bridge between zbus's `mpsc` and calloop's channel. They are two kinds
         // of channel because zbus does not know calloop and vice versa; the bridge
         // is a thread that only forwards.
@@ -3929,6 +4457,18 @@ pub fn run() -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the brain: {e}"))?;
+    // AND ITS ANSWERS to what this footer asked of it — a notice put away or
+    // off, a module's action — each from the thread that waited for it, so a
+    // refusal is said on the line that asked instead of lost in a socket.
+    let (brain_answers, answered) = channel::channel::<crate::brain::Answer>();
+    state.brain_answers = Some(brain_answers);
+    handle
+        .insert_source(answered, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(answer) = event {
+                state.brain_answered(&answer);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the brain's answers: {e}"))?;
 
     // EIGHTH SOURCE: the power daemons — the battery, the profile, logind.
     //
@@ -4380,12 +4920,12 @@ pub fn run() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the update's journal: {e}"))?;
 
-    let (lan_sender, lan_answers) = channel::channel::<ronoctua_lan::Found>();
+    let (lan_sender, lan_answers) = channel::channel::<crate::network::Heard>();
     state.lan_sender = Some(lan_sender);
     handle
         .insert_source(lan_answers, |event, (), state: &mut Footer| {
-            if let channel::Event::Msg(found) = event {
-                state.network_watch.found(found);
+            if let channel::Event::Msg(heard) = event {
+                state.network_watch.heard(heard);
                 state.network_settle();
                 state.apply_geometry(state.interactivity());
                 state.draw_and_paint();
@@ -4593,6 +5133,9 @@ pub fn run() -> Result<()> {
             calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
             |_, (), state: &mut Footer| {
                 let now = std::time::Instant::now();
+                // THE LOOP IS ALIVE: this tick turning is the proof systemd's
+                // watchdog asks for (`crate::watchdog`).
+                state.watchdog.pet(now);
                 // Both on the SAME tick: a second clock just for the echo area would
                 // wake the loop twice a second for nothing.
                 let won = state.expire_echo(now);
@@ -4670,6 +5213,13 @@ pub fn run() -> Result<()> {
                 let watching = state.network.is_some();
                 if watching {
                     state.network_watch.sample();
+                    // AND THE NAMES OF WHAT IT FOUND, asked of resolved on a
+                    // thread — once per address, never on this loop.
+                    if let (Some(list), Some(back)) =
+                        (state.network_watch.names_wanted(), state.lan_sender.clone())
+                    {
+                        crate::network::spawn(crate::network::Lan::Name(list), back);
+                    }
                 }
                 // AND THE UPDATE'S MARK RIDES IT TOO, one frame per tick. The
                 // counter always advances — it is a `u64` add — but the REDRAW is
@@ -4828,6 +5378,10 @@ impl Footer {
             .state_now()
             .map(|id| self.texts.t(&format!("state-{id}")))
             .unwrap_or_default();
+        // THE BRAIN'S MARKS, remembered for the colour, the hint and the
+        // click — each asked later by the segment's id alone.
+        let brain_marks = crate::brain::marks(self.brain.as_ref());
+        crate::brain::remember(&brain_marks);
         let mut out = crate::segments(
             &crate::daemon::buffer_name(&self.windows, &self.texts),
             &crate::daemon::buffer_mode(&self.windows, &self.texts, &self.catalogue),
@@ -4893,6 +5447,11 @@ impl Footer {
                 // into and a Tor that is not started draw nothing.
                 tailscale: self.tunnels.on_tailnet(),
                 tor: self.tunnels.through_tor(),
+                // WHAT THE BRAIN'S MODULES MARKED, each as it published it —
+                // and nothing at rest.
+                brain: &brain_marks,
+                // THE PASSWORDLESS WINDOW'S END, while one is open (`security`).
+                security_until: crate::security::modeline_until(&self.zone, &self.texts).as_deref(),
             },
         );
         // THE SOFTWARE CENTRE'S TWO, with nothing to say at rest: a trial
@@ -4950,6 +5509,7 @@ impl Footer {
             .filter_map(|p| u32::try_from(p).ok())
             .collect();
         self.states.retain(|pid, _| alive.contains(pid));
+        self.state_tones.retain(|pid, _| alive.contains(pid));
 
         // ONLY A WINDOW OF OURS IS ASKED. This runs on every event the
         // compositor sends, and a foreign window has no socket to answer on —
@@ -4976,8 +5536,9 @@ impl Footer {
         if self.states.contains_key(&pid) {
             return;
         }
-        if let Ok(Some((now, _))) = crate::leader::buffer_states(pid) {
+        if let Ok(Some((now, tone, _))) = crate::leader::buffer_states(pid) {
             self.states.insert(pid, now);
+            self.state_tones.insert(pid, tone);
         }
     }
 
@@ -5163,6 +5724,14 @@ impl Footer {
     /// where the keyboard actually is — the footer at rest does not capture it,
     /// or no buffer would ever receive one.
     fn band_clicked(&mut self, hit: crate::band::Hit) {
+        // THE ALERT BAR IS THE BAND while it is up, and its one control is
+        // the close button (`alert::lines`, `Hit::Read`) — `alert-dismiss`.
+        if self.alerts.showing().is_some() {
+            if hit == crate::band::Hit::Read {
+                self.dismiss_the_alert();
+            }
+            return;
+        }
         let Some(key) = self.notifications.showing().map(|s| s.notification.key()) else {
             return;
         };
@@ -5211,13 +5780,16 @@ impl Footer {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let row = (y / line_height) as u16;
-        if row != self.brain_line_at() {
+        // ONE LINE OR TWO: an alarm and a countdown share the strip on two.
+        let first = self.brain_line_at();
+        if row < first || row >= first + self.brain_rows() {
             return None;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let column = (x / cell) as u16;
         crate::brain::at(
             self.brain_placed.as_ref(),
+            row - first,
             column,
             self.column_at_the_edge(x),
         )
@@ -5235,14 +5807,14 @@ impl Footer {
         match hit {
             crate::brain::Hit::Abort => self.run_command("brain-abort"),
             crate::brain::Hit::Proceed => self.run_command("brain-proceed"),
-            // WHATEVER THE NOTICE OFFERED, by the id the notice itself named.
-            // A notice with nothing to offer draws no button, so there is
-            // nothing here to click.
-            crate::brain::Hit::Notice => {
-                if let Some(act) = self.noticed().and_then(|n| n.act.clone()) {
-                    self.run_command(&act);
-                }
-            }
+            // THE NOTICE'S THREE, each the command its key runs: a notice that
+            // does not offer one draws no button, so there is nothing here to
+            // click that it would refuse.
+            crate::brain::Hit::Act => self.run_command("brain-act"),
+            crate::brain::Hit::Dismiss => self.run_command("brain-dismiss"),
+            crate::brain::Hit::Snooze => self.run_command("brain-snooze"),
+            // AND `+N`: every notice, on the brain's page — `LEADER b`.
+            crate::brain::Hit::More => self.run_command("brain-open"),
         }
     }
 
@@ -5332,7 +5904,7 @@ impl Footer {
         // runs, which is what keeps the mouse from reaching a door the
         // keyboard cannot.
         if id == "update" {
-            self.run_command("update-watch");
+            self.run_command(crate::update_window::WATCH);
             return;
         }
         // THE BATTERY AND THE PROFILE OPEN THE POWER VIEW — the same command
@@ -5362,7 +5934,7 @@ impl Footer {
             return;
         }
         // THE RESIZER'S, likewise: the screen whole again, by the command
-        // `LEADER d r` runs.
+        // `LEADER / r` runs.
         if id == "resizer" {
             self.run_command("dev-resizer");
             return;
@@ -5376,17 +5948,19 @@ impl Footer {
         // painter's own answer (`player_mark::zone_at`), so a glyph is taken
         // where it is drawn and the air between them takes nothing.
         //
-        // PLAY/PAUSE: the left button toggles, `p t`; the right one RAISES the
-        // column, never the toggle `p c` is — a column already here stays, one
-        // elsewhere is brought here. NEXT: the left button skips, `p n`; the
-        // right one opens the player here, `p p`.
+        // PLAY/PAUSE: the left button toggles, `p t`; the right one is
+        // `p c` itself — the column opened here, or closed when it is here, or
+        // brought here from wherever it is (the owner, 2026-09-30: it only
+        // RAISED, and a click that can open a thing and not close it is half
+        // a switch). NEXT: the left button skips, `p n`; the right one opens
+        // the player here, `p p`.
         if id == "player" {
             match crate::player_mark::zone_at(cell) {
                 Some(crate::player_mark::Zone::Toggle) if forward => {
                     self.run_command("player-toggle");
                 }
                 Some(crate::player_mark::Zone::Toggle) => {
-                    self.run_with("player-column", Some(crate::player::RAISE));
+                    self.run_command("player-column");
                 }
                 // NEXT, INERT while only the ambient sounds are on: drawn in
                 // the inert tone, it takes no click (`player_mark::inert`).
@@ -5477,6 +6051,27 @@ impl Footer {
             self.run_command("atuin-open");
             return;
         }
+
+        // A BRAIN MODULE'S MARK, `brain:<module>/<mark>`: its own action, by
+        // name through `brain-act`, or its module's page through `brain-open`
+        // (`LEADER b`) — both doors the keyboard has. Either button: a mark
+        // says one thing, and a second meaning would be a menu.
+        if let Some(mark) = crate::brain::drawn_mark(id) {
+            let (command, argument) = crate::brain::click_of(&mark);
+            self.run_with(command, Some(&argument));
+            return;
+        }
+
+        // THE PASSWORDLESS WINDOW'S END: the centre, on its administrator's
+        // section — the command `LEADER s e e` runs, with the section.
+        if id == "security-until" {
+            self.run_with(
+                "security-open",
+                Some(crate::security::Section::Admin.word()),
+            );
+            return;
+        }
+
         // A DEVICE'S MARK OPENS THAT DEVICE, whole — the owner's words: every
         // piece of information and every option for the one that was clicked.
         // It is the command `RET` on its row runs, with the path as the
@@ -5805,6 +6400,22 @@ impl Footer {
                         .t_with(ronoctua_i18n::key::HINT_PROFILE, &[("profile", &name)]),
                 )
             }
+
+            // A BRAIN MODULE'S MARK says what its module wrote for it.
+            id if crate::brain::is_mark(id) => crate::brain::hint_of(id, &self.texts),
+
+            // THE PASSWORDLESS WINDOW: until when, and that a click ends it there.
+            "security-until" => {
+                let until = ronoctua_security::relax::open_until()?;
+                Some(self.texts.t_with(
+                    ronoctua_i18n::key::HINT_SECURITY_UNTIL,
+                    &[(
+                        "time",
+                        &crate::security::clock_here(until, &self.zone, &self.texts),
+                    )],
+                ))
+            }
+
             "state" => {
                 let now = self.state_now()?;
                 Some(self.texts.t_with(
@@ -5833,6 +6444,18 @@ impl Footer {
         self.states.get(&pid).map(String::as_str)
     }
 
+    /// The tone the focused window's state declared — `Standard` where it
+    /// declared none, which is the host's own rule.
+    fn state_tone_now(&self) -> ronoctua_protocol::Tone {
+        let pid = self
+            .windows
+            .focused()
+            .and_then(|w| w.pid)
+            .and_then(|p| u32::try_from(p).ok());
+        pid.and_then(|p| self.state_tones.get(&p).copied())
+            .unwrap_or_default()
+    }
+
     /// A new list from the queue.
     ///
     /// # Why it does not simply repaint
@@ -5849,17 +6472,20 @@ impl Footer {
         // WHAT ENDED, by the same function the window door uses. Two ways of
         // deciding "this job is over" is how the two doors come to disagree
         // about whether to read the directory again.
-        for report in crate::transfers::what_ended(&self.jobs, &jobs) {
+        let heard = self.jobs_heard.then_some(self.jobs.as_slice());
+        for report in crate::transfers::what_ended(heard, &jobs) {
             self.files_reported(report);
         }
         // AND THE PERSON'S PROGRAMS, by the same diff (`transfers::ended`):
         // an order that ended changed the machine, the launcher and maybe a
         // mark, and some ends are a notification.
-        let programs: Vec<ronoctua_transfers::Job> = crate::transfers::ended(&self.jobs, &jobs)
+        let heard = self.jobs_heard.then_some(self.jobs.as_slice());
+        let programs: Vec<ronoctua_transfers::Job> = crate::transfers::ended(heard, &jobs)
             .filter(|j| matches!(j.work, ronoctua_transfers::Work::Software { .. }))
             .cloned()
             .collect();
         self.jobs = jobs;
+        self.jobs_heard = true;
         if let Some(v) = self.transfers.as_mut() {
             v.refresh(self.jobs.clone());
         }
@@ -5869,6 +6495,7 @@ impl Footer {
         let software_shows =
             self.software.is_some() && (working || !self.software_readings.jobs.is_empty());
         self.software_jobs_ended(&programs);
+        self.containers_jobs_arrived();
         let changed = before != crate::transfers::segment(&self.jobs);
         if self.transfers.is_some() {
             self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -5880,33 +6507,52 @@ impl Footer {
 
     /// A fresh mind arrived from the brain.
     ///
-    /// # Why it compares the ANNOUNCEMENT and not the mind
+    /// # Why it compares the FACE and not the mind
     ///
     /// The same reason `ledger_arrived` compares the modeline's sentence rather
     /// than the job list: the daemon republishes on every beat of its own tick
     /// — a new pulse, a moment considered — and almost none of that reaches
-    /// this surface. What the footer draws out of the whole mind is ONE line,
-    /// and that line is the announcement.
+    /// this surface. What the footer draws out of the whole mind is the strip —
+    /// the countdown and the loudest notice — and the marks on the modeline:
+    /// [`crate::brain::Face`], which is exactly those.
+    ///
+    /// It compared the ANNOUNCEMENT alone, and a notice appearing or going on
+    /// its own — a reminder ringing with nothing counting down — changed
+    /// nothing that comparison saw: no height asked for, no frame drawn.
     ///
     /// So the mind is kept whatever happens (the two commands read `running`
     /// out of it), and the screen only moves when the thing on it changed.
     fn mind_arrived(&mut self, mind: ronoctua_brain::Mind) {
-        // THE DISK'S RELIEF IS AN EVENT, and it is said whether or not the
-        // announcement moved — the early return below is about the band's
-        // line, and a relief is not on it. Said at the END, once the mind is
-        // the one this surface draws from.
-        let said = self
-            .events
-            .disk(mind.relieved.as_ref(), self.texts.decimal_mark());
-        let before = self.announced().cloned();
+        // WHAT A MODULE TOLD IS AN EVENT, and it is said whether or not the
+        // face moved — the early return below is about the strip and the
+        // marks, and an event is on neither. Said at the END, once the mind
+        // is the one this surface draws from.
+        let said = self.events.of_brain(&mind, &self.zone, &self.texts);
+        // A KILL FOR LACK OF MEMORY is not an event of the line: it is the
+        // notification the bus's own kill is, and one kill both told is one.
+        let (kills, said): (Vec<_>, Vec<_>) = said.into_iter().partition(|e| self.is_a_kill(e));
+        self.security_heard(&mind);
+        let before = crate::brain::Face::of(self.brain.as_ref());
         let height = self.brain_rows();
         self.brain = Some(mind);
-        if before == self.announced().cloned() {
+        // THE DATE-AND-TIME PAGE'S WATCH follows the mind, when it is open:
+        // it is how a switch made there — or on the module's own page — shows.
+        let watched = self
+            .locale
+            .as_mut()
+            .is_some_and(|v| v.set_watched(crate::locale::watched_in(self.brain.as_ref())));
+        if before == crate::brain::Face::of(self.brain.as_ref()) {
+            if watched {
+                self.draw_and_paint();
+            }
+            self.kills_told(kills);
             self.said_now(said);
             return;
         }
         tracing::info!(
             announced = self.announced().map(|a| a.task.as_str()),
+            notices = self.brain.as_ref().map_or(0, |m| m.notices.len()),
+            marks = self.brain.as_ref().map_or(0, |m| m.marks.len()),
             running = self.brain.as_ref().map(|m| m.running.as_str()),
             // THE ROW COUNT, in the shape `band=` already has on the
             // notification queue's line. It is what a VM waits on: "the line is
@@ -5922,7 +6568,55 @@ impl Footer {
             self.apply_geometry(self.interactivity());
         }
         self.draw_and_paint();
+        self.kills_told(kills);
         self.said_now(said);
+    }
+
+    /// Whether a brain's event is a kill for lack of memory: its catalogue
+    /// entry carries the tag of the bus's own kill notification. By the TAG,
+    /// and never by the module that told it — the footer names no module.
+    fn is_a_kill(&self, e: &crate::events::Event) -> bool {
+        self.book
+            .entry(e.tag)
+            .is_some_and(|entry| entry.tags.iter().any(|t| t == MEMORY_KILLED))
+    }
+
+    /// Kills the brain told: added to the notification oomd's bus signal
+    /// raised for the same kill, or raised — never twice
+    /// (`ronoctua_notify::oom::Kills`).
+    fn kills_told(&mut self, kills: Vec<crate::events::Event>) {
+        if kills.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        for e in kills {
+            let (cgroup, at) = kill_of(&e);
+            let (summary, body) = (e.summary(&self.texts), e.body(&self.texts));
+            match self.kills.from_the_brain(cgroup, at) {
+                ronoctua_notify::oom::Told::Amend(key)
+                    if self.notifications.amend(key, &summary, &body) =>
+                {
+                    tracing::info!(%cgroup, "the brain's kill added to the bus's notification");
+                }
+                ronoctua_notify::oom::Told::Already => {
+                    tracing::info!(%cgroup, "a kill told twice by the brain; said once");
+                }
+                // RAISED, as the bus's own is: its entry decides how loud.
+                _ => {
+                    let mut n = ronoctua_notify::Notification::fresh_one(
+                        0,
+                        self.texts.t(e.app),
+                        None,
+                        summary,
+                        body,
+                        ronoctua_notify::Urgency::Critical,
+                    );
+                    n.tags = vec![e.tag.to_owned()];
+                    self.arrived(n, now);
+                }
+            }
+        }
+        self.after_the_queue_moved();
     }
 
     /// `LEADER s u n` — and `u` in the update's view, in either door: the
@@ -5930,10 +6624,10 @@ impl Footer {
     ///
     /// # It names no step, and it cannot
     ///
-    /// What an update IS lives in `assets/updates.nix` and nowhere else
-    /// (invariant 5): this triggers the same unit the brain triggers, by the
-    /// brain's own constant. The footer holds no list of steps, and
-    /// `update-has-one-list` is the check that keeps it from growing one.
+    /// What an update IS lives in its brain module's declaration and nowhere
+    /// else (invariant 5): this triggers the same unit the brain triggers, by
+    /// the module's own constant. The footer holds no list of steps, and the
+    /// module's one-list check keeps it from growing one.
     ///
     /// # And it says which door it went through
     ///
@@ -5946,6 +6640,27 @@ impl Footer {
         let said = crate::update_window::said_of(crate::update_window::begin());
         let m = self.texts.t(said);
         self.echo_message(m);
+    }
+
+    /// One of the update's three commands, as its window names them.
+    fn update_ordered(&mut self, order: crate::update_window::Order) {
+        use crate::update_window::Order;
+        match order {
+            // `LEADER s u n` — the whole sequence, now, outside any schedule.
+            Order::Start => self.start_the_update(),
+            // `LEADER s u u` — the view that watches it, in the footer's
+            // region.
+            Order::Open => self.open_update(),
+            // `LEADER s u w` — the same view in a window, and the door the
+            // modeline's mark opens. It re-execs this binary with `update`,
+            // exactly as the file manager's second door does: what draws over
+            // there is a window and a GPU, and what it decides is nothing.
+            Order::Watch => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["update".to_owned()], None);
+                }
+            }
+        }
     }
 
     /// The countdown's two answers, from the keyboard or from the line itself.
@@ -6788,7 +7503,10 @@ impl Footer {
                 // sequence that does not exist. They are different messages
                 // because they are different things: one the user asked for, the
                 // other they did not expect.
-                let msg = match attempt {
+                // AND HOW LONG IT STAYS (`crate::echo`): the `Quit` of an
+                // `Esc` confirms what the hand just did and is BRIEF; a
+                // sequence that is not bound is a sentence to read.
+                let (msg, class) = match attempt {
                     // THE CASE IS THE CAUSE, and it goes to the screen. "not bound"
                     // on its own sends the person looking for a shortcut they have
                     // just pressed; saying that the OTHER case exists points at the
@@ -6796,18 +7514,26 @@ impl Footer {
                     // something about.
                     Some(seq) if sym != ronoctua_keymap::Sym::Esc && other_case.is_some() => {
                         let otherwise_one = other_case.map(|t| t.notation()).unwrap_or_default();
-                        self.texts.t_with(
-                            ronoctua_i18n::key::ECHO_NO_ON_BOX,
-                            &[("sequence", seq), ("other", &otherwise_one)],
+                        (
+                            self.texts.t_with(
+                                ronoctua_i18n::key::ECHO_NO_ON_BOX,
+                                &[("sequence", seq), ("other", &otherwise_one)],
+                            ),
+                            crate::echo::Echo::Normal,
                         )
                     }
-                    Some(seq) if sym != ronoctua_keymap::Sym::Esc => self
-                        .texts
-                        .t_with(ronoctua_i18n::key::ECHO_NO_ON, &[("sequence", seq)]),
-                    _ => self.texts.t(ronoctua_i18n::key::ECHO_CANCELLED),
+                    Some(seq) if sym != ronoctua_keymap::Sym::Esc => (
+                        self.texts
+                            .t_with(ronoctua_i18n::key::ECHO_NO_ON, &[("sequence", seq)]),
+                        crate::echo::Echo::Normal,
+                    ),
+                    _ => (
+                        self.texts.t(ronoctua_i18n::key::ECHO_CANCELLED),
+                        crate::echo::Echo::Brief,
+                    ),
                 };
                 self.close_leader();
-                self.echo_message(msg);
+                self.echo_for(msg, class);
             }
             Effect::Run(id, argument) => {
                 tracing::info!(command = id, argument, "command fired by the leader");
@@ -7026,6 +7752,16 @@ impl Footer {
         qh: &QueueHandle<Self>,
         events: &[PointerEvent],
     ) {
+        // THE ICONS APP'S REGION ANSWERS ITS OWN POINTER — its tabs, cells,
+        // rows and bars are laid out by the view (`crate::icons`), and asked
+        // by the layout they were drawn with.
+        if self.icons_took_the_pointer(events) {
+            return;
+        }
+        // AND THE SEARCH'S, by the same rule (`crate::fast_access_rows`).
+        if self.fast_access_took_the_pointer(events) {
+            return;
+        }
         let before = (
             self.here.under_pointer,
             self.here.row_under_pointer,
@@ -7149,6 +7885,7 @@ impl Footer {
                     // the message line, as the panel's buttons are.
                     self.here.player_deck_under =
                         self.player_deck_hover(e.position.0, e.position.1);
+                    self.player_control_under = self.player_control_at(e.position.0, e.position.1);
                     // AND THE PLAYER'S GLOBE: the group under the hand lit,
                     // and held, turned past the slack.
                     self.player_globe_moved(e.position);
@@ -7206,6 +7943,9 @@ impl Footer {
                     self.brain_hint = self
                         .brain_at(e.position.0, e.position.1)
                         .and_then(|p| p.explain.clone());
+                    // AND A HINT TOO LONG FOR THE LINE STAYS while the hand
+                    // goes to the line to read the rest (`Footer::linger`).
+                    self.linger();
                     // AND WHICH OF THE MANAGER'S SECTIONS, which is what
                     // decides the film's two buttons are drawn — see the
                     // window door's twin. Their CELLS are reserved either way,
@@ -7287,6 +8027,8 @@ impl Footer {
                         self.drag_shelf_to(which, e.position.1);
                     } else if let Some(half) = self.here.dragging_record {
                         self.drag_record_to(half, e.position.1);
+                    } else if let Some(bar) = self.here.dragging_git {
+                        self.git_drag_to(bar, e.position.0, e.position.1);
                     } else if let Some(held) = self.here.player_deck {
                         self.player_deck_dragged(held, e.position.0);
                     } else if let Some(n) = self.here.dragging_player {
@@ -7345,6 +8087,7 @@ impl Footer {
                     self.here.segment_under_pointer = None;
                     self.here.mark_zone_under_pointer = None;
                     self.here.player_button_under = None;
+                    self.player_control_under = None;
                     self.here.pointer_at = None;
                     self.here.segment_held = None;
                     self.address_hint = None;
@@ -7357,6 +8100,8 @@ impl Footer {
                     self.hint_said = None;
                     self.hint_lit = None;
                     self.fold_lit = false;
+                    // AND A LINGERING HINT GOES WITH THE HAND that left.
+                    self.lingering_hint = None;
                     self.here.dragging = false;
                     self.here.dragging_shelf = None;
                     self.here.dragging_player = None;
@@ -7588,6 +8333,10 @@ impl Footer {
                         // its own column — see `record_bars`.
                         self.here.dragging_record = Some(half);
                         self.drag_record_to(half, e.position.1);
+                    } else if let Some(bar) = self.git_bar_at(e.position.0, e.position.1) {
+                        // THE GIT BROWSER'S BARS, one per column that is cut.
+                        self.here.dragging_git = Some(bar);
+                        self.git_drag_to(bar, e.position.0, e.position.1);
                     } else if let Some(id) = self.player_button_at(e.position.0, e.position.1) {
                         // A BUTTON OF THE PLAYER'S PANEL, where the last
                         // frame placed it: what it does in every door.
@@ -7606,7 +8355,7 @@ impl Footer {
                         // THE PLAYER'S PICTURE, beside its rows or over the
                         // whole region: a click plays or pauses, a double
                         // click puts it on the whole screen.
-                        self.player_picture_pressed();
+                        self.player_picture_pressed(e.position.0);
                     } else if self.player_deck_pressed(e.position.0, e.position.1) {
                         // A LINE OF A DECK among the player's rows — its
                         // glyph, its band, its track, its meter: what
@@ -7690,6 +8439,7 @@ impl Footer {
                     self.here.dragging_globe = None;
                     self.here.dragging_shelf = None;
                     self.here.dragging_record = None;
+                    self.here.dragging_git = None;
                     self.here.dragging_player = None;
                     self.here.dragging_player_track = false;
                     // A DECK LET GO: a band dragged asks its new start, and one
@@ -8026,6 +8776,17 @@ impl Footer {
             // paged a whole region at a time — already wrong for the facts, and
             // it would have been wrong for the preview the same way.
             let ceiling = self.expansion_ceiling();
+            // THE GIT BROWSER'S COLUMN under the pointer, and only it.
+            if self.view() == ViewState::Git {
+                if self
+                    .git_view
+                    .as_mut()
+                    .is_some_and(|v| v.wheel(cell, i64::from(whole)))
+                {
+                    self.owes_paint = true;
+                }
+                return;
+            }
             // AN OPEN NOTIFICATION'S HALF, under the pointer, and only it.
             if self.view() == ViewState::Notifications {
                 let records = self.notifications.history().to_vec();
@@ -8253,6 +9014,8 @@ impl Footer {
             text: None,
             quads: None,
             images: None,
+            photographing: false,
+            photographed: None,
         });
 
         tracing::info!(
@@ -8706,6 +9469,18 @@ impl Footer {
             // them a leader key.
             "syncthing-add-device" | "syncthing-add-folder" => match argument {
                 Some(said) => self.syncthing_typed(id, said),
+                // A FOLDER IS CHOSEN, not typed: the view, and its picker up
+                // over it (`syncthing::Picking`).
+                None if id == "syncthing-add-folder" => {
+                    self.open_syncthing();
+                    if let Some(v) = self.syncthing.as_mut() {
+                        v.choose(crate::syncthing::Picking::NewFolder);
+                    }
+                    self.settle_the_syncthing_view();
+                    self.region_resized();
+                    self.follow_cursor();
+                    self.draw_and_paint();
+                }
                 None => {
                     // THE LEADER'S OWN QUESTION, and not one the view asked:
                     // a question of the view's still standing would take the
@@ -8852,20 +9627,12 @@ impl Footer {
             "gestures" => self.toggle_gestures(),
             "gestures-calibrate" => self.calibrate_gestures(),
             "dev-resizer" => self.toggle_resizer(),
-            // THE VIEW'S OWN QUESTIONS, answered — a new name, the name and
-            // the folder a file is saved under, a file to open — and, typed
-            // from no question, a name for what plays or saving: the view
-            // opened, and asked there.
-            "player-rename"
-            | "player-save-set"
-            | "player-save-queue"
-            | "player-save-set-folder"
-            | "player-save-queue-folder"
-            | "player-open-saved"
-            | "player-subtitle-file"
-            | "player-lane-start"
-            | "player-lane-until"
-            | "player-lane-title" => match argument {
+            // THE VIEW'S OWN QUESTIONS, answered — a new name, when a lane
+            // begins and ends, its title — and, typed from no question, a
+            // name for what plays or saving: the view opened, and asked
+            // there (a save's name opens the save's picker holding it).
+            "player-rename" | "player-save-set" | "player-save-queue" | "player-lane-start"
+            | "player-lane-until" | "player-lane-title" => match argument {
                 Some(said) => self.player_answered(id, said),
                 None => {
                     if self.player_view.is_none() {
@@ -8890,11 +9657,10 @@ impl Footer {
                 }
             }
             "player-up" | "player-down" | "player-less" | "player-more" | "player-enter"
-            | "player-remove" | "player-add" | "player-parent" | "player-only"
-            | "player-maximize" | "player-play-now" | "player-clear" | "player-quieter"
-            | "player-louder" | "player-pip" | "player-mute" | "player-stop" | "player-swap"
-            | "player-fold" | "player-also" | "player-lane-shown" | "player-earlier"
-            | "player-later"
+            | "player-remove" | "player-add" | "player-only" | "player-maximize"
+            | "player-play-now" | "player-clear" | "player-quieter" | "player-louder"
+            | "player-pip" | "player-mute" | "player-stop" | "player-swap" | "player-fold"
+            | "player-also" | "player-lane-shown" | "player-earlier" | "player-later"
                 if self.player_view.is_some() =>
             {
                 if let Some(press) = crate::player::press_of(id) {
@@ -9209,6 +9975,13 @@ impl Footer {
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
                 self.draw_and_paint();
             }
+            // ITS WINDOW: the second screen of this history, which follows it
+            // over the control socket (`crate::clipboard_window`).
+            "clipboard-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["clipboard".to_owned()], None);
+                }
+            }
             "clipboard-copy-of-new" => {
                 let Some(e) = self.clipboard.at(self.clip_cursor) else {
                     return;
@@ -9237,6 +10010,7 @@ impl Footer {
             }
             "clipboard-remove" => {
                 if self.clipboard.remove(self.clip_cursor) {
+                    self.clipboard_moved();
                     // THE CURSOR MUST NOT STAY PAST THE END. Removing the last one
                     // would leave the list pointing at the void, and the right
                     // column would show nothing without saying why.
@@ -9261,10 +10035,13 @@ impl Footer {
                 }
             }
             "clipboard-pin" => {
-                self.clipboard.toggle_pinned(self.clip_cursor);
+                if self.clipboard.toggle_pinned(self.clip_cursor).is_some() {
+                    self.clipboard_moved();
+                }
             }
             "clipboard-clear" => {
                 self.clipboard.clear();
+                self.clipboard_moved();
                 self.clip_cursor = 0;
                 self.clip_qr = None;
             }
@@ -9388,9 +10165,9 @@ impl Footer {
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
             }
-            // THE LEADER'S OTHER TWO SETS, by name: what a tap of `Alt` or
-            // `Ctrl` does right after the leader, for the pointer that cannot
-            // tap one (the leader's hint line) and for `LEADER :`.
+            // THE LEADER'S SETS, by name: what the leader pressed again with
+            // the list open walks to, for the pointer that cannot press it (the
+            // leader's hint line) and for `LEADER :`.
             "leader-set-window" => self.leader_set_by_name(crate::leader::Set::Window),
             "leader-set-full" => self.leader_set_by_name(crate::leader::Set::Full),
             // THE APP FINDER. It opens with the catalogue ALREADY READY: the sweep
@@ -9524,7 +10301,11 @@ impl Footer {
                     return;
                 }
                 if self.locale.is_none() {
-                    self.locale = Some(crate::locale::View::fresh());
+                    let mut v = crate::locale::View::fresh();
+                    // THE WATCH OUT OF THE MIND THIS FOOTER STREAMS, and not
+                    // asked for: no socket on the loop.
+                    v.set_watched(crate::locale::watched_in(self.brain.as_ref()));
+                    self.locale = Some(v);
                 }
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -9759,7 +10540,7 @@ impl Footer {
             // THE TWO MONITORS, in a FLOATING window — which is the compositor's
             // doing and not ours (invariant 4): what the shell decides is the window's
             // `app_id`, and the rule that floats it is generated from the same
-            // constant (`terminal::floating_rules`).
+            // constant (`floating::FLOATING`).
             //
             // Floating and not tiled because this is the window one opens ON TOP
             // of what is already there, looks at, and closes — tiled, it would
@@ -9790,9 +10571,6 @@ impl Footer {
             // that has a second way in. When this one cannot run, because the
             // compositor is what broke, systemd opens the same program on a VT.
             "rescue-open" => self.open_rescue(),
-            "glyphs-nerd-fonts" => self.open_buffer("RONOCTUA_BUFFER_GLYPHS"),
-            "unicode-symbols" => self.open_buffer("RONOCTUA_BUFFER_UNICODE"),
-            "lucide-icons" => self.open_buffer("RONOCTUA_BUFFER_LUCIDE"),
             // THE KEYBOARDS, and it may be opened ABOUT one: the row on a
             // Bluetooth device's page hands over its `Modalias`, which carries
             // the same two numbers keyd matches on. The host turns it into the
@@ -9805,39 +10583,25 @@ impl Footer {
             }
             "memory-open" => self.open_buffer("RONOCTUA_BUFFER_MEMORY"),
             "example-open" => self.open_buffer("RONOCTUA_BUFFER_EXAMPLE"),
-            "brain-open" => self.open_buffer("RONOCTUA_BUFFER_BRAIN"),
+            // THE BRAIN, and it may be opened ABOUT one of its modules: a
+            // mark's click names it, and the window opens on that module's
+            // page (`buffer.rs`, the disks buffer's arrangement).
+            "brain-open" => self.open_buffer_about("RONOCTUA_BUFFER_BRAIN", argument),
             // THE COUNTDOWN'S TWO ANSWERS. They are the band's two controls and
             // they are reachable with no window open, which is the whole point:
             // the line appears on its own, and what answers it must not require
             // opening a screen first.
             "brain-abort" => self.brain_answer(false),
             "brain-proceed" => self.brain_answer(true),
-            // WHAT THE EMACS WATCH OFFERS. A USER unit, so it goes through no
-            // polkit and asks nobody anything — which is what lets the brain
-            // offer a button at all: nothing this machine does by itself may
-            // put a question in front of somebody who is not there.
-            "brain-start-emacs" => self.start_the_emacs_daemon(),
-            // WHAT THE CLOCK WATCH OFFERS. It goes through the narrow polkit
-            // rule in `nix/modules/base.nix`, which answers `YES` — nothing
-            // this machine does by itself may put a question in front of
-            // somebody who is not there.
-            "brain-clock-automatic" => self.keep_the_clock_right(),
             // THE BARS HIDDEN, or back — `crate::hidden`. By name from
             // `LEADER :`, and from the root's grafted row.
             "footer-hide-push" => self.toggle_the_bars(crate::adapt::Hidden::Push),
             "footer-hide-cover" => self.toggle_the_bars(crate::adapt::Hidden::Cover),
-            // `LEADER s u n` — the whole sequence, now, outside any schedule.
-            "system-update" => self.start_the_update(),
-            // `LEADER s u u` — the view that watches it, in the footer's
-            // region.
-            "update-open" => self.open_update(),
-            // `LEADER s u w` — the same view in a window, and the door the
-            // modeline's mark opens. It re-execs this binary with `update`,
-            // exactly as the file manager's second door does: what draws over
-            // there is a window and a GPU, and what it decides is nothing.
-            "update-watch" => {
-                if let Ok(me) = std::env::current_exe() {
-                    self.open_foreign(&me.to_string_lossy(), &["update".to_owned()], None);
+            // THE UPDATE'S THREE, which its window owns and names — the
+            // footer asks which one an id is, and spells none of them.
+            update if crate::update_window::order_of(update).is_some() => {
+                if let Some(order) = crate::update_window::order_of(update) {
+                    self.update_ordered(order);
                 }
             }
             "transfers-window" => self.open_buffer("RONOCTUA_BUFFER_TRANSFERS"),
@@ -9856,6 +10620,412 @@ impl Footer {
             "transfers-subtitles-as-me" => {
                 self.queue_the_clipboard(Wish::media(Want::Subtitles).as_me());
             }
+
+            // THE STRIP'S THREE ABOUT THE LOUDEST NOTICE — its buttons, its
+            // keys inside the brain and `LEADER :` all land here.
+            "brain-dismiss" => self.brain_notice(crate::brain::Verb::Dismiss),
+            "brain-snooze" => self.brain_notice(crate::brain::Verb::Snooze),
+            // THE NOTICE'S FIRST CONTROL, or — named, `brain-act <module>
+            // <action>` — any action a module offers: a mark's click names one.
+            "brain-act" => {
+                let acting = crate::brain::act_of(self.brain.as_ref(), argument);
+                self.brain_act(acting, None);
+            }
+            // AND AN ACTION BY ITS OWN NAME, `<module>-<action>`: what the
+            // registry lists once the modules' actions are generated into it,
+            // and what the line asked under — its answer arrives here as the
+            // argument.
+            //
+            // THE GENERATED LIST ANSWERS TOO, when the mind does not list it:
+            // before the brain has spoken, or with no brain at all, the
+            // command is still sent — and the line says what came back, the
+            // brain not answering included — rather than "does nothing yet".
+            other
+                if crate::brain::action_named(self.brain.as_ref(), other).is_some()
+                    || crate::leader::a_module_action(other) =>
+            {
+                let acting = crate::brain::action_named(self.brain.as_ref(), other)
+                    .or_else(|| crate::leader::module_action(other))
+                    .ok_or(ronoctua_i18n::key::ECHO_BRAIN_NO_ACTION);
+                self.brain_act(acting, argument);
+            }
+
+            // THE KEYS PACKAGE (2026-09-30).
+            "leader-set-default" => self.leader_set_by_name(crate::leader::Set::Footer),
+            "footer-bars-cycle" => self.cycle_the_bars(),
+            // THE LEADER'S `Esc`, by name: an open leader closes with its
+            // word, and a closed one is left as it is.
+            "leader-close" => {
+                if self.leader.active_one() {
+                    self.close_leader();
+                    let said = self.texts.t(ronoctua_i18n::key::ECHO_CANCELLED);
+                    self.echo_for(said, crate::echo::Echo::Brief);
+                    self.draw_and_paint();
+                }
+            }
+            "footer-settings-open" => self.open_footer_settings(),
+            "footer-settings-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["footer-settings".to_owned()], None);
+                }
+            }
+            "footer-settings-up" | "footer-settings-down" | "footer-settings-enter" => {
+                if let Some(press) = crate::footer_settings::press_of(id) {
+                    self.footer_settings_press(press);
+                }
+            }
+            "footer-hours" => self.flip_the_hours(),
+            "minibuffer-fold-open" => self.fold_by_name(ronoctua_keymap::Sym::Down),
+            "minibuffer-fold-close" => self.fold_by_name(ronoctua_keymap::Sym::Up),
+            "alert-dismiss" => self.dismiss_the_alert(),
+
+            // THE FILE MANAGER'S SECRET QUESTIONS — an archive's password, a
+            // disk's passphrase — answered to the same view the window hands
+            // them to (`files::View::secret_answered`). Asked on the
+            // minibuffer's secret line, so neither the keys nor the answer
+            // reach the log.
+            crate::files_archive::PASSWORD
+            | crate::files_archive::PASSWORD_WRONG
+            | crate::files_archive::PASSWORD_NEW
+            | crate::files_archive::PASSWORD_AGAIN
+            | crate::files_archive::UNLOCK => {
+                let step = self
+                    .files
+                    .as_mut()
+                    .map_or(crate::files::Step::Nothing, |v| {
+                        v.secret_answered(id, argument.unwrap_or_default())
+                    });
+                self.apply_files_step(step);
+            }
+
+            // THE ICONS APP: the region, the window, a screen of each, and the
+            // Lucide colour's answer (its question's id).
+            "icons-open" => self.open_icons(None),
+            "icons-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    let screen = self.icons_app.as_ref().map_or(
+                        ronoctua_iconset::Collection::NerdFonts,
+                        crate::icons::View::screen,
+                    );
+                    self.open_foreign(
+                        &me.to_string_lossy(),
+                        &["icons".to_owned(), screen.id().to_owned()],
+                        None,
+                    );
+                }
+            }
+            _ if crate::icons::SCREEN_COMMANDS.iter().any(|(c, _)| *c == id) => {
+                self.open_icons(crate::icons::screen_named(id));
+            }
+            // THE LUCIDE COLOUR: its answer comes back here with the text;
+            // run by its name (`LEADER :`), it ASKS — and with the app shut
+            // there is nothing to colour, which is said, never silence.
+            crate::icons::COLOUR_COMMAND => {
+                match (self.icons_app.as_mut(), argument) {
+                    (Some(v), Some(text)) => v.colour_answered(text),
+                    (Some(v), None) => {
+                        let now = v.colour();
+                        self.mx
+                            .request_with(crate::icons::COLOUR_COMMAND, false, Some(&now));
+                    }
+                    (None, _) => {
+                        let leader = crate::leader();
+                        let keys = crate::leader::taught_keys(&self.tree, "icons-open", None)
+                            .map_or_else(String::new, |k| format!("{leader} {k}"));
+                        let said = self
+                            .texts
+                            .t_with(ronoctua_i18n::key::ICONS_COLOUR_CLOSED, &[("keys", &keys)]);
+                        self.echo_message(said);
+                    }
+                }
+                self.draw_and_paint();
+            }
+
+            "calc-open" => self.open_calc(),
+            // THE CALCULATOR IN A WINDOW OF ITS OWN (`LEADER = w`), compact and
+            // floating — the same view, in the door that has a place.
+            "calc-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["calc".to_owned()], None);
+                }
+            }
+
+            // THE WEBSITE PAGE — `LEADER p h` — opened, or turned to.
+            "player-website" => self.player_page(id),
+            // ITS QUESTIONS, answered on the minibuffer: the view's to answer.
+            id if crate::player_website::asks(id) => {
+                if let Some(said) = argument {
+                    self.player_answered(id, said);
+                }
+            }
+            // THE VIEW'S NEW KEYS by name: the seeks, the picture folded, the
+            // queue saved again, the countries' order, the lyrics translated.
+            "player-rewind"
+            | "player-forward"
+            | "player-picture-fold"
+            | "player-save-queue-again"
+            | "player-countries-order"
+            | "player-lyrics-translate"
+                if self.player_view.is_some() =>
+            {
+                if let Some(press) = crate::player::press_of(id) {
+                    self.player_press(press);
+                }
+            }
+            // THE SEEKS WITH NO VIEW OPEN are the transport's, told straight
+            // away as the others are.
+            "player-rewind" | "player-forward" => {
+                let errand =
+                    crate::player_transport::button_errand(id, self.player.as_ref(), &self.texts);
+                self.player_errand(errand);
+            }
+
+            // A LISTING OF THE CATALOGUE'S KEYS, and the catalogue's questions
+            // answered on the minibuffer (`crate::player_catalog`).
+            "player-listing-earlier"
+            | "player-listing-later"
+            | "player-listing-first"
+            | "player-listing-last"
+            | "player-listing-full"
+            | "player-listing-layout"
+            | "player-listing-source"
+            | "player-listing-letter"
+            | "player-listing-order"
+                if self.player_view.is_some() =>
+            {
+                if let Some(press) = crate::player::press_of(id) {
+                    self.player_press(press);
+                }
+            }
+            id if crate::player_catalog::asks(id) => {
+                if let Some(said) = argument {
+                    self.player_answered(id, said);
+                }
+            }
+
+            crate::video_metrics::OPEN_COMMAND => self.open_video_metrics(argument),
+            crate::video_metrics::WINDOW_COMMAND => {
+                if let Ok(me) = std::env::current_exe() {
+                    let mut words = vec!["video-metrics".to_owned()];
+                    words.extend(argument.map(ToOwned::to_owned));
+                    self.open_foreign(&me.to_string_lossy(), &words, None);
+                }
+            }
+            crate::video_metrics::SCAN_COMMAND => self.video_metrics_scan(),
+            // A VALUE TYPED on the minibuffer comes back as its question's command,
+            // with the text; a question run by name, or `/` clicked on the hint, asks.
+            id if crate::video_metrics::Ask::of_command(id).is_some()
+                && (argument.is_some() || crate::video_metrics::press_of(id).is_none()) =>
+            {
+                self.video_metrics_typed(id, argument);
+            }
+            id if crate::video_metrics::press_of(id).is_some() => {
+                if let Some(press) = crate::video_metrics::press_of(id) {
+                    self.video_metrics_press(press);
+                }
+            }
+
+            // THE SECURITY CENTRE: its doors, the leader's toggles and checks, the
+            // view's keys and the answers to its questions — all through
+            // `security_errand`, the one path a key in the view takes too.
+            "security-open" => {
+                self.open_security(argument.and_then(crate::security::Section::of_word));
+            }
+            "security-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    let mut args = vec!["security".to_owned()];
+                    args.extend(argument.map(ToOwned::to_owned));
+                    self.open_foreign(&me.to_string_lossy(), &args, None);
+                }
+            }
+            "security-relax" => {
+                let errand = crate::security::relax_errand(&self.security_scene);
+                self.security_errand(errand);
+            }
+            "security-shields" => {
+                let errand = crate::security::shields_errand(&self.security_scene);
+                self.security_errand(errand);
+            }
+            "security-firewall" => {
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = crate::security::firewall_errand(&self.security_scene, &texts);
+                self.security_errand(errand);
+            }
+            // THE WATCH'S EVENT: "a network came up, treated as public — treat
+            // it as home?", from the minibuffer's line or by name.
+            crate::security::HOME => {
+                let texts = std::rc::Rc::clone(&self.texts);
+                let errand = crate::security::home_errand(&self.security_scene, &texts);
+                self.security_errand(errand);
+            }
+            "security-vt-forget" => self.security_errand(crate::security::Errand::ForgetKey),
+            // THE FILE MANAGER'S CHANGE ONLY ROOT MAY MAKE, with the password
+            // the sudo door asked for — the manager's `Doing::RootProved`.
+            crate::files::ROOT_PASSWORD => {
+                if let (Some(text), Some(change)) = (argument, self.files_root_waiting.take()) {
+                    self.do_about_files(crate::files::Doing::RootProved(
+                        change,
+                        ronoctua_lookup::keys::Secret::new(text),
+                    ));
+                }
+            }
+            crate::security::CHECK_PASSWORD
+            | crate::security::CHECK_EMAIL
+            | crate::security::CHECK_FILE
+            | crate::security::PASSWORD
+            | crate::security::RULE
+            | crate::security::VT_KEY => self.security_answer(id, argument),
+            other
+                if other.starts_with("security-") && crate::security::press_of(other).is_some() =>
+            {
+                if let Some(press) = crate::security::press_of(other) {
+                    self.security_press(press);
+                }
+            }
+
+            // THE PERSON'S CONTAINERS, `LEADER s o`: the region's door, the
+            // window's, the view's keys by name — and a typed question's
+            // answer, which arrives here under the id that asked.
+            "containers-open" => self.open_containers(),
+            "containers-window" => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["containers".to_owned()], None);
+                }
+            }
+            // THE LOGIN'S PASSWORD, to podman's stdin off the loop, with the
+            // login it was asked for; with none waiting, said.
+            crate::containers::LOGIN_PASSWORD => {
+                let said = match (self.containers_login.take(), argument) {
+                    (Some(login), Some(text)) if !text.is_empty() => {
+                        let said = self.texts.t_with(
+                            ronoctua_i18n::key::CONTAINERS_ECHO_LOGGING_IN,
+                            &[("registry", &login.registry), ("user", &login.user)],
+                        );
+                        match self.containers_feed.as_ref() {
+                            Some(feed) => {
+                                feed.login(login, ronoctua_consent::keys::Secret::new(text));
+                                Some(said)
+                            }
+                            None => Some(
+                                self.texts
+                                    .t(ronoctua_i18n::key::CONTAINERS_REFUSED_NO_LOGIN),
+                            ),
+                        }
+                    }
+                    (Some(_), _) => None,
+                    (None, _) => Some(
+                        self.texts
+                            .t(ronoctua_i18n::key::CONTAINERS_REFUSED_NO_LOGIN),
+                    ),
+                };
+                if let Some(said) = said {
+                    self.echo_message(said);
+                }
+            }
+            crate::containers::PULL | crate::containers::BUILD | crate::containers::LOGIN
+                if argument.is_some_and(|a| !a.trim().is_empty()) =>
+            {
+                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                let errand = crate::containers::answered(
+                    id,
+                    argument.unwrap_or_default(),
+                    home.as_deref(),
+                    &self.texts,
+                );
+                self.containers_errand(errand);
+            }
+            other if crate::containers::press_of(other).is_some() => {
+                if let Some(press) = crate::containers::press_of(other) {
+                    self.containers_press(press);
+                }
+            }
+
+            // THE BELONGINGS (`LEADER s v`): the view, its window, and every
+            // command of the view — a key, a row, a question's answer.
+            crate::belongings::OPEN_COMMAND => {
+                self.open_belongings();
+            }
+            crate::belongings::WINDOW_COMMAND => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &["belongings".to_owned()], None);
+                }
+            }
+            // THE ONE THE LEADER BINDS (`LEADER s v s`), by its name: the rest of
+            // the view's commands come from its rows and its keys.
+            crate::belongings::SYNC_COMMAND => {
+                self.belongings_command(crate::belongings::SYNC_COMMAND, argument);
+            }
+            other if crate::belongings::is_command(other) => {
+                self.belongings_command(other, argument);
+            }
+
+            // THE SEARCH OVER EVERYTHING (`LEADER d`): its four doors, what a
+            // window of it hands the footer to open, and the answers to the
+            // questions its detail asks on the minibuffer.
+            "fast-access-open" => self.fast_access_command(id, argument),
+            "fast-access-window" => self.fast_access_command(id, argument),
+            "fast-access-float" => self.fast_access_command(id, argument),
+            "fast-access-column" => self.fast_access_command(id, argument),
+            "fast-access-launch" => self.fast_access_command(id, argument),
+            "fast-access-open-path" => self.fast_access_command(id, argument),
+            "fast-access-reveal" => self.fast_access_command(id, argument),
+            "fast-access-man" => self.fast_access_command(id, argument),
+            crate::fast_access_detail::ASK_NAME
+            | crate::fast_access_detail::ASK_MODIFIED
+            | crate::fast_access_detail::ASK_TAG
+            | crate::fast_access_detail::ASK_META
+            | crate::fast_access_detail::ASK_COLOUR
+            | crate::fast_access::ASK_SEARXNG
+            | crate::fast_access::ASK_BRAVE => self.fast_access_answered(id, argument),
+
+            // THE RANKING — `LEADER p k` — opened, or turned to; and its keys
+            // by name while the view is open (`crate::player_ranking`).
+            "player-ranking" => self.player_page(id),
+            other
+                if crate::player_ranking::RankingKey::of_command(other).is_some()
+                    && self.player_view.is_some() =>
+            {
+                if let Some(press) = crate::player::press_of(other) {
+                    self.player_press(press);
+                }
+            }
+
+            "display-rise" => self.display_press(crate::display::Press::Rise),
+            "display-sink" => self.display_press(crate::display::Press::Sink),
+
+            // A VPN'S USER, THEN ITS PASSWORD — the two lines an imported
+            // `.ovpn` that asks for one opens (`network::View::after_bring`).
+            // What the text does is the view's (`network::View::answered`),
+            // the window's line reaching the same call. With no argument
+            // nothing was typed, and nothing is stored.
+            "network-vpn-user" | "network-vpn-password" => {
+                if let Some(said) = argument {
+                    self.network_answered(id, said);
+                }
+            }
+            // A PLACE'S CURRENCIES: the place the open question is about —
+            // asked by its row or by its rate's switch — else the one under
+            // the cursor, as `locale-where` takes it.
+            "locale-currency" => {
+                let asking = match self.locale_asking.take() {
+                    Some(
+                        a @ (crate::locale::Asking::Currency(_) | crate::locale::Asking::Rate(_)),
+                    ) => Some(a),
+                    _ => self
+                        .locale
+                        .as_ref()
+                        .and_then(crate::locale::View::place_here)
+                        .map(crate::locale::Asking::Currency),
+                };
+                match asking {
+                    Some(asking) => self.locale_was_told(argument, asking),
+                    None => {
+                        self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_NO_PLACE_HERE));
+                        self.draw_and_paint();
+                    }
+                }
+            }
+
             // WINDOW AND WORKSPACE ARE THE COMPOSITOR'S (invariant 4). The
             // shell does not reimplement them: it asks over the IPC, which is
             // the only border it has with the compositor (invariant 3).
@@ -10080,12 +11250,19 @@ impl Footer {
                 }
                 self.draw_and_paint();
             }
+            // THE BRAIN'S ANSWER, said here — as the window's door does.
+            //
+            // OFF THE LOOP, as every other change this footer asks of the
+            // brain: the answer comes back to `brain_answered` — nothing when
+            // it took it, its refusal in its own sentence, "not answering"
+            // when it is not there — and the row follows the mind as it
+            // streams in (`mind_arrived`).
             crate::locale::Errand::Watch(on) => {
-                if !crate::locale::watch_the_clock(on) {
+                let started = self.brain_answers.clone().is_some_and(|back| {
+                    crate::brain::put(crate::locale::the_clocks_switch(on), None, back)
+                });
+                if !started {
                     self.echo_message(self.texts.t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN));
-                }
-                if let Some(v) = self.locale.as_mut() {
-                    v.reread();
                 }
                 self.draw_and_paint();
             }
@@ -10125,6 +11302,14 @@ impl Footer {
         }
         if let Some(v) = self.locale.as_mut() {
             v.reread();
+        }
+        // AND THE GIT BROWSER, which keeps its words (`git_browser::View`).
+        if let Some(v) = self.git_view.as_mut() {
+            v.speak(self.texts.clone());
+        }
+        // AND THE FILE MANAGER, whose facts panel kept the sheet it read.
+        if let Some(v) = self.files.as_mut() {
+            v.speak(self.texts.clone());
         }
         // AND THE SOFTWARE VIEW'S SEARCHES AND SHEETS ask in the new one:
         // Flathub answers in the language it is asked in.
@@ -10239,6 +11424,10 @@ impl Footer {
             // without the keyboard would be worse — a listing on screen that
             // answers nothing, with an armed `delete` nobody can see is armed.
             self.files = None;
+            // AND THE GIT BROWSER, with the manager it was opened from.
+            self.git_view = None;
+            self.git_behind = None;
+            self.git_watch = None;
             self.rest_the_watch();
             self.first_page();
             self.close_leader();
@@ -10313,12 +11502,15 @@ impl Footer {
     /// and this reads them all: one hand leaving must not restart the clock
     /// under another hand that is still reading.
     fn hold_the_band_if_anyone_reads_it(&mut self) -> bool {
-        let now = std::time::Instant::now();
-        if self.pointers.lit(&self.here).any(|(_, p)| p.on_band) {
-            self.notifications.hold(now)
-        } else {
-            self.notifications.release(now)
-        }
+        // AN ALERT HOLDS IT TOO: the notification under it is not on the
+        // screen, and its clock would run out unseen (`crate::alert`).
+        let read = self.pointers.lit(&self.here).any(|(_, p)| p.on_band);
+        crate::alert::hold_the_band(
+            &mut self.notifications,
+            self.alerts.showing().is_some(),
+            read,
+            std::time::Instant::now(),
+        )
     }
 
     /// Takes the glance away when its time is up. `true` if it went.
@@ -10367,7 +11559,7 @@ impl Footer {
         let Some(sender) = self.capture_sender.clone() else {
             return;
         };
-        let child = std::process::Command::new(me)
+        let child = crate::watchdog::unshared(&mut std::process::Command::new(me))
             .arg("capture")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -10389,28 +11581,31 @@ impl Footer {
                 let _ = out.read_to_string(&mut said);
             }
             let _ = child.wait();
-            let answer = said.lines().find_map(|l| {
-                l.strip_prefix("saved ")
-                    .map(|p| Ok(std::path::PathBuf::from(p)))
-                    .or_else(|| l.strip_prefix("failed ").map(|w| Err(w.to_owned())))
-            });
             // NOTHING SAID IS A CAPTURE GIVEN UP, which still ends it.
-            let _ = sender.send(answer.unwrap_or_else(|| Err(String::new())));
+            let _ = sender.send(crate::capture::outcome_of(&said));
         });
     }
 
     /// The capture overlay is gone: a file to announce, a reason to log, or
     /// a capture somebody gave up.
-    fn captured(&mut self, answer: Result<std::path::PathBuf, String>) {
+    fn captured(&mut self, answer: crate::capture::Outcome) {
+        use crate::capture::Outcome;
         self.capturing = false;
         match answer {
-            Ok(at) => {
+            Outcome::Saved(at) => {
                 tracing::info!(at = %at.display(), "the screen was captured");
                 let n = self.capture_notification(&at);
                 self.arrived(n, std::time::Instant::now());
             }
-            Err(why) if why.is_empty() => {}
-            Err(why) => {
+            Outcome::GivenUp => {}
+            Outcome::OutsideTheRoom => {
+                self.echo_message(
+                    self.texts
+                        .t(ronoctua_i18n::key::ECHO_CAPTURE_OUTSIDE_THE_ROOM),
+                );
+                self.draw_and_paint();
+            }
+            Outcome::Failed(why) => {
                 tracing::warn!(why = %why, "the capture failed");
                 self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_CAPTURE_FAILED));
                 self.draw_and_paint();
@@ -10540,7 +11735,7 @@ impl Footer {
         // about: `crate::apps::pixmap_key` says why at length. Built here from
         // the LIVE side, so a change of text size asks a question the cache has
         // not been asked before, instead of finding yesterday's answer.
-        let key = crate::apps::pixmap_key(icon, crate::apps::pixmap_side().ceil() as u32);
+        let key = crate::apps::pixmap_key(icon, self.icon_side_px());
         match self.icons.get(&key) {
             Some(Some(_)) => Some(key),
             _ => None,
@@ -10566,7 +11761,7 @@ impl Footer {
         let Some(l) = self.apps.as_ref() else {
             return;
         };
-        let side = crate::apps::pixmap_side().ceil() as u32;
+        let side = self.icon_side_px();
         // ASKED FOR BY THE SAME KEY IT WILL BE FILED UNDER, side included:
         // asking by the bare name would find the picture of another size
         // already there and never request this one.
@@ -10706,6 +11901,9 @@ impl Footer {
         use crate::apps::Action;
         match action {
             Action::Nothing => {}
+            // THE LIVE SELECTION, read off the loop and typed into the query
+            // when it comes back (`PasteFor::Applications`).
+            Action::WantsPaste => self.read_the_clipboard(PasteFor::Applications),
             // REDRAW HERE, and not just re-commit the size: with the list at the
             // ceiling, filtering from 400 down to 40 changes no height at all, and
             // the compositor only sends a `configure` when the height CHANGES.
@@ -10903,10 +12101,14 @@ impl Footer {
         self.open_network_with(view);
     }
 
-    fn open_network_with(&mut self, view: crate::network::View) {
+    fn open_network_with(&mut self, mut view: crate::network::View) {
         // THE SAME GUARD THE OTHER FIVE HAVE — see `region_is_free`.
         if !self.region_is_free("network-open") {
             return;
+        }
+        // THE FILE PICKER'S FOLDER, watched through the footer's wake.
+        if let Some(wake) = self.picker_wake.clone() {
+            view.watch_with(wake);
         }
         self.watch_scans();
         self.network_wired();
@@ -10914,6 +12116,10 @@ impl Footer {
             w.reread();
         }
         self.network_reread();
+        // A HOTSPOT ALREADY UP shows its password from the first frame,
+        // whichever door started it — as the window's does at creation.
+        let serving = crate::network::sharing::follow(&mut self.hotspot_serving, &self.net);
+        view.show_sharing(serving);
         // THE FIRST SAMPLE IS TAKEN AT OPENING, not on the first tick: the
         // clock runs once a second, so without this the first frame drew "no
         // ports", an empty neighbour list and an empty monitor for a whole
@@ -11082,14 +12288,7 @@ impl Footer {
                 match (address, self.lan_sender.clone()) {
                     (Some(address), Some(echo)) => {
                         self.network_watch.sweeping(true);
-                        if let Err(e) = std::thread::Builder::new()
-                            .name("lan-sweep".to_owned())
-                            .spawn(move || {
-                                let found = ronoctua_lan::sweep(&address).unwrap_or_default();
-                                let _ = echo.send(found);
-                            })
-                        {
-                            tracing::warn!(error = %e, "no thread for the sweep");
+                        if !crate::network::spawn(crate::network::Lan::Sweep(address), echo) {
                             self.network_watch.sweeping(false);
                         }
                         None
@@ -11116,18 +12315,72 @@ impl Footer {
                 self.texts
                     .t_with(key::ECHO_NETWORK_NOT_A_TUNNEL, &[("file", &name)]),
             ),
+            crate::network::Errand::Said(said) => Some(said),
+            crate::network::Errand::Paste => {
+                self.network_wire = Some(wire);
+                self.read_the_clipboard(PasteFor::Picker);
+                return;
+            }
             crate::network::Errand::Bring(path, kind) => {
                 let name = ronoctua_network::vpn::name_of(&path);
-                Some(match wire.import(&path, kind) {
+                let imported = wire.import(&path, kind);
+                let said = match &imported {
                     Ok(()) => self
                         .texts
                         .t_with(key::ECHO_NETWORK_IMPORTED, &[("network", &name)]),
                     Err(e) => self.texts.t_with(
                         key::ECHO_NETWORK_IMPORT_FAILED,
-                        &[("file", &name), ("reason", &e.to_string())],
+                        &[
+                            ("file", &name),
+                            ("reason", &crate::network_words::reason(e, &self.texts)),
+                        ],
                     ),
-                })
+                };
+                // A VPN THAT ASKS FOR A PASSWORD asks for it NOW, on the
+                // minibuffer — the view decides (`after_bring`).
+                let next = self
+                    .network
+                    .as_mut()
+                    .map_or(crate::network::Errand::Nothing, |v| {
+                        v.after_bring(imported.is_ok())
+                    });
+                if let crate::network::Errand::Ask(question) = next {
+                    self.network_wire = Some(wire);
+                    self.network_reread();
+                    self.echo_message(said);
+                    self.mx.request(question.id, question.secret);
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
+                    self.draw_and_paint();
+                    return;
+                }
+                Some(said)
             }
+            // THE VPN'S USER AND PASSWORD, stored in its profile: the
+            // password goes to NetworkManager in this one call and leaves
+            // the footer with the errand.
+            crate::network::Errand::VpnSecret {
+                tunnel,
+                user,
+                password,
+            } => Some(match wire.store_vpn_secret(&tunnel, &user, &password) {
+                Ok(()) => self
+                    .texts
+                    .t_with(key::ECHO_NETWORK_VPN_STORED, &[("network", &tunnel)]),
+                Err(e) => self.texts.t_with(
+                    key::ECHO_NETWORK_VPN_STORE_FAILED,
+                    &[("reason", &crate::network_words::reason(&e, &self.texts))],
+                ),
+            }),
+            // THE GATEWAY'S ROUND TRIP, on a thread: three echoes a fifth of
+            // a second apart are the better part of a second.
+            crate::network::Errand::Measure(gateway) => match self.lan_sender.clone() {
+                Some(back) => {
+                    self.network_watch.measuring(gateway);
+                    crate::network::spawn(crate::network::Lan::Measure(gateway), back);
+                    None
+                }
+                None => Some(self.texts.t(key::ECHO_NETWORK_UNAVAILABLE)),
+            },
             // BECOMING THE NETWORK, and stopping. The password is made here,
             // shown on the row and never stored by the footer: what keeps it
             // is the profile NetworkManager wrote.
@@ -11137,6 +12390,16 @@ impl Footer {
                     .and_then(|word| wire.hotspot(&name, &word).map(|()| word))
                 {
                     Ok(word) => {
+                        // THE PASSWORD WHERE BOTH DOORS READ IT
+                        // (`network::sharing`), born owner-only.
+                        if let Err(e) =
+                            crate::network::sharing::keep(&crate::network::sharing::Kept {
+                                network: name.clone(),
+                                password: word.clone(),
+                            })
+                        {
+                            tracing::warn!(error = %e, "the hotspot's password was not kept for the other door");
+                        }
                         if let Some(v) = self.network.as_mut() {
                             v.sharing(Some(word.clone()));
                         }
@@ -11147,11 +12410,12 @@ impl Footer {
                     }
                     Err(e) => Some(self.texts.t_with(
                         key::ECHO_NETWORK_HOTSPOT_FAILED,
-                        &[("reason", &e.to_string())],
+                        &[("reason", &crate::network_words::reason(&e, &self.texts))],
                     )),
                 }
             }
             crate::network::Errand::Hotspot(false) => {
+                crate::network::sharing::forget();
                 if let Some(v) = self.network.as_mut() {
                     v.sharing(None);
                 }
@@ -11179,24 +12443,22 @@ impl Footer {
                     tracing::info!(airplane = on, "aeroplane mode");
                     None
                 }
-                Err(e) => Some(
-                    self.texts
-                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
-                ),
+                Err(e) => Some(crate::network_words::refused(&e, &self.texts)),
             },
-            crate::network::Errand::Disconnect(medium) => {
-                Some(self.texts.t(if wire.disconnect(medium).is_ok() {
+            crate::network::Errand::Disconnect(medium, interface) => Some(self.texts.t(
+                if wire.disconnect_link(medium, &interface).is_ok() {
                     key::ECHO_NETWORK_DISCONNECTED
                 } else {
                     key::ECHO_NETWORK_UNAVAILABLE
-                }))
-            }
+                },
+            )),
             // THE LINK'S FACTS, on the message line: band, rate and signal.
             // It is the answer to "why is this slow?" without leaving the
             // screen — and it was by measuring exactly that that this project
             // found a 16x difference between two bands of the same router.
             crate::network::Errand::Facts => Some(match crate::network::carrying(&self.net) {
-                Some(e) if e.medium == ronoctua_network::Medium::Wired => self.texts.t_with(
+                // A CABLE AND A PHONE have no band and no signal to say.
+                Some(e) if e.medium != ronoctua_network::Medium::Radio => self.texts.t_with(
                     key::ECHO_NETWORK_LINK_WIRED,
                     &[
                         ("network", &e.interface),
@@ -11251,7 +12513,10 @@ impl Footer {
                     }
                     Err(e) => self.texts.t_with(
                         key::ECHO_NETWORK_FAILED,
-                        &[("network", &target.ssid), ("reason", &e.to_string())],
+                        &[
+                            ("network", &target.ssid),
+                            ("reason", &crate::network_words::reason(&e, &self.texts)),
+                        ],
                     ),
                 })
             }
@@ -11270,7 +12535,7 @@ impl Footer {
                                     .t_with(key::ECHO_NETWORK_STORED, &[("network", &ssid)]),
                                 Err(e) => self.texts.t_with(
                                     key::ECHO_NETWORK_STORE_FAILED,
-                                    &[("reason", &e.to_string())],
+                                    &[("reason", &crate::network_words::reason(&e, &self.texts))],
                                 ),
                             }
                         }
@@ -11286,9 +12551,7 @@ impl Footer {
                     Ok(()) => self
                         .texts
                         .t_with(key::ECHO_NETWORK_TUNNEL_DOWN, &[("network", &name)]),
-                    Err(e) => self
-                        .texts
-                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                    Err(e) => crate::network_words::refused(&e, &self.texts),
                 })
             }
             crate::network::Errand::Raise(at) => {
@@ -11297,9 +12560,7 @@ impl Footer {
                     Ok(()) => self
                         .texts
                         .t_with(key::ECHO_NETWORK_TUNNEL_UP, &[("network", &name)]),
-                    Err(e) => self
-                        .texts
-                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                    Err(e) => crate::network_words::refused(&e, &self.texts),
                 })
             }
             // THE TUNNEL ORDERS GO TO THEIR OWN THREAD, which is where the
@@ -11355,9 +12616,7 @@ impl Footer {
                     Ok(()) => self
                         .texts
                         .t_with(Self::removed_saying(&self.net, &at), &[("network", &name)]),
-                    Err(e) => self
-                        .texts
-                        .t_with(key::ECHO_NETWORK_REFUSED, &[("error", &e.to_string())]),
+                    Err(e) => crate::network_words::refused(&e, &self.texts),
                 })
             }
         };
@@ -11486,8 +12745,9 @@ impl Footer {
         // state the buffer is already in is a key that teaches there is a choice
         // and then makes none — the same reason a window that publishes no
         // keymap has no `SPC m` row at all.
-        if let Ok(Some((now, listed))) = crate::leader::buffer_states(pid) {
+        if let Ok(Some((now, tone, listed))) = crate::leader::buffer_states(pid) {
             self.states.insert(pid, now);
+            self.state_tones.insert(pid, tone);
             self.buffer_pid = Some(pid);
             if listed.len() > 1 {
                 self.state_menu = listed;
@@ -11709,7 +12969,9 @@ impl Footer {
     fn notification_of(&mut self, e: ronoctua_notify::Event) {
         let now = std::time::Instant::now();
         match e {
-            ronoctua_notify::Event::New(n) => self.arrived(*n, now),
+            ronoctua_notify::Event::New(n) => {
+                self.arrived(*n, now);
+            }
             ronoctua_notify::Event::Close(id) => {
                 if self.notifications.dismiss(id, now) {
                     ronoctua_notify::dbus::notification_was_closed(
@@ -11724,16 +12986,30 @@ impl Footer {
             // loud and long is the catalogue's `memory-killed` row, and not a
             // branch here — so the day the owner wants it quieter, the change
             // is one line of a table.
+            //
+            // ONCE: the brain's watch on the journal tells the same kill a few
+            // seconds later, knowing more, and adds it to this notification
+            // (`kills_told`). When the brain was first, this one is not raised.
             ronoctua_notify::Event::OomKilled { cgroup, reason } => {
-                let n = self.oom_notification(&cgroup, &reason);
-                self.arrived(n, now);
+                let at = std::time::SystemTime::now();
+                if self.kills.from_the_bus(&cgroup, at) {
+                    let n = self.oom_notification(&cgroup, &reason);
+                    let key = self.arrived(n, now);
+                    self.kills.raised(&cgroup, at, key);
+                } else {
+                    tracing::info!(%cgroup, "oomd's kill was told by the brain already; not raised twice");
+                }
             }
         }
         self.after_the_queue_moved();
     }
 
     /// One notification, from arrival to the band.
-    fn arrived(&mut self, mut n: ronoctua_notify::Notification, now: std::time::Instant) {
+    fn arrived(
+        &mut self,
+        mut n: ronoctua_notify::Notification,
+        now: std::time::Instant,
+    ) -> ronoctua_notify::RecordKey {
         // AN ID OF ITS OWN, for the ones WE raise. The bus's daemon counts up
         // from 1; a local one that kept the zero it was built with would be
         // the same notification as every other local one, and `dismiss(id)`,
@@ -11775,11 +13051,18 @@ impl Footer {
             level = p.level,
             "notification decided"
         );
+        let key = n.key();
         self.notifications.enqueue(n, p, now);
+        key
     }
 
     /// The queue moved: log it, save the history, resize and paint.
     fn after_the_queue_moved(&mut self) {
+        // AND THE CLOCK ASKED AGAIN: a notification that just took an empty
+        // band under the alert, or under a resting pointer, is held from its
+        // first instant — `Queue::hold` holds nothing while the band is empty
+        // (`alert::hold_the_band`).
+        self.hold_the_band_if_anyone_reads_it();
         // The queue's state on ONE greppable line. The modeline's segment also
         // shows it, but it starts with a PUA glyph — a grep for `text= 2` does
         // not match, because between the `=` and the space there is a glyph.
@@ -11861,20 +13144,28 @@ impl Footer {
         // drew at the old height. One more round settles it; the guard is the
         // number itself, so a line that did not change costs a comparison and
         // there is no loop to run away.
-        // `fold::settle` answers ONCE, when the band opens, and never again:
-        // a height that kept following the line is a height the pointer moves,
-        // which is the loop `Fold::held` is written about.
+        // `fold::settle` measures the band when it opens and after that only
+        // GROWS it, to the ceiling: a height that followed the line both ways
+        // is a height the pointer moves, which is the loop `Fold::held` is
+        // written about, and one that only grows cannot turn round.
         if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
             self.apply_geometry(self.interactivity());
             self.draw();
             self.paint();
         }
+        // AND THE POINTER THE DRAWER MOVED, taken where it now is.
+        self.pointer_follows_the_drawer();
         // AND ONCE MORE IF THE MODELINE MOVED UNDER A POINTER THAT STAYED: a
         // mark that came or went beside the player's pair moved it under a
         // resting hand, and what was lit and said was the other glyph's, or
         // said over air. The frame just painted placed the segments, so a
         // second round reads the same table — one round, never a loop.
         if self.modeline_moved_under_the_pointer() {
+            self.draw();
+            self.paint();
+        }
+        // AND THE SAME FOR A CONTROL OF THE PLAYER'S ROWS, by the same rule.
+        if self.player_control_moved_under_the_pointer() {
             self.draw();
             self.paint();
         }
@@ -11897,6 +13188,12 @@ impl Footer {
         // there is a name to walk is written down by the layout, and the
         // layout is this frame. See `arm_the_walk`.
         self.arm_the_walk();
+        // AND THE FREE MINIBUFFER'S HOURS, for the same reason: whether they
+        // were drawn is this frame's (`keep_the_clock`).
+        self.keep_the_clock();
+        // AND THE DRAWER'S KEYS AT THE COMPOSITOR, while a hint too long for
+        // the line is on it (`keep_the_fold_keys`).
+        self.keep_the_fold_keys();
     }
 
     /// Hangs the clock that walks a name too long for its column.
@@ -12017,11 +13314,9 @@ impl Footer {
         // ON THE PAGE THE FRAME WILL LOOK THEM UP UNDER, and not the one the
         // last screen of the last frame left on (`wear_the_pictures_page`).
         self.wear_the_pictures_page();
-        if let Some(queue) = self.files_looking.as_ref()
-            && let Some(view) = self.files.as_mut()
-            && let Some(ask) = view.wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
-        {
-            let _ = queue.send(ask);
+        if let Some(view) = self.files.as_mut() {
+            self.files_threads
+                .look(|| view.wants_look(u32::from(tokens::space::FILES_PANELPIXELS)));
         }
         self.thumbs_again();
         self.follow_the_motion();
@@ -12043,6 +13338,17 @@ impl Footer {
         if let Some(view) = self.files.as_mut() {
             view.hover_thumb(columns, room, at);
         }
+    }
+
+    /// The side an icon of the launcher (and a program's picture) is decoded
+    /// at, in PHYSICAL pixels: the logical side times the footer's scale, so
+    /// it is as sharp as the letter beside it. It is half of the cache key
+    /// (`apps::pixmap_key`), so a change of scale or of text size asks a
+    /// question the cache has not been asked. The drawing stays in the
+    /// logical box (`apps::pixmap_side`).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn icon_side_px(&self) -> u32 {
+        (crate::apps::pixmap_side() * self.scale_now()).ceil() as u32
     }
 
     /// THE SHARPEST SCREEN'S SCALE, of however many this footer is drawn on.
@@ -12114,18 +13420,13 @@ impl Footer {
     /// reason: the cursor can move a dozen ways, and enumerating them is how a
     /// case gets missed.
     fn follow_the_motion(&mut self) {
-        let Some(player) = self.files_playing.as_mut() else {
-            return;
-        };
         let Some(view) = self.files.as_mut() else {
             return;
         };
         // ONE QUESTION, ONE ANSWER, PASSED STRAIGHT ON. The view decides what
         // should be running by comparing values; this door does not know what
         // changed and does not need to.
-        if let Some(ask) = view.wants_motion() {
-            player.tell(ask);
-        }
+        self.files_threads.play(|| view.wants_motion());
     }
 
     /// One key, however it arrived — pressed, or repeated by the clock.
@@ -12172,8 +13473,8 @@ impl Footer {
     fn took_a_key(&mut self, event: KeyEvent) {
         // EVERY KEY THAT GOES DOWN IS TOLD TO THE TAP, before anything can
         // swallow it: a modifier alone arms it and any other key disarms it,
-        // which is what tells a TAP of `Alt` or `Ctrl` — the leader's set —
-        // from the same modifier held in a chord. `Control_R` held for the
+        // which is what tells a TAP of `Ctrl` — the bars' cycle — from the
+        // same modifier held in a chord. `Control_R` held for the
         // paging arrows below stays a chord for exactly that reason. See
         // `crate::leader::Tap`; the release half is `key_released`.
         self.tap.pressed(event.keysym);
@@ -12202,6 +13503,15 @@ impl Footer {
         let Some(key) = self.translate(&event) else {
             return;
         };
+        self.key_arrived(key);
+    }
+
+    /// A key, translated: from here on it is the same key whether a keyboard
+    /// pressed it or the footer's camera walked it (`crate::footer_photograph`)
+    /// — the camera enters here so that what it photographs is the path a
+    /// person's key takes, and not a second one.
+    fn key_arrived(&mut self, key: ronoctua_keymap::Key) {
+        self.pickers_see_the_page();
 
         // A SWEEP OF THE REGION'S TEXT answers two keys before anything
         // else: `Ctrl+C` copies it and `Esc` lets it go. Only while there is
@@ -12352,6 +13662,12 @@ impl Footer {
             // nothing and does NOT close the view: closing on a wrong key
             // would lose the place in the list. The question "keep it?" is a
             // screen of the view, so its keys arrive here like every other.
+            // THE FILE PICKER, while it is up over the view, takes what it
+            // reads — every letter, and its own keys.
+            if self.network.as_ref().is_some_and(|v| v.picker_takes(key)) {
+                self.network_press(crate::network::Press::Pick(key));
+                return;
+            }
             if let Some(press) = crate::network_words::press_of_key(key) {
                 self.network_press(press);
             }
@@ -12566,6 +13882,19 @@ impl Footer {
             // BY THE WHOLE NOTATION, through the reader the window calls too
             // (`syncthing::press_of_key`): with shift alone, `C-d` was `d` and
             // forgot a folder, while the window's same chord did nothing.
+            // THE FILE PICKER, while it is up over the view, takes what it
+            // reads — every letter, and its own keys.
+            if self.syncthing.as_ref().is_some_and(|v| v.picker_takes(key)) {
+                let columns = self.screen_columns();
+                if let Some(v) = self.syncthing.as_mut() {
+                    let errand =
+                        v.pick_key(key, self.syncthing_snapshot.as_ref(), columns, &self.texts);
+                    self.region_resized();
+                    self.follow_cursor();
+                    self.syncthing_errand(errand);
+                }
+                return;
+            }
             if let Some(press) = crate::syncthing::press_of_key(key) {
                 self.syncthing_press(press);
             }
@@ -12590,6 +13919,16 @@ impl Footer {
         // BOTH DOORS THROUGH ONE READER — `camera_settings::press_of_key`,
         // which reads a letter by its whole notation: `C-d` is not `d`.
         if self.view() == ViewState::Camera {
+            // THE FILE PICKER, while it is up over the view, takes what it
+            // reads — every letter, and its own keys.
+            if self
+                .camera_view
+                .as_ref()
+                .is_some_and(|v| v.picker_takes(key))
+            {
+                self.camera_settings_press(crate::camera_settings::Press::Pick(key));
+                return;
+            }
             if let Some(press) = crate::camera_settings::press_of_key(key) {
                 self.camera_settings_press(press);
             }
@@ -12616,8 +13955,9 @@ impl Footer {
                 return;
             }
             // EVERY DOOR THROUGH ONE READER — `player::press_of_key`, with
-            // the modifiers: `C-s` is not `s`.
-            if let Some(press) = crate::player::press_of_key(key) {
+            // the modifiers: `C-s` is not `s` — and every key the text's
+            // while one is being edited (`View::press_of_key`).
+            if let Some(press) = self.player_view.as_ref().and_then(|v| v.press_of_key(key)) {
                 self.player_press(press);
             }
             return;
@@ -12640,6 +13980,87 @@ impl Footer {
             if let Some(press) = crate::audio::press_of_key(key) {
                 self.audio_press(press);
             }
+            return;
+        }
+
+        // THE FOOTER'S OWN SETTINGS: two arrows and `RET`, read by the whole
+        // notation through the reader the window calls too
+        // (`footer_settings::press_of_key`) — `C-n` is not `<down>` in
+        // either door.
+        if self.view() == ViewState::FooterSettings {
+            if let Some(press) = crate::footer_settings::press_of_key(key) {
+                self.footer_settings_press(press);
+            }
+            return;
+        }
+
+        // THE GIT BROWSER: its own table (`git_browser::OF_THE_VIEW`), read
+        // by the whole notation — the window reads the same one.
+        if self.view() == ViewState::Git {
+            self.git_key(key);
+            return;
+        }
+
+        // THE ICONS APP: the tabs, the grid's arrows and the page's, read by
+        // the whole notation through the reader the window calls too
+        // (`icons::press_of_key`) — and a bare letter is the search.
+        if self.view() == ViewState::Icons {
+            self.icons_key(key);
+            return;
+        }
+
+        // THE CALCULATOR: every key is its own, read by the whole notation
+        // through the reader the window calls too (`calc::press_of_key`); a
+        // key it does not take is swallowed, as every modal swallows the
+        // keyboard it holds.
+        if self.view() == ViewState::Calc {
+            if let Some(press) = crate::calc::press_of_key(key) {
+                self.calc_press(press);
+            }
+            return;
+        }
+
+        // THE VIDEO-METRICS VIEW: its keys by their whole notation — or, while a
+        // description is edited, the text's every key.
+        if self.view() == ViewState::VideoMetrics {
+            self.video_metrics_key(key);
+            return;
+        }
+
+        // THE SECURITY CENTRE: its table, read by the whole notation through the
+        // reader the window calls too (`security::press_of_key`).
+        if self.view() == ViewState::Security {
+            if let Some(press) = crate::security::press_of_key(key) {
+                self.security_press(press);
+            }
+            return;
+        }
+
+        // THE PERSON'S CONTAINERS: every key read by its whole notation out of
+        // `containers::OF_THE_VIEW`, through the reader the window calls too
+        // (`containers::press_of_key`). A key outside the table does nothing
+        // and does not close the view.
+        if self.view() == ViewState::Containers {
+            if let Some(press) = crate::containers::press_of_key(key) {
+                self.containers_press(press);
+            }
+            return;
+        }
+
+        // THE BELONGINGS: read by the whole notation through the reader the
+        // window calls too (`belongings::press_of_key`).
+        if self.view() == ViewState::Belongings {
+            if let Some(press) = crate::belongings::press_of_key(key) {
+                self.belongings_press(press);
+            }
+            return;
+        }
+
+        // THE SEARCH: every key is its own, read by the whole notation
+        // through the reader the window calls too (`fast_access::press_of_key`)
+        // — a bare letter is what is typed.
+        if self.view() == ViewState::FastAccess {
+            self.fast_access_key(key);
             return;
         }
 
@@ -12795,6 +14216,14 @@ impl Footer {
     /// for it, and a password typed for a login goes with it.
     fn questions_let_go(&mut self) {
         self.locale_asking = None;
+        if let Some(v) = self.files.as_mut() {
+            v.secrets_let_go();
+        }
+        // THE SECURITY CENTRE'S, and the file manager's password for a change
+        // of owner: a work waiting for a password goes with the question.
+        self.security.let_go();
+        self.files_root_waiting = None;
+        self.containers_login = None;
         self.kiosk.let_go();
         self.player_pairing.let_go();
         if let Some(v) = self.player_view.as_mut() {
@@ -12805,6 +14234,14 @@ impl Footer {
         }
         if let Some(v) = self.syncthing.as_mut() {
             v.let_go();
+        }
+        // THE VIDEO CATALOGUE'S: the row a value was asked for goes with the
+        // question, or an answer typed later would land on it.
+        if let Some(v) = self.video_metrics.as_mut() {
+            v.unanswered();
+        }
+        if let Some(o) = self.belongings.as_mut() {
+            o.view.let_go();
         }
     }
 
@@ -12818,11 +14255,7 @@ impl Footer {
         let Some(view) = self.files.as_mut() else {
             return;
         };
-        if let Some(stage) = self.files_turning.as_mut()
-            && let Some(ask) = view.wants_turn()
-        {
-            stage.tell(ask);
-        }
+        self.files_threads.turn(|| view.wants_turn());
         // AND THE GLOBE, by the same value diff.
         if let Some(stage) = self.files_globe.as_mut()
             && let Some(ask) = view.wants_globe()
@@ -12876,9 +14309,8 @@ impl Footer {
         self.echo_message(m);
     }
 
-    /// `footer-hide-push`, `footer-hide-cover`, and the leader pressed again
-    /// at the root: the bars hidden that way, or back when they already are —
-    /// see `crate::hidden`.
+    /// `footer-hide-push` and `footer-hide-cover`, by name: the bars hidden
+    /// that way, or back when they already are — see `crate::hidden`.
     ///
     /// THE LEADER ENDS FIRST, with its keyboard, and the switch is written
     /// into `modeline.json` MERGED with what the file says now — the toggle is
@@ -12890,7 +14322,45 @@ impl Footer {
             self.close_leader();
         }
         tracing::info!(?mode, "the bars toggled");
-        self.write_the_modeline(|p| p.hidden = crate::hidden::toggled(p.hidden, mode));
+        // THE NEW MODE IS SAID ONLY WHEN IT WAS WRITTEN: a refusal —
+        // the file will not parse, or will not be written — is on the line,
+        // and a brief word over it would hide the one sentence that matters.
+        if self.write_the_modeline(|p| p.hidden = crate::hidden::toggled(p.hidden, mode)) {
+            self.say_the_bars();
+        }
+    }
+
+    /// `footer-bars-cycle` — a tap of `Ctrl` at the leader's root, the root's
+    /// grafted row, or the name: the bars' next mode, normal → push → cover
+    /// (`crate::hidden::next_mode`), taken from the FILE as it is now, the
+    /// way a toggle is, so a mode set by another hand is the one walked on.
+    fn cycle_the_bars(&mut self) {
+        if self.leader.active_one() {
+            self.close_leader();
+        }
+        let written = self.write_the_modeline(|p| crate::footer_settings::Setting::Bars.change(p));
+        tracing::info!(mode = ?self.modeline.hidden, written, "the bars cycled");
+        // SAID ONLY WHEN WRITTEN, for the reason `toggle_the_bars` gives.
+        if written {
+            self.say_the_bars();
+        }
+    }
+
+    /// The bars' mode, said on the minibuffer — briefly. At rest the two
+    /// hidden modes look alike, and a tap that changed nothing a person can
+    /// see would be a tap they repeat. The minibuffer shows itself while it
+    /// has something to say, in every mode (`crate::hidden`), so the sentence
+    /// is read wherever the bars went.
+    fn say_the_bars(&mut self) {
+        let key = match self.modeline.hidden {
+            None => ronoctua_i18n::key::ECHO_BARS_SHOWN,
+            Some(crate::adapt::Hidden::Push) => ronoctua_i18n::key::ECHO_BARS_PUSH,
+            Some(crate::adapt::Hidden::Cover) => ronoctua_i18n::key::ECHO_BARS_COVER,
+        };
+        let said = self.texts.t(key);
+        self.echo_for(said, crate::echo::Echo::Brief);
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
     }
 
     /// Arms the ONE timer that may show a waiting list — numbered, the way
@@ -12954,24 +14424,28 @@ impl Footer {
     /// `by` is what opened it: a key's list waits with the bars hidden, a
     /// click's does not (`crate::leader::Patience`).
     fn activate_leader(&mut self, by: crate::leader::Opener) {
-        // THE LEADER AGAIN, AT THE ROOT, hides the bars or brings them back
-        // (`crate::hidden::leader_again`): `LEADER LEADER` in the footer's
-        // set pushes, `LEADER ALT LEADER` covers, and in the full set — or
-        // with anything typed, the buffer's `,` and the `w s` states included
-        // — it starts the sequence over as it always did.
+        // THE LEADER AGAIN, AT THE ROOT, walks to the next set
+        // (`crate::hidden::leader_again`): default, windows, the whole tree,
+        // and round — `LEADER LEADER s n` is the network's window. With
+        // anything typed, the buffer's `,` and the `w s` states included, it
+        // starts the sequence over as it always did.
         let typed_nothing =
             self.leader.at_root() && self.buffer_pending.is_empty() && !self.state_pending;
         // ONLY A LEADER THAT IS THE VIEW counts as open here: one made active
         // under a footer app or the command finder is not on the screen — the
         // app still has the region and the keys — and the leader pressed
-        // again there starts it over, as it always did, instead of hiding the
-        // bars from a list the person cannot see.
-        if let Some(mode) = crate::hidden::leader_again(
+        // again there starts it over, as it always did, instead of switching
+        // the set of a list the person cannot see.
+        if let Some(set) = crate::hidden::leader_again(
             self.leader.active_one() && self.view() == ViewState::Leader,
             typed_nothing,
             self.leader.set_now(),
         ) {
-            self.toggle_the_bars(mode);
+            // A KEY LIKE ANY OTHER OF THE SEQUENCE: a list still waiting for
+            // the hand counts again from it (`crate::leader::Patience`) —
+            // `LEADER LEADER s n` typed in one breath never flashes a list.
+            self.patience_after_a_key();
+            self.switch_leader_set(set);
             return;
         }
         // "which-key in one frame" (5.2), counted from here.
@@ -13078,41 +14552,41 @@ impl Footer {
                 is_group: true,
             });
         }
-        // AND THE LEADER ITSELF, as a row: the toggle of the hidden bars in
-        // this set, which the tree cannot hold (`crate::hidden::bars_row`) —
-        // on the list so the pointer reaches it, and so the list says it. It
-        // is grafted HERE, where every root is built, so a set switch swaps it
-        // for the other set's toggle.
-        if let Some(row) = crate::hidden::bars_row(self.leader.set_now(), &self.leader_label) {
-            inputs.push(row);
-        }
+        // AND THE TAP OF `Ctrl`, as a row: the cycle of the bars' modes,
+        // which the tree cannot hold (`crate::hidden::bars_row`) — on the list
+        // so the pointer reaches it, and so the list says it. It is grafted
+        // HERE, where every root is built, so every set's root has it.
+        inputs.push(crate::hidden::bars_row());
         Some(inputs)
     }
 
     /// A key came UP — from the compositor's keyboard or from an independent
-    /// one: the right `Ctrl` stops being held, and a clean TAP of `Alt` or
-    /// `Ctrl` chooses the leader's set.
+    /// one: the right `Ctrl` stops being held, and a clean TAP of `Ctrl`
+    /// cycles the bars' modes.
     fn key_released(&mut self, sym: Keysym) {
         if sym == Keysym::Control_R {
             self.right_ctrl = false;
         }
-        if let Some(set) = self.tap.released(sym) {
-            self.set_tapped(set);
+        if self.tap.released(sym) {
+            self.bars_tapped();
         }
     }
 
-    /// A tap chose a set. It counts only where the leader is the view and
-    /// nothing has been typed — the `,` group included — and everywhere else
-    /// a modifier alone is ignored, exactly as it always was: `translate`
-    /// drops it, and no view reads it.
-    fn set_tapped(&mut self, set: crate::leader::Set) {
-        if self.view() != ViewState::Leader
-            || !self.leader.at_root()
-            || !self.buffer_pending.is_empty()
-        {
+    /// A tap of `Ctrl` arrived. It counts only where the leader is the view
+    /// and nothing has been typed — the `,` group included — and everywhere
+    /// else a modifier alone is ignored, exactly as it always was:
+    /// `translate` drops it, and no view reads it.
+    fn bars_tapped(&mut self) {
+        if !self.a_tap_counts() {
             return;
         }
-        self.switch_leader_set(set);
+        self.cycle_the_bars();
+    }
+
+    /// Whether a tap of `Ctrl` means the cycle here: the leader is the view,
+    /// at its root, with no `,` pending.
+    fn a_tap_counts(&self) -> bool {
+        self.view() == ViewState::Leader && self.leader.at_root() && self.buffer_pending.is_empty()
     }
 
     /// Switches the open leader to `set` and shows that set's root.
@@ -13147,18 +14621,18 @@ impl Footer {
         true
     }
 
-    /// `leader-set-window` and `leader-set-full`, run by NAME — the click on
-    /// the leader's hint, `LEADER :`, the control socket. A closed leader
-    /// opens in that set; an open one at its root switches; one halfway
-    /// through a sequence starts over at the root, in that set.
+    /// `leader-set-default`, `leader-set-window` and `leader-set-full`, run by
+    /// NAME — the click on the leader's hint, `LEADER :`, the control socket.
+    /// A closed leader opens in that set; an open one at its root switches;
+    /// one halfway through a sequence starts over at the root, in that set.
     fn leader_set_by_name(&mut self, set: crate::leader::Set) {
         if !self.leader.active_one() || !self.leader.at_root() || !self.buffer_pending.is_empty() {
             // AN OPEN LEADER IS ENDED FIRST, and not just trimmed back to its
             // root: `activate_leader` on an open leader with nothing typed is
-            // the leader pressed AGAIN, which toggles the hidden bars
+            // the leader pressed AGAIN, which walks to the next set
             // (`crate::hidden::leader_again`). Clearing a pending `,` and
-            // then activating was exactly that — a set asked for by name hid
-            // the footer instead.
+            // then activating was exactly that — a set asked for by name
+            // landed one set further on.
             self.leader.finish();
             self.buffer_pending.clear();
             self.state_pending = false;
@@ -13170,7 +14644,8 @@ impl Footer {
         // AND A LIST THAT WAS WAITING for a key-opened leader shows now: the
         // set was chosen by the pointer or by name, and none of them types
         // fast. The switch below lays it out; the old timer, when it fires,
-        // finds it shown. A TAP keeps waiting — it does not come through here.
+        // finds it shown. The LEADER pressed again keeps waiting — it does
+        // not come through here.
         self.list_patience = crate::leader::Patience::Shown;
         self.switch_leader_set(set);
     }
@@ -13215,6 +14690,138 @@ impl Footer {
         ));
     }
 
+    /// The clipboard's ENTRIES moved: a new generation, and every window
+    /// following them told (`Footer::clipboard_told`).
+    fn clipboard_moved(&mut self) {
+        self.clip_generation = self.clip_generation.wrapping_add(1);
+        self.clipboard_told(None);
+    }
+
+    /// Every window following the history told what it is now — the history
+    /// CLONED ONCE and shared, and turned into a line on each follower's own
+    /// thread — with what the footer said to them, if anything. With no window
+    /// open this is nothing.
+    fn clipboard_told(&mut self, said: Option<String>) {
+        if self.clip_followers.is_empty() {
+            return;
+        }
+        let shot = std::sync::Arc::new(crate::clipboard_wire::Shot {
+            entries: self.clipboard.inputs().iter().cloned().collect(),
+            sync: self.clipcascade.clone(),
+            generation: self.clip_generation,
+            said,
+        });
+        // A WINDOW THAT CLOSED ended its thread; its sender says so here.
+        self.clip_followers
+            .retain(|tx| tx.send(std::sync::Arc::clone(&shot)).is_ok());
+    }
+
+    /// A clipboard window asked to follow the history: told it now.
+    fn clipboard_followed(&mut self, stream: crate::leader::Follower) {
+        let Some(tx) = crate::clipboard_wire::follower(stream.0) else {
+            return;
+        };
+        let shot = std::sync::Arc::new(crate::clipboard_wire::Shot {
+            entries: self.clipboard.inputs().iter().cloned().collect(),
+            sync: self.clipcascade.clone(),
+            generation: self.clip_generation,
+            said: None,
+        });
+        if tx.send(shot).is_ok() {
+            tracing::info!("a clipboard window follows the history");
+            self.clip_followers.push(tx);
+        }
+    }
+
+    /// What a clipboard window's key asked of the history — carried out by
+    /// the errands this footer's own view uses. An act aimed at a history that
+    /// has moved since is refused: its index would be another entry's.
+    fn clipboard_asked(&mut self, generation: u64, act: crate::clipboard_wire::Act) {
+        if generation != self.clip_generation {
+            tracing::info!(
+                ?act,
+                generation,
+                now = self.clip_generation,
+                "a clipboard act for a history that moved"
+            );
+            // REFUSED, AND SAID: the window shows the history it has now and
+            // a sentence on its line, never a key that silently did nothing.
+            let said = self.texts.t(ronoctua_i18n::key::CLIPBOARD_ACT_STALE);
+            self.clipboard_told(Some(said));
+            return;
+        }
+        // THE FOOTER'S OWN CURSOR IS NOT THE WINDOW'S: the errands address
+        // an entry through it, and it is put back after.
+        let kept = self.clip_cursor;
+        self.clip_answering = Some(Vec::new());
+        self.clipboard_carry_out(act);
+        let said = self.clip_answering.take().and_then(|mut s| s.pop());
+        self.clip_cursor = kept.min(self.clipboard.how_many().saturating_sub(1));
+        self.clipboard_told(said);
+        self.draw_and_paint();
+    }
+
+    /// One act of a clipboard window, through the errands this footer's own
+    /// view uses.
+    fn clipboard_carry_out(&mut self, act: crate::clipboard_wire::Act) {
+        use crate::clipboard_view::Errand;
+        use crate::clipboard_wire::Act;
+        match act {
+            Act::Copy { n } => {
+                self.clip_cursor = n;
+                self.run_command("clipboard-copy-of-new");
+            }
+            Act::Remove { n } => {
+                self.clip_cursor = n;
+                self.run_command("clipboard-remove");
+            }
+            Act::Pin { n } => {
+                self.clip_cursor = n;
+                self.run_command("clipboard-pin");
+            }
+            Act::Clear => self.run_command("clipboard-clear"),
+            Act::Sync { on } => self.clipboard_errand(Errand::Sync(on)),
+            Act::LogOut => self.clipboard_errand(Errand::LogOut),
+            Act::Keep {
+                salt,
+                rounds,
+                images,
+                notify,
+                cap,
+                mark,
+            } => self.clipboard_errand(Errand::Keep(Box::new(
+                ronoctua_clipcascade::prefs::Settings {
+                    salt,
+                    rounds,
+                    images,
+                    notify,
+                    cap,
+                    mark,
+                },
+            ))),
+            // THE PASSWORD GOES TO CLIPCASCADE AND NOWHERE ELSE — the same
+            // order the footer's own minibuffer gives on its third answer.
+            Act::LogIn {
+                server,
+                username,
+                password,
+            } => self.tell_clipcascade(ronoctua_clipcascade::Order::LogIn {
+                server,
+                username,
+                password,
+            }),
+            // THE TYPED SETTINGS, through the arm the minibuffer reaches.
+            Act::Typed { id, text } => {
+                if matches!(
+                    id.as_str(),
+                    "clipboard-salt" | "clipboard-rounds" | "clipboard-cap"
+                ) {
+                    self.run_with(&id, Some(&text));
+                }
+            }
+        }
+    }
+
     /// One press, through the clipboard's own view.
     ///
     /// ONE FUNCTION FOR THE KEY, THE MOUSE AND THE NAMED COMMAND. The view
@@ -13230,16 +14837,19 @@ impl Footer {
                 sync: &sync,
             };
             let errand = self.clip_view.key(press, &facts, columns, &self.texts);
-            let at = self.clip_view.target_at(&facts, columns, &self.texts);
+            // THE ENTRY THE RIGHT HALF DESCRIBES — the cursor's, or the
+            // newest while the cursor is on the sync's rows.
+            let at = self.clip_view.shown_entry(&facts, columns, &self.texts);
             (errand, at)
         };
         // THE TWO CURSORS ARE ONE THING SEEN TWICE. The view's counts ROWS —
         // entries, then the sync section — and `clip_cursor` counts ENTRIES,
         // which is what the preview, the QR and the four `clipboard-*`
         // commands are addressed by. The view is the one that MOVED, so it is
-        // the one that is believed; a row that is not an entry leaves
-        // `clip_cursor` where it was, because there is no entry to point at.
-        if let crate::clipboard_view::Target::Entry(n) = at
+        // the one that is believed — and on a row that is not an entry it is
+        // the entry the right half describes (`View::shown_entry`), so the
+        // picture decoded is the one the box is drawn for.
+        if let Some(n) = at
             && n != self.clip_cursor
         {
             self.clip_cursor = n;
@@ -13250,6 +14860,21 @@ impl Footer {
         }
         self.follow_cursor();
         self.clipboard_errand(errand);
+    }
+
+    /// Whether the clipboard view's picture box has rows in the region at
+    /// its scroll now.
+    fn clipboard_picture_fits(&self) -> bool {
+        let facts = crate::clipboard_view::Facts {
+            queue: &self.clipboard,
+            sync: &self.clipcascade,
+        };
+        self.clip_view
+            .picture(&facts, self.screen_columns(), &self.texts)
+            .is_none_or(|p| {
+                crate::clipboard_view::picture_rows(p, self.current_offset(), self.grid().lines)
+                    .is_some()
+            })
     }
 
     /// What the view asked for.
@@ -13293,6 +14918,13 @@ impl Footer {
                     return;
                 }
                 self.run_command("clipboard-qrcode");
+                // A CODE NOBODY CAN SEE IS SAID, never drawn off the region
+                // in silence — the window asks the same question.
+                if self.clip_qr.is_some() && !self.clipboard_picture_fits() {
+                    let said = self.texts.t(ronoctua_i18n::key::CLIPBOARD_NO_ROOM);
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                }
                 return;
             }
             Errand::Clear => {
@@ -13476,6 +15108,3202 @@ impl Footer {
         self.echo_message(said);
         self.draw_and_paint();
         false
+    }
+
+    /// Putting the loudest notice away, or off — from its key, from the
+    /// strip's button, or by name — and saying what became of it.
+    ///
+    /// # Why the refusal is spoken and not swallowed
+    ///
+    /// Because a key that does nothing and says nothing is indistinguishable
+    /// from a key that did not register — the reason `brain_answer` gives,
+    /// and the same sentence door. And the brain's OWN refusal is spoken
+    /// too: the ask goes out on a thread that waits for the answer
+    /// (`brain::put`), and what comes back is said by `brain_answered` — a
+    /// notice that went down between the frame and the key is "not up", not
+    /// "put away".
+    fn brain_notice(&mut self, verb: crate::brain::Verb) {
+        match crate::brain::notice_ask(self.brain.as_ref(), verb) {
+            Ok((ask, said)) => self.brain_put(ask, said),
+            Err(refused) => {
+                let m = self.texts.t(refused);
+                self.echo_message(m);
+            }
+        }
+    }
+
+    /// One of a module's actions: asked for straight away, or — when it asks
+    /// a question first — the question on the minibuffer's line, under the
+    /// action's own name and in the words of the key its module declared,
+    /// whose answer comes back to `run_with` as that name's argument and is
+    /// sent with it.
+    fn brain_act(
+        &mut self,
+        acting: Result<crate::brain::Acting, &'static str>,
+        answer: Option<&str>,
+    ) {
+        let acting = match acting {
+            Ok(a) => a,
+            Err(refused) => {
+                let m = self.texts.t(refused);
+                self.echo_message(m);
+                return;
+            }
+        };
+        if acting.asks.is_some() && answer.is_none() {
+            match crate::brain::question_of(&acting) {
+                Some((id, asks)) => {
+                    self.mx.request_asking(id, asks);
+                    self.apply_geometry(KeyboardInteractivity::Exclusive);
+                    self.draw_and_paint();
+                }
+                None => {
+                    let m = self.texts.t(ronoctua_i18n::key::ECHO_BRAIN_NO_ACTION);
+                    self.echo_message(m);
+                }
+            }
+            return;
+        }
+        let ask = crate::brain::act_ask(&acting, answer);
+        self.brain_put(ask, ronoctua_i18n::key::ECHO_BRAIN_TAKEN);
+    }
+
+    /// Asks the brain for a change off the loop; `taken` is what the line
+    /// says once it took it. A thread that could not start is said at once —
+    /// nothing would ever come back to say anything else.
+    fn brain_put(&mut self, ask: ronoctua_brain::Ask, taken: &'static str) {
+        let started = self
+            .brain_answers
+            .clone()
+            .is_some_and(|back| crate::brain::put(ask, Some(taken), back));
+        if !started {
+            let m = self.texts.t(ronoctua_i18n::key::ECHO_BRAIN_UNREACHABLE);
+            self.echo_message(m);
+        }
+    }
+
+    /// What the brain answered to a change this footer asked for — the
+    /// success, or the refusal in its own sentence.
+    fn brain_answered(&mut self, answer: &crate::brain::Answer) {
+        if let Some(said) = answer.sentence(&self.texts) {
+            self.echo_message(said);
+            self.draw_and_paint();
+        }
+    }
+
+    /// What the file manager's panels' threads came back with
+    /// (`inspection::Threads`): what is inside a file, a frame of its film, a
+    /// view of its shape.
+    fn files_heard(&mut self, heard: crate::inspection::Heard) {
+        // WHAT IS INSIDE THE FILE, a frame of its film, a view of its shape. A
+        // stale one is dropped inside the panel and not here: the cursor moves
+        // while a child process runs, and which answer is still the right one
+        // is the view's question, not this door's.
+        let answered = matches!(
+            heard,
+            crate::inspection::Heard::Looked(_) | crate::inspection::Heard::Changeable { .. }
+        );
+        if let Some(v) = self.files.as_mut() {
+            v.heard(heard);
+        }
+        if !answered {
+            self.owes_paint = true;
+            return;
+        }
+        // AND THE PLAYER IS ASKED AGAIN — see the window door's twin, and the
+        // defect written out there.
+        self.follow_the_motion();
+        self.follow_the_turn();
+        // AND WHAT EVERY ANSWER OF A THREAD IS FOLLOWED BY (see
+        // `Footer::files_reported`): the watch, and the height — an answer is
+        // what says how many lines the panels want.
+        self.follow_the_place();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// The id of the control of a row of the player's view at `(x, y)` — a
+    /// title's glyph — READ FROM WHAT THE LAST FRAME PLACED
+    /// (`player_controls_placed`): the line `row_at` counts and the cell
+    /// `cell_at` reads, the two a click there takes. No row is built.
+    fn player_control_at(&self, x: f64, y: f64) -> Option<&'static str> {
+        if self.view() != ViewState::Player {
+            return None;
+        }
+        let (i, cell) = (self.row_at(x, y)?, self.cell_at(x)?);
+        self.player_controls_placed
+            .borrow()
+            .iter()
+            .find(|&&(line, from, width, _)| line == i && crate::chrome::in_cell(cell, from, width))
+            .map(|&(_, _, _, about)| about)
+    }
+
+    /// The frame PLACED `visible` — the lines of the page, as the paint
+    /// numbers them: the player's controls on them written down for the
+    /// pointer, and nothing when the player's view is not what is drawn.
+    fn player_controls_were_placed(&self, visible: &[&ExpansionRow]) {
+        let mut placed = self.player_controls_placed.borrow_mut();
+        placed.clear();
+        if self.view() != ViewState::Player {
+            return;
+        }
+        for (i, line) in visible.iter().enumerate() {
+            for &(from, width, about) in &line.controls {
+                placed.push((i, from, width, about));
+            }
+        }
+    }
+
+    /// AFTER A FRAME, the control under a pointer that has not moved, read
+    /// again against what was just placed: playback that starts pushes the
+    /// Queue's title down, a page opens, the view closes — and a resting
+    /// hand kept explaining the glyph that had been there while a click took
+    /// what is. `true` when it changed, and one more frame is owed — one
+    /// round, never a loop: the next frame places the same.
+    fn player_control_moved_under_the_pointer(&mut self) -> bool {
+        let now = self
+            .here
+            .pointer_at
+            .and_then(|(x, y)| self.player_control_at(x, y));
+        if now == self.player_control_under {
+            return false;
+        }
+        self.player_control_under = now;
+        true
+    }
+
+    /// What a control of the player's rows says under the pointer, in this
+    /// door: the SWAP says what it does from here — the window in the view's
+    /// place — as the panel's button does.
+    fn player_control_sentence(&self, id: &str) -> Option<String> {
+        match id {
+            "player-swap" => Some(self.texts.t(ronoctua_i18n::key::PLAYER_SWAP_FOOTER)),
+            id => crate::chrome::hint_sentence(id, &self.texts),
+        }
+    }
+
+    /// `footer-settings-open`: the footer's own settings, in the region —
+    /// never over a view that holds work (`region_is_free`), and a second
+    /// opening keeps the live view and its cursor.
+    fn open_footer_settings(&mut self) {
+        if !self.region_is_free("footer-settings-open") {
+            return;
+        }
+        if self.footer_settings.is_none() {
+            self.footer_settings = Some(crate::footer_settings::View::fresh(
+                &self.modeline,
+                self.screen_columns(),
+                &self.texts,
+            ));
+        }
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A key of the footer's settings, from the keyboard, the hint or a
+    /// second click — and what the view asks for after it.
+    fn footer_settings_press(&mut self, press: crate::footer_settings::Press) {
+        use crate::footer_settings::Errand;
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self.footer_settings.as_mut().map_or(Errand::Nothing, |v| {
+            v.press(press, &self.modeline, columns, &texts)
+        });
+        match errand {
+            Errand::Nothing => self.draw_and_paint(),
+            Errand::Close => {
+                self.footer_settings = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
+            // THE ROW'S COMMAND, the one `LEADER :` and a tap reach too: it
+            // writes the file (`Setting::change`), moves the bars, says a
+            // refusal on this line, and ends in a frame.
+            Errand::Change(setting) => self.run_command(setting.command()),
+        }
+    }
+
+    /// `footer-hours`: the hours on the free minibuffer, or not — written into
+    /// `modeline.json` merged, like every switch of that file.
+    fn flip_the_hours(&mut self) {
+        self.write_the_modeline(|p| crate::footer_settings::Setting::Hours.change(p));
+    }
+
+    /// `minibuffer-fold-open` and `minibuffer-fold-close`: what the right
+    /// `Ctrl` with `↓` and `↑` does to the minibuffer's line
+    /// (`Footer::fold_key`), by name — the compositor's transient bind while
+    /// a hint too long for the line is on it, `LEADER :`, the socket.
+    fn fold_by_name(&mut self, sym: ronoctua_keymap::Sym) {
+        if self.fold_key(sym) {
+            self.apply_geometry(self.interactivity());
+        }
+        self.close_the_drawer_of_an_empty_line();
+        self.draw_and_paint();
+    }
+
+    /// `alert-dismiss`, and the alert bar's own close button: the bar goes
+    /// until its cause gets worse (`alert::Alerts::close`).
+    fn dismiss_the_alert(&mut self) {
+        if self.alerts.close() {
+            tracing::info!("the alert bar was closed by hand");
+            self.alert_moved();
+        }
+    }
+
+    /// A battery reading reached the alert (`power_arrived`): it comes, stays
+    /// with its new number, or goes.
+    fn battery_for_the_alert(&mut self) {
+        let reading = self
+            .power_snapshot
+            .as_ref()
+            .and_then(crate::alert::Reading::of);
+        if self.alerts.battery(reading) {
+            tracing::info!(alert = ?self.alerts.showing(), "the alert bar moved");
+            self.alert_moved();
+        }
+    }
+
+    /// The alert came, went or changed: the band it stands on is held while
+    /// it is up — a notification waits for it, and is shown after — its
+    /// clock is armed or let go, and the height follows.
+    fn alert_moved(&mut self) {
+        self.hold_the_band_if_anyone_reads_it();
+        self.keep_the_alert_clock();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Arms the clock that alternates the alert's two roles — only while an
+    /// alert is up, and once: the clock lets itself go when the bar goes.
+    fn keep_the_alert_clock(&mut self) {
+        if self.alerts.showing().is_none() {
+            self.alert_phase = false;
+            return;
+        }
+        if self.alert_clock {
+            return;
+        }
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(crate::alert::phase_lasts()),
+            |_, (), state: &mut Self| {
+                if state.alerts.showing().is_none() {
+                    state.alert_clock = false;
+                    state.alert_phase = false;
+                    return calloop::timer::TimeoutAction::Drop;
+                }
+                state.alert_phase = !state.alert_phase;
+                state.draw_and_paint();
+                calloop::timer::TimeoutAction::ToDuration(crate::alert::phase_lasts())
+            },
+        );
+        match armed {
+            Ok(_) => self.alert_clock = true,
+            Err(e) => tracing::warn!(error = %e, "the alert's colours will not alternate"),
+        }
+    }
+
+    /// A message on the minibuffer's line, for as long as its CLASS says
+    /// (`crate::echo`) — and a one-shot timer at its deadline, so a brief one
+    /// goes when it should and not on the next second's tick. The timer finds
+    /// the message gone, or newer, and does nothing.
+    fn echo_for(&mut self, text: String, class: crate::echo::Echo) {
+        // A CLIPBOARD WINDOW'S ACT is answered on the window's line.
+        if let Some(said) = self.clip_answering.as_mut() {
+            tracing::info!(echo = %text, "said to a clipboard window");
+            said.push(text);
+            return;
+        }
+        tracing::info!(echo = %text, ?class, "echo area");
+        let until = std::time::Instant::now() + class.lasts();
+        self.echo = Some((text, until));
+        // THE PERSON'S ANSWER TAKES THE LINE AT ONCE, and an event on it goes
+        // back to the front of the queue to be said whole afterwards.
+        if self.event_line.interrupted() {
+            self.forget_the_line_under_the_pointer();
+        }
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_deadline(until),
+            |_, (), state: &mut Self| {
+                let now = std::time::Instant::now();
+                if state.expire_echo(now) {
+                    state.events_tick(now);
+                    state.close_the_drawer_of_an_empty_line();
+                    state.draw_and_paint();
+                }
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            tracing::warn!(error = %e, "the message's own timer was not armed; the second's tick retires it");
+        }
+    }
+
+    /// A preference that could not be written, SAID — never only logged: the
+    /// change is in force in this process and lost at its restart, and the
+    /// person has to know which of the two they are looking at.
+    fn say_a_preference_not_written(&mut self, file: &str, why: &dyn std::fmt::Display) {
+        tracing::warn!(error = %why, file, "a preference could not be written");
+        let said = self.texts.t_with(
+            ronoctua_i18n::key::ECHO_PREFERENCE_NOT_WRITTEN,
+            &[("file", file), ("why", &why.to_string())],
+        );
+        self.echo_for(said, crate::echo::Echo::Long);
+    }
+
+    /// Whether the free minibuffer shows the hours: asked for, the line drawn,
+    /// nothing said on it and nothing holding it (`minibuffer_is_free`).
+    fn hours_wanted(&self) -> bool {
+        self.modeline.hours && self.shape.draws_minibuffer() && self.minibuffer_is_free()
+    }
+
+    /// The hours as the person reads them — the 12- or 24-hour clock they
+    /// chose (`chrome::clock_text`), in this machine's zone.
+    fn hours_now(&self) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        crate::chrome::clock_text(
+            now,
+            &self.zone,
+            crate::locale::prefs::current().clock,
+            &self.texts,
+        )
+    }
+
+    /// Arms the timer that redraws the hours at the NEXT MINUTE — only while
+    /// they were drawn (`clock_drawn`), and once: it is not re-armed until it
+    /// fires, and firing redraws, which arms it again only if the hours are
+    /// still on the line. A line that fills or a switch turned off lets it go.
+    fn keep_the_clock(&mut self) {
+        if !self.clock_drawn || self.clock_armed {
+            return;
+        }
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let left = crate::footer_settings::until_the_next_minute(now);
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(left),
+            |_, (), state: &mut Self| {
+                state.clock_armed = false;
+                if state.hours_wanted() {
+                    state.draw_and_paint();
+                }
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        match armed {
+            Ok(_) => self.clock_armed = true,
+            Err(e) => tracing::warn!(error = %e, "the hours will not move"),
+        }
+    }
+
+    /// A HINT TOO LONG FOR THE MINIBUFFER'S LINE LINGERS while the pointer
+    /// travels from its mark to the line and its chevron.
+    ///
+    /// # Why
+    ///
+    /// The line explains the mark under the pointer and nothing else, so it
+    /// emptied the moment the pointer left the mark — and took with it the
+    /// chevron that opens the rest of a sentence that did not fit. The rest of
+    /// the player's title was on the screen exactly while nothing could reach
+    /// it: the footer at rest has no keyboard for `RCtrl ↓`, and the hand
+    /// going to the chevron left the mark. So a hint that does not fit STAYS
+    /// while the pointer is on the footer over nothing that explains itself,
+    /// and the next hint, a row of the region or leaving the footer lets it
+    /// go.
+    fn linger(&mut self) {
+        let cut = self
+            .segment_hint()
+            .filter(|t| layout::width(t) > self.minibuffer_room);
+        if cut.is_some() {
+            self.lingering_hint = cut;
+            return;
+        }
+        let elsewhere = self.here.segment_under_pointer.is_some()
+            || self.band_hint.is_some()
+            || self.address_hint.is_some()
+            || self.brain_hint.is_some()
+            || self.osk_hint.is_some()
+            || self.hint_said.is_some()
+            || self.here.player_button_under.is_some()
+            || self.here.player_deck_under.is_some()
+            || self.here.row_under_pointer.is_some();
+        if elsewhere {
+            self.lingering_hint = None;
+        }
+    }
+
+    /// The minibuffer's drawer opened, grew or closed under a pointer that did
+    /// not move: the surface is anchored at the screen's bottom, so the rows
+    /// above the drawer moved on the screen and the hand did not — in the
+    /// surface's own coordinates the pointer moved by what the drawer moved.
+    ///
+    /// # Why the footer says it, and does not wait for the compositor
+    ///
+    /// The pinned compositor does re-send the pointer after a layer's commit,
+    /// after the transaction and when the resize's animation ends
+    /// (`cursor_rebase_all`: `sway/desktop/layer_shell.c`,
+    /// `sway/desktop/transaction.c`) — but only once the new size is applied,
+    /// and at the animation's end, a fifth of a second later. Until then the
+    /// footer answered for the row that USED to be under the hand: the other
+    /// half of the loop `fold::Fold::held` is written about. So the position
+    /// it remembers is moved by the displacement in the frame that moved it
+    /// (`fold::pointer_after`), and what is under the pointer is asked again
+    /// from it — one frame, never a loop (`fold::settle` only grows a held
+    /// drawer). A motion that comes later carries the surface's own
+    /// coordinates, whole: it replaces this position, it never adds to it.
+    fn pointer_follows_the_drawer(&mut self) {
+        let now = crate::fold::rows(self.fold);
+        let was = std::mem::replace(&mut self.fold_rows_seen, now);
+        if now == was {
+            return;
+        }
+        let Some((x, y)) = self.here.pointer_at else {
+            return;
+        };
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let y = crate::fold::pointer_after(y, was, now, line);
+        self.here.pointer_at = Some((x, y));
+        self.here.row_under_pointer = self.row_at(x, y);
+        self.here.cell_under_pointer = self.cell_at(x);
+        self.hint_said = self
+            .hint_under(x, y)
+            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
+        self.hint_lit = self
+            .hint_act_under(x, y)
+            .and_then(|_| self.hint_under(x, y));
+        self.fold_lit = self.fold_at(x, y);
+        let hit = self.segment_hit(x, y);
+        self.here.segment_under_pointer = hit.map(|(id, _)| id);
+        self.here.mark_zone_under_pointer = pair_zone(hit);
+        self.linger();
+        self.draw();
+        self.paint();
+    }
+
+    /// Asks the compositor for `Ctrl+↑/↓` while a hint too long for the line
+    /// is on it and the footer has no keyboard — and gives the keys back when
+    /// it goes (`wm-fold-keys-hold`, `wm-fold-keys-free`).
+    ///
+    /// # Why the compositor, and only then
+    ///
+    /// The footer at rest takes no keyboard (a buffer would get no key), so
+    /// the right `Ctrl` and the arrows that walk the drawer reach it only
+    /// while it has one. For as long as a cut hint is on the line — the hand
+    /// is on the footer, reading — the compositor runs `minibuffer-fold-open`
+    /// and `-close` on those keys; the rest of the time they are the window's.
+    /// A bind asked for at every frame would be a socket round per frame, so
+    /// the answer is kept and only a change is sent.
+    ///
+    /// # In the default mode, named, whatever mode is on
+    ///
+    /// Both deeds say `mode "default" …`: a bare run-time bind lands in the
+    /// ACTIVE mode, and the resize and fit modes bind `Ctrl+Up`/`Ctrl+Down`
+    /// of their own — hovering a cut hint there replaced them, and the
+    /// release deleted them. Named, the hold and the release touch one list,
+    /// in a mode change or not, and inside a mode the keys stay the mode's.
+    /// A footer that dies holding them leaves them bound to a socket nobody
+    /// hears: the first such press gives them back (`fold::nobody_took`), and
+    /// the next footer's first frame releases them too.
+    fn keep_the_fold_keys(&mut self) {
+        let wanted = self.lingering_hint.is_some() && !self.grabbing();
+        if wanted == self.fold_keys_held {
+            return;
+        }
+        let deed = if wanted {
+            crate::fold::KEYS_HOLD
+        } else {
+            crate::fold::KEYS_FREE
+        };
+        // KEPT EITHER WAY: a compositor that refused is told again only when
+        // the wish changes, never on the next frame.
+        self.fold_keys_held = wanted;
+        let Some(spoken) = ronoctua_scroll::deeds::spoken_of(deed) else {
+            tracing::warn!(deed, "the drawer's keys are not a deed this build has");
+            return;
+        };
+        match open_the_compositor().and_then(|mut wm| wm.deed(&spoken.deed, None)) {
+            Ok(()) => tracing::info!(deed, "the drawer's keys at the compositor"),
+            // GIVING BACK KEYS NOBODY HELD is refused ("could not find binding"),
+            // and it is the first frame of every footer: not worth a warning.
+            Err(e) if !wanted => tracing::debug!(error = %e, deed, "no drawer's keys to give back"),
+            Err(e) => {
+                tracing::warn!(error = %e, deed, "the compositor did not take the drawer's keys")
+            }
+        }
+    }
+
+    /// THE GIT BROWSER, opened from the file manager's `C-h` over the
+    /// repository at `root` — in the region, with the manager put aside
+    /// behind it (`git_behind`) until it closes.
+    fn open_git(&mut self, root: std::path::PathBuf) {
+        let repo = ronoctua_git::Repo::discover(&root);
+        let root = repo.as_ref().map_or(root, |r| r.root.clone());
+        let Some(sender) = self.git_sender() else {
+            return;
+        };
+        self.git_watch = repo.as_ref().and_then(|r| {
+            let s = sender.clone();
+            crate::git_line::watch(&r.git_dir, std::slice::from_ref(&r.root), move || {
+                s.send(crate::git_browser_window::Back::Moved).is_ok()
+            })
+            .map_err(|e| tracing::warn!(error = %e, "no watch on the repository"))
+            .ok()
+        });
+        self.git_repo = repo;
+        self.git_view = Some(crate::git_browser::View::at(
+            &root,
+            false,
+            self.texts.clone(),
+            self.zone.clone(),
+        ));
+        if self.files.is_some() {
+            self.git_behind = self.files.take();
+        }
+        tracing::info!(root = %root.display(), "git browser opened");
+        self.git_ask();
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// The browser closed: the file manager comes back as it was left —
+    /// and its git line is read again, because what reached it while the
+    /// manager waited behind the browser was dropped (a `C-r` fetch made in
+    /// the browser moves its arrows).
+    fn close_git(&mut self) {
+        self.git_view = None;
+        self.git_repo = None;
+        self.git_watch = None;
+        if let Some(v) = self.git_behind.take() {
+            self.files = Some(v);
+        }
+        self.follow_the_place();
+        if let Some(k) = self.files_git.as_ref() {
+            k.nudge();
+        }
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Where the browser's threads hand back, hung on the loop the first
+    /// time — an event source nobody pays for until the browser is opened.
+    fn git_sender(&mut self) -> Option<channel::Sender<crate::git_browser_window::Back>> {
+        if let Some(s) = self.git_sender.clone() {
+            return Some(s);
+        }
+        let handle = self.repeat.clone()?;
+        let (sender, backs) = channel::channel::<crate::git_browser_window::Back>();
+        if let Err(e) = handle.insert_source(backs, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(b) = event {
+                state.git_back(b);
+            }
+        }) {
+            tracing::warn!(error = %e, "could not hang the git browser's channel");
+            return None;
+        }
+        self.git_sender = Some(sender.clone());
+        Some(sender)
+    }
+
+    /// Reads what the browser wants, each on a thread of its own.
+    fn git_ask(&mut self) {
+        let Some(sender) = self.git_sender() else {
+            return;
+        };
+        let Some(v) = self.git_view.as_mut() else {
+            return;
+        };
+        for need in v.wanted() {
+            let generation = v.generation();
+            let Some(repo) = self.git_repo.clone() else {
+                let _ = sender.send(crate::git_browser_window::Back::Heard(
+                    crate::git_browser::Heard {
+                        generation,
+                        answer: crate::git_browser::refused_answer(&need),
+                        need,
+                    },
+                ));
+                continue;
+            };
+            let s = sender.clone();
+            let _ = std::thread::Builder::new()
+                .name("git-browser".to_owned())
+                .spawn(move || {
+                    let answer = crate::git_browser::read(&repo, &need);
+                    let _ = s.send(crate::git_browser_window::Back::Heard(
+                        crate::git_browser::Heard {
+                            generation,
+                            need,
+                            answer,
+                        },
+                    ));
+                });
+        }
+    }
+
+    /// What one of the browser's threads came back with.
+    fn git_back(&mut self, b: crate::git_browser_window::Back) {
+        use crate::git_browser_window::Back;
+        let Some(v) = self.git_view.as_mut() else {
+            return;
+        };
+        match b {
+            Back::Heard(h) => {
+                if !v.heard(h) {
+                    return;
+                }
+            }
+            Back::Moved => v.stale(),
+            Back::Fetched(done) => {
+                let said = v.fetched(done);
+                self.echo_message(said);
+            }
+            Back::Kept(Ok((path, id))) => {
+                self.open_the_file(&path);
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let said = self.texts.t_with(
+                    ronoctua_i18n::key::FILES_GIT_KEPT,
+                    &[("path", &name), ("id", crate::git_line::short(&id))],
+                );
+                self.echo_message(said);
+            }
+            Back::Kept(Err(why)) => {
+                let said = self.texts.t_with(
+                    ronoctua_i18n::key::FILES_GIT_KEEP_FAILED,
+                    &[("why", &why.said(&self.texts))],
+                );
+                self.echo_for(said, crate::echo::Echo::Long);
+            }
+        }
+        self.git_ask();
+        self.draw_and_paint();
+    }
+
+    /// A key of the browser's, from the keyboard, the hint or `Esc`.
+    fn git_key(&mut self, key: ronoctua_keymap::Key) {
+        // THE WIDTH AND THE ROOM THE REGION IS DRAWN AT, before the key
+        // measures against them.
+        let (columns, room) = self.git_shape();
+        let errand = self
+            .git_view
+            .as_mut()
+            .map_or(crate::git_browser::Errand::Nothing, |v| {
+                let _ = v.drawn(columns, room);
+                v.key(key)
+            });
+        self.git_errand(errand);
+    }
+
+    /// What the browser asked this door to do.
+    fn git_errand(&mut self, errand: crate::git_browser::Errand) {
+        use crate::git_browser::Errand;
+        match errand {
+            Errand::Nothing => return,
+            Errand::Paint => {}
+            Errand::Close => {
+                self.close_git();
+                return;
+            }
+            Errand::Say(key) => {
+                let said = self.texts.t(key);
+                self.echo_message(said);
+            }
+            Errand::Copy(text) => {
+                let ok = crate::buffer::copy_to_clipboard(&text).is_ok();
+                let said = self.texts.t(if ok {
+                    ronoctua_i18n::key::FILES_COPIED
+                } else {
+                    ronoctua_i18n::key::FILES_NOT_COPIED
+                });
+                self.echo_message(said);
+            }
+            Errand::Terminal(root) => {
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(
+                        &me.to_string_lossy(),
+                        &["terminal".to_owned()],
+                        Some(&root.to_string_lossy()),
+                    );
+                }
+            }
+            Errand::Fetch => {
+                let (Some(sender), Some(repo)) = (self.git_sender(), self.git_repo.clone()) else {
+                    if let Some(v) = self.git_view.as_mut() {
+                        let said = v.fetched(Err(ronoctua_git::Why::NotARepo));
+                        self.echo_message(said);
+                    }
+                    self.draw_and_paint();
+                    return;
+                };
+                let _ = std::thread::Builder::new()
+                    .name("git-fetch".to_owned())
+                    .spawn(move || {
+                        let done = repo.fetch(None).map_err(|r| r.why);
+                        let _ = sender.send(crate::git_browser_window::Back::Fetched(done));
+                    });
+            }
+            Errand::Keep { commit, path } => {
+                let (Some(sender), Some(repo), Some(cache)) = (
+                    self.git_sender(),
+                    self.git_repo.clone(),
+                    crate::git_browser::versions_dir(),
+                ) else {
+                    let said = self.texts.t(ronoctua_i18n::key::FILES_GIT_NO_VERSION);
+                    self.echo_message(said);
+                    self.draw_and_paint();
+                    return;
+                };
+                let _ = std::thread::Builder::new()
+                    .name("git-version".to_owned())
+                    .spawn(move || {
+                        let kept = crate::git_browser::keep_version(&repo, &commit, &path, &cache)
+                            .map(|p| (p, commit.0.clone()));
+                        let _ = sender.send(crate::git_browser_window::Back::Kept(kept));
+                    });
+            }
+        }
+        self.git_ask();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// The browser's region, in cells and lines: the screen's cells NET OF
+    /// BOTH MARGINS (`git_browser::footer_columns`), and the lines the region
+    /// has once the explanation's row is paid out of it (`region_lines`, the
+    /// grid's own arithmetic — `grid_full` gives the browser the whole
+    /// ceiling). ONE answer for the rows, the paint, the hover, the click and
+    /// the keys: two of them measuring differently is a control grabbed
+    /// somewhere other than where it is drawn.
+    ///
+    /// Line counts and a stored flag only (`explain_rows` remembers), so it
+    /// is safe under `metric`.
+    fn git_shape(&self) -> (u16, usize) {
+        (
+            crate::git_browser::footer_columns(self.screen_columns()),
+            region_lines(self.expansion_ceiling(), self.explain_rows()),
+        )
+    }
+
+    /// Where the browser's region is on the surface `width` by `bottom`, in
+    /// pixels — what its bands, rules and bars are painted and grabbed from.
+    fn git_px(&self, width: f32, bottom: f32) -> crate::git_browser::Px {
+        let first = self.first_of_expansion();
+        let f = crate::chrome::Frame::of(width, bottom, first);
+        crate::git_browser::Px {
+            lead: crate::chrome::FIELDS_LEAD,
+            top: f.y_of(first),
+            bottom: f.bottom(),
+            edge: width,
+            cell: f.cell(),
+            line: f.line(),
+        }
+    }
+
+    /// The browser's rules, bands and bars on the surface `width` by
+    /// `bottom` — none when it is not what the region shows.
+    fn git_paint(
+        &self,
+        width: f32,
+        bottom: f32,
+    ) -> (
+        Vec<ronoctua_render::quad::Quad>,
+        Vec<crate::git_browser::BarBox>,
+    ) {
+        let Some(v) = self
+            .git_view
+            .as_ref()
+            .filter(|_| self.view() == ViewState::Git)
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        let (columns, room) = self.git_shape();
+        let drawn = v.drawn(columns, room);
+        let px = self.git_px(width, bottom);
+        let mut quads = crate::git_browser::bands(&drawn, &px);
+        quads.extend(crate::git_browser::dividers(&drawn, &px));
+        (quads, crate::git_browser::bars(&drawn, &px))
+    }
+
+    /// The browser's hover band for the pointer on region line `line`, cell
+    /// `cell` — its row, in its column only.
+    fn git_hover(
+        &self,
+        line: usize,
+        cell: u16,
+        color: tokens::Color,
+        width: f32,
+        bottom: f32,
+    ) -> Option<ronoctua_render::quad::Quad> {
+        let v = self.git_view.as_ref()?;
+        let (columns, room) = self.git_shape();
+        let drawn = v.drawn(columns, room);
+        crate::git_browser::hover_band(&drawn, &self.git_px(width, bottom), line, cell, color)
+    }
+
+    /// The browser's bar under `(x, y)`, where the last frame drew it.
+    fn git_bar_at(&self, x: f64, y: f64) -> Option<crate::git_browser::BarBox> {
+        let (w, h) = self.pointer_screen()?;
+        #[allow(clippy::cast_possible_truncation)]
+        let (x, y) = (x as f32, y as f32);
+        self.git_paint(w, h).1.into_iter().find(|b| b.holds(x, y))
+    }
+
+    /// One of the browser's bars, dragged to `(x, y)`.
+    fn git_drag_to(&mut self, bar: crate::git_browser::BarBox, x: f64, y: f64) {
+        let Some((w, h)) = self.pointer_screen() else {
+            return;
+        };
+        let px = self.git_px(w, h);
+        #[allow(clippy::cast_possible_truncation)]
+        let to = bar.offset_at(x as f32, y as f32, &px);
+        if self
+            .git_view
+            .as_mut()
+            .is_some_and(|v| v.scroll_bar(&bar, to))
+        {
+            self.owes_paint = true;
+        }
+    }
+
+    /// The file manager's git line follows the folder on screen — the keeper
+    /// raised the first time, on the manager's own channel.
+    fn follow_the_git_line(&mut self) {
+        let Some(dir) = self.files.as_ref().map(|v| v.where_().to_path_buf()) else {
+            return;
+        };
+        if self.files_git.is_none()
+            && let Some(sender) = self.files_sender.clone()
+        {
+            self.files_git = Some(crate::git_line::Keeper::new(move |line| {
+                sender
+                    .send(crate::files::Report::Git(Box::new(line)))
+                    .is_ok()
+            }));
+        }
+        if let Some(k) = self.files_git.as_mut() {
+            k.follow(&dir);
+        }
+    }
+
+    /// `icons-open` and a screen's command: the icons app in the region, on
+    /// `screen` — or on the one it shows, when it is open already. Its tables
+    /// are read on a thread (`icons::read_the_tables`), on a channel hung for
+    /// as long as the view is open.
+    fn open_icons(&mut self, screen: Option<ronoctua_iconset::Collection>) {
+        if self.icons_app.is_none() && !self.region_is_free("icons-open") {
+            return;
+        }
+        match self.icons_app.as_mut() {
+            Some(v) => {
+                if let Some(s) = screen {
+                    v.show(s);
+                }
+            }
+            None => {
+                let s = screen.unwrap_or(ronoctua_iconset::Collection::NerdFonts);
+                self.icons_app = Some(crate::icons::View::new(s, &self.texts));
+                self.icons_read_the_tables();
+            }
+        }
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// Hangs the tables' channel on the loop and starts the thread.
+    fn icons_read_the_tables(&mut self) {
+        let Some(handle) = self.repeat.clone() else {
+            tracing::warn!("no loop to hear the icon tables on; the view says it is reading");
+            return;
+        };
+        let (sender, arrived) = channel::channel::<
+            Result<std::sync::Arc<ronoctua_iconset::Set>, ronoctua_iconset::Refusal>,
+        >();
+        match handle.insert_source(arrived, |event, (), state: &mut Self| {
+            if let channel::Event::Msg(answer) = event {
+                state.icons_took(answer);
+            }
+        }) {
+            Ok(token) => {
+                self.icons_app_source = Some(token);
+                crate::icons::read_the_tables(move |answer| {
+                    let _ = sender.send(answer);
+                });
+            }
+            Err(e) => tracing::warn!(error = %e, "could not hang the icon tables' channel"),
+        }
+    }
+
+    /// The tables arrived: handed to the view, and the channel let go.
+    fn icons_took(
+        &mut self,
+        answer: Result<std::sync::Arc<ronoctua_iconset::Set>, ronoctua_iconset::Refusal>,
+    ) {
+        if let Some(token) = self.icons_app_source.take()
+            && let Some(handle) = self.repeat.as_ref()
+        {
+            handle.remove(token);
+        }
+        if let Some(v) = self.icons_app.as_mut() {
+            v.took(answer);
+            self.draw_and_paint();
+        }
+    }
+
+    /// Shuts the view, and lets its tables go with it — the footer lives for
+    /// months, and ~9 MB of icons is not something it keeps.
+    fn close_icons(&mut self) {
+        self.icons_app = None;
+        // THE HAND'S TARGET WAS THE VIEW'S — a code no other view has rows
+        // for — and goes with it.
+        self.here.row_under_pointer = None;
+        if let Some(token) = self.icons_app_source.take()
+            && let Some(handle) = self.repeat.as_ref()
+        {
+            handle.remove(token);
+        }
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// Where the icons app is drawn in the region: its tab line first, then
+    /// the view's own area — from the metric, never from what the region
+    /// holds (`the-footer-does-not-ask-itself`).
+    fn icons_area_of(&self, width: f32, bottom: f32) -> crate::icons::Area {
+        let first = self.first_of_expansion();
+        let line = tokens::metrics::line_height(tokens::text::size());
+        let top = crate::icons::Area::y_of(first);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lines = ((bottom - top).max(0.0) / line).floor() as u16;
+        let columns = crate::chrome::Frame::of(width, bottom, first).columns();
+        crate::icons::Area {
+            left: crate::chrome::INSET,
+            top: first,
+            columns: columns.saturating_sub(2 * crate::chrome::INSET),
+            lines,
+            right_px: width,
+            bottom_px: bottom,
+        }
+    }
+
+    /// The view's area on the screen the pointer and the keys are measured on,
+    /// under the tab line.
+    fn icons_area(&self) -> Option<crate::icons::Area> {
+        let (w, h) = self.pointer_screen()?;
+        Some(self.icons_area_of(w, h).below(1))
+    }
+
+    /// A key in the icons app.
+    fn icons_key(&mut self, key: ronoctua_keymap::Key) {
+        let Some(area) = self.icons_area() else {
+            return;
+        };
+        let in_page = self
+            .icons_app
+            .as_ref()
+            .is_some_and(crate::icons::View::in_page);
+        let Some(press) = crate::icons::press_of_key(key, in_page) else {
+            return;
+        };
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self
+            .icons_app
+            .as_mut()
+            .map_or(crate::icons::Errand::Nothing, |v| {
+                v.key(press, area, &texts)
+            });
+        self.icons_errand(errand);
+    }
+
+    /// What the icons app asked, done in this door — and a frame.
+    fn icons_errand(&mut self, errand: crate::icons::Errand) {
+        use crate::icons::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.close_icons();
+                return;
+            }
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            // THIS DOOR ASKS ON ITS MINIBUFFER — the line a window asks on its
+            // header — starting from the colour as it is.
+            Errand::AskColour(initial) => {
+                self.mx
+                    .request_with(crate::icons::COLOUR_COMMAND, false, Some(&initial));
+            }
+            Errand::Paste => {
+                self.read_the_clipboard(PasteFor::Icons);
+                return;
+            }
+        }
+        self.draw_and_paint();
+    }
+
+    /// The pointer over the icons app's region — its tabs, its cells, its
+    /// rows and its bars, by the layout its drawing used. Answers whether it
+    /// took the frame: a frame that leaves the region, or crosses out of it,
+    /// is the footer's own.
+    fn icons_took_the_pointer(&mut self, events: &[PointerEvent]) -> bool {
+        if self.view() != ViewState::Icons {
+            return false;
+        }
+        let Some((w, h)) = self.pointer_screen() else {
+            return false;
+        };
+        let whole = self.icons_area_of(w, h);
+        let area = whole.below(1);
+        let top = f64::from(crate::icons::Area::y_of(whole.top));
+        let held = self.icons_app.as_ref().is_some_and(|v| v.grabbed.is_some());
+        let inside = |e: &PointerEvent| {
+            !matches!(e.kind, PointerEventKind::Leave { .. })
+                && e.position.1 >= top
+                && e.position.1 < f64::from(h)
+        };
+        if !held && !events.iter().all(inside) {
+            // THE HOVER GOES WITH THE POINTER, and the footer takes the rest.
+            let had = self.here.row_under_pointer.take().is_some();
+            if let Some(v) = self.icons_app.as_mut()
+                && (v.hovered(None) | v.tab_hovered(None) | had)
+            {
+                self.ask_paint();
+            }
+            return false;
+        }
+        let texts = std::rc::Rc::clone(&self.texts);
+        let cell_px = f64::from(crate::chrome::cell_width());
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let mut errands: Vec<crate::icons::Errand> = Vec::new();
+        let mut keys: Vec<ronoctua_keymap::Key> = Vec::new();
+        let mut turned: Option<f32> = None;
+        for e in events {
+            #[allow(clippy::cast_possible_truncation)]
+            let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (column, line) = (
+                (e.position.0 / cell_px) as u16,
+                (e.position.1 / line_px) as u16,
+            );
+            let Some(v) = self.icons_app.as_mut() else {
+                return false;
+            };
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.here.under_pointer = true;
+                    if v.grabbed.is_some() {
+                        v.dragged(area, py, &texts);
+                    } else if line == whole.top {
+                        // A TAB LIGHTS AND SAYS WHAT IT DOES, on the search
+                        // line right under it — the line below the shortcuts
+                        // every header explains them on.
+                        let tab = v.tab_at(whole, &texts, column, line);
+                        v.tab_hovered(tab);
+                        v.hovered(None);
+                        self.here.row_under_pointer = None;
+                    } else {
+                        v.tab_hovered(None);
+                        let target = v.target_at(area, &texts, px, py);
+                        v.hovered(target);
+                        // EACH HAND KEEPS ITS OWN TARGET, as a window's does,
+                        // and is lit in its own colour (`seats`).
+                        self.here.row_under_pointer = target.map(crate::icons::Target::code);
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    v.hovered(None);
+                    v.tab_hovered(None);
+                    self.here.row_under_pointer = None;
+                }
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    v.grabbed = None;
+                }
+                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    if line == whole.top {
+                        if let Some(crate::chrome::Act::Key(k)) =
+                            v.tab_press_at(whole, &texts, column, line)
+                        {
+                            keys.push(k);
+                        }
+                    } else if let Some(t) = v.target_at(area, &texts, px, py) {
+                        errands.push(v.pressed(t, area, py, &texts));
+                    }
+                }
+                // THE BACK BUTTON IS `Esc` over the region, as everywhere.
+                PointerEventKind::Press { button, .. } if button == BACK_BUTTON => {
+                    keys.push(ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Esc));
+                }
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    wheel_arrived(&mut v.lines_owed, &vertical, &horizontal);
+                    turned = Some(py);
+                }
+                _ => {}
+            }
+        }
+        if let Some(y) = turned
+            && let Some(v) = self.icons_app.as_mut()
+        {
+            let by = wheel_lines(&mut v.lines_owed);
+            if by != 0 {
+                v.wheeled(by, area, y, &texts);
+            }
+        }
+        for k in keys {
+            self.icons_key(k);
+        }
+        for e in errands {
+            self.icons_errand(e);
+        }
+        self.ask_paint();
+        true
+    }
+
+    /// `calc-open`: the calculator, in the region — never over a view that
+    /// holds work (`region_is_free`). A second opening keeps what is typed,
+    /// and reads the history again: the window may have kept answers since.
+    fn open_calc(&mut self) {
+        if !self.region_is_free("calc-open") {
+            return;
+        }
+        match self.calc.as_mut() {
+            None => {
+                let history = crate::calc::store().read().history;
+                let zone =
+                    ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
+                let zoneinfo = std::env::var_os("RONOCTUA_ZONEINFO").map(std::path::PathBuf::from);
+                self.calc = Some(crate::calc::View::fresh(history, zone, zoneinfo));
+                // THE DIRECTORY FOUND HERE AND HANDED IN
+                // (`persistence-takes-its-root-as-a-parameter`).
+                self.calc_watch = ronoctua_store::config_dir().and_then(|d| self.watch_calc(&d));
+            }
+            Some(v) => {
+                if let Some(kept) = crate::calc::store().parsed() {
+                    v.history_is(kept.history);
+                }
+            }
+        }
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A watch on `calc.json`, while the view is open: an answer the window
+    /// keeps is in this history at once. Its channel goes with it — the
+    /// notice dropped, the sender with it, and the source is taken off.
+    fn watch_calc(&self, dir: &std::path::Path) -> Option<ronoctua_files::notice::Notice> {
+        let handle = self.repeat.clone()?;
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(error = %e, "no configuration directory to watch calc.json in");
+            return None;
+        }
+        let (sender, changed) = calloop::channel::channel::<()>();
+        handle
+            .insert_source(changed, |event, (), state: &mut Self| {
+                if let calloop::channel::Event::Msg(()) = event
+                    && let Some(kept) = crate::calc::store().parsed()
+                    && let Some(v) = state.calc.as_mut()
+                    && kept.history.as_slice() != v.history()
+                {
+                    v.history_is(kept.history);
+                    state.region_resized();
+                    state.draw_and_paint();
+                }
+            })
+            .map_err(|e| tracing::warn!(error = %e, "the calc.json watch could not be hung"))
+            .ok()?;
+        ronoctua_files::notice::Notice::on_file(
+            dir,
+            crate::calc::FILE,
+            ronoctua_files::notice::Pace::Coalesced,
+            move || sender.send(()).is_ok(),
+        )
+        .ok()
+    }
+
+    /// Now, in milliseconds since the epoch — what the calculator's `now` is,
+    /// and the moment an answer is kept at.
+    fn calc_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
+    }
+
+    /// A key of the calculator, from the keyboard or the hint.
+    fn calc_press(&mut self, press: crate::calc::Press) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let now = Self::calc_now();
+        let errand = self
+            .calc
+            .as_mut()
+            .map_or(crate::calc::Errand::Nothing, |v| {
+                v.at(now);
+                v.press(press, &texts)
+            });
+        self.calc_errand(errand);
+    }
+
+    /// A click on what a line of the calculator holds.
+    fn calc_clicked(&mut self, target: crate::calc::Target) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let now = Self::calc_now();
+        let errand = self
+            .calc
+            .as_mut()
+            .map_or(crate::calc::Errand::Nothing, |v| {
+                v.at(now);
+                v.clicked(target, &texts)
+            });
+        self.calc_errand(errand);
+    }
+
+    /// What the calculator asked for — the window's own errands, done by this
+    /// door and SAID on this door's line.
+    fn calc_errand(&mut self, errand: crate::calc::Errand) {
+        use crate::calc::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.calc = None;
+                self.calc_watch = None;
+                self.first_page();
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+                return;
+            }
+            Errand::Keep(entry) => match crate::calc::keep_in(&crate::calc::store(), entry) {
+                Ok(history) => {
+                    if let Some(v) = self.calc.as_mut() {
+                        v.history_is(history);
+                    }
+                }
+                Err(crate::calc::Unkept::Unparsed) => {
+                    let said = self.texts.t_with(
+                        ronoctua_i18n::key::CALC_UNKEPT_UNPARSED,
+                        &[("file", crate::calc::FILE)],
+                    );
+                    self.echo_message(said);
+                }
+                Err(crate::calc::Unkept::NotWritten(why)) => {
+                    tracing::warn!(error = %why, "an answer could not be kept");
+                    let said = self.texts.t_with(
+                        ronoctua_i18n::key::CALC_UNKEPT,
+                        &[("file", crate::calc::FILE), ("why", &why.to_string())],
+                    );
+                    self.echo_message(said);
+                }
+            },
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            Errand::Paste => self.read_the_clipboard(PasteFor::Calc),
+            Errand::Fetch => self.calc_fetch(),
+            Errand::Allow => {
+                let host = ronoctua_calc::rates::HOST;
+                match crate::consent_rows::allow(&[host], &self.texts) {
+                    Ok(()) => {
+                        if let Some(v) = self.calc.as_mut() {
+                            v.allowed();
+                        }
+                        self.calc_fetch();
+                    }
+                    // EVERY APP'S SENTENCE for a press that could not be kept
+                    // (`consent_rows::unkept`).
+                    Err(said) => self.echo_message(said),
+                }
+            }
+            // THE FOOTER HAS NO PLACE OF ITS OWN to float: the window is the
+            // door that floats, and `C-f` opens it — compact, floating.
+            Errand::Float => self.run_command("calc-window"),
+        }
+        self.calc_look();
+        // A MODE, AN ANSWER KEPT OR A LIST FOUND changes how many lines the
+        // region holds.
+        self.region_resized();
+        self.draw_and_paint();
+    }
+
+    /// The rates are wanted and nobody looked: the file and the consent, read
+    /// now — and a fetch when the host may be asked.
+    fn calc_look(&mut self) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        if !self
+            .calc
+            .as_ref()
+            .is_some_and(|v| v.to_look(texts.decimal_mark()))
+        {
+            return;
+        }
+        let probe = crate::calc::probe();
+        let errand = self.calc.as_mut().map(|v| v.looked(probe, &texts));
+        if errand == Some(crate::calc::Errand::Fetch) {
+            self.calc_fetch();
+        }
+    }
+
+    /// Asks for the rates on a thread, and hangs a channel for the answer on
+    /// this loop — one channel per ask, gone when its thread ends.
+    fn calc_fetch(&mut self) {
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let (sender, arrived) = calloop::channel::channel::<crate::calc::Fetched>();
+        let hung = handle.insert_source(arrived, |event, (), state: &mut Self| {
+            if let calloop::channel::Event::Msg(got) = event {
+                let texts = std::rc::Rc::clone(&state.texts);
+                if let Some(v) = state.calc.as_mut() {
+                    v.fetched(got, &texts);
+                }
+                state.region_resized();
+                state.draw_and_paint();
+            }
+        });
+        if let Err(e) = hung {
+            tracing::warn!(error = %e, "the rates' channel could not be hung");
+            return;
+        }
+        crate::calc::fetch_then(move |got| {
+            let _ = sender.send(got);
+        });
+    }
+
+    /// `video-metrics-open [page]`: the view, in the region — never over a view
+    /// that holds work (`region_is_free`); a second opening keeps the live view,
+    /// on the page asked when one is.
+    fn open_video_metrics(&mut self, argument: Option<&str>) {
+        let page = argument.and_then(crate::video_metrics_window::opening_of);
+        if self.video_metrics.is_none() && !self.region_is_free("video-metrics-open") {
+            return;
+        }
+        self.video_metrics_awake();
+        let errand = match self.video_metrics.as_mut() {
+            Some(v) => match page {
+                Some(p) => v.open(p),
+                None => crate::video_metrics::Errand::Look(v.look()),
+            },
+            None => {
+                let (v, e) = crate::video_metrics::View::fresh(
+                    page.unwrap_or(crate::video_metrics::Page::Home),
+                );
+                self.video_metrics = Some(v);
+                e
+            }
+        };
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.video_metrics_errand(errand);
+    }
+
+    /// The feed and its channel, when they are not up yet — and what the door
+    /// fills in the readings: the zone, the clock and how the queue is opened.
+    fn video_metrics_awake(&mut self) {
+        if self.video_metrics_wake.is_none()
+            && let Some(handle) = self.repeat.clone()
+        {
+            let (sender, woke) = channel::channel::<crate::video_metrics_feed::Woke>();
+            let hung = handle.insert_source(woke, |event, (), state: &mut Footer| {
+                if let channel::Event::Msg(w) = event {
+                    state.video_metrics_woke(w);
+                }
+            });
+            match hung {
+                Ok(_) => self.video_metrics_wake = Some(sender),
+                Err(e) => tracing::error!(error = %e, "could not hang the video-metrics channel"),
+            }
+        }
+        if self.video_metrics_feed.is_none() {
+            let sender = std::sync::Mutex::new(self.video_metrics_wake.clone());
+            self.video_metrics_feed = Some(crate::video_metrics_feed::Feed::start(
+                ronoctua_video_metrics::default_path(),
+                move || {
+                    if let Ok(s) = sender.lock()
+                        && let Some(s) = s.as_ref()
+                    {
+                        let _ = s.send(crate::video_metrics_feed::Woke::Feed);
+                    }
+                },
+            ));
+        }
+        let r = &mut self.video_metrics_readings;
+        r.zone = self.zone.clone();
+        r.now_s = crate::video_metrics::now_s();
+        r.transfers_keys =
+            crate::leader::taught_keys(&self.tree, "transfers-open", None).unwrap_or_default();
+    }
+
+    /// Shuts the view, and its thread with it.
+    fn close_video_metrics(&mut self) {
+        self.video_metrics = None;
+        self.video_metrics_feed = None;
+        self.video_metrics_covers.clear();
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// `video-metrics-scan`: a scan now, asked by the view's feed — or by a
+    /// feed raised for it, with the view closed.
+    fn video_metrics_scan(&mut self) {
+        self.video_metrics_awake();
+        if let Some(f) = self.video_metrics_feed.as_ref() {
+            f.want(crate::video_metrics_feed::Want::Scan);
+        }
+    }
+
+    /// What the feed or the clipboard brought.
+    fn video_metrics_woke(&mut self, woke: crate::video_metrics_feed::Woke) {
+        use crate::video_metrics::Said;
+        use crate::video_metrics_feed::{Arrived, Woke};
+        let arrived = match woke {
+            Woke::Pasted(Ok(text)) => {
+                if self
+                    .video_metrics
+                    .as_mut()
+                    .is_some_and(|v| v.text_pasted(&text))
+                {
+                    self.draw_and_paint();
+                }
+                return;
+            }
+            Woke::Pasted(Err(e)) => {
+                tracing::warn!(error = %e, "the clipboard could not be read");
+                let said = self.texts.t(ronoctua_i18n::key::DOOR_PASTE_FAILED);
+                self.echo_message(said);
+                self.draw_and_paint();
+                return;
+            }
+            Woke::Feed => self
+                .video_metrics_feed
+                .as_ref()
+                .map(crate::video_metrics_feed::Feed::take)
+                .unwrap_or_default(),
+        };
+        if arrived.is_empty() {
+            return;
+        }
+        self.video_metrics_readings.now_s = crate::video_metrics::now_s();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let mut next = Vec::new();
+        for a in arrived {
+            match a {
+                Arrived::Reading(r) => self.video_metrics_readings.took(*r),
+                Arrived::Done(done) => {
+                    let Some(v) = self.video_metrics.as_mut() else {
+                        // THE SCAN ASKED WITH THE VIEW CLOSED still says where
+                        // it went.
+                        if let crate::video_metrics::Done::Scan(s) = done {
+                            let (said, _) = crate::video_metrics::View::default().took(
+                                crate::video_metrics::Done::Scan(s),
+                                &self.video_metrics_readings,
+                                &texts,
+                            );
+                            match said {
+                                Some(Said::Normal(t)) => self.echo_message(t),
+                                Some(Said::Long(t)) => self.echo_for(t, crate::echo::Echo::Long),
+                                None => {}
+                            }
+                            // AND THE FEED RAISED FOR IT GOES: no view reads.
+                            self.video_metrics_feed = None;
+                        }
+                        continue;
+                    };
+                    let (said, then) = v.took(done, &self.video_metrics_readings, &texts);
+                    match said {
+                        Some(Said::Normal(t)) => self.echo_message(t),
+                        Some(Said::Long(t)) => self.echo_for(t, crate::echo::Echo::Long),
+                        None => {}
+                    }
+                    next.push(then);
+                }
+            }
+        }
+        // THE COVERS THE REGION DRAWS, by the key their rows name.
+        self.video_metrics_covers = self
+            .video_metrics_readings
+            .pictures
+            .iter()
+            .map(|(file, p)| {
+                let key = crate::video_metrics::picture_key(file);
+                (key.clone(), (key, std::sync::Arc::clone(&p.rgba)))
+            })
+            .collect();
+        // A READING NEVER MOVES THE PAGE: the cursor is kept on its row. A
+        // question the view put there from an errand's answer is followed,
+        // as the key it answers would have been.
+        let columns = self.screen_columns();
+        let mut follow = false;
+        if let Some(v) = self.video_metrics.as_mut() {
+            let rows = v.rows(&self.video_metrics_readings, columns, &texts);
+            v.settle(&rows);
+            follow = v.follow_owed();
+        }
+        for e in next {
+            self.video_metrics_errand(e);
+        }
+        self.region_resized();
+        if follow {
+            self.follow_cursor();
+        }
+        self.draw_and_paint();
+    }
+
+    /// A key of the view — from the keyboard, the hint, or `RET` from a second
+    /// click (invariant 19).
+    fn video_metrics_press(&mut self, press: crate::video_metrics::Press) {
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self.video_metrics.as_mut().map(|v| {
+            let rows = v.rows(&self.video_metrics_readings, columns, &texts);
+            v.press(press, &rows, &self.video_metrics_readings)
+        });
+        if let Some(errand) = errand {
+            self.video_metrics_errand(errand);
+        }
+        self.follow_cursor();
+        self.draw_and_paint();
+    }
+
+    /// A key with the view in the region: the text's while a description is
+    /// edited, else the view's by its whole notation.
+    fn video_metrics_key(&mut self, key: ronoctua_keymap::Key) {
+        if self
+            .video_metrics
+            .as_ref()
+            .is_some_and(crate::video_metrics::View::editing)
+        {
+            let (_, room) = crate::video_metrics::extent(self.screen_columns());
+            let errand = self.video_metrics.as_mut().map(|v| v.text_key(key, room));
+            if let Some(errand) = errand {
+                self.video_metrics_errand(errand);
+            }
+            self.region_resized();
+            self.follow_cursor();
+            self.draw_and_paint();
+            return;
+        }
+        if let Some(press) = crate::video_metrics::press_of_key(key) {
+            self.video_metrics_press(press);
+        }
+    }
+
+    /// Carries out what the view asked for.
+    fn video_metrics_errand(&mut self, errand: crate::video_metrics::Errand) {
+        use crate::video_metrics::Errand;
+        use crate::video_metrics_feed::Want;
+        let want = |me: &Self, w: Want| {
+            if let Some(f) = me.video_metrics_feed.as_ref() {
+                f.want(w);
+            }
+        };
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => self.close_video_metrics(),
+            Errand::Look(look) => {
+                self.first_page();
+                want(self, Want::Look(look));
+            }
+            Errand::Edit(edit) => want(self, Want::Edit(edit)),
+            Errand::Scan => want(self, Want::Scan),
+            Errand::Play(play) => want(self, Want::Play(play)),
+            Errand::Download { url, title } => want(self, Want::Download { url, title }),
+            Errand::Transfers => self.video_metrics_to_the_queue(),
+            // THIS DOOR ASKS ON ITS MINIBUFFER — the same `line::Line` a window
+            // asks on its header — from what the row holds now.
+            Errand::Ask { ask, initial } => {
+                self.mx
+                    .request_with(ask.command(), false, initial.as_deref());
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // THE LIVE SELECTION, off the loop (`crate::pasting`), back through
+            // this view's own channel — and only into the text it was read for.
+            Errand::Paste => {
+                if let Some(sender) = self.video_metrics_wake.clone() {
+                    crate::pasting::text_then(move |text| {
+                        let _ = sender.send(crate::video_metrics_feed::Woke::Pasted(
+                            text.map_err(|e| e.to_string()),
+                        ));
+                    });
+                }
+            }
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            // CLOSE BEFORE CHROME OPENS, the launcher's rule: a view left open
+            // over the window that just opened keeps its keyboard.
+            Errand::Kiosk(url) => {
+                self.close_video_metrics();
+                self.kiosk_open(Some(&url));
+            }
+            Errand::Say(text) => self.echo_for(text, crate::echo::Echo::Long),
+        }
+    }
+
+    /// What was typed on the minibuffer for one of the view's questions — or,
+    /// with no argument (by name, a click), the question asked.
+    fn video_metrics_typed(&mut self, id: &str, argument: Option<&str>) {
+        let Some(ask) = crate::video_metrics::Ask::of_command(id) else {
+            return;
+        };
+        if self.video_metrics.is_none() {
+            self.open_video_metrics(None);
+            if self.video_metrics.is_none() {
+                return;
+            }
+        }
+        // BY NAME, WITH NO VALUE: asked about the row the cursor is on when
+        // it is one the question fits — as `RET` there would — and refused
+        // with a sentence otherwise, never asked about nothing.
+        let Some(said) = argument else {
+            let columns = self.screen_columns();
+            let texts = std::rc::Rc::clone(&self.texts);
+            let errand = self.video_metrics.as_mut().map(|v| {
+                let rows = v.rows(&self.video_metrics_readings, columns, &texts);
+                v.asked_by_name(ask, &rows, &self.video_metrics_readings, &texts)
+            });
+            if let Some(errand) = errand {
+                self.video_metrics_errand(errand);
+            }
+            self.draw_and_paint();
+            return;
+        };
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self
+            .video_metrics
+            .as_mut()
+            .map(|v| v.typed(id, said, &self.video_metrics_readings, &texts));
+        if let Some(errand) = errand {
+            self.video_metrics_errand(errand);
+        }
+        self.draw_and_paint();
+    }
+
+    /// A download handed to the queue: the view gives the region to the
+    /// transfers' queue (`LEADER t t`), where the download is seen going — the
+    /// view closes first, as before Chrome, so the region is free. The
+    /// registry's `transfers-open` is not run from here: a command reached
+    /// from a view's errand that can open the view again is a ring
+    /// (`the-footer-does-not-ask-itself`), so the panel is opened as that
+    /// arm opens it, from the list the footer already holds.
+    fn video_metrics_to_the_queue(&mut self) {
+        self.close_video_metrics();
+        if !self.region_is_free("transfers-open") {
+            return;
+        }
+        let mut view = crate::transfers::View::fresh_one();
+        view.refresh(self.jobs.clone());
+        self.transfers = Some(view);
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// A click on row `n` of the view — at the cell under the pointer, for a
+    /// shelf of the grid and a line being edited: the first selects, the second
+    /// acts (invariant 19).
+    fn video_metrics_clicked(&mut self, n: usize) {
+        let columns = self.screen_columns();
+        let column = self.here.cell_under_pointer.unwrap_or(0);
+        let texts = std::rc::Rc::clone(&self.texts);
+        let Some(v) = self.video_metrics.as_mut() else {
+            return;
+        };
+        let rows = v.rows(&self.video_metrics_readings, columns, &texts);
+        if v.editing() {
+            if let Some(hit) = crate::video_metrics::text_hit(&rows, n, column) {
+                v.text_clicked(hit);
+            }
+            self.draw_and_paint();
+            return;
+        }
+        if let Some(errand) = v.click_answers(n, &rows) {
+            self.video_metrics_errand(errand);
+            self.draw_and_paint();
+            return;
+        }
+        if v.clicked(n, column, &rows) {
+            self.video_metrics_press(crate::video_metrics::Press::Enter);
+        } else {
+            self.draw_and_paint();
+        }
+    }
+
+    /// The view's rows as the region's lines: fields, the caret, the lines that
+    /// continue a row, and each thumbnail over its lines as a COVER — the
+    /// picture-over-rows the region already draws for the player — with its
+    /// picture's key and size, once it is decoded.
+    fn video_metrics_rows(&self) -> Vec<ExpansionRow> {
+        let Some(v) = self.video_metrics.as_ref() else {
+            return Vec::new();
+        };
+        let rows = v.rows(
+            &self.video_metrics_readings,
+            self.screen_columns(),
+            &self.texts,
+        );
+        rows.iter()
+            .enumerate()
+            .map(|(n, r)| {
+                let covers = r
+                    .thumbs
+                    .iter()
+                    .filter_map(|t| {
+                        let p = self.video_metrics_readings.pictures.get(&t.file)?;
+                        Some(crate::player_rows::CoverRow {
+                            line: t.line,
+                            lines: t.lines,
+                            left: t.left,
+                            cells: t.cells,
+                            key: std::rc::Rc::from(crate::video_metrics::picture_key(&t.file)),
+                            size: p.size,
+                        })
+                    })
+                    .collect();
+                let acts = !r.heading || !r.cells.is_empty();
+                ExpansionRow {
+                    click: acts.then_some(Click::VideoMetrics(n)),
+                    fields: r.fields.clone(),
+                    description: crate::video_metrics::View::about(&rows, n, &self.texts),
+                    caret: r.caret,
+                    covers,
+                    continues: r.continues,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                }
+            })
+            .collect()
+    }
+
+    /// The view's cursor, as the line the region follows.
+    fn video_metrics_cursor(&self) -> Option<usize> {
+        let v = self.video_metrics.as_ref()?;
+        let rows = v.rows(
+            &self.video_metrics_readings,
+            self.screen_columns(),
+            &self.texts,
+        );
+        Some(v.drawn_cursor(&rows))
+    }
+
+    /// The keys the hint line teaches for the row under the cursor.
+    fn video_metrics_hint(&self) -> Option<Vec<crate::chrome::Piece>> {
+        let v = self.video_metrics.as_ref()?;
+        let rows = v.rows(
+            &self.video_metrics_readings,
+            self.screen_columns(),
+            &self.texts,
+        );
+        Some(v.hint(&rows, &self.texts))
+    }
+
+    /// How the hover lights a line of the view: a shelf of the grid lights the
+    /// CELL under the pointer (its cells in pixels), a line of a picture or a
+    /// title lights nothing, any other row its usual band.
+    fn video_metrics_band(
+        &self,
+        click: Option<Click>,
+        column: Option<u16>,
+        cell_px: f32,
+    ) -> crate::video_metrics::Band {
+        use crate::video_metrics::Band;
+        let Some(Click::VideoMetrics(n)) = click else {
+            return Band::Nothing;
+        };
+        let Some(v) = self.video_metrics.as_ref() else {
+            return Band::Nothing;
+        };
+        let rows = v.rows(
+            &self.video_metrics_readings,
+            self.screen_columns(),
+            &self.texts,
+        );
+        let owner = crate::video_metrics::Row::owner(&rows, n);
+        let Some(row) = rows.get(owner) else {
+            return Band::Nothing;
+        };
+        if row.cells.is_empty() {
+            return if row.heading || !row.thumbs.is_empty() {
+                Band::Nothing
+            } else {
+                Band::Plain
+            };
+        }
+        let column = column.unwrap_or(0);
+        row.cells
+            .iter()
+            .find(|c| crate::chrome::in_cell(column, c.from, c.width))
+            .map_or(Band::Nothing, |c| {
+                Band::Cell(
+                    f32::from(crate::chrome::FIELDS_LEAD + c.from) * cell_px,
+                    f32::from(c.width) * cell_px,
+                )
+            })
+    }
+
+    /// `security-open [section]`: the security centre in the region — never
+    /// over a view that holds work (`region_is_free`) — its scene read on a
+    /// thread and its folders watched while it is shown.
+    fn open_security(&mut self, section: Option<crate::security::Section>) {
+        if !self.security_shown && !self.region_is_free("security-open") {
+            return;
+        }
+        if let Some(s) = section {
+            self.security.open_on(s);
+        }
+        if !self.security_shown {
+            self.security_shown = true;
+            self.security_start(crate::security::Job::Read);
+            // A FOLDER THAT MOVED is a stir on the channel, and the loop reads
+            // again what moves — never the slow facts (`Scene::refreshed`).
+            let sender = self.security_channel();
+            self.security_watches =
+                crate::security::watches(ronoctua_xdg::state_dir(), move || {
+                    sender
+                        .as_ref()
+                        .is_some_and(|tx| tx.send(crate::security::Came::Stirred).is_ok())
+                });
+            self.first_page();
+        }
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.security_settle();
+        self.draw_and_paint();
+    }
+
+    /// The cursor on a row that acts — and, when somebody asked for a place
+    /// (a section's word, a check's answer, a question), that place brought
+    /// into view: its first row first in the region, and the cursor on screen.
+    /// A scene that arrives on its own never moves the page.
+    fn security_settle(&mut self) {
+        if !self.security_shown {
+            return;
+        }
+        let rows = self.security.rows(
+            &self.security_scene,
+            self.screen_columns(),
+            &self.texts,
+            &self.zone,
+        );
+        if let Some(top) = self.security.settle_on(&rows, &self.security_scene) {
+            self.scroll_offset_to(top.min(self.last_start()));
+            let shown = self.current_offset()..self.current_offset() + self.expansion_ceiling();
+            if !shown.contains(&self.security.cursor()) {
+                self.follow_cursor();
+            }
+        }
+    }
+
+    /// The channel the security centre's threads answer on, made once.
+    fn security_channel(&mut self) -> Option<channel::Sender<crate::security::Came>> {
+        if self.security_sender.is_none() {
+            let handle = self.repeat.clone()?;
+            let (sender, came) = channel::channel::<crate::security::Came>();
+            handle
+                .insert_source(came, |event, (), state: &mut Self| {
+                    if let channel::Event::Msg(came) = event {
+                        state.security_came(came);
+                    }
+                })
+                .ok()?;
+            self.security_sender = Some(sender);
+        }
+        self.security_sender.clone()
+    }
+
+    /// Starts one of the centre's jobs on a thread.
+    fn security_start(&mut self, job: crate::security::Job) {
+        if let Some(tx) = self.security_channel() {
+            crate::security::start(job, move |c| {
+                let _ = tx.send(c);
+            });
+        }
+    }
+
+    /// A key of the centre, from the keyboard, the hint or a second click.
+    fn security_press(&mut self, press: crate::security::Press) {
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self
+            .security
+            .press(press, &self.security_scene, columns, &texts, &self.zone);
+        self.security_errand(errand);
+    }
+
+    /// A question of the centre's: asked when it came with no argument (a
+    /// check from the leader), answered when it came with one.
+    fn security_answer(&mut self, id: &str, argument: Option<&str>) {
+        use crate::security::Errand;
+        let errand = match (id, argument) {
+            (crate::security::CHECK_PASSWORD, None) => Errand::Ask {
+                id: crate::security::CHECK_PASSWORD,
+                secret: true,
+                initial: None,
+            },
+            (crate::security::CHECK_EMAIL, None) => Errand::Ask {
+                id: crate::security::CHECK_EMAIL,
+                secret: false,
+                initial: None,
+            },
+            (crate::security::CHECK_FILE, None) => Errand::Ask {
+                id: crate::security::CHECK_FILE,
+                secret: false,
+                initial: None,
+            },
+            (_, None) => Errand::Nothing,
+            (_, Some(text)) => {
+                let texts = std::rc::Rc::clone(&self.texts);
+                self.security
+                    .answered(id, text, &self.security_scene, &texts)
+            }
+        };
+        self.security_errand(errand);
+    }
+
+    /// What came back from one of the centre's threads.
+    fn security_came(&mut self, came: crate::security::Came) {
+        // A SCENE FOR A PAGE THAT CLOSED is dropped: kept, it would be the
+        // stale copy a leader command builds its change over.
+        if !self.security_shown
+            && matches!(
+                came,
+                crate::security::Came::Scene(_) | crate::security::Came::Stirred
+            )
+        {
+            return;
+        }
+        let texts = std::rc::Rc::clone(&self.texts);
+        let out = self.security.came(came, &mut self.security_scene, &texts);
+        if let Some(said) = out.say {
+            self.echo_for(said, crate::echo::Echo::Long);
+        }
+        if out.read {
+            self.security_refresh();
+        }
+        // WHAT CAME IS DRAWN ON THE PAGE — the upload's question, a check's
+        // answer — and a leader command ran it with the page closed: the
+        // page opens on it (or says why the region is not free).
+        if out.show && !self.security_shown {
+            self.open_security(None);
+        }
+        self.security_errand(out.errand);
+    }
+
+    /// The page closed: its watches go, and its scene with them — nothing
+    /// keeps it fresh once the watches are gone, and a leader command run
+    /// later must build its change over the file as it is THEN, never over a
+    /// copy the window may have changed since (`security::settings_now` reads
+    /// the file for an unread scene).
+    fn security_close(&mut self) {
+        self.security_shown = false;
+        self.security_watches.clear();
+        self.security_scene = crate::security::Scene::default();
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+    }
+
+    /// Reads again what moves in the scene the page shows — after a work of
+    /// the door, a folder that changed, the watch's page that moved. With the
+    /// page closed there is nothing to keep fresh: a leader command reads the
+    /// file itself (`security::settings_now`).
+    fn security_refresh(&mut self) {
+        if self.security_shown {
+            let scene = Box::new(self.security_scene.clone());
+            self.security_start(crate::security::Job::Refresh(scene));
+        }
+    }
+
+    /// The brain spoke: when the watch's page moved (a refused connection,
+    /// sudo used) and the centre is on screen, its lists are read again.
+    fn security_heard(&mut self, mind: &ronoctua_brain::Mind) {
+        let before = self
+            .brain
+            .as_ref()
+            .and_then(crate::security::watch_generation);
+        if before != crate::security::watch_generation(mind) {
+            self.security_refresh();
+        }
+    }
+
+    /// Carries out what the centre asked for — the ONE path, for a key of the
+    /// view and a command of the leader alike.
+    fn security_errand(&mut self, errand: crate::security::Errand) {
+        use crate::security::{Errand, Job};
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => self.security_close(),
+            Errand::Ask {
+                id,
+                secret,
+                initial,
+            } => {
+                self.mx.request_with(id, secret, initial.as_deref());
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            Errand::Door(work, proof) => {
+                self.security.sent(&work);
+                self.security_start(Job::Door(work, proof));
+            }
+            Errand::Shields => self.security_start(Job::Shields),
+            Errand::Hash(path) => {
+                let said = crate::security::checking(&self.texts);
+                self.echo_for(said, crate::echo::Echo::Brief);
+                self.security.check_started();
+                self.security_start(Job::Hash(path));
+            }
+            Errand::Upload { path, sha256 } => {
+                let said = crate::security::queue_upload(path, sha256, &self.texts);
+                self.echo_for(said, crate::echo::Echo::Long);
+            }
+            Errand::Email(address) => {
+                let said = crate::security::checking(&self.texts);
+                self.echo_for(said, crate::echo::Echo::Brief);
+                self.security.check_started();
+                self.security_start(Job::Email(address));
+            }
+            Errand::Password(secret) => {
+                let said = crate::security::checking(&self.texts);
+                self.echo_for(said, crate::echo::Echo::Brief);
+                self.security.check_started();
+                self.security_start(Job::Password(secret));
+            }
+            Errand::KeepKey(secret) => {
+                let said = crate::security::keep_key(&secret, &self.texts);
+                self.echo_for(said, crate::echo::Echo::Long);
+                self.security_refresh();
+            }
+            Errand::ForgetKey => {
+                let said = crate::security::forget_key(&self.texts);
+                self.echo_for(said, crate::echo::Echo::Long);
+                self.security_refresh();
+            }
+            // ANOTHER VIEW TAKES THE REGION: the page is left first, as `Esc`
+            // leaves it, so the region is free for the view the row names —
+            // the window hands the same command to a free footer.
+            Errand::Command(id) => {
+                if self.security_shown {
+                    self.security_close();
+                }
+                self.run_command(id);
+            }
+            Errand::Show(section) => self.open_security(Some(section)),
+            Errand::Url(url) => {
+                if let Some(opener) = option_env!("RONOCTUA_XDG_OPEN").filter(|p| !p.is_empty()) {
+                    self.open_foreign(opener, &[url], None);
+                }
+            }
+            Errand::Say(said) => self.echo_for(said, crate::echo::Echo::Long),
+        }
+        self.security_settle();
+        self.draw_and_paint();
+    }
+
+    /// `containers-open`: the person's containers, in the region — the view,
+    /// its threads and podman's events, alive while it is open.
+    fn open_containers(&mut self) {
+        if self.containers.is_none() {
+            if !self.region_is_free("containers-open") {
+                return;
+            }
+            self.containers = Some(crate::containers::View::fresh());
+            self.containers_readings = crate::containers::Readings {
+                zone: self.zone.clone(),
+                jobs: Self::container_jobs(&self.jobs),
+                queue_keys: crate::containers_words::queue_keys(&self.tree),
+                ..crate::containers::Readings::default()
+            };
+            self.containers_awake();
+        }
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+    }
+
+    /// The feed, and its bell hung on the loop — both while the view is
+    /// open, and never before: a person who never opens the view runs no
+    /// `podman events`.
+    fn containers_awake(&mut self) {
+        let Some(handle) = self.repeat.clone() else {
+            return;
+        };
+        let (wake, woke) = channel::channel::<()>();
+        match handle.insert_source(woke, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.containers_woke();
+            }
+        }) {
+            Ok(token) => self.containers_bell = Some(token),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not hang the containers' channel");
+                return;
+            }
+        }
+        let sender = std::sync::Mutex::new(wake);
+        let mut feed =
+            crate::containers_feed::Feed::new(ronoctua_containers::Podman::from_env(), move || {
+                if let Ok(s) = sender.lock() {
+                    let _ = s.send(());
+                }
+            });
+        feed.start();
+        self.containers_feed = Some(feed);
+    }
+
+    /// Shuts the view — and its threads and children with it.
+    fn close_containers(&mut self) {
+        self.containers = None;
+        self.containers_feed = None;
+        if let (Some(token), Some(handle)) = (self.containers_bell.take(), self.repeat.as_ref()) {
+            handle.remove(token);
+        }
+        self.containers_readings = crate::containers::Readings::default();
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// The threads brought something: take all of it; an action's end is
+    /// said on the line.
+    fn containers_woke(&mut self) {
+        let arrivals = self
+            .containers_feed
+            .as_ref()
+            .map(crate::containers_feed::Feed::take)
+            .unwrap_or_default();
+        if arrivals.is_empty() {
+            return;
+        }
+        // A LOG FOLLOWED AT ITS END stays at its end, if its end was in
+        // sight — the one time data moves the page, because the person asked
+        // for the tail; wheeled away from it, the page stays.
+        let tail = self.containers_tail_in_sight();
+        let texts = std::rc::Rc::clone(&self.texts);
+        for a in arrivals {
+            if let Some(said) = self.containers_readings.took(a, &texts) {
+                self.echo_message(said);
+            }
+        }
+        self.containers_settled();
+        if tail && self.follow_cursor() {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Whether the view follows a log whose last line is in the region now.
+    fn containers_tail_in_sight(&self) -> bool {
+        let follows = self.containers.as_ref().is_some_and(|v| {
+            v.follows_log(
+                &self.containers_readings,
+                crate::containers::Layout::Stacked,
+            )
+        });
+        if !follows {
+            return false;
+        }
+        let offset = self.current_offset();
+        let ceiling = self.expansion_ceiling();
+        self.list_cursor()
+            .is_some_and(|at| at >= offset && at < offset + ceiling)
+    }
+
+    /// The hover band of the containers' view, in pixels: the stretch of the
+    /// line under the pointer that a click takes — one kind or one tab of a
+    /// strip, a row — the same zones the click reads
+    /// (`containers::View::hover_span`), as the window lights it. `None`
+    /// when the view is not the one open; `Some(None)` over nothing a click
+    /// takes, where no band is lit.
+    fn containers_hover_px(
+        &self,
+        line: Option<usize>,
+        cell: Option<u16>,
+        cell_px: f32,
+    ) -> Option<Option<(f32, f32)>> {
+        if self.view() != ViewState::Containers {
+            return None;
+        }
+        let v = self.containers.as_ref()?;
+        let lines = v.lines(
+            &self.containers_readings,
+            self.screen_columns(),
+            crate::containers::Layout::Stacked,
+            0,
+            &self.texts,
+        );
+        let span = line
+            .zip(cell)
+            .and_then(|(line, cell)| crate::containers::View::hover_span(&lines, line, cell));
+        let lead = crate::chrome::FIELDS_LEAD;
+        Some(span.map(|(from, to)| {
+            (
+                f32::from(lead + from) * cell_px,
+                f32::from(to.saturating_sub(from)) * cell_px,
+            )
+        }))
+    }
+
+    /// The cursors put back in step with what is drawn, the streams made what
+    /// is shown, and a frame — never the page moved (`settle_region`).
+    fn containers_settled(&mut self) {
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let layout = crate::containers::Layout::Stacked;
+        if let Some(v) = self.containers.as_mut() {
+            v.settle(&self.containers_readings, columns, layout, 0, &texts);
+            let wants = v.wants(&self.containers_readings, layout);
+            if let Some(feed) = self.containers_feed.as_mut() {
+                feed.follow(&wants, &mut self.containers_readings);
+            }
+        }
+        self.region_resized();
+        self.settle_region();
+        self.draw_and_paint();
+    }
+
+    /// The queue's list changed: the containers' jobs, and a listing again
+    /// when one of them ended.
+    fn containers_jobs_arrived(&mut self) {
+        if self.containers.is_none() {
+            return;
+        }
+        let mine = Self::container_jobs(&self.jobs);
+        let running = |js: &[ronoctua_transfers::Job]| {
+            js.iter()
+                .filter(|j| {
+                    matches!(
+                        j.stage,
+                        ronoctua_transfers::Stage::Running | ronoctua_transfers::Stage::Weighing
+                    )
+                })
+                .count()
+        };
+        if running(&mine) < running(&self.containers_readings.jobs)
+            && let Some(feed) = self.containers_feed.as_ref()
+        {
+            feed.relist();
+        }
+        if mine != self.containers_readings.jobs {
+            self.containers_readings.jobs = mine;
+            self.containers_settled();
+        }
+    }
+
+    /// A key of the view, from the keyboard, the hint, a second click or
+    /// `LEADER :` — and what the view asks for after it. A typed question
+    /// asked by name with the view closed is asked all the same.
+    fn containers_press(&mut self, press: crate::containers::Press) {
+        // A LOGIN'S ANSWER IS SAID BY THE FEED, which lives with the view:
+        // asked by name with the view closed, the view opens first — or the
+        // region was taken, and that is said instead.
+        if press == crate::containers::Press::Login && self.containers.is_none() {
+            self.open_containers();
+            if self.containers.is_none() {
+                return;
+            }
+        }
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = match self.containers.as_mut() {
+            Some(v) => v.key(
+                press,
+                &self.containers_readings,
+                columns,
+                crate::containers::Layout::Stacked,
+                &texts,
+            ),
+            None => match press {
+                crate::containers::Press::Pull => {
+                    crate::containers::Errand::Ask(crate::containers::PULL, None)
+                }
+                crate::containers::Press::Build => {
+                    crate::containers::Errand::Ask(crate::containers::BUILD, None)
+                }
+                _ => crate::containers::Errand::Nothing,
+            },
+        };
+        self.containers_errand(errand);
+        // A PERSON'S KEY follows the cursor; data arriving never does.
+        if self.containers.is_some() && self.follow_cursor() {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Does what the view asked for.
+    fn containers_errand(&mut self, errand: crate::containers::Errand) {
+        use crate::containers::Errand;
+        let texts = std::rc::Rc::clone(&self.texts);
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.close_containers();
+                return;
+            }
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &texts);
+                self.echo_message(said);
+            }
+            Errand::Act(action, name) => {
+                let what = texts.t(crate::containers_feed::action_key(&action));
+                self.echo_message(texts.t_with(
+                    ronoctua_i18n::key::CONTAINERS_ECHO_ASKED,
+                    &[("what", &what), ("name", &name)],
+                ));
+                if let Some(feed) = self.containers_feed.as_ref() {
+                    feed.act(action, name);
+                }
+            }
+            Errand::Queue(job, label) => {
+                let said = crate::containers_words::queued_said(
+                    &job,
+                    &label,
+                    &self.containers_readings.queue_keys,
+                    &texts,
+                );
+                let work = ronoctua_transfers::Work::Container { job, label };
+                match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
+                    Ok(_) => self.echo_message(said),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "the transfer queue did not take the job");
+                        self.echo_message(texts.t(ronoctua_i18n::key::CONTAINERS_NO_QUEUE));
+                    }
+                }
+            }
+            // THIS DOOR ASKS ON ITS MINIBUFFER — the same `line::Line` a
+            // window asks on its header.
+            Errand::Ask(id, initial) => {
+                self.mx
+                    .request_with(id, crate::containers::secret(id), initial.as_deref());
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            // THE PASSWORD ON THE SECRET LINE, the login kept until it comes.
+            Errand::Password(login) => {
+                self.containers_login = Some(login);
+                self.mx
+                    .request_with(crate::containers::LOGIN_PASSWORD, true, None);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            Errand::Shell(id) => {
+                let line = self
+                    .containers_feed
+                    .as_ref()
+                    .and_then(|f| f.exec_line(&id))
+                    .or_else(|| ronoctua_containers::Podman::from_env().map(|p| p.exec_line(&id)));
+                match (line, std::env::current_exe()) {
+                    // CLOSE BEFORE LAUNCHING, the launcher's rule: a view
+                    // left open over the terminal keeps its keyboard.
+                    (Some((podman, args)), Ok(me)) => {
+                        let mut words = vec!["terminal".to_owned(), podman];
+                        words.extend(args);
+                        self.close_containers();
+                        self.open_foreign(&me.to_string_lossy(), &words, None);
+                        return;
+                    }
+                    _ => self.echo_message(crate::containers_words::refused(
+                        ronoctua_containers::Refusal {
+                            why: ronoctua_containers::Why::NoPodman,
+                        },
+                        &texts,
+                    )),
+                }
+            }
+            // ANOTHER VIEW — the firewall's rules: this one gives the region
+            // back first, or the other would find it taken and say so.
+            Errand::Run(id) => {
+                self.close_containers();
+                self.run_command(id);
+                return;
+            }
+            Errand::Say(text) => self.echo_message(text),
+        }
+        if self.containers.is_some() {
+            self.containers_settled();
+        } else {
+            self.draw_and_paint();
+        }
+    }
+
+    /// A click on the view's line `n`: what is under the pointer's cell there
+    /// — a kind on the strip, a row, a tab, an answer — and the second click
+    /// is `RET` (invariant 19).
+    fn containers_clicked(&mut self, n: usize) {
+        let cell = self.here.cell_under_pointer;
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let layout = crate::containers::Layout::Stacked;
+        let again = match self.containers.as_mut() {
+            Some(v) => {
+                let lines = v.lines(&self.containers_readings, columns, layout, 0, &texts);
+                v.clicked(&lines, n, cell, layout, &self.containers_readings)
+            }
+            None => return,
+        };
+        if again {
+            self.containers_press(crate::containers::Press::Enter);
+        } else {
+            self.containers_settled();
+        }
+    }
+
+    /// The queue's jobs that are the containers'.
+    fn container_jobs(jobs: &[ronoctua_transfers::Job]) -> Vec<ronoctua_transfers::Job> {
+        jobs.iter()
+            .filter(|j| matches!(j.work, ronoctua_transfers::Work::Container { .. }))
+            .cloned()
+            .collect()
+    }
+
+    /// The view's hint line, for the minibuffer.
+    fn containers_hint(&self) -> Option<Vec<crate::chrome::Piece>> {
+        self.containers.as_ref().map(|v| {
+            v.hint(
+                &self.containers_readings,
+                crate::containers::Layout::Stacked,
+                &self.texts,
+            )
+        })
+    }
+
+    /// `belongings-open`: the belongings, in the region — never over a view
+    /// that holds work (`region_is_free`); a second opening keeps the live
+    /// view and its cursor. Its files are watched from here until it closes,
+    /// and not before (`belongings::watch`).
+    fn open_belongings(&mut self) -> bool {
+        if self.view() == ViewState::Belongings {
+            return true;
+        }
+        if !self.region_is_free("belongings-open") {
+            return false;
+        }
+        if self.belongings.is_none() {
+            let places = ronoctua_belongings::places::Places::from_env();
+            let readings =
+                crate::belongings::Readings::read(places.clone(), crate::belongings::now_s());
+            let view = crate::belongings::View::fresh(
+                &readings,
+                &self.zone,
+                self.screen_columns(),
+                &self.texts,
+            );
+            let mut open = crate::belongings::Open {
+                view,
+                readings,
+                places,
+                watches: Vec::new(),
+                token: None,
+            };
+            if let (Some(handle), Some(places)) = (self.repeat.clone(), open.places.as_ref()) {
+                let (sender, heard) = channel::channel::<()>();
+                open.watches = crate::belongings::watch(places, move || sender.send(()).is_ok());
+                open.token = handle
+                    .insert_source(heard, |event, (), state: &mut Self| {
+                        if let channel::Event::Msg(()) = event {
+                            state.belongings_heard();
+                        }
+                    })
+                    .map_err(|e| tracing::warn!(error = %e, "the belongings are not watched"))
+                    .ok();
+            }
+            self.belongings = Some(open);
+        }
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.draw_and_paint();
+        true
+    }
+
+    /// A file of the belongings changed: read again, the cursor back on its
+    /// row.
+    fn belongings_heard(&mut self) {
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        if let Some(o) = self.belongings.as_mut() {
+            o.reread();
+            o.view.settle_in(&o.readings, &self.zone, columns, &texts);
+        }
+        if self.view() == ViewState::Belongings {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Shuts the view, and its watches with it.
+    fn close_belongings(&mut self) {
+        if let Some(open) = self.belongings.take()
+            && let (Some(token), Some(handle)) = (open.token, self.repeat.as_ref())
+        {
+            handle.remove(token);
+        }
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// A key of the belongings, from the keyboard, the hint or a second click.
+    fn belongings_press(&mut self, press: crate::belongings::Press) {
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self
+            .belongings
+            .as_mut()
+            .map_or(crate::belongings::Errand::Nothing, |o| {
+                // THE FILES AS THEY ARE NOW: a decision the window made a
+                // moment ago is the one this key lays its own over.
+                o.reread();
+                o.view
+                    .press(press, &o.readings, &self.zone, columns, &texts)
+            });
+        self.belongings_errand(errand);
+    }
+
+    /// A command of the belongings by its name — a leader key, `LEADER :`,
+    /// the brain's mark — or the minibuffer's answer to the view's question
+    /// (`argument`). Every one is the view's, so the view opens first.
+    fn belongings_command(&mut self, id: &str, argument: Option<&str>) {
+        if !self.open_belongings() {
+            return;
+        }
+        let columns = self.screen_columns();
+        let texts = std::rc::Rc::clone(&self.texts);
+        let errand = self
+            .belongings
+            .as_mut()
+            .map_or(crate::belongings::Errand::Nothing, |o| {
+                o.reread();
+                // AN ANSWER ONLY TO THE VIEW'S OWN QUESTION: the brain's mark
+                // runs `belongings-sync` with an empty argument, and that is a
+                // command, not a passphrase.
+                let answering = o.view.asking().is_some_and(|a| a.command() == id);
+                match argument.filter(|_| answering) {
+                    Some(said) => o.view.answered(id, said, &o.readings, &texts),
+                    None => o.view.command(id, &o.readings, &self.zone, columns, &texts),
+                }
+            });
+        self.belongings_errand(errand);
+    }
+
+    /// Carries out what the belongings' view asked for — on THIS door's line.
+    fn belongings_errand(&mut self, errand: crate::belongings::Errand) {
+        use crate::belongings::Errand;
+        match errand {
+            Errand::Nothing => {}
+            Errand::Close => {
+                self.close_belongings();
+                return;
+            }
+            Errand::Ask(line) => {
+                self.mx.request_line(line);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            Errand::Say(said) => self.echo_for(said, crate::echo::Echo::Long),
+            Errand::Copy(text) => {
+                let said = crate::chrome::copied(&text, &self.texts);
+                self.echo_message(said);
+            }
+            Errand::Queue(op) => match crate::belongings::queue(
+                op,
+                self.belongings.as_ref().and_then(|o| o.places.as_ref()),
+            ) {
+                Ok(()) => {
+                    let said = crate::belongings::queued_said(op, &self.texts);
+                    self.echo_message(said);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "the transfer queue did not take the order");
+                    let said = self.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE);
+                    self.echo_for(said, crate::echo::Echo::Long);
+                }
+            },
+        }
+        // WHAT THIS DOOR WROTE, read back at once — the watch rings for it
+        // too, and finds nothing new.
+        self.belongings_heard();
+        self.draw_and_paint();
+    }
+
+    /// `fast-access-open`: the search over everything in the region (`LEADER
+    /// d d`, `Super+d`) — never over a view that holds work
+    /// (`region_is_free`). A second opening with words types them; without,
+    /// the box stays as it is. Its threads' channel is hung on the loop while
+    /// it is open, and the file panel's three threads are raised once and
+    /// kept (`fast_access_threads`) — the footer lives for months.
+    fn open_fast_access(&mut self, query: Option<&str>) {
+        if self.fast_access.is_none() {
+            if !self.region_is_free("fast-access-open") {
+                return;
+            }
+            let Some(search) = self.fast_access_raise() else {
+                return;
+            };
+            self.fast_access = Some(search);
+            // SAID ONCE PER OPENING: what `fast-access-vm` reads to know the
+            // leader's sequence and the chord reached this view.
+            tracing::info!("fast-access opened in the region");
+        }
+        let texts = std::rc::Rc::clone(&self.texts);
+        let outs = match (self.fast_access.as_mut(), query) {
+            (Some(s), Some(q)) if !q.trim().is_empty() => {
+                s.view.set_text("");
+                let errands = s.view.typed(q, &s.ground, &texts);
+                s.errands(errands, &texts)
+            }
+            _ => Vec::new(),
+        };
+        self.first_page();
+        self.apply_geometry(KeyboardInteractivity::Exclusive);
+        self.fast_access_outs(outs);
+    }
+
+    /// The search, raised: its feed's channel on the loop, its settings
+    /// watched, the panel's threads, and the in-process ground — the
+    /// applications this footer already scanned.
+    fn fast_access_raise(&mut self) -> Option<crate::fast_access_window::Search> {
+        let Some(handle) = self.repeat.clone() else {
+            tracing::warn!("no loop to hear the search on; it is not opened");
+            return None;
+        };
+        let (sender, heard) = channel::channel::<crate::fast_access_search::Back>();
+        let sender = std::sync::Mutex::new(sender);
+        let sink: crate::fast_access_search::Sink = std::sync::Arc::new(move |b| {
+            if let Ok(s) = sender.lock() {
+                let _ = s.send(b);
+            }
+        });
+        match handle.insert_source(heard, |event, (), state: &mut Self| {
+            if let channel::Event::Msg(back) = event {
+                state.fast_access_back(back);
+            }
+        }) {
+            Ok(token) => self.fast_access_sources.push(token),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not hang the search's channel");
+                return None;
+            }
+        }
+        // `fast-access.json`, WATCHED while the view is open: a window's
+        // remembered openings and switches reach this door too.
+        let (told, changed) = channel::channel::<()>();
+        if let Ok(token) = handle.insert_source(changed, |event, (), state: &mut Self| {
+            if let channel::Event::Msg(()) = event
+                && let Some(s) = state.fast_access.as_mut()
+            {
+                s.settings_changed(&state.texts);
+                state.draw_and_paint();
+            }
+        }) {
+            self.fast_access_sources.push(token);
+            self.fast_access_watch = ronoctua_store::config_dir().and_then(|dir| {
+                ronoctua_files::notice::Notice::on_file(
+                    &dir,
+                    crate::fast_access::FILE,
+                    ronoctua_files::notice::Pace::Coalesced,
+                    move || told.send(()).is_ok(),
+                )
+                .ok()
+            });
+        }
+        if self.fast_access_threads.is_none() {
+            self.fast_access_threads =
+                crate::inspection::Threads::raise(&handle, |state: &mut Self, h| {
+                    if let Some(s) = state.fast_access.as_mut()
+                        && s.panels_heard(h)
+                    {
+                        state.ask_paint();
+                    }
+                })
+                .map_err(|e| tracing::warn!(error = %e, "the search's file panel has no threads"))
+                .ok();
+        }
+        let threads = self
+            .fast_access_threads
+            .take()
+            .unwrap_or_else(crate::inspection::Threads::none);
+        let (trees, registry) = (&self.tree, &self.command_registry);
+        let ground = crate::fast_access::Ground {
+            catalogue: self.catalogue.clone(),
+            commands: crate::fast_access_search::commands_of(trees, registry),
+            zone: self.zone.clone(),
+            zoneinfo: std::env::var_os("RONOCTUA_ZONEINFO").map(std::path::PathBuf::from),
+            queue_keys: crate::software_feed::Taught::of_this_leader(trees).queue,
+        };
+        let feed = crate::fast_access_search::Feed::start(sink);
+        let view = crate::fast_access::View::new(crate::fast_access::store().read(), &self.texts);
+        Some(crate::fast_access_window::Search::new(
+            view,
+            Some(feed),
+            ground,
+            threads,
+        ))
+    }
+
+    /// Shuts the view: its threads end with the feed, the index's reader
+    /// closes, the film and the shape stop, and the panel's threads are kept
+    /// for the next opening.
+    fn close_fast_access(&mut self) {
+        if self.fast_access.is_some() {
+            tracing::info!("fast-access closed in the region");
+        }
+        if let Some(mut s) = self.fast_access.take() {
+            s.let_go();
+            self.fast_access_threads = Some(std::mem::replace(
+                &mut s.threads,
+                crate::inspection::Threads::none(),
+            ));
+        }
+        self.fast_access_watch = None;
+        if let Some(handle) = self.repeat.as_ref() {
+            for token in self.fast_access_sources.drain(..) {
+                handle.remove(token);
+            }
+        }
+        // THE HAND'S TARGET WAS THE VIEW'S, and goes with it.
+        self.here.row_under_pointer = None;
+        self.first_page();
+        self.apply_geometry(self.interactivity());
+        self.draw_and_paint();
+    }
+
+    /// What a thread of the search came back with.
+    fn fast_access_back(&mut self, back: crate::fast_access_search::Back) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let Some(outs) = self.fast_access.as_mut().and_then(|s| s.back(back, &texts)) else {
+            return;
+        };
+        self.fast_access_outs(outs);
+    }
+
+    /// Where the search is drawn in the region — from the metric, never from
+    /// what the region holds (`the-footer-does-not-ask-itself`).
+    fn fast_access_area_of(&self, width: f32, bottom: f32) -> crate::icons_page::Area {
+        let first = self.first_of_expansion();
+        let line = tokens::metrics::line_height(tokens::text::size());
+        let top = crate::icons_page::Area::y_of(first);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lines = ((bottom - top).max(0.0) / line).floor() as u16;
+        let columns = crate::chrome::Frame::of(width, bottom, first).columns();
+        crate::icons_page::Area {
+            left: crate::chrome::INSET,
+            top: first,
+            columns: columns.saturating_sub(2 * crate::chrome::INSET),
+            lines,
+            right_px: width,
+            bottom_px: bottom,
+        }
+    }
+
+    /// The view's area on the screen the pointer and the keys are measured on.
+    fn fast_access_area(&self) -> Option<crate::icons_page::Area> {
+        let (w, h) = self.pointer_screen()?;
+        Some(self.fast_access_area_of(w, h))
+    }
+
+    /// A key in the search, read through the reader the window calls too
+    /// (`fast_access::press_of_key`).
+    fn fast_access_key(&mut self, key: ronoctua_keymap::Key) {
+        let Some(area) = self.fast_access_area() else {
+            return;
+        };
+        let Some(press) = crate::fast_access::press_of_key(key) else {
+            return;
+        };
+        let texts = std::rc::Rc::clone(&self.texts);
+        let outs = self
+            .fast_access
+            .as_mut()
+            .map(|s| s.key(press, area, &texts))
+            .unwrap_or_default();
+        self.fast_access_outs(outs);
+    }
+
+    /// The minibuffer's answer to a question the search asked.
+    fn fast_access_answered(&mut self, id: &str, argument: Option<&str>) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let outs = self
+            .fast_access
+            .as_mut()
+            .map(|s| s.answered(id, argument.unwrap_or_default(), &texts))
+            .unwrap_or_default();
+        self.fast_access_outs(outs);
+    }
+
+    /// The clipboard's text, into what is typed.
+    fn fast_access_pasted(&mut self, text: &str) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        let outs = self
+            .fast_access
+            .as_mut()
+            .map(|s| {
+                let errands = s.view.pasted(text, &s.ground, &texts);
+                s.errands(errands, &texts)
+            })
+            .unwrap_or_default();
+        self.fast_access_outs(outs);
+    }
+
+    /// What the search asked, done in this door — and a frame. Something
+    /// opened closes the view (`Out::Done`): the footer runs it itself.
+    fn fast_access_outs(&mut self, outs: Vec<crate::fast_access_window::Out>) {
+        use crate::fast_access_window::Out;
+        let mut close = false;
+        for o in outs {
+            match o {
+                Out::Close | Out::Done => close = true,
+                Out::Footer(id, arg) => self.fast_access_order(id, arg),
+                Out::Software(attr) => {
+                    self.fast_access_order("software-open", Some(format!("search {attr}")));
+                }
+                Out::Say(text) => self.echo_message(text),
+                Out::Ask(line) => self.mx.request_line(line),
+                Out::Paste => self.read_the_clipboard(PasteFor::FastAccess),
+            }
+        }
+        if close && self.fast_access.is_some() {
+            self.close_fast_access();
+            return;
+        }
+        self.fast_access_settle();
+        self.draw_and_paint();
+    }
+
+    /// What the next frame needs asked, asked now — the detail on the
+    /// cursor's hit, the panel's preview, the videos' pictures — after
+    /// every change of the view, so the frame draws a settled view
+    /// (`Search::look_again`).
+    fn fast_access_settle(&mut self) {
+        let texts = std::rc::Rc::clone(&self.texts);
+        if let Some(s) = self.fast_access.as_mut() {
+            s.look_again(&texts);
+        }
+    }
+
+    /// An order of the search's for this footer, run on the next turn of the
+    /// loop — as a window's reaches it (`Ui::tell_the_footer`): the view is
+    /// closed by then, and what runs finds the region free. A loop that
+    /// cannot hear it says so.
+    fn fast_access_order(&mut self, id: &str, argument: Option<String>) {
+        if self.fast_access_orders.is_none()
+            && let Some(handle) = self.repeat.clone()
+        {
+            let (sender, orders) = channel::channel::<(String, Option<String>)>();
+            match handle.insert_source(orders, |event, (), state: &mut Self| {
+                if let channel::Event::Msg((id, argument)) = event {
+                    state.run_with(&id, argument.as_deref());
+                    state.apply_geometry(state.interactivity());
+                    state.draw_and_paint();
+                }
+            }) {
+                Ok(_) => self.fast_access_orders = Some(sender),
+                Err(e) => tracing::warn!(error = %e, "could not hang the search's orders"),
+            }
+        }
+        let sent = self
+            .fast_access_orders
+            .as_ref()
+            .is_some_and(|o| o.send((id.to_owned(), argument)).is_ok());
+        if !sent {
+            let said = self
+                .texts
+                .t_with(ronoctua_i18n::key::FAST_ACCESS_UNOPENED, &[("what", id)]);
+            self.echo_message(said);
+        }
+    }
+
+    /// The commands a door of the search hands the footer — each with the
+    /// argument a key could not give — and the doors of the search.
+    fn fast_access_command(&mut self, id: &str, argument: Option<&str>) {
+        let argument = argument.map(str::trim).filter(|a| !a.is_empty());
+        match (id, argument) {
+            ("fast-access-open", query) => self.open_fast_access(query),
+            ("fast-access-window" | "fast-access-float", query) => {
+                let Ok(me) = std::env::current_exe() else {
+                    let said = self.texts.t(ronoctua_i18n::key::FAST_ACCESS_NO_SHELL);
+                    self.echo_message(said);
+                    return;
+                };
+                let mut args = vec!["fast-access".to_owned()];
+                if id == "fast-access-float" {
+                    args.push("--float".to_owned());
+                }
+                args.extend(query.map(ToOwned::to_owned));
+                // THE REGION'S SEARCH GIVES WAY TO THE WINDOW, typed with what
+                // it had: one search, in the door asked for.
+                if let Some(s) = self.fast_access.as_ref()
+                    && query.is_none()
+                    && !s.view.text().trim().is_empty()
+                {
+                    args.push(s.view.text().to_owned());
+                }
+                if self.fast_access.is_some() {
+                    self.close_fast_access();
+                }
+                self.open_foreign(&me.to_string_lossy(), &args, None);
+            }
+            // THE COLUMN OF THIS WORKSPACE: closed when it is here, and
+            // brought here otherwise — with words, raised with them.
+            ("fast-access-column", query) => {
+                let here = self.current_workspace_name();
+                let raise = query.is_some()
+                    || crate::right_column::toggle(
+                        crate::right_column::Tenant::FastAccess,
+                        here.as_deref(),
+                    ) == crate::right_column::Asked::Raise;
+                if !raise {
+                    return;
+                }
+                let Ok(me) = std::env::current_exe() else {
+                    let said = self.texts.t(ronoctua_i18n::key::FAST_ACCESS_NO_SHELL);
+                    self.echo_message(said);
+                    return;
+                };
+                let mut args = crate::column::Opening {
+                    tenant: crate::right_column::Tenant::FastAccess,
+                    on: here,
+                    size: None,
+                }
+                .args();
+                if let Some(q) = query {
+                    args = vec![
+                        "fast-access".to_owned(),
+                        "--column".to_owned(),
+                        q.to_owned(),
+                    ];
+                }
+                self.open_foreign(&me.to_string_lossy(), &args, None);
+            }
+            ("fast-access-launch", Some(desktop_id)) => {
+                match self.catalogue.iter().find(|e| e.id == desktop_id).cloned() {
+                    Some(e) => self.open_application(&e),
+                    None => {
+                        let said = self.texts.t_with(
+                            ronoctua_i18n::key::FAST_ACCESS_UNOPENED,
+                            &[("what", desktop_id)],
+                        );
+                        self.echo_message(said);
+                    }
+                }
+            }
+            ("fast-access-open-path", Some(path)) => {
+                self.open_the_file(std::path::Path::new(path));
+            }
+            // THE FILE MANAGER'S WINDOW, on the folder the file is in.
+            ("fast-access-reveal", Some(path)) => {
+                let path = std::path::Path::new(path);
+                let folder = if path.is_dir() {
+                    path
+                } else {
+                    path.parent().unwrap_or(path)
+                };
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(
+                        &me.to_string_lossy(),
+                        &["files".to_owned(), folder.display().to_string()],
+                        None,
+                    );
+                }
+            }
+            // THE MANUAL PAGE IN A TERMINAL, `man <section> <name>` — the
+            // whole page, which the detail shows the start of.
+            ("fast-access-man", Some(page)) => {
+                let (name, section) = page.rsplit_once('.').unwrap_or((page, ""));
+                let mut args = vec!["terminal".to_owned(), "man".to_owned()];
+                if !section.is_empty() {
+                    args.push(section.to_owned());
+                }
+                args.push(name.to_owned());
+                if let Ok(me) = std::env::current_exe() {
+                    self.open_foreign(&me.to_string_lossy(), &args, None);
+                }
+            }
+            // A COMMAND THAT NEEDS AN ARGUMENT, given none: said, never silence.
+            (id, None) => {
+                let said = self
+                    .texts
+                    .t_with(ronoctua_i18n::key::FAST_ACCESS_UNOPENED, &[("what", id)]);
+                self.echo_message(said);
+            }
+            (id, Some(_)) => tracing::warn!(id, "not a command of the search's"),
+        }
+        self.draw_and_paint();
+    }
+
+    /// What the pointer rests on in the search's region has to add, whole
+    /// (`fast_access_window::Search::about`).
+    fn fast_access_about(&self) -> Option<String> {
+        if self.view() != ViewState::FastAccess {
+            return None;
+        }
+        let (w, h) = self.pointer_screen()?;
+        let area = self.fast_access_area_of(w, h);
+        self.fast_access.as_ref()?.about(area, &self.texts)
+    }
+
+    /// The pointer over the search's region — its rows, cells, strips, grid,
+    /// divider and bars, by the layout its drawing used. Answers whether it
+    /// took the frame: a frame that leaves the region is the footer's own.
+    fn fast_access_took_the_pointer(&mut self, events: &[PointerEvent]) -> bool {
+        if self.view() != ViewState::FastAccess {
+            return false;
+        }
+        let Some((w, h)) = self.pointer_screen() else {
+            return false;
+        };
+        let area = self.fast_access_area_of(w, h);
+        let top = f64::from(crate::icons_page::Area::y_of(area.top));
+        let held = self
+            .fast_access
+            .as_ref()
+            .is_some_and(|s| s.view.grabbed.is_some());
+        let inside = |e: &PointerEvent| {
+            !matches!(e.kind, PointerEventKind::Leave { .. })
+                && e.position.1 >= top
+                && e.position.1 < f64::from(h)
+        };
+        if !held && !events.iter().all(inside) {
+            // THE HOVER GOES WITH THE POINTER, and the footer takes the rest.
+            let had = self.here.row_under_pointer.take().is_some();
+            let texts = std::rc::Rc::clone(&self.texts);
+            if let Some(s) = self.fast_access.as_mut() {
+                crate::fast_access_rows::hovered(&mut s.view, area, None, 0.0, &texts);
+            }
+            if had {
+                self.ask_paint();
+            }
+            return false;
+        }
+        let texts = std::rc::Rc::clone(&self.texts);
+        let mut outs: Vec<crate::fast_access_window::Out> = Vec::new();
+        let mut turned: Option<(f32, f32)> = None;
+        for e in events {
+            #[allow(clippy::cast_possible_truncation)]
+            let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+            let Some(s) = self.fast_access.as_mut() else {
+                return false;
+            };
+            match e.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.here.under_pointer = true;
+                    if !crate::fast_access_rows::held(&mut s.view, area, (px, py), &texts) {
+                        let lay = crate::fast_access_rows::Lay::of(&s.view, area, &texts);
+                        let target = lay.target_at(&s.view, px, py, &texts);
+                        crate::fast_access_rows::hovered(&mut s.view, area, target, py, &texts);
+                        // EACH HAND KEEPS ITS OWN TARGET, as a window's does.
+                        self.here.row_under_pointer =
+                            target.map(crate::fast_access_rows::Target::code);
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    crate::fast_access_rows::hovered(&mut s.view, area, None, py, &texts);
+                    self.here.row_under_pointer = None;
+                }
+                PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+                    s.view.grabbed = None;
+                }
+                PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+                    let lay = crate::fast_access_rows::Lay::of(&s.view, area, &texts);
+                    if let Some(t) = lay.target_at(&s.view, px, py, &texts) {
+                        let errands = crate::fast_access_rows::pressed(
+                            &mut s.view,
+                            t,
+                            area,
+                            (px, py),
+                            &s.ground,
+                            &texts,
+                        );
+                        outs.extend(s.errands(errands, &texts));
+                    }
+                }
+                // THE BACK BUTTON IS `Esc` over the region, as everywhere.
+                PointerEventKind::Press { button, .. } if button == BACK_BUTTON => {
+                    outs.extend(s.key(crate::fast_access::Press::Escape, area, &texts));
+                }
+                PointerEventKind::Axis {
+                    vertical,
+                    horizontal,
+                    ..
+                } => {
+                    wheel_arrived(&mut s.view.lines_owed, &vertical, &horizontal);
+                    turned = Some((px, py));
+                }
+                _ => {}
+            }
+        }
+        if let Some((x, y)) = turned
+            && let Some(s) = self.fast_access.as_mut()
+        {
+            let by = wheel_lines(&mut s.view.lines_owed);
+            if by != 0 {
+                crate::fast_access_rows::wheel_at(&mut s.view, area, x, y, by, &texts);
+            }
+        }
+        if outs.is_empty() {
+            self.fast_access_settle();
+            self.ask_paint();
+        } else {
+            self.fast_access_outs(outs);
+        }
+        true
+    }
+
+    /// The search over its blank rows: what is typed, the results, the
+    /// divider and the detail — the drawing the window paints too, from the
+    /// one layout its pointer reads. Its pictures, to go up with the rest.
+    ///
+    /// What goes OVER the pictures — the bars' thumbs, a film's transport —
+    /// is put in `over`, which the frame paints after them.
+    fn fast_access_drawn(
+        &self,
+        width: f32,
+        bottom: f32,
+        under: &mut Vec<ronoctua_render::quad::Quad>,
+        over: &mut Vec<ronoctua_render::quad::Quad>,
+        spans: &mut Vec<ronoctua_render::Span>,
+        bars: &mut crate::bars::Drawn,
+    ) -> Vec<crate::fast_access_rows::Pic> {
+        if self.view() != ViewState::FastAccess {
+            return Vec::new();
+        }
+        let area = self.fast_access_area_of(width, bottom);
+        let texts = std::rc::Rc::clone(&self.texts);
+        // EVERY HAND'S TARGET, in its own colour — the window's rule, from
+        // the footer's own hands.
+        let lit: Vec<(tokens::Color, crate::fast_access_rows::Target)> = self
+            .pointers
+            .lit(&self.here)
+            .filter_map(|(c, p)| {
+                p.row_under_pointer
+                    .map(|n| (c, crate::fast_access_rows::Target::of_code(n)))
+            })
+            .collect();
+        let Some(s) = self.fast_access.as_ref() else {
+            return Vec::new();
+        };
+        let mut drawing = crate::fast_access_rows::Drawing::default();
+        crate::fast_access_rows::draw(&s.view, area, true, &lit, &texts, &mut drawing);
+        under.extend(drawing.under);
+        over.extend(drawing.over);
+        for track in drawing.tracks {
+            bars.record(track);
+        }
+        spans.extend(drawing.spans);
+        drawing.pictures
     }
 
     /// Opens or closes the notification manager.
@@ -13862,17 +18690,10 @@ impl Footer {
         }
     }
 
+    /// A message of the NORMAL class (`crate::echo`) — every message that
+    /// names no class of its own.
     fn echo_message(&mut self, text: String) {
-        tracing::info!(echo = %text, "echo area");
-        self.echo = Some((
-            text,
-            std::time::Instant::now() + std::time::Duration::from_secs(ECHO_SECONDS),
-        ));
-        // THE PERSON'S ANSWER TAKES THE LINE AT ONCE, and an event on it goes
-        // back to the front of the queue to be said whole afterwards.
-        if self.event_line.interrupted() {
-            self.forget_the_line_under_the_pointer();
-        }
+        self.echo_for(text, crate::echo::Echo::Normal);
     }
 
     /// Wipes the message if it expired. Gives back `true` if something changed.
@@ -14002,6 +18823,9 @@ impl Footer {
             && self.view() == ViewState::NoneOf
             && !self.echo_on_the_line()
             && self.mx.line().is_none()
+            // A HINT THAT LINGERS is on the line (`Footer::linger`): the
+            // drawer was opened to read it.
+            && self.lingering_hint.is_none()
         {
             self.fold.close();
             self.apply_geometry(self.interactivity());
@@ -14116,6 +18940,51 @@ impl Footer {
             ViewState::Update
         } else if self.display.is_some() {
             ViewState::Display
+        } else if self.git_view.is_some() {
+            // THE GIT BROWSER, over the file manager it was opened from — which
+            // is put aside while it is up (`git_behind`), so this rank is
+            // above nothing that could be open with it.
+            ViewState::Git
+        } else if self.icons_app.is_some() {
+            // THE ICONS APP (`LEADER m i`): a grid and a page, and a search
+            // typed — below every view that holds work.
+            ViewState::Icons
+        } else if self.calc.is_some() {
+            // THE CALCULATOR (`LEADER = =`): a sum being typed — below every
+            // view that holds another's work, as the footer's settings are.
+            ViewState::Calc
+        } else if self.video_metrics.is_some() {
+            // THE VIDEO CATALOGUE (`LEADER v`): a page, filters, a question —
+            // and a description being written, which is work a person did
+            // by hand. Never open beside another view (`region_is_free`).
+            ViewState::VideoMetrics
+        } else if self.security_shown {
+            // THE SECURITY CENTRE (`LEADER s e`): its questions are the
+            // minibuffer's, so nothing here is half typed — any view that
+            // holds work outranks it.
+            ViewState::Security
+        } else if self.containers.is_some() {
+            // THE PERSON'S CONTAINERS: a list and a detail, a question at
+            // most — nothing typed that a later view would lose.
+            ViewState::Containers
+        } else if self.belongings.is_some() {
+            // THE BELONGINGS (`LEADER s v`): what is decided is a file, and a
+            // question is the minibuffer's line — nothing half done lives in
+            // the view, so any view that holds work outranks it.
+            ViewState::Belongings
+        } else if self.fast_access.is_some() {
+            // THE SEARCH (`LEADER d d`): one line typed and what it found —
+            // below every view that holds work, as the icons app is.
+            ViewState::FastAccess
+        } else if self.footer_settings.is_some() {
+            // THE FOOTER'S OWN SETTINGS (`LEADER s r`): three rows and a
+            // cursor, nothing typed and nothing half done — so every view that
+            // holds work outranks it, and it sits BELOW them: the git browser,
+            // the icons' search, the calculator's sum, the video catalogue's
+            // description being written. It sat above all four, and a
+            // `video-metrics-open` over a catalogue kept alive showed the
+            // settings while the catalogue's work waited underneath.
+            ViewState::FooterSettings
         } else if self.files.is_some() {
             // ABOVE THE LOCATOR AND THE LEADER, because it holds state a
             // person built by hand: a directory navigated to, a set of marks,
@@ -14249,6 +19118,11 @@ impl Footer {
     /// the footer's height stays the same on every output — see
     /// [`Footer::apply_geometry`] for why that matters.
     fn band_rows(&self) -> u16 {
+        // THE MAXIMUM ALERT BAR TAKES THE BAND'S PLACE while it is up
+        // (`crate::alert`), and the notification waits for it, held.
+        if self.alerts.showing().is_some() {
+            return crate::alert::ROWS;
+        }
         crate::band::rows(self.notifications.showing()).min(BAND_CEILING)
     }
 
@@ -14328,48 +19202,6 @@ impl Footer {
         sequence.to_owned()
     }
 
-    /// Starts the Emacs daemon — the one thing the brain's watch offers.
-    ///
-    /// It is the distro's own unit (`services.emacs.enable`, which is the
-    /// upstream NixOS module) and it is a USER unit, so `systemctl --user
-    /// start` authorises through nothing and asks nobody. The echo is the
-    /// answer either way: a person who pressed a button is owed a sentence.
-    fn start_the_emacs_daemon(&mut self) {
-        match ronoctua_brain::systemd::start(ronoctua_brain::tasks::emacs::UNIT) {
-            Ok(()) => {
-                let m = self.texts.t(ronoctua_i18n::key::ECHO_EMACS_STARTING);
-                self.echo_message(m);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "could not start the Emacs daemon");
-                let m = self.texts.t(ronoctua_i18n::key::ECHO_EMACS_UNREACHABLE);
-                self.echo_message(m);
-            }
-        }
-    }
-
-    /// Turns the machine's network time client back on.
-    ///
-    /// # Why the shell does it and not the daemon that asked
-    ///
-    /// Because a notice names a COMMAND ID and carries nothing to do — that is
-    /// what makes its button reachable by `LEADER :`, by the buffer's `, n`
-    /// and by a click on the line, all through one door. The brain's own watch
-    /// does the same thing on its schedule; this is the press.
-    fn keep_the_clock_right(&mut self) {
-        match ronoctua_clock::set_automatic(true) {
-            Ok(()) => {
-                let m = self.texts.t(ronoctua_i18n::key::ECHO_CLOCK_KEPT);
-                self.echo_message(m);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "automatic time could not be turned on");
-                let m = self.texts.t(ronoctua_i18n::key::ECHO_CLOCK_REFUSED);
-                self.echo_message(m);
-            }
-        }
-    }
-
     /// What the brain has announced, when it has announced anything.
     fn announced(&self) -> Option<&ronoctua_brain::Announcement> {
         self.brain.as_ref()?.announcement.as_ref()
@@ -14387,7 +19219,7 @@ impl Footer {
     /// `first_of_expansion` already carries a paragraph about. `band_rows` next
     /// door answers the same question about the band, and now they read alike.
     fn brain_rows(&self) -> u16 {
-        crate::brain::rows(self.announced(), self.noticed())
+        crate::brain::rows(&crate::brain::Shown::of(self.brain.as_ref()))
     }
 
     /// How many lines the on-screen keyboard takes: none while it is away.
@@ -14865,7 +19697,7 @@ impl Footer {
         self.draw_and_paint();
     }
 
-    /// Turns the screen resizer on, or off — `LEADER d r`, and a click on its
+    /// Turns the screen resizer on, or off — `LEADER / r`, and a click on its
     /// mark.
     ///
     /// ON is a process of its own (`resizer`, the keeper), waited for on a
@@ -15005,6 +19837,10 @@ impl Footer {
                 {
                     corners.push(at);
                     let next = crate::gestures::CORNERS.get(corners.len()).copied();
+                    // A CALIBRATION THAT COULD NOT BE KEPT is said as that,
+                    // and not as a calibration done: in force until the
+                    // footer restarts, and lost then.
+                    let mut unwritten: Option<std::io::Error> = None;
                     let key = if let Some(k) = next {
                         k
                     } else {
@@ -15016,16 +19852,18 @@ impl Footer {
                                 let prefs = crate::gestures::Prefs {
                                     area: Some([a.left, a.top, a.right, a.bottom]),
                                 };
-                                if let Err(err) = crate::gestures::store().write(&prefs) {
-                                    tracing::warn!(error = %err, "the calibrated area was not written");
-                                }
+                                unwritten = crate::gestures::store().write(&prefs).err();
                                 ronoctua_i18n::key::ECHO_GESTURES_CALIBRATED
                             }
                             None => ronoctua_i18n::key::ECHO_GESTURES_CALIBRATION_FAILED,
                         }
                     };
-                    let m = self.texts.t(key);
-                    self.echo_message(m);
+                    if let Some(err) = unwritten {
+                        self.say_a_preference_not_written(crate::gestures::FILE, &err);
+                    } else {
+                        let m = self.texts.t(key);
+                        self.echo_message(m);
+                    }
                     drawn = true;
                 }
                 continue;
@@ -15130,21 +19968,19 @@ impl Footer {
                 }
             }
         }
-        // A LONE `Alt` OR `Ctrl` TAPPED HERE, at the leader's root, IS THE
-        // TAP that chooses the leader's set (`leader::Tap`). This keyboard
-        // latches a tapped modifier and sends its key-up only after the next
-        // key — which by then made it a chord, `LEADER M-s is not bound` — so
-        // the latch is given up at once, its key-up sent, and the set taken
-        // here. The footer's own `Tap` is cleared first: the key-up coming
-        // back through the compositor must not switch a second time.
-        if self.view() == ViewState::Leader
-            && self.leader.at_root()
-            && self.buffer_pending.is_empty()
-            && let Some((modifier, ups)) = self
+        // A LONE `Ctrl` TAPPED HERE, at the leader's root, IS THE TAP that
+        // cycles the bars' modes (`leader::Tap`). This keyboard latches a
+        // tapped modifier and sends its key-up only after the next key —
+        // which by then made it a chord, `LEADER C-s is not bound` — so the
+        // latch is given up at once, its key-up sent, and the cycle run here.
+        // The footer's own `Tap` is cleared first: the key-up coming back
+        // through the compositor must not cycle a second time.
+        if self.a_tap_counts()
+            && crate::leader::osk_tap_cycles_the_bars(crate::osk::Modifier::Ctrl)
+            && let Some(ups) = self
                 .osk
                 .as_mut()
                 .and_then(crate::osk::Board::spend_a_lone_tap)
-            && let Some(set) = crate::leader::set_of_osk_tap(modifier)
         {
             for o in ups {
                 if let Out::Key(code, down) = o {
@@ -15152,7 +19988,7 @@ impl Footer {
                 }
             }
             self.tap = crate::leader::Tap::default();
-            self.set_tapped(set);
+            self.bars_tapped();
         }
         if keep && let Some(board) = self.osk.as_ref() {
             let store = crate::osk::store();
@@ -15162,7 +19998,7 @@ impl Footer {
                     crate::osk::FILE
                 );
             } else if let Err(e) = store.write(&board.prefs) {
-                tracing::warn!(error = %e, "the keyboard's settings could not be written");
+                self.say_a_preference_not_written(crate::osk::FILE, &e);
             }
         }
         if hide {
@@ -15380,11 +20216,6 @@ impl Footer {
         std::mem::swap(&mut self.here, &mut self.touch_here);
         self.pointer_frame_here(conn, qh, events);
         std::mem::swap(&mut self.here, &mut self.touch_here);
-    }
-
-    /// What the brain wants said, when it wants anything said.
-    fn noticed(&self) -> Option<&ronoctua_brain::Notice> {
-        self.brain.as_ref()?.notice.as_ref()
     }
 
     /// Which line of the surface the modeline is on.
@@ -15758,6 +20589,21 @@ impl Footer {
     /// Split off so `explain_rows` has something to ask that does not ask it
     /// back: the row it decides to take is taken out of THIS answer.
     fn grid_full(&self) -> Grid {
+        // THE GIT BROWSER IS THE WHOLE REGION, in one column of lines that
+        // are its own columns laid side by side: the full ceiling, before the
+        // explanation takes its row (`grid` takes it, and `git_shape` builds
+        // exactly the lines left) — so it is ONE page, and its last line, its
+        // bands and its bars are the ones drawn. Asked before the count:
+        // counting is building every column.
+        if self.view() == ViewState::Git {
+            return Grid {
+                columns: 1,
+                lines: self.expansion_ceiling(),
+                width: crate::git_browser::footer_columns(self.screen_columns()),
+                colon: 0,
+                icon: 0,
+            };
+        }
         // THE COUNT FIRST, and the ROWS only for whoever measures them.
         //
         // The clipboard and the file manager take a single column, so all they
@@ -16462,6 +21308,8 @@ impl Footer {
                     fields: Vec::new(),
                     foot: false,
                     chips: Vec::new(),
+                    caret: None,
+                    controls: Vec::new(),
                     deck: None,
                     schematic: None,
                     covers: Vec::new(),
@@ -16502,7 +21350,7 @@ impl Footer {
             && let Some(v) = self.software.as_ref()
         {
             let width = self.screen_columns();
-            let side = crate::apps::pixmap_side().ceil() as u32;
+            let side = self.icon_side_px();
             return v
                 .rows(&self.software_readings, width, &self.texts)
                 .into_iter()
@@ -16562,6 +21410,163 @@ impl Footer {
                     foot: false,
                     ..ExpansionRow::empty_one()
                 })
+                .collect();
+        }
+
+        // THE FOOTER'S OWN SETTINGS: the view's rows, each first line a
+        // click that selects and a second that acts, and each one saying,
+        // under the pointer, what its `RET` does.
+        if self.view() == ViewState::FooterSettings
+            && let Some(v) = self.footer_settings.as_ref()
+        {
+            let rows = v.rows(&self.modeline, self.screen_columns(), &self.texts);
+            return rows
+                .iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::FooterSettings(n)),
+                    fields: r.fields.clone(),
+                    description: crate::footer_settings::View::about(&rows, n, &self.texts),
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
+        // THE GIT BROWSER: its columns laid onto the region's lines, each line
+        // every column's fields at the region's cells (`git_browser::Drawn`)
+        // — one click per line, and the view says which column and row the
+        // pointer's cell is.
+        if self.view() == ViewState::Git
+            && let Some(v) = self.git_view.as_ref()
+        {
+            let (columns, room) = self.git_shape();
+            let drawn = v.drawn(columns, room);
+            return (0..drawn.room)
+                .map(|n| ExpansionRow {
+                    click: Some(Click::Git(n)),
+                    fields: drawn.line(n),
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
+        // THE ICONS APP: blank rows, as many as the region may hold — the
+        // view draws its tabs, its grid and its page over them itself
+        // (`Footer::draw_and_paint`), with the layout its pointer reads.
+        if self.view() == ViewState::Icons {
+            return (0..self.expansion_ceiling())
+                .map(|_| ExpansionRow::empty_one())
+                .collect();
+        }
+
+        // THE CALCULATOR: the view's lines, each a click on what it holds —
+        // a key, a mode, an answer kept, a unit — found by the cell under the
+        // pointer (`calc::Line::target_at`), the ruler the lit field uses.
+        if self.view() == ViewState::Calc
+            && let Some(v) = self.calc.as_ref()
+        {
+            return v
+                .footer_lines(self.screen_columns(), &self.texts)
+                .into_iter()
+                .enumerate()
+                .map(|(n, l)| ExpansionRow {
+                    click: (l.targets.iter().any(Option::is_some) || !l.bands.is_empty())
+                        .then_some(Click::Calc(n)),
+                    fields: l.fields,
+                    caret: l.caret,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
+        // THE VIDEO CATALOGUE: its rows, each first line a click that selects and a
+        // second that acts, a shelf's cell under the pointer, the thumbnails over
+        // their lines.
+        if self.view() == ViewState::VideoMetrics {
+            return self.video_metrics_rows();
+        }
+
+        // THE SECURITY CENTRE: each row a click that selects and a second that
+        // acts, and each one saying, under the pointer, what its `RET` does.
+        if self.view() == ViewState::Security {
+            let rows = self.security.rows(
+                &self.security_scene,
+                self.screen_columns(),
+                &self.texts,
+                &self.zone,
+            );
+            return rows
+                .iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading).then_some(Click::Security(n)),
+                    fields: r.fields.clone(),
+                    description: crate::security::View::about(&rows, n, &self.texts),
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
+        // THE PERSON'S CONTAINERS: the stacked layout's lines, each clickable
+        // where it has something to take — which stretch, the click's cell
+        // says (`containers::View::clicked`).
+        if self.view() == ViewState::Containers
+            && let Some(v) = self.containers.as_ref()
+        {
+            let lines = v.lines(
+                &self.containers_readings,
+                self.screen_columns(),
+                crate::containers::Layout::Stacked,
+                0,
+                &self.texts,
+            );
+            return lines
+                .into_iter()
+                .enumerate()
+                .map(|(n, l)| ExpansionRow {
+                    click: l
+                        .zones
+                        .iter()
+                        .any(|z| z.target != crate::containers::Target::Nothing)
+                        .then_some(Click::Containers(n)),
+                    fields: l.fields,
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
+        // THE BELONGINGS: every row a click that selects and a second that
+        // acts, each saying under the pointer what its `RET` does.
+        if self.view() == ViewState::Belongings
+            && let Some(o) = self.belongings.as_ref()
+        {
+            let rows = o
+                .view
+                .rows(&o.readings, &self.zone, self.screen_columns(), &self.texts);
+            return rows
+                .iter()
+                .enumerate()
+                .map(|(n, r)| ExpansionRow {
+                    click: (!r.heading()).then_some(Click::Belongings(n)),
+                    fields: r.fields.clone(),
+                    description: crate::belongings::View::about(&rows, n, &self.texts),
+                    foot: false,
+                    ..ExpansionRow::empty_one()
+                })
+                .collect();
+        }
+
+        // THE SEARCH: blank rows, as many as the region may hold — the view
+        // draws what is typed, its results and its detail over them itself
+        // (`Footer::fast_access_drawn`), with the layout its pointer reads.
+        if self.view() == ViewState::FastAccess {
+            return (0..self.expansion_ceiling())
+                .map(|_| ExpansionRow::empty_one())
                 .collect();
         }
 
@@ -16648,6 +21653,8 @@ impl Footer {
                     fields: Vec::new(),
                     foot: false,
                     chips: Vec::new(),
+                    caret: None,
+                    controls: Vec::new(),
                     deck: None,
                     schematic: None,
                     covers: Vec::new(),
@@ -16681,15 +21688,11 @@ impl Footer {
                         None => format!("{GROUP_MARK}{}", self.texts.t(&e.label)),
                     },
                     description: Some(self.texts.t(&e.label)),
-                    // THE LEADER'S OWN ROW is the leader again, not a key of
-                    // the tree — see `Click::Leader`.
+                    // THE TAP'S OWN ROW runs the cycle, not a key of the tree
+                    // — see `Click::Bars`.
                     click: Some(
-                        if e.command
-                            .as_deref()
-                            .and_then(crate::hidden::mode_of)
-                            .is_some()
-                        {
-                            Click::Leader
+                        if e.command.as_deref() == Some(crate::hidden::CYCLE_COMMAND) {
+                            Click::Bars
                         } else {
                             Click::Key(e.sym)
                         },
@@ -16880,22 +21883,34 @@ impl Footer {
             // every page (`player_media::panel_lines`): a page of two rows
             // left the film no line at all. The width's answer, and the
             // stored ceiling's — nothing the region holds.
+            // FOLDED, only the transport and the time bar (the stored
+            // `player_folded`).
             let keep = self.player_panel().map_or(0, |panel| {
-                let lines = crate::player_media::panel_lines(
-                    panel,
-                    tokens::metrics::cell_width(tokens::text::size()),
-                    tokens::metrics::line_height(tokens::text::size()),
-                );
+                let lines = if self.player_folded_now() {
+                    crate::player_media::FOLDED_LINES
+                } else {
+                    crate::player_media::panel_lines(
+                        panel,
+                        tokens::metrics::cell_width(tokens::text::size()),
+                        tokens::metrics::line_height(tokens::text::size()),
+                    )
+                };
                 usize::from(lines).min(self.expansion_ceiling())
             });
+            let controls: Vec<Vec<(u16, u16, &'static str)>> = (0..rows.len())
+                .map(|n| crate::player_rows::controls_under(&rows, n))
+                .collect();
             let mut region: Vec<ExpansionRow> = rows
                 .into_iter()
+                .zip(controls)
                 .enumerate()
-                .map(|(n, r)| ExpansionRow {
+                .map(|(n, (r, controls))| ExpansionRow {
                     // A TITLE WITH A CONTROL takes a click too: the glyph
                     // at the end of its line is the control.
                     click: (!r.heading || !r.cells.is_empty()).then_some(Click::Player(n)),
                     chips: r.chips.iter().map(|c| c.at).collect(),
+                    caret: r.caret,
+                    controls,
                     deck: r.deck,
                     schematic: r.schematic,
                     covers: r.covers,
@@ -18191,6 +23206,17 @@ impl Footer {
                 self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
             }
+            // THE CLIPBOARD, read off the loop — the live selection
+            // (`crate::pasting`) — for the filter or the question's query.
+            Step::Paste => self.read_the_clipboard(PasteFor::Files),
+            // A SECRET, on the minibuffer's own masked line — the window asks
+            // the same one with `Ui::ask`. The answer comes back through
+            // `run_with` to `files::View::secret_answered`.
+            Step::Secret(id) => {
+                self.mx.request(id, true);
+                self.apply_geometry(self.interactivity());
+                self.draw_and_paint();
+            }
             Step::Changed => {
                 // AND THE REGION FOLLOWS THE CURSOR, as every other list does.
                 // Without it the cursor walks past the twelfth line and off the
@@ -18240,8 +23266,11 @@ impl Footer {
     /// it after every keypress honest.
     fn follow_the_place(&mut self) {
         if let (Some(n), Some(v)) = (self.files_notice.as_mut(), self.files.as_ref()) {
-            n.look_at(v.where_());
+            // THE ARCHIVE'S OWN FOLDER while the view stands inside one.
+            n.look_at(v.watched());
         }
+        // AND THE GIT LINE, into and out of a repository (`git_line`).
+        self.follow_the_git_line();
     }
 
     /// Stops watching the directory, keeping the thread and the sidebar.
@@ -18253,6 +23282,9 @@ impl Footer {
     fn rest_the_watch(&mut self) {
         if let Some(n) = self.files_notice.as_mut() {
             n.rest();
+        }
+        if let Some(k) = self.files_git.as_mut() {
+            k.rest();
         }
     }
 
@@ -18308,6 +23340,19 @@ impl Footer {
                 self.open_buffer_about("RONOCTUA_BUFFER_FORMAT", Some(&id));
                 return;
             }
+            // CHECK WITH VIRUSTOTAL: the security centre's window, checking
+            // the file — the region is the manager's, and the window asks its
+            // own questions (the file manager's window opens the same one).
+            Doing::VirusTotal(path) => {
+                if let Some(me) = me {
+                    self.open_foreign(
+                        &me.to_string_lossy(),
+                        &crate::security::window_checking(&path),
+                        None,
+                    );
+                }
+                return;
+            }
             Doing::Launch(which) => {
                 let Some(entry) = self.catalogue.iter().find(|e| e.id == which).cloned() else {
                     let m = self.texts.t_with(
@@ -18329,6 +23374,11 @@ impl Footer {
                         Some(&dir.to_string_lossy()),
                     );
                 }
+                return;
+            }
+            // THE HISTORY, in this door's kind of door: the region.
+            Doing::History(root) => {
+                self.open_git(root);
                 return;
             }
             Doing::RootTerminal(dir) => {
@@ -18455,18 +23505,20 @@ impl Footer {
                     v.mounted(&at);
                 }
             }
-            // WHAT IS INSIDE THE FILE. A stale answer is dropped inside
-            // `View::looked` and not here: the cursor moves while a child
-            // process runs, and which answer is still the right one is the
-            // view's question, not this door's.
-            crate::files::Report::Inspected(looked) => {
-                if let Some(v) = self.files.as_mut() {
-                    v.looked(*looked);
-                }
-                // AND THE PLAYER IS ASKED AGAIN — see the window door's twin,
-                // and the defect written out there.
-                self.follow_the_motion();
-                self.follow_the_turn();
+            // THE SUDO DOOR WANTS THE PASSWORD for a change of owner: asked on
+            // this line, and answered back as `files-root-password`.
+            crate::files::Report::Password(change) => {
+                self.files_root_waiting = Some(change);
+                self.mx.request(crate::files::ROOT_PASSWORD, true);
+                self.apply_geometry(KeyboardInteractivity::Exclusive);
+            }
+            crate::files::Report::Door(why) => {
+                let m = self.texts.t(crate::security_words::refusal(why));
+                self.echo_message(m);
+            }
+            crate::files::Report::Said(e) => {
+                let m = self.texts.t_with(e.key, &e.borrowed());
+                self.echo_message(m);
             }
             crate::files::Report::Racked(rack) => {
                 // ONLY WHEN THERE IS A VIEW TO PUT IT IN. The thread goes on
@@ -18498,6 +23550,35 @@ impl Footer {
                         v.reread_sidebar();
                     }
                 }
+                // A FILE OF THE WORK TREE MOVED: the git line reads again.
+                if let Some(k) = self.files_git.as_ref() {
+                    k.nudge();
+                }
+            }
+            crate::files::Report::Git(line) => {
+                if !self.files.as_mut().is_some_and(|v| v.git_heard(*line)) {
+                    return;
+                }
+            }
+            // AN ARCHIVE'S ANSWER — a listing, a member out, a job refused —
+            // turned into a step by the same view the window asks.
+            crate::files::Report::Archive(r) => {
+                let step = self
+                    .files
+                    .as_mut()
+                    .map_or(crate::files::Step::Nothing, |v| v.archive_reported(*r));
+                self.apply_files_step(step);
+                return;
+            }
+            // A WRITER OF THE FACTS CAME BACK — the window's arm, in the same
+            // words (`inspection_edit::sentence`).
+            crate::files::Report::Amended(amended) => {
+                if let Some(v) = self.files.as_mut() {
+                    v.reread();
+                }
+                if let Some(m) = crate::inspection_edit::sentence(&amended, &self.texts) {
+                    self.echo_message(m);
+                }
             }
         }
         // A MOUNT MOVES THE VIEW. `Report::Mounted` goes into the directory it
@@ -18510,6 +23591,62 @@ impl Footer {
         // nothing having gone wrong.
         self.apply_geometry(self.interactivity());
         self.draw_and_paint();
+    }
+
+    /// How many lines the region shows, told to every view that hosts the
+    /// file picker before a key reaches it: its `PgUp` and `PgDn` walk half
+    /// of them (`file_picker::FilePicker::page_is`).
+    fn pickers_see_the_page(&self) {
+        let lines = self.grid().lines;
+        if let Some(v) = self.player_view.as_ref() {
+            v.page_is(lines);
+        }
+        if let Some(v) = self.software.as_ref() {
+            v.page_is(lines);
+        }
+        if let Some(v) = self.syncthing.as_ref() {
+            v.page_is(lines);
+        }
+        if let Some(v) = self.network.as_ref() {
+            v.page_is(lines);
+        }
+        if let Some(v) = self.camera_view.as_ref() {
+            v.page_is(lines);
+        }
+    }
+
+    /// The file picker of whichever view hosts one, woken — its folder
+    /// moved, or its devices were read: the region again, when its rows
+    /// changed.
+    fn picker_woken(&mut self) {
+        let mut changed = false;
+        if let Some(v) = self.software.as_mut() {
+            changed |= v.look();
+        }
+        if let Some(v) = self.syncthing.as_mut() {
+            changed |= v.look();
+        }
+        if let Some(v) = self.network.as_mut() {
+            changed |= v.look();
+        }
+        if let Some(v) = self.camera_view.as_mut() {
+            changed |= v.look();
+        }
+        if changed {
+            self.draw_and_paint();
+        }
+    }
+
+    /// Where a pointer is across the player's rows on a line of the region
+    /// whose grid column starts `base` cells in — the ONE answer the band a
+    /// grid's cell lights with, the cursor's cell and the cell a click takes
+    /// all read (`chrome::Across`): the rows are drawn `chrome::FIELDS_LEAD`
+    /// after the column's first cell.
+    fn player_across(base: u16) -> crate::chrome::Across {
+        crate::chrome::Across {
+            lead: crate::chrome::FIELDS_LEAD.saturating_add(base),
+            cell_px: crate::chrome::cell_width(),
+        }
     }
 
     /// Which CELL of the region the pointer is over, from the left edge.
@@ -18588,7 +23725,7 @@ impl Footer {
                 let effect = self.leader.key(&self.tree, t);
                 self.apply_leader_effect(effect);
             }
-            Some(Click::Leader) => self.activate_leader(crate::leader::Opener::Pointer),
+            Some(Click::Bars) => self.cycle_the_bars(),
             // THE CLIPBOARD'S ROW, and the VIEW turns it into a target. It
             // used to hand out `Candidate`, which routes into the `M-x`
             // finder — so with `M-x` closed the candidate list was empty and
@@ -18646,6 +23783,21 @@ impl Footer {
                         v.clicked(n, width, &self.texts)
                     });
                 self.transfers_step(step);
+            }
+            // THE GIT BROWSER: the CELL says which column and row — the view
+            // resolves it (`git_browser::Drawn::target_at`); the first click
+            // selects and the second is `RET` (invariant 19).
+            Some(Click::Git(n)) => {
+                let cell = self.here.cell_under_pointer.unwrap_or(0);
+                let (columns, room) = self.git_shape();
+                let errand =
+                    self.git_view
+                        .as_mut()
+                        .map_or(crate::git_browser::Errand::Nothing, |v| {
+                            let _ = v.drawn(columns, room);
+                            v.clicked(n, cell)
+                        });
+                self.git_errand(errand);
             }
             Some(Click::Notifications(n)) => {
                 // WHICH CELL decides whether this was a target or just aiming —
@@ -18778,6 +23930,62 @@ impl Footer {
                     self.locale_errand(errand);
                 }
             }
+            // THE CLICK SELECTS, AND THE SECOND ONE ACTS — the security
+            // centre's rows, through the press a key takes.
+            Some(Click::Security(n)) => {
+                let width = self.screen_columns();
+                let rows = self
+                    .security
+                    .rows(&self.security_scene, width, &self.texts, &self.zone);
+                if self.security.clicked(n, &rows) {
+                    self.security_press(crate::security::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
+            }
+            Some(Click::Containers(n)) => self.containers_clicked(n),
+            // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19,
+            // through the same press a key goes through.
+            Some(Click::FooterSettings(n)) => {
+                let width = self.screen_columns();
+                let again = self.footer_settings.as_mut().is_some_and(|v| {
+                    let rows = v.rows(&self.modeline, width, &self.texts);
+                    v.clicked(n, &rows)
+                });
+                if again {
+                    self.footer_settings_press(crate::footer_settings::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
+            }
+            // THE CALCULATOR: the cell under the pointer says what the line's
+            // press reaches — a key, a mode, an answer kept, a unit.
+            Some(Click::Calc(n)) => {
+                let cell = self.here.cell_under_pointer.unwrap_or(0);
+                let target = self.calc.as_ref().and_then(|v| {
+                    v.footer_lines(self.screen_columns(), &self.texts)
+                        .get(n)
+                        .and_then(|l| l.target_at(cell))
+                });
+                match target {
+                    Some(t) => self.calc_clicked(t),
+                    None => self.draw_and_paint(),
+                }
+            }
+            Some(Click::VideoMetrics(n)) => self.video_metrics_clicked(n),
+            Some(Click::Belongings(n)) => {
+                let width = self.screen_columns();
+                let texts = std::rc::Rc::clone(&self.texts);
+                let again = self.belongings.as_mut().is_some_and(|o| {
+                    let rows = o.view.rows(&o.readings, &self.zone, width, &texts);
+                    o.view.clicked(n, &rows)
+                });
+                if again {
+                    self.belongings_press(crate::belongings::Press::Enter);
+                } else {
+                    self.draw_and_paint();
+                }
+            }
             Some(Click::Geo(n)) => {
                 let width = self.screen_columns();
                 let texts = std::rc::Rc::clone(&self.texts);
@@ -18828,11 +24036,28 @@ impl Footer {
                 let width = self.player_columns();
                 let mut already = false;
                 // BY ITS COLUMN too: the files are a grid, and the queue's
-                // title carries the control that empties it.
-                let column = self.here.cell_under_pointer.unwrap_or(0);
+                // title carries the control that empties it — through
+                // `player_across`, the answer the band of a grid's cell is
+                // painted by: the cell a click takes is the cell lit.
+                let base = self
+                    .here
+                    .row_under_pointer
+                    .map_or(0, |line| self.grid().position(line).0);
+                let across = Self::player_across(base);
+                #[allow(clippy::cast_possible_truncation)]
+                let x = self.here.x_under_pointer.map_or(0.0, |x| x as f32);
+                // `Ctrl` MARKS a file of the picker, `Shift` every file up to
+                // it — the picker's several, by the pointer.
+                let mods = self.pointer_mods();
                 if let Some(v) = self.player_view.as_mut() {
                     let rows = v.rows(self.player.as_ref(), width, &self.texts);
-                    already = v.clicked_at(n, column, &rows);
+                    if (mods.ctrl || mods.shift)
+                        && v.mark_clicked_px(n, x, across, &rows, mods.shift)
+                    {
+                        self.draw_and_paint();
+                        return;
+                    }
+                    already = v.clicked_px(n, x, across, &rows);
                 }
                 if already {
                     self.player_press(crate::player::Press::Enter);
@@ -19225,6 +24450,47 @@ impl Footer {
             ViewState::Geo => self.geo.as_ref().map(crate::geo::View::cursor),
             ViewState::Display => self.display.as_ref().map(crate::display::View::cursor),
             ViewState::Bluetooth => self.bluetooth.as_ref().map(crate::bluetooth::View::cursor),
+
+            ViewState::FooterSettings => self
+                .footer_settings
+                .as_ref()
+                .map(crate::footer_settings::View::cursor),
+
+            // THE GIT BROWSER SCROLLS ITS OWN COLUMNS: the region is its
+            // whole height, and there is no line of it to follow.
+            ViewState::Git => None,
+
+            // THE GRID IS NO LIST: its cursor is a cell, and the region never
+            // scrolls — the view moves its own rows.
+            ViewState::Icons => None,
+
+            ViewState::Calc => self
+                .calc
+                .as_ref()
+                .and_then(|v| v.footer_cursor(self.screen_columns(), &self.texts)),
+
+            // THE DRAWN ROW — a shelf's first line, a caret's — found by identity.
+            ViewState::VideoMetrics => self.video_metrics_cursor(),
+
+            ViewState::Security => Some(self.security.cursor()),
+
+            ViewState::Containers => self.containers.as_ref().and_then(|v| {
+                let lines = v.lines(
+                    &self.containers_readings,
+                    self.screen_columns(),
+                    crate::containers::Layout::Stacked,
+                    0,
+                    &self.texts,
+                );
+                v.cursor_line(&lines, &self.containers_readings)
+            }),
+
+            ViewState::Belongings => self.belongings.as_ref().map(|o| o.view.cursor()),
+
+            // THE SEARCH DRAWS ITS OWN ROWS: the region never scrolls, the
+            // view moves its results and its detail itself.
+            ViewState::FastAccess => None,
+
             // THE KIOSK'S LISTS, by the row the tab or the extension is drawn
             // on — the cursor keeps its id, not its row. A grid has none.
             ViewState::Kiosk => self.kiosk_view.as_ref().and_then(|v| {
@@ -19584,10 +24850,19 @@ impl Footer {
             Keysym::Home | Keysym::KP_Home => Sym::Home,
             Keysym::End | Keysym::KP_End => Sym::End,
             // THE LOCK IS UNDONE by the one function every window's reader
-            // calls too (`door::keys::without_caps_lock`, which says why).
+            // calls too (`door::keys::without_caps_lock`, which says why) —
+            // and kept, as a window keeps it, where the region types text
+            // (`door::keys::lock_undone`, `region_types_capitals`).
             otherwise => Sym::Char(crate::door::keys::without_caps_lock(
                 otherwise.key_char()?,
-                self.mods.caps_lock,
+                crate::door::keys::lock_undone(
+                    self.mods,
+                    region_types_capitals(
+                        self.view(),
+                        self.player_view.as_ref(),
+                        self.video_metrics.as_ref(),
+                    ),
+                ),
             )),
         };
 
@@ -19732,7 +25007,10 @@ impl Footer {
         let Some(screen) = self.screens.get(i) else {
             return;
         };
-        if screen.gpu.is_some() || screen.width == 0 {
+        // A PHOTOGRAPH'S SCREEN has no glass: its frame is kept, not
+        // presented, and its surface belongs to a stand-in compositor that
+        // has no buffer to give a GPU (`crate::footer_photograph`).
+        if screen.gpu.is_some() || screen.width == 0 || screen.photographing {
             return;
         }
         let layer = &screen.layer;
@@ -19850,6 +25128,9 @@ impl Footer {
         // request is asynchronous: this frame goes out with the glyphs, and the
         // next one with whatever has arrived.
         self.request_visible_icons();
+        // THE HOURS ARE DRAWN AGAIN or not at all, frame by frame: what arms
+        // their minute's timer is this frame drawing them (`keep_the_clock`).
+        self.clock_drawn = false;
         // THE PLAYER'S PICTURE, started or ended with what the region shows —
         // and its panel laid out, and written down for the pointer.
         self.player_picture_follows();
@@ -19890,10 +25171,18 @@ impl Footer {
         // It already showed up in the modeline's mode indicator. That is not
         // enough: the indicator is a narrow segment that ELIDES, and the place
         // one looks at while typing a chord is the line below — the echo area.
-        let pending = self
-            .leader
-            .active_one()
-            .then(|| self.leader.prefix(&self.leader_label));
+        //
+        // AND THE SUBMENUS BUILT AT RUN TIME: `LEADER w s` and `LEADER ,` live
+        // outside the tree (their rows are what the focused window published),
+        // so the leader's own sequence stops a level short — the line said
+        // `LEADER w-` with the list of states on screen (`pending_line`).
+        let pending = self.leader.active_one().then(|| {
+            pending_line(
+                &self.leader.raw_prefix(&self.leader_label),
+                self.state_pending.then_some(crate::leader::STATE_KEY),
+                &self.buffer_pending,
+            )
+        });
         // THE ECHO, AS PIECES: the shell's own answer in one run, or — when
         // the shell has nothing to answer — an event of the machine, with the
         // actions its catalogue entry offers at the end (`crate::events`).
@@ -20087,14 +25376,24 @@ impl Footer {
         // the row under the cursor, and which rows exist on what was read.
         let software = &self.software;
         let software_readings = &self.software_readings;
+        let icons_app = &self.icons_app;
         let display = &self.display;
         // THE READING TOO, because this view's hint depends on whether the
         // screen its level is about is still there — see `display::View::hint`.
         let screens = &self.display_snapshot;
         let bluetooth = &self.bluetooth;
         let network = &self.network;
+        // THE CENTRE'S SCENE: its finger keys are taught only with a reader.
+        let security_scene = &self.security_scene;
         let clipboard = &self.clip_view;
         let history = &self.history;
+        let calc_taught = self
+            .calc
+            .as_ref()
+            .map(|v| v.taught(self.texts.decimal_mark()));
+        // THE VIDEO CATALOGUE'S KEYS, taught for the row under its cursor —
+        // built before the closure borrows.
+        let video_metrics_hint = self.video_metrics_hint();
         // AND WHICH VIEW IS ON SCREEN, decided in the ONE place that decides
         // it. The chain below used to ask in its own order — power, then the
         // radio, then the network — while `Footer::view()` ranks them the
@@ -20117,11 +25416,19 @@ impl Footer {
         // hint's row under the cursor.
         let player_columns = self.player_columns();
         // THE LEADER'S SET, while nothing has been typed: at its ROOT the
-        // leader's line teaches the taps that switch it — as clicks, since the
-        // pointer cannot tap a modifier (invariant 19). Past the root there is
-        // no set to choose, and the line is the sequence alone.
+        // leader's line teaches the next set, which the leader pressed again
+        // switches to — as a click, since the pointer cannot press the leader
+        // (invariant 19). Past the root there is no set to choose, and the
+        // line is the sequence alone.
         let leader_set = (self.leader.at_root() && self.buffer_pending.is_empty())
             .then(|| self.leader.set_now());
+        let leader_label = self.leader_label.as_str();
+        let containers_hint = self.containers_hint();
+        // THE BELONGINGS' ROWS, and the zone their dates are in.
+        let belongings = &self.belongings;
+        let belongings_zone = &self.zone;
+        // THE SEARCH'S KEYS, which follow its scope and its cursor's row.
+        let fast_access_hint = self.fast_access.as_ref().map(|s| s.hint(texts));
         let hint = move || {
             match showing {
                 // THE FILE MANAGER teaches its own keys, and only while it is
@@ -20226,6 +25533,48 @@ impl Footer {
                 // THE SHELL'S HISTORY: `s` syncs and `S-<arrows>` turn a
                 // value, and nothing on a row says so.
                 ViewState::History => history.as_ref().map(|v| v.hint(texts)),
+
+                // THE FOOTER'S SETTINGS: its two arrows and `RET`, generated
+                // from its table (`footer_settings::OF_THE_VIEW`).
+                ViewState::FooterSettings => Some(crate::chrome::hint_of(
+                    crate::footer_settings::OF_THE_VIEW,
+                    texts,
+                )),
+
+                // THE GIT BROWSER: its table, the one its window teaches.
+                ViewState::Git => Some(crate::chrome::hint_of(
+                    crate::git_browser::OF_THE_VIEW,
+                    texts,
+                )),
+
+                // THE ICONS APP: the grid's keys or the page's, `Esc` first.
+                ViewState::Icons => icons_app.as_ref().map(|v| v.hint(texts)),
+
+                // THE CALCULATOR: its mode's keys, the converter's in Convert
+                // (`calc::hint`, the table the window's header reads too).
+                ViewState::Calc => calc_taught.map(|t| crate::calc::hint(t, false, texts)),
+
+                // THE VIDEO CATALOGUE: the keys that work where its cursor is.
+                ViewState::VideoMetrics => video_metrics_hint.clone(),
+
+                // THE SECURITY CENTRE: its keys, generated from its table.
+                ViewState::Security => Some(crate::security::View::hint(security_scene, texts)),
+
+                // THE PERSON'S CONTAINERS: the keys that work on the row under
+                // the cursor, and the question's own while one is up.
+                ViewState::Containers => containers_hint.clone(),
+
+                // THE BELONGINGS: the keys that work on the row under the
+                // cursor — a decision's only on a conflict.
+                ViewState::Belongings => belongings.as_ref().map(|o| {
+                    o.view
+                        .hint(&o.readings, belongings_zone, hint_columns, texts)
+                }),
+
+                // THE SEARCH: its keys, the strip's and YouTube's while they
+                // act, the consent row's while one is drawn — `Esc` first.
+                ViewState::FastAccess => fast_access_hint.clone(),
+
                 // A COMPOSITOR KEY MODE, with nothing of ours open: the line
                 // teaches the mode's keys, because nothing else on screen
                 // says the keys changed meaning.
@@ -20242,11 +25591,11 @@ impl Footer {
             // THE LEADER TOO, where the line is the sequence being typed: the
             // way back goes after it (see where the line is built), and `Esc`
             // there ends the whole sequence, as the leader's rule has it. At
-            // the root the other sets follow it (`leader::set_hint`).
+            // the root the next set follows it (`leader::set_hint`).
             .or_else(|| {
                 (showing == ViewState::Leader).then(|| {
                     leader_set
-                        .map(|s| crate::leader::set_hint(s, texts))
+                        .map(|s| crate::leader::set_hint(s, leader_label, texts))
                         .unwrap_or_default()
                 })
             })
@@ -20298,6 +25647,8 @@ impl Footer {
             v.extend(strip_of.iter());
             v
         };
+        // THE PLAYER'S CONTROLS, where this frame puts them — for the pointer.
+        self.player_controls_were_placed(&visible);
         // WHERE LINE `i` LANDS. The grid answers for the list; past it lies the
         // strip, which is not in the grid at all — one column, pinned, and the
         // index IS the line.
@@ -20394,6 +25745,13 @@ impl Footer {
                     })
                     .map(|t| vec![crate::chrome::Piece::said(t)])
             })
+            // AND A CONTROL OF A TITLE among the player's rows — the glyph
+            // that empties the queue — the same way.
+            .or_else(|| {
+                self.player_control_under
+                    .and_then(|id| self.player_control_sentence(id))
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
+            })
             // AND A CONTROL OF A DECK among the player's rows, the same way.
             .or_else(|| {
                 self.here
@@ -20405,6 +25763,12 @@ impl Footer {
                             &self.texts,
                         )
                     })
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
+            })
+            // AND A FACT OF THE SEARCH'S FILE under the pointer, said whole —
+            // the panel cut it to its column, as the file manager's does.
+            .or_else(|| {
+                self.fast_access_about()
                     .map(|t| vec![crate::chrome::Piece::said(t)])
             })
             // AND WHAT THE MANAGER'S FOCUSED ROW HAS TO ADD — today, the reason
@@ -20537,6 +25901,14 @@ impl Footer {
                 Some(vec![crate::chrome::Piece::said(
                     crate::transfers::under_the_pointer(job, &self.texts),
                 )])
+            })
+            // AND LAST, A HINT TOO LONG FOR THE LINE that the pointer left
+            // on its way to the line and its chevron (`Footer::linger`):
+            // anything else that explains itself takes the line first.
+            .or_else(|| {
+                self.lingering_hint
+                    .clone()
+                    .map(|t| vec![crate::chrome::Piece::said(t)])
             });
         // WHERE THE POINTER IS, marked by a BACKGROUND — and, since the owner
         // reported it from the screen, where the FOCUS is by another.
@@ -20829,6 +26201,9 @@ impl Footer {
             let state_is_base = self
                 .state_now()
                 .is_none_or(|s| s == ronoctua_protocol::BASE_STATE);
+            // AND THE TONE THE STATE DECLARED, which outranks the rule above:
+            // a question waiting on the person in `warning`, whatever its id.
+            let state_paint = state_colour(state_is_base, self.state_tone_now());
             let battery_danger = self.battery_danger();
             // WHICH DEVICE MARKS ARE ALARMED, once per frame: the pool is
             // resolved again here because `placed` only carries ids.
@@ -20879,7 +26254,7 @@ impl Footer {
                             segment_color(
                                 c.id,
                                 with_keyboard,
-                                state_is_base,
+                                state_paint,
                                 battery_danger,
                                 &alarmed,
                                 current_workspace,
@@ -20918,15 +26293,20 @@ impl Footer {
             // Remembered in `band_placed` for the pointer, for the same reason
             // the modeline's segments are: what the cursor is over has to be
             // what was DRAWN.
-            let band = crate::band::lines(
-                self.notifications.showing(),
-                columns,
-                self.notifications.fraction_left(std::time::Instant::now()),
-                self.notifications.position(),
-                self.blink_on,
-                self.notifications.held(),
-                &crate::band::Words { texts: &self.texts },
-            );
+            // THE MAXIMUM ALERT BAR IN ITS PLACE while one is up
+            // (`crate::alert`): its line, in the ink of the phase it wears.
+            let band = match self.alerts.showing() {
+                Some(cause) => crate::alert::lines(cause, columns, self.alert_phase, &self.texts),
+                None => crate::band::lines(
+                    self.notifications.showing(),
+                    columns,
+                    self.notifications.fraction_left(std::time::Instant::now()),
+                    self.notifications.position(),
+                    self.blink_on,
+                    self.notifications.held(),
+                    &crate::band::Words { texts: &self.texts },
+                ),
+            };
             for (row, line) in band.iter().enumerate() {
                 for piece in &line.pieces {
                     spans.extend(glyph_and_text(
@@ -21022,15 +26402,17 @@ impl Footer {
             // Remembered in `brain_placed` for the pointer, for the reason the
             // band's is: what the cursor is over has to be what was DRAWN.
             let brain = crate::brain::lines(
-                self.announced(),
-                self.noticed(),
+                &crate::brain::Shown::of(self.brain.as_ref()),
                 columns,
                 ronoctua_brain::Clock::now(&ronoctua_brain::moment::Wall),
                 &crate::brain::Words {
                     texts: &self.texts,
+                    zone: &self.zone,
                     abort_keys: &self.brain_keys(crate::leader::BRAIN_ABORT_KEYS),
                     proceed_keys: &self.brain_keys(crate::leader::BRAIN_PROCEED_KEYS),
-                    notice_keys: &self.brain_keys(crate::leader::BRAIN_NOTICE_KEYS),
+                    act_keys: &self.brain_keys(crate::leader::BRAIN_NOTICE_KEYS),
+                    dismiss_keys: &self.brain_keys(crate::leader::BRAIN_DISMISS_KEYS),
+                    snooze_keys: &self.brain_keys(crate::leader::BRAIN_SNOOZE_KEYS),
                 },
             );
             if let Some(l) = &brain {
@@ -21038,7 +26420,9 @@ impl Footer {
                     spans.extend(glyph_and_text(
                         &piece.text,
                         piece.at,
-                        brain_line,
+                        // ITS OWN ROW OF THE STRIP: an alarm and a countdown
+                        // share it on two.
+                        brain_line + piece.row,
                         piece.color,
                         // The two controls and the pie are anchored to the
                         // border — see `brain::Piece::edge`.
@@ -21219,6 +26603,10 @@ impl Footer {
             // narrowest one the event's actions are placed for.
             let indicator_cells = indicator.as_deref().map(layout::width);
             let mini_room = minibuffer_room(columns, indicator_cells, opens);
+            // WHAT SAYS A HINT IS CUT (`Footer::linger`): the room the line
+            // gives its text with the chevron beside it — which a hint that
+            // does not fit always has.
+            self.minibuffer_room = minibuffer_room(columns, indicator_cells, true);
             let action_room =
                 room_for_the_actions(columns, narrowest_columns, indicator_cells, opens);
             // WHERE EVERY SHORTCUT OF THIS LINE LANDED, for the pointer.
@@ -21463,6 +26851,30 @@ impl Footer {
                 }
             }
 
+            // THE HOURS, at the right end of the FREE minibuffer — asked for
+            // (`LEADER s r`, `crate::footer_settings`), and only while nothing
+            // is said on the line and nothing holds it: a clock over a sentence
+            // would be a second thing to read on one line. Counted from the
+            // border like the counter, in its quiet tone: it is there to be
+            // found. The minute's timer is armed only while this draws it
+            // (`Footer::keep_the_clock`).
+            if at_rest && !held.open && indicator.is_none() && self.hours_wanted() {
+                let text = self.hours_now();
+                let w = layout::width(&text);
+                if w < columns {
+                    self.clock_drawn = true;
+                    spans.push(ronoctua_render::Span {
+                        size: ronoctua_render::Size::Grid,
+                        text,
+                        column: crate::chrome::from_the_edge(columns, w),
+                        line: mini_line,
+                        color: tokens::color::TEXT_SUBTLE_DEFAULT,
+                        edge: true,
+                        foot: false,
+                    });
+                }
+            }
+
             // THE EXPANDED REGION — which-key, `M-x` candidates, history.
             //
             // ONE loop for the three, over the SAME list that decided the height.
@@ -21591,10 +27003,12 @@ impl Footer {
                         continue;
                     }
                     let Some((key, rgba)) = self
-                        .player
+                        .player_view
                         .as_ref()
-                        .zip(self.player_view.as_ref())
-                        .and_then(|(s, v)| v.picture(s, &cr.key))
+                        .and_then(|v| v.picture(self.player.as_ref(), &cr.key))
+                        // AND THE VIDEO CATALOGUE'S THUMBNAILS, by the key
+                        // their rows name.
+                        .or_else(|| self.video_metrics_covers.get(&*cr.key))
                     else {
                         continue;
                     };
@@ -21640,6 +27054,17 @@ impl Footer {
                         tall,
                     ));
                 }
+                if let Some(at) = line.caret {
+                    let cell = tokens::metrics::cell_width(tokens::text::size());
+                    let tall = tokens::metrics::line_height(tokens::text::size());
+                    chip_grounds.push(crate::chrome::caret(
+                        f32::from(base + crate::chrome::FIELDS_LEAD) * cell,
+                        f32::from(y) * tall,
+                        cell,
+                        tall,
+                        at,
+                    ));
+                }
                 // A FILE MANAGER ROW DRAWS ITSELF, field by field.
                 //
                 // It resolved its own columns against the screen's width before
@@ -21666,8 +27091,22 @@ impl Footer {
                     // which is the rule this system keeps: the pointer's mark
                     // is not the cursor. There is no explanation on its message
                     // line for the colour to point at either.
-                    let on_this_row =
-                        self.here.row_under_pointer == Some(i) && self.view() != ViewState::Themes;
+                    //
+                    // NOR IN THE GIT BROWSER, for the same reason: its cursor
+                    // is the accent (`git_browser::item_fields`), and its
+                    // pointer's mark is its own band (`git_hover`) — the
+                    // window lights no field either, and the two doors draw
+                    // the same.
+                    //
+                    // NOR IN THE CALCULATOR, for the same reason: the accent
+                    // there is the mode in use and the ring's category, and
+                    // its pointer's mark is the band over what a press takes
+                    // (`calc::Line::band_at`).
+                    let lights = !matches!(
+                        self.view(),
+                        ViewState::Themes | ViewState::Git | ViewState::Calc
+                    );
+                    let on_this_row = self.here.row_under_pointer == Some(i) && lights;
                     // WHICH field, asked ONCE and by the walk the click makes.
                     // See `files::Row::field_index_at`: `covers` answers "may
                     // this field own the cell", and two packed fields both say
@@ -21682,9 +27121,10 @@ impl Footer {
                     for (which, f) in line.fields.iter().enumerate() {
                         // AND THE OTHER RUNS OF THE SAME THING LIGHT WITH IT.
                         let under = alight == Some(which)
-                            || lit_hit
-                                .as_ref()
-                                .is_some_and(|h| crate::files::lit_with(f, h));
+                            || (self.view() != ViewState::Git
+                                && lit_hit
+                                    .as_ref()
+                                    .is_some_and(|h| crate::files::lit_with(f, h)));
                         spans.push(ronoctua_render::Span {
                             // THE ROW'S OWN SIZE, through the one function that
                             // turns lines into one — see `files::run_size`.
@@ -21888,7 +27328,7 @@ impl Footer {
                     // every door places them (`player_layout::placed`), with
                     // the manager's picture air round the box — each asking
                     // for its place's size, in physical pixels.
-                    let air = f32::from(tokens::space::FILES_PICTUREAIR);
+                    let air = crate::files::picture_air();
                     let room = ronoctua_player::arrange::Rect {
                         x: f32::from(panel.from) * panel_cell + air,
                         y: f32::from(top) * line_height + air,
@@ -22002,35 +27442,24 @@ impl Footer {
                 player_stage,
                 self.here.player_button_under,
             ));
-            if let (Some(panel), Some(s), Some(&(line, ..))) = (
-                panel_drawn.panel,
-                self.player.as_ref(),
-                panel_drawn.buttons.first(),
-            ) && s.current.is_some()
-            {
-                let clock = s.duration.map_or_else(
-                    || crate::player::clock(s.position),
-                    |d| {
-                        format!(
-                            "{} / {}",
-                            crate::player::clock(s.position),
-                            crate::player::clock(d)
-                        )
-                    },
-                );
-                let cells = ronoctua_protocol::cells(&clock);
-                if let Some(at) = crate::player_media::clock_at(panel, &panel_drawn.buttons, cells)
-                {
-                    spans.push(ronoctua_render::Span {
-                        size: ronoctua_render::Size::Grid,
-                        text: clock,
-                        column: at,
-                        line,
-                        color: tokens::color::TEXT_SECONDARY,
-                        edge: false,
-                        foot: false,
-                    });
-                }
+            // THE CLOCK WHERE THE LAYOUT PUT IT — between its two seeks,
+            // which are buttons of the transport above, or alone where they
+            // do not fit (`player_media::transport`).
+            if let (Some(clock), Some((line, at))) = (
+                self.player
+                    .as_ref()
+                    .and_then(crate::player_media::clock_text),
+                panel_drawn.clock,
+            ) {
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::Grid,
+                    text: clock,
+                    column: at,
+                    line,
+                    color: tokens::color::TEXT_SECONDARY,
+                    edge: false,
+                    foot: false,
+                });
             }
             // AND THE TIME BAR, the window's own drawing
             // (`chrome::time_bar`) on the track the pointer takes.
@@ -22117,7 +27546,11 @@ impl Footer {
                         width as f32,
                     );
                     if let Some((_, box_wide)) = measured {
-                        let air = f32::from(tokens::space::FILES_PICTUREAIR);
+                        let air = crate::files::picture_air();
+                        // AT THE FOOTER'S PIXELS — the largest scale it is
+                        // drawn at (`scale_now`), as its icons are.
+                        #[allow(clippy::cast_possible_truncation)]
+                        v.preview_at_scale(self.scale_now() as i32);
                         v.measured_preview(
                             box_wide - air - air,
                             f32::from(tall) * line_height - air - air,
@@ -22216,7 +27649,14 @@ impl Footer {
                     // measured from — see `files::globe_texture`.
                     // THE PICTURES' PALETTE, and not this screen's: one globe
                     // for every screen, painted in one palette.
-                    v.measured_globe(crate::files::globe_texture(a), gone, pictures_palette);
+                    // AT THE FOOTER'S PIXELS, as the preview is.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let by = self.scale_now() as i32;
+                    v.measured_globe(
+                        crate::files::globe_texture_at(a, by),
+                        gone.saturating_mul(u32::try_from(by.max(1)).unwrap_or(1)),
+                        pictures_palette,
+                    );
                     if let (Some(key), Some(rgba)) = (v.globe_key(), v.globe_frame()) {
                         file_globe =
                             Some((key, crate::files::picture_in(a, rgba.width, rgba.height)));
@@ -22286,92 +27726,45 @@ impl Footer {
                 ));
             }
             if self.clipboard_open {
-                let start = list_columns(columns).saturating_add(2);
-                let panel = columns.saturating_sub(start);
-                let end = first_of_expansion + u16::try_from(grid.lines).unwrap_or(0);
-                let chosen = self.clipboard.at(self.clip_cursor);
-
-                // THE LAST THREE LINES are fixed: what the item is, ClipCascade's
-                // state, and the keys. They stay at the bottom because they are
-                // reference — what is read is the content, and it stays at the top.
-                let panel_footer = 3u16;
-                let alto = end
-                    .saturating_sub(first_of_expansion)
-                    .saturating_sub(panel_footer);
-
-                if let Some(m) = &self.clip_qr {
-                    // THE QR IN QUADS, one per module. The module's size comes from
-                    // the available HEIGHT — the region has a ceiling (invariant 14),
-                    // and a fixed number would give a code that does not fit on a
-                    // short screen or is tiny on a tall one. Illegible is the same as
-                    // absent: nobody can point the camera at it.
-                    let available = f32::from(alto) * line_height;
-                    let side = m.side as f32;
-                    let modulo = (available / (side + 2.0)).floor().max(1.0);
-                    let x0 = f32::from(start) * tokens::metrics::cell_width(tokens::text::size());
-                    let y0 = f32::from(first_of_expansion) * line_height + modulo;
-                    // THE QUIET ZONE around it is part of the code: without it the
-                    // camera does not find the edges. That is why the background is a
-                    // bigger quad, and not only the dark modules.
-                    qr_quads.push(ronoctua_render::quad::Quad {
-                        x: x0,
-                        y: y0 - modulo,
-                        width: (side + 2.0) * modulo,
-                        height: (side + 2.0) * modulo,
-                        color: tokens::color::TEXT_PRIMARY,
-                    });
-                    for y in 0..m.side {
-                        for x in 0..m.side {
-                            if !m.dark(x, y) {
-                                continue;
+                // THE BOX THE VIEW LEFT, at the rows it left for it — the
+                // window asks the same function. The preview used to be
+                // painted here at the top of the right half, over the item's
+                // own heading and facts (the photograph read `gĩtemcommit`),
+                // and its text is rows of the view now, placed like the rest.
+                let sync = self.clipcascade.clone();
+                let facts = crate::clipboard_view::Facts {
+                    queue: &self.clipboard,
+                    sync: &sync,
+                };
+                let offset = self.current_offset();
+                let room = grid.lines;
+                let cell = tokens::metrics::cell_width(tokens::text::size());
+                if let Some(box_) = self.clip_view.picture(&facts, columns, &self.texts)
+                    && let Some(area) = crate::clipboard_view::picture_area(
+                        box_,
+                        offset,
+                        room,
+                        crate::chrome::FIELDS_LEAD,
+                        cell,
+                        |line| f32::from(first_of_expansion + line) * line_height,
+                    )
+                {
+                    match box_.shows {
+                        crate::clipboard_view::Shows::Qr(_) => {
+                            if let Some(m) = &self.clip_qr {
+                                qr_quads.extend(crate::clipboard_view::qr_quads(m, area));
                             }
-                            qr_quads.push(ronoctua_render::quad::Quad {
-                                x: x0 + (x as f32 + 1.0) * modulo,
-                                y: y0 + (y as f32) * modulo,
-                                width: modulo,
-                                height: modulo,
-                                color: tokens::color::SURFACE_CHROME,
-                            });
                         }
-                    }
-                } else if let Some((_, rgba)) = &self.clip_image {
-                    // THE IMAGE PREVIEW takes the content area, fitted without
-                    // stretching. It is a TEXTURED QUAD on the SAME surface — there
-                    // is no window and no popup (invariant 14), and there is no
-                    // border, radius or shadow (invariant 15).
-                    let cell = tokens::metrics::cell_width(tokens::text::size());
-                    preview = Some(
-                        ronoctua_render::image::Area {
-                            x: f32::from(start) * cell,
-                            y: f32::from(first_of_expansion) * line_height,
-                            width: f32::from(panel) * cell,
-                            height: f32::from(alto) * line_height,
+                        // THE PICTURE OF THE ENTRY THE BOX IS FOR, and no
+                        // other: one decoded for another entry is not drawn.
+                        crate::clipboard_view::Shows::Image(n) => {
+                            if let Some((_, rgba)) =
+                                self.clip_image.as_ref().filter(|(at, _)| *at == n)
+                            {
+                                preview =
+                                    Some(crate::files::picture_in(area, rgba.width, rgba.height));
+                            }
                         }
-                        .fit_into(rgba.width, rgba.height),
-                    );
-                } else if let Some(t) = chosen.and_then(ronoctua_clipboard::Entry::text) {
-                    // THE HIGHLIGHT IS PER LINE, and not over the whole text.
-                    //
-                    // The highlighter's ranges are offsets in BYTES of the original
-                    // text, and `layout::wrap` rewrites the text — it joins spaces,
-                    // splits a long word. Matching the two would require the wrapper
-                    // to give back the mapping, which would cut across its
-                    // responsibility. Highlighting each already broken line gives the
-                    // same result on screen and keeps the two things apart.
-                    //
-                    // THE CUT IS HERE NOW, and it used to be inside the wrapper. This
-                    // panel shows the first `alto` lines and no more — it has no bar
-                    // and no offset, so a line past the panel is a line nobody can
-                    // reach. Saying that here is what let the wrapper answer the other
-                    // question, which is how many lines there are in all.
-                    let tongue = ronoctua_syntax::guess(t);
-                    for (n, l) in layout::wrap(t, panel, usize::from(alto))
-                        .into_iter()
-                        .take(usize::from(alto))
-                        .enumerate()
-                    {
-                        let line = first_of_expansion + u16::try_from(n).unwrap_or(0);
-                        spans.extend(highlight_line(&l, tongue, line, start));
                     }
                 }
 
@@ -22514,6 +27907,18 @@ impl Footer {
                     color: tokens::color::NOTIFICATION_BACKGROUND,
                 });
             }
+            // AND THE ALERT'S OWN GROUND over its rows, the role of the phase
+            // it wears — laid after the band's, and under the letters.
+            if self.alerts.showing().is_some() {
+                let (ground, _) = crate::alert::roles(self.alert_phase);
+                backgrounds.push(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: 0.0,
+                    width: width as f32,
+                    height: f32::from(crate::alert::ROWS.min(modeline_line)) * line_height,
+                    color: ground,
+                });
+            }
 
             // AND THE GLANCE'S STRIPES, one per place, alternating.
             //
@@ -22548,7 +27953,8 @@ impl Footer {
                     x: 0.0,
                     y: f32::from(brain_line) * line_height,
                     width: width as f32,
-                    height: line_height,
+                    // AS TALL AS THE STRIP: one line, or two.
+                    height: f32::from(self.brain_rows()) * line_height,
                     color: tokens::color::BRAIN_BACKGROUND,
                 });
             }
@@ -22707,13 +28113,81 @@ impl Footer {
                     color: tokens::color::SURFACE_HOVER,
                 });
             }
+            // A GRID'S CURSOR CELL WEARS THE SELECTION — the picker's files in
+            // the player's region, as the file manager's cursor does — on its
+            // own cell, by the arithmetic its click takes it with.
+            if self.view() == ViewState::Player
+                && let Some(v) = self.player_view.as_ref()
+            {
+                let rows = v.rows(self.player.as_ref(), self.player_columns(), &self.texts);
+                let cursor = visible.iter().enumerate().find_map(|(i, l)| match l.click {
+                    Some(Click::Player(n)) => rows
+                        .get(n)
+                        .filter(|r| r.focused)
+                        .and_then(|r| {
+                            r.cells
+                                .iter()
+                                .filter(|c| !c.control)
+                                .find(|c| c.target == r.target)
+                        })
+                        .map(|c| (i, c.from, c.width)),
+                    _ => None,
+                });
+                if let Some((line, from, wide)) = cursor {
+                    let (base, grid_y) = place_of(line);
+                    let (band_at, band_wide) = Self::player_across(base).band_of(from, wide);
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: band_at,
+                        y: f32::from(first_of_expansion + grid_y) * line_height,
+                        width: band_wide,
+                        height: line_height,
+                        color: tokens::color::SURFACE_SELECTION,
+                    });
+                }
+            }
+            // THE PLAYER'S ROWS, ONCE FOR EVERY POINTER: what each line
+            // lights is theirs to say (`player_rows::lighting`).
+            let player_rows = (self.view() == ViewState::Player)
+                .then(|| {
+                    self.player_view
+                        .as_ref()
+                        .map(|v| v.rows(self.player.as_ref(), self.player_columns(), &self.texts))
+                })
+                .flatten()
+                .unwrap_or_default();
+            let player_lights = |click: Option<Click>| match click {
+                Some(Click::Player(n)) if n < player_rows.len() => {
+                    Some(crate::player_rows::lighting(&player_rows, n))
+                }
+                _ => None,
+            };
             for &(color, row_p, cell_p, x_p, (base, grid_y)) in &under_the_pointers {
+                // THE GIT BROWSER'S BAND IS ITS COLUMN'S, on a row — and none
+                // where a click does nothing (`git_browser::hover_band`).
+                if self.view() == ViewState::Git {
+                    #[allow(clippy::cast_precision_loss)]
+                    if let (Some(line), Some(cell)) = (row_p, cell_p)
+                        && let Some(q) = self.git_hover(line, cell, color, width as f32, bottom)
+                    {
+                        backgrounds.push(q);
+                    }
+                    continue;
+                }
                 // A LINE OF A DECK IS A FIGURE, and no band lights behind it:
                 // its controls say what they do on the message line.
                 if row_p.and_then(|r| visible.get(r)).is_some_and(|l| {
                     l.deck.is_some()
                         || l.schematic.is_some()
-                        || !l.covers.is_empty()
+                        // A SHELF OF THE VIDEO GRID is the exception: its
+                        // cell lights, pictures included (below).
+                        || (!l.covers.is_empty()
+                            && !matches!(l.click, Some(Click::VideoMetrics(_)))
+                            // NOR A STRIP'S LINE: its words light, beside
+                            // the picture (`player_rows::Lit::From`).
+                            && !matches!(
+                                player_lights(l.click),
+                                Some(crate::player_rows::Lighting::From(_))
+                            ))
                         || l.globe.is_some()
                 }) {
                     continue;
@@ -22776,6 +28250,37 @@ impl Footer {
                         self.notification_hover_px(columns, line, cell_p.unwrap_or(0), cell)
                     })
                     .unwrap_or((band_at, band_wide));
+                // A GRID ROW OF THE PLAYER — the picker's files — lights the
+                // ONE cell under the pointer, by the answer its click takes
+                // it with (`player_across`), and nothing between two cells.
+                // A LINE BESIDE A FIGURE lights from its words on, wherever
+                // on the row the pointer rests; a line of controls, only the
+                // control under it (`player_rows::lighting`, the window's
+                // answer too).
+                let (band_at, band_wide) = match player_lights(
+                    row_p
+                        .and_then(|line| visible.get(line))
+                        .and_then(|l| l.click),
+                ) {
+                    Some(crate::player_rows::Lighting::Cell(cells)) => {
+                        match x_p.and_then(|x| Self::player_across(base).band(&cells, x)) {
+                            Some(band) => band,
+                            None => continue,
+                        }
+                    }
+                    Some(crate::player_rows::Lighting::From(column)) => {
+                        let (at, _) = Self::player_across(base).band_of(column, 1);
+                        (at, (band_at + band_wide - at).max(0.0))
+                    }
+                    Some(crate::player_rows::Lighting::Whole) | None => (band_at, band_wide),
+                };
+                // THE CONTAINERS' BAND IS THE STRETCH A CLICK TAKES: one kind
+                // or one tab of a strip, never the whole line.
+                let (band_at, band_wide) = match self.containers_hover_px(row_p, cell_p, cell) {
+                    Some(Some(band)) => band,
+                    Some(None) => continue,
+                    None => (band_at, band_wide),
+                };
                 // THE THEME CHOOSER'S BAND IS ITS COLUMN'S, and there is none
                 // where that column has nothing on this row.
                 //
@@ -22807,6 +28312,53 @@ impl Footer {
                     }) {
                         Some(band) => band,
                         None => continue,
+                    }
+                } else {
+                    (band_at, band_wide)
+                };
+                // THE CALCULATOR'S BAND IS WHAT A PRESS THERE TAKES: a row of
+                // its lists whole, a key or a mode alone — and nothing where
+                // a press takes nothing (`calc::Line::band_at`, which the
+                // click reads too through `target_at`).
+                let (band_at, band_wide) = if self.view() == ViewState::Calc {
+                    let row =
+                        row_p
+                            .and_then(|line| visible.get(line))
+                            .and_then(|l| match l.click {
+                                Some(Click::Calc(n)) => Some(n),
+                                _ => None,
+                            });
+                    let cells = row.zip(cell_p).and_then(|(n, c)| {
+                        self.calc.as_ref().and_then(|v| {
+                            v.footer_lines(self.screen_columns(), &self.texts)
+                                .get(n)
+                                .and_then(|l| l.band_at(c))
+                        })
+                    });
+                    match cells {
+                        Some(c) => {
+                            crate::files::band_px(c, base + crate::chrome::FIELDS_LEAD, cell)
+                        }
+                        None => continue,
+                    }
+                } else {
+                    (band_at, band_wide)
+                };
+                // THE VIDEO GRID'S BAND IS ITS CELL, over the shelf's lines;
+                // a line of a picture or a title lights nothing.
+                let (band_at, band_wide) = if self.view() == ViewState::VideoMetrics {
+                    match self.video_metrics_band(
+                        row_p
+                            .and_then(|line| visible.get(line))
+                            .and_then(|l| l.click),
+                        cell_p,
+                        cell,
+                    ) {
+                        crate::video_metrics::Band::Plain => (band_at, band_wide),
+                        crate::video_metrics::Band::Cell(at, wide) => {
+                            (f32::from(base) * cell + at, wide)
+                        }
+                        crate::video_metrics::Band::Nothing => continue,
                     }
                 } else {
                     (band_at, band_wide)
@@ -23027,6 +28579,47 @@ impl Footer {
                 }
             }
 
+            // THE ICONS APP, over its blank rows: its tab line, the line
+            // that names the icon, the grid or the page — the drawing the
+            // window paints too, from the one layout its pointer reads.
+            let mut icons_pictures: Vec<crate::icons_page::Picture> = Vec::new();
+            if self.view() == ViewState::Icons {
+                #[allow(clippy::cast_precision_loss)]
+                let area = self.icons_area_of(width as f32, bottom);
+                let texts = std::rc::Rc::clone(&self.texts);
+                // EVERY HAND'S TARGET, in its own colour — the window's rule
+                // (`icons_window`), from the footer's own hands.
+                let lit: Vec<(tokens::Color, crate::icons::Target)> = self
+                    .pointers
+                    .lit(&self.here)
+                    .filter_map(|(c, p)| {
+                        p.row_under_pointer
+                            .map(|n| (c, crate::icons::Target::of_code(n)))
+                    })
+                    .collect();
+                let mut drawing = crate::icons::Drawing::default();
+                if let Some(v) = self.icons_app.as_ref() {
+                    v.draw(area, true, &lit, &texts, &mut drawing);
+                }
+                backgrounds.extend(drawing.under);
+                backgrounds.extend(drawing.thumbs);
+                for track in drawing.tracks {
+                    bars_drawn.record(track);
+                }
+                spans.extend(drawing.spans);
+                icons_pictures = drawing.pictures;
+            }
+            // AND THE SEARCH, over its blank rows (`Footer::fast_access_drawn`).
+            #[allow(clippy::cast_precision_loss)]
+            let mut fast_access_pictures = self.fast_access_drawn(
+                width as f32,
+                bottom,
+                &mut backgrounds,
+                &mut transport_now,
+                &mut spans,
+                &mut bars_drawn,
+            );
+
             // THE SCROLLBAR, hidden until the mouse passes over it.
             //
             // It is not new chrome: it is a rectangle inside the SAME surface,
@@ -23123,6 +28716,24 @@ impl Footer {
                     });
                 }
             }
+            // AND THE GIT BROWSER'S: the diff's bands, the rules between its
+            // columns and a bar per column that is cut — from the same
+            // `git_browser` functions its window paints with.
+            #[allow(clippy::cast_precision_loss)]
+            let (git_quads, git_bars) = self.git_paint(width as f32, bottom);
+            backgrounds.extend(git_quads);
+            for b in git_bars {
+                bars_drawn.record(crate::bars::Track::of(b.track));
+                if let Some((bx, by, bw, bh)) = b.thumb {
+                    backgrounds.push(ronoctua_render::quad::Quad {
+                        x: bx,
+                        y: by,
+                        width: bw,
+                        height: bh,
+                        color: tokens::color::RULE_STRONG,
+                    });
+                }
+            }
 
             // AND THE OPENED LINE'S OWN BAR, in its own band.
             //
@@ -23182,6 +28793,21 @@ impl Footer {
             // buffer can show, so there is one number and this is it.
             let (logical_w, logical_h) = (screen.width, screen.height);
             let told = &mut screen.scale_told;
+            // A PHOTOGRAPH'S SCREEN KEEPS THE FRAME instead of presenting it:
+            // the same runs and the same rectangles this loop composed for a
+            // screen on the glass (`crate::footer_photograph`).
+            if screen.photographing {
+                let mut quads = backgrounds.clone();
+                let split = u32::try_from(quads.len()).unwrap_or(u32::MAX);
+                quads.extend(transport_now.iter().copied());
+                screen.photographed = Some(crate::door::Composed {
+                    spans: spans.clone(),
+                    quads,
+                    split,
+                    pictures: pixmaps.clone(),
+                });
+                continue;
+            }
             let (Some(gpu), Some(text)) = (screen.gpu.as_mut(), screen.text.as_mut()) else {
                 continue;
             };
@@ -23250,6 +28876,28 @@ impl Footer {
                 if let Some((key, area, rgba)) = player_globe_pic.take() {
                     im.upload_it(&gpu.device, &gpu.queue, &key, &rgba);
                     batch.push((key, area));
+                }
+                // AND THE ICONS APP'S FIGURE on its stage: up only when its key
+                // — the document, its side and the palette — is missing.
+                for p in icons_pictures.drain(..) {
+                    if im.missing(&p.key)
+                        && let Some(rgba) = p.rgba()
+                    {
+                        im.upload_it(&gpu.device, &gpu.queue, &p.key, &rgba);
+                    }
+                    batch.push((p.key, p.area));
+                }
+                // AND THE SEARCH'S: a moving picture every frame under its key,
+                // a still one only when it is missing — and one with no pixels
+                // is not drawn.
+                for p in fast_access_pictures.drain(..) {
+                    let missing = im.missing(&p.key);
+                    if let Some(px) = p.pixels(missing) {
+                        im.upload_it(&gpu.device, &gpu.queue, &p.key, &px);
+                    } else if missing {
+                        continue;
+                    }
+                    batch.push((p.key, p.area));
                 }
                 for (key, area, crop, rgba) in player_covers.drain(..) {
                     if im.missing(&key) {
@@ -24160,6 +29808,9 @@ impl Footer {
             self.after_the_queue_moved();
         }
         self.said_now(said);
+        // AND THE MAXIMUM ALERT BAR, from the reading now held: the battery
+        // below its line, on battery and not charging (`crate::alert`).
+        self.battery_for_the_alert();
     }
 
     /// `power.json` changed under the footer: the profile it names is applied
@@ -25081,7 +30732,6 @@ impl Footer {
         crate::kiosk_view::Facts {
             bars_shown: self.kiosk.pair_of(window).is_some() && !self.kiosk.hidden(window),
             address_line: self.modeline.address_line,
-            adapted: self.modeline.adapts(crate::kiosk::ADAPTER),
         }
     }
 
@@ -25164,18 +30814,22 @@ impl Footer {
     }
 
     /// `modeline-adapt-kiosk`: the modeline adapted to the kiosk, or not.
+    ///
+    /// The same change the footer's settings make in either door
+    /// (`footer_settings::Setting::change`), taken from the file as it is.
     fn flip_the_adaptation(&mut self) {
-        let wanted = !self.modeline.adapts(crate::kiosk::ADAPTER);
-        self.write_the_modeline(|p| {
-            p.adapt.insert(crate::kiosk::ADAPTER.to_owned(), wanted);
-        });
+        self.write_the_modeline(|p| crate::footer_settings::Setting::Kiosk.change(p));
     }
 
     /// One switch of `modeline.json` changed and written — MERGED into what
     /// the file says now (`Store::parsed`), so a hand's edit is not lost; and
     /// refused, with a sentence, when the file will not parse: writing would
     /// replace what is in it.
-    fn write_the_modeline(&mut self, change: impl FnOnce(&mut crate::adapt::Prefs)) {
+    ///
+    /// Answers whether the file was WRITTEN. A caller that says something
+    /// after the change says it only then: the refusal is on the line, and
+    /// the one message the minibuffer holds would be the caller's instead.
+    fn write_the_modeline(&mut self, change: impl FnOnce(&mut crate::adapt::Prefs)) -> bool {
         let store = crate::adapt::store();
         let Some(mut now) = store.parsed() else {
             let m = self
@@ -25183,21 +30837,30 @@ impl Footer {
                 .t(ronoctua_i18n::key::ECHO_MODELINE_WILL_NOT_PARSE);
             self.echo_message(m);
             self.draw_and_paint();
-            return;
+            return false;
         };
         change(&mut now);
         let was = self.above_rows();
         // THE COPY FIRST, so the file's own notice — inotify sees our write
         // like anybody's — finds nothing new.
         self.modeline = now.clone();
-        if let Err(e) = store.write(&now) {
-            tracing::warn!(error = %e, "could not write modeline.json");
-        }
+        // A FILE THAT WILL NOT BE WRITTEN IS SAID (`say_a_preference_not_written`):
+        // the switch is in force here and gone at the next start — the bars'
+        // mode lost at every reboot was this, a directory the person could not
+        // write into and a line in a log nobody reads.
+        let written = match store.write(&now) {
+            Ok(()) => true,
+            Err(e) => {
+                self.say_a_preference_not_written(crate::adapt::FILE, &e);
+                false
+            }
+        };
         // AND THE SHAPE, which the bars' mode is part of (`crate::hidden`).
         if self.above_rows() != was || self.shape_now() != self.shape {
             self.apply_geometry(self.interactivity());
         }
         self.draw_and_paint();
+        written
     }
 
     /// `modeline.json` changed on disk: taken, unless it is what this footer
@@ -25324,7 +30987,10 @@ impl Footer {
     }
 
     /// `kiosk.json` written again — the pairs a footer that restarts keeps.
-    fn kiosk_persist(&self) {
+    /// Not written is SAID, as every file the footer keeps for the person is
+    /// (`say_a_preference_not_written`): the pairs hold in this process and
+    /// are lost at its restart.
+    fn kiosk_persist(&mut self) {
         let Some(path) = ronoctua_xdg::runtime_file(KIOSK_FILE) else {
             return;
         };
@@ -25333,7 +30999,7 @@ impl Footer {
             return;
         };
         if let Err(e) = ronoctua_xdg::write_atomically(dir, file, &self.kiosk.kept()) {
-            tracing::warn!(error = %e, "could not write kiosk.json");
+            self.say_a_preference_not_written(KIOSK_FILE, &e);
         }
     }
 
@@ -25883,7 +31549,7 @@ impl Footer {
         };
         // NOT `status()`, WHICH WAITS. This runs inside the calloop callback,
         // and a player that is slow to answer would freeze the footer.
-        match std::process::Command::new(&program)
+        match crate::watchdog::unshared(&mut std::process::Command::new(&program))
             .arg(verb)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -26103,7 +31769,7 @@ impl Footer {
         }
         .args();
         let started = std::env::current_exe().and_then(|me| {
-            std::process::Command::new(me)
+            crate::watchdog::unshared(&mut std::process::Command::new(me))
                 .args(words)
                 .stdin(std::process::Stdio::null())
                 .spawn()
@@ -26277,6 +31943,21 @@ impl Footer {
             }
             // THE PLAYER CLOSED EVERYWHERE, answered yes on the view's row.
             Err(crate::player::Errand::QuitEverywhere) => self.player_quit(),
+            // THE CLIPBOARD, for the text being edited — off the loop.
+            Err(crate::player::Errand::Paste) => self.read_the_clipboard(PasteFor::Player),
+            // A VIDEO OF THE RANKING IN THE CHROME KIOSK — this footer's own
+            // `kiosk-open` (`crate::player_ranking`).
+            Err(crate::player::Errand::Kiosk(url)) => self.kiosk_open(Some(&url)),
+            // THE PICTURE FOLDED AWAY beside the rows, or back: the stored
+            // field the metric reads, the view told, the picture's thread
+            // following, and the region sized again.
+            Err(crate::player::Errand::FoldPicture) => {
+                self.player_folded = !self.player_folded;
+                self.player_room_follows();
+                self.player_picture_follows();
+                self.region_resized();
+                self.follow_cursor();
+            }
             // WHAT PLAYS ON EVERY SCREEN something of it goes to — the
             // footer's screens, by name — or the windows up closed.
             Err(crate::player::Errand::EveryScreen) => {
@@ -26523,20 +32204,43 @@ impl Footer {
         let panel = self.player_panel().is_some();
         let columns = self.player_columns();
         let (player, texts) = (self.player.as_ref(), &self.texts);
-        self.player_view.as_mut().is_some_and(|v| {
+        // AND WHETHER A WORLD PAGE'S GLOBE stands in the picture's place —
+        // stored, for the metric and the layout — where nothing folds.
+        let globe = panel
+            && self
+                .player_view
+                .as_ref()
+                .is_some_and(crate::player::View::globe_here);
+        let globe_moved = std::mem::replace(&mut self.player_globe, globe) != globe;
+        // AND WHETHER A PICTURE STANDS BESIDE THE ROWS to fold away — the
+        // glyph on "Now" and `z` — from the stored fields.
+        let fold = (panel && !self.player_only && !globe).then_some(self.player_folded);
+        let changed = self.player_view.as_mut().is_some_and(|v| {
             v.beside_the_panel(panel);
+            let folding = v.picture_foldable(fold);
             // THE CURSOR STAYS ON ITS ROW: the refusal is lines of the home
             // above it, and coming or going they moved it by as many.
             let spot = v
                 .rows(player, columns, texts)
                 .get(v.cursor())
                 .map(|r| r.spot.clone());
-            let changed = v.picture_refused(refused);
+            let changed = v.picture_refused(refused) || folding;
             if changed && let Some(spot) = spot {
                 v.follow(&spot, player, columns, texts);
             }
             changed
-        })
+        });
+        // FOLDED, A GLOBE COMING OR GOING moves the panel's lines: the
+        // region is sized again.
+        changed || (globe_moved && self.player_folded && !self.player_only)
+    }
+
+    /// Whether the panel beside the rows is folded NOW: folded by `z`, not
+    /// the picture alone (`o`), and no globe in the picture's place — a
+    /// world page keeps its globe, as the window and the column do. Stored
+    /// fields only, for the metric.
+    const fn player_folded_now(&self) -> bool {
+        self.player_folded && !self.player_only && !self.player_globe
     }
 
     /// The picture's thread, started while the panel shows a picture and
@@ -26554,7 +32258,9 @@ impl Footer {
             .player_view
             .as_ref()
             .is_some_and(|v| v.panel && v.globe_here());
-        let wanted = if panel && !globe {
+        // FOLDED, no picture is drawn beside the rows, and none is asked.
+        let folded = self.player_folded_now();
+        let wanted = if panel && !globe && !folded {
             self.player_lanes_shown()
         } else {
             Vec::new()
@@ -26586,12 +32292,24 @@ impl Footer {
         self.player_drawn = match (self.view() == ViewState::Player, self.player_panel()) {
             (true, Some(panel)) => {
                 let lines = u16::try_from(self.grid().lines).unwrap_or(u16::MAX);
-                crate::player_media::drawn(
-                    panel,
-                    self.first_of_expansion(),
-                    lines,
-                    self.player.as_ref(),
-                )
+                // FOLDED BESIDE THE ROWS: the transport and the bar at the
+                // region's foot, and no picture. Only (`o`) is the picture
+                // alone, and nothing folds there.
+                if self.player_folded_now() {
+                    crate::player_media::drawn_folded(
+                        panel,
+                        self.first_of_expansion(),
+                        lines,
+                        self.player.as_ref(),
+                    )
+                } else {
+                    crate::player_media::drawn(
+                        panel,
+                        self.first_of_expansion(),
+                        lines,
+                        self.player.as_ref(),
+                    )
+                }
             }
             _ => crate::player_media::Drawn::default(),
         };
@@ -26600,7 +32318,7 @@ impl Footer {
         // to the view: its Layout page draws what this door shows.
         let room = match (self.player_drawn.panel, self.player_drawn.picture) {
             (Some(panel), Some((_, lines))) => {
-                let air = f32::from(tokens::space::FILES_PICTUREAIR);
+                let air = crate::files::picture_air();
                 let cell = tokens::metrics::cell_width(tokens::text::size());
                 let line = tokens::metrics::line_height(tokens::text::size());
                 Some((
@@ -26813,18 +32531,38 @@ impl Footer {
     /// window. The first click has paused it by then, so the second plays it
     /// again: what a double click leaves is the screen changed and the film
     /// as it was.
-    fn player_picture_pressed(&mut self) {
+    fn player_picture_pressed(&mut self, x: f64) {
+        use crate::player_media::PictureClick;
         let now = std::time::Instant::now();
-        let double = self
-            .here
-            .picture_clicked
-            .is_some_and(|then| now.duration_since(then) <= crate::player_window::DOUBLE_CLICK);
-        self.here.picture_clicked = if double { None } else { Some(now) };
-        self.player_errand(crate::player::Errand::Tell(
-            ronoctua_player::wire::Ask::Toggle,
-        ));
-        if double {
-            self.player_errand(crate::player::Errand::Show(crate::player::Show::Maximized));
+        // WHICH THIRD of the panel's picture, as the paint placed it.
+        let zone = match (self.player_drawn.panel, self.metric()) {
+            (Some(panel), Some(f)) => {
+                let left = f64::from(f.x_of(panel.from));
+                let width = f64::from(panel.cells) * f64::from(f.cell());
+                crate::player_media::picture_zone(width, x - left)
+            }
+            _ => crate::player_media::Zone::Middle,
+        };
+        let click =
+            self.here
+                .picture_clicked
+                .clicked(now, zone, crate::player_window::DOUBLE_CLICK);
+        let toggle = || crate::player::Errand::Tell(ronoctua_player::wire::Ask::Toggle);
+        match click {
+            PictureClick::Toggle => self.player_errand(toggle()),
+            PictureClick::ToggleAndMaximize => {
+                self.player_errand(toggle());
+                self.player_errand(crate::player::Errand::Show(crate::player::Show::Maximized));
+            }
+            PictureClick::ToggleAndSeek(seconds) => {
+                self.player_errand(toggle());
+                let seek = crate::player_transport::seek_errand(seconds > 0.0, &self.texts);
+                self.player_errand(seek);
+            }
+            PictureClick::Seek(seconds) => {
+                let seek = crate::player_transport::seek_errand(seconds > 0.0, &self.texts);
+                self.player_errand(seek);
+            }
         }
     }
 
@@ -27014,7 +32752,7 @@ impl Footer {
             self.draw_and_paint();
             return;
         }
-        if !self.region_is_free("update-open") {
+        if !self.region_is_free(crate::update_window::OPEN) {
             return;
         }
         self.update = Some(crate::update_window::View::read());
@@ -27137,6 +32875,10 @@ impl Footer {
             crate::camera_settings::Snapshot::read(self.camera_list.clone(), self.studio.clone());
         let columns = self.screen_columns();
         let mut v = crate::camera_settings::View::fresh();
+        // THE FILE PICKER'S FOLDER, watched through the footer's wake.
+        if let Some(wake) = self.picker_wake.clone() {
+            v.watch_with(wake);
+        }
         v.settle_in(&self.camera_snapshot, columns, &self.texts);
         self.camera_view = Some(v);
         self.first_page();
@@ -27188,6 +32930,13 @@ impl Footer {
             // close first, and the answer came back to nothing on screen.
             Err(crate::camera_settings::Errand::Ask(q)) => {
                 self.camera_ask(q);
+                return;
+            }
+            // THE CLIPBOARD, off the loop, for the file picker up over the
+            // view.
+            Err(crate::camera_settings::Errand::Paste) => {
+                self.read_the_clipboard(PasteFor::Picker);
+                self.draw_and_paint();
                 return;
             }
             // THE APP'S DOOR: the view closes first, because the app opens a
@@ -27429,8 +33178,8 @@ impl Footer {
                 self.mods = mods;
                 // THE SAME TWO HALVES the compositor's keyboard goes through:
                 // `typed` for the press, `key_released` for the release — so
-                // a tap of `Alt` on an independent keyboard chooses the
-                // leader's set exactly as it does on the seat's.
+                // a tap of `Ctrl` on an independent keyboard cycles the bars
+                // exactly as it does on the seat's.
                 if down {
                     self.typed(event);
                 } else {
@@ -27639,8 +33388,11 @@ impl Footer {
     /// A fresh reading, or something that arrived, from ClipCascade's thread.
     fn clipcascade_event(&mut self, event: ronoctua_clipcascade::Event) {
         match event {
+            // A READING MOVES NO ENTRY, so it moves no generation: a window's
+            // act aimed at the same history is still aimed right.
             ronoctua_clipcascade::Event::Snapshot(shot) => {
                 self.clipcascade = *shot;
+                self.clipboard_told(None);
                 // NOT `follow_cursor`: a reading ARRIVING is not a key press.
                 self.settle_region();
             }
@@ -27654,8 +33406,11 @@ impl Footer {
                     kinds: vec!["text/plain".to_owned()],
                     pinned: false,
                 };
-                if self.clipboard.register(entry) && self.clipboard_open {
-                    self.apply_geometry(self.interactivity());
+                if self.clipboard.register(entry) {
+                    self.clipboard_moved();
+                    if self.clipboard_open {
+                        self.apply_geometry(self.interactivity());
+                    }
                 }
             }
             ronoctua_clipcascade::Event::Done { refused, .. } => {
@@ -27827,13 +33582,20 @@ impl Footer {
         let errand = match self.software.as_mut() {
             Some(v) => v.reopen(opening, &self.software_readings, &texts),
             None => {
-                let (v, e) = crate::software::View::fresh(opening, &self.software_readings, &texts);
+                let (mut v, e) =
+                    crate::software::View::fresh(opening, &self.software_readings, &texts);
+                // THE FILE PICKER'S FOLDER, watched through the footer's wake.
+                if let Some(wake) = self.picker_wake.clone() {
+                    v.watch_with(wake);
+                }
                 self.software = Some(v);
                 e
             }
         };
         // EVERY OPENING READS THE MACHINE AGAIN: what the view says about
-        // what is installed is never older than the view.
+        // what is installed is never older than the view — nor what the
+        // person let (a catalogue let in another door draws no row here).
+        self.software_readings.reread_consents();
         self.software_want(crate::software_feed::Want::Reread);
         self.first_page();
         self.software_errand(errand);
@@ -27947,6 +33709,15 @@ impl Footer {
         // `C-RET`, `S-<left>`, `TAB`, the arrows, `ESC` — and only then is a
         // bare letter the search.
         let texts = std::rc::Rc::clone(&self.texts);
+        // THE FILE PICKER, while it is up over the view, takes what it reads
+        // — every letter, and its own keys (`crate::file_picker`).
+        if let Some(v) = self.software.as_mut()
+            && v.picking()
+            && let Some(errand) = v.pick_key(key, &self.software_readings, &texts)
+        {
+            self.software_errand(errand);
+            return;
+        }
         let errand = match crate::software::stroke_of(key) {
             Some(Stroke::Press(press)) => {
                 self.software_press(press);
@@ -28073,6 +33844,17 @@ impl Footer {
             }
             Errand::PasteImage => {
                 self.software_paste_image();
+                None
+            }
+            // A CATALOGUE'S HOSTS LET: its row goes, and the next search asks
+            // it. A consent that could not be kept is said, never dropped.
+            Errand::Let(source) => {
+                match crate::consent_rows::allow(source.hosts(), &self.texts) {
+                    Ok(()) => {
+                        self.software_readings.reread_consents();
+                    }
+                    Err(said) => self.echo_message(said),
+                }
                 None
             }
         }
@@ -28255,7 +34037,7 @@ impl Footer {
             let where_ = self
                 .files
                 .as_ref()
-                .map(|v| v.where_().to_string_lossy().into_owned());
+                .map(|v| v.watched().to_string_lossy().into_owned());
             let mut args = vec!["files".to_owned()];
             args.extend(where_);
             self.open_foreign(&me.to_string_lossy(), &args, None);
@@ -28275,6 +34057,27 @@ impl Footer {
             if self.software.is_none() {
                 return;
             }
+        }
+        // A FILE IS CHOSEN, not typed: with no argument, the view's picker
+        // up over it — what its rows open (`software::Picking`) — as
+        // `syncthing-add-folder` does. With one, the path is the answer.
+        let picking = match ask {
+            crate::software::Ask::IconPath => Some(crate::software::Picking::Icon),
+            crate::software::Ask::FilePath => Some(crate::software::Picking::Package),
+            _ => None,
+        };
+        if argument.is_none()
+            && let Some(asked) = picking
+        {
+            let errand = self
+                .software
+                .as_mut()
+                .map_or(crate::software::Errand::Nothing, |v| v.choose(asked));
+            self.software_errand(errand);
+            self.region_resized();
+            self.follow_cursor();
+            self.draw_and_paint();
+            return;
         }
         let Some(said) = argument else {
             self.mx.request_with(ask.command(), ask.secret(), None);
@@ -28390,11 +34193,71 @@ impl Footer {
                     self.software_errand(errand);
                 }
             }
+            PasteFor::Icons => {
+                let errand = self.icons_app.as_mut().map(|v| v.pasted(&text));
+                if let Some(errand) = errand {
+                    self.icons_errand(errand);
+                }
+            }
+            PasteFor::FastAccess => self.fast_access_pasted(&text),
             PasteFor::Manual => {
                 let errand = self.manual.as_mut().map(|v| v.pasted(&text));
                 if let Some(errand) = errand {
                     self.manual_errand(errand);
                 }
+            }
+            PasteFor::Applications => {
+                let action = self.apps.as_mut().map(|a| a.paste(&text));
+                if let Some(action) = action {
+                    self.apply_app_action(action);
+                }
+            }
+            PasteFor::Files => {
+                let step = self.files.as_mut().map(|v| v.pasted(&text));
+                if let Some(step) = step {
+                    self.apply_files_step(step);
+                }
+            }
+            PasteFor::Calc => {
+                let texts = std::rc::Rc::clone(&self.texts);
+                if let Some(v) = self.calc.as_mut() {
+                    v.pasted(&text, &texts);
+                }
+                self.calc_errand(crate::calc::Errand::Nothing);
+            }
+            // A PASTE THAT ARRIVES AFTER THE TEXT WAS LEFT is nobody's.
+            PasteFor::Player => {
+                if self
+                    .player_view
+                    .as_mut()
+                    .is_some_and(|v| v.text_pasted(&text))
+                {
+                    self.draw_and_paint();
+                }
+            }
+            // THE PICKER OF THE VIEW IN THE REGION, whichever it is.
+            PasteFor::Picker => {
+                match self.view() {
+                    ViewState::Syncthing => {
+                        if let Some(v) = self.syncthing.as_mut() {
+                            v.picker_pasted(&text);
+                        }
+                        self.settle_the_syncthing_view();
+                    }
+                    ViewState::Network => {
+                        if let Some(v) = self.network.as_mut() {
+                            v.picker_pasted(&text);
+                        }
+                    }
+                    ViewState::Camera => {
+                        if let Some(v) = self.camera_view.as_mut() {
+                            v.picker_pasted(&text);
+                        }
+                    }
+                    _ => {}
+                }
+                self.follow_cursor();
+                self.draw_and_paint();
             }
         }
     }
@@ -28410,7 +34273,7 @@ impl Footer {
             self.grid().per_page(),
             self.screen_columns(),
         );
-        let side = crate::apps::pixmap_side().ceil() as u32;
+        let side = self.icon_side_px();
         let (Some(v), Some(pictures)) = (self.software.as_ref(), self.software_pictures.as_mut())
         else {
             return;
@@ -28628,7 +34491,12 @@ impl Footer {
         if !self.region_is_free("syncthing-open") {
             return;
         }
-        self.syncthing = Some(crate::syncthing::View::fresh(self.syncthing_prefs));
+        let mut view = crate::syncthing::View::fresh(self.syncthing_prefs);
+        // THE FILE PICKER'S FOLDER, watched through the footer's wake.
+        if let Some(wake) = self.picker_wake.clone() {
+            view.watch_with(wake);
+        }
+        self.syncthing = Some(view);
         self.first_page();
         self.follow_cursor();
         self.settle_the_syncthing_view();
@@ -28673,6 +34541,8 @@ impl Footer {
             Errand::Order(order) => self.ask_syncthing(*order),
             Errand::Keep(prefs) => self.keep_the_syncthing_settings(prefs),
             Errand::Web(address) => self.open_the_syncthing_page(&address),
+            Errand::Said(said) => self.echo_message(said),
+            Errand::Paste => self.read_the_clipboard(PasteFor::Picker),
             // ON THIS DOOR'S LINE, the minibuffer — and the view is told WHAT
             // it is being asked, so that the answer knows what it answers.
             Errand::Ask(ask) => {
@@ -29014,6 +34884,13 @@ impl Footer {
         // after the repaint below, once the modeline draws the new reading.
         let said = self.events.network(&s);
         self.net = s;
+        // THE HOTSPOT'S PASSWORD FILE follows the hotspot, view open or not:
+        // its end takes the file away (`network::sharing::follow`), and an
+        // open view reads it — whichever door started the hotspot.
+        let serving = crate::network::sharing::follow(&mut self.hotspot_serving, &self.net);
+        if let Some(v) = self.network.as_mut() {
+            v.show_sharing(serving);
+        }
         let after = (
             self.net.adrift(),
             self.net.airplane(),
@@ -29098,11 +34975,8 @@ impl Footer {
             // says why: there are no error names here worth a table of their
             // own, and a silent failure would be a switch that does nothing.
             ronoctua_tunnel::Event::Done { refused, .. } => {
-                if let Some(words) = refused {
-                    let said = self.texts.t_with(
-                        ronoctua_i18n::key::ECHO_NETWORK_REFUSED,
-                        &[("error", &words)],
-                    );
+                if let Some(r) = refused {
+                    let said = crate::network_words::tunnel_refused(&r, &self.texts);
                     self.echo_message(said);
                     self.draw_and_paint();
                 }
@@ -29580,6 +35454,12 @@ impl Footer {
                 }
             }
             Errand::Answer(yes) => self.bluetooth_answer(yes, ""),
+            // A PHONE'S INTERNET, through NetworkManager — the sentence is
+            // the one the window says (`bluetooth::tethered`).
+            Errand::Tether { address, name, on } => {
+                let said = crate::bluetooth::tethered(&address, &name, on, &self.texts);
+                self.echo_message(said);
+            }
             // THE DIGITS ARE TYPED ON THIS DOOR'S LINE — the minibuffer —
             // MASKED, and come back as the argument of `bluetooth-accept`.
             // The window asks the same line on its header.
@@ -29650,9 +35530,10 @@ impl Footer {
             shared: self.book.shared.clone(),
             adjustments: self.book.adjustments.clone(),
         };
+        // A PREFERENCE NOT WRITTEN, in the sentence every other one says —
+        // it said "could not copy", which is another failure.
         if let Err(e) = self.notes.save_preferences(&prefs) {
-            tracing::warn!(error = %e, "could not write the preferences");
-            self.echo_message(self.texts.t(ronoctua_i18n::key::ECHO_COPY_FAILED));
+            self.say_a_preference_not_written(ronoctua_notify::store::PREFERENCES_FILE, &e);
         }
         self.draw_and_paint();
     }
@@ -30108,7 +35989,7 @@ impl Footer {
                 if let Some(dir) = ronoctua_power::prefs::home()
                     && let Err(e) = ronoctua_power::prefs::persist(&dir, profile)
                 {
-                    tracing::warn!(error = %e, "could not write power.json");
+                    self.say_a_preference_not_written(ronoctua_power::prefs::FILE, &e);
                 }
             }
         }
@@ -30138,12 +36019,48 @@ fn state_row(typed: &str, has_choice: bool) -> Option<ronoctua_keymap::Entry> {
     })
 }
 
+/// The pending sequence the minibuffer draws: the leader's own, then what a
+/// submenu built at run time has taken since — the state list's key under
+/// `LEADER w`, or the focused buffer's group under the root (`LEADER ,`,
+/// whose first key is the prefix itself) — and the dash that says a key is
+/// still missing.
+#[must_use]
+fn pending_line(leader: &str, state: Option<&str>, buffer: &[String]) -> String {
+    let mut out = leader.to_owned();
+    for key in state.into_iter().chain(buffer.iter().map(String::as_str)) {
+        out.push(' ');
+        out.push_str(key);
+    }
+    out.push('-');
+    out
+}
+
+/// The colour of the modeline's state.
+///
+/// `Standard` is the host's rule — two colours and not one per state: what a
+/// reader learns is "quiet means the usual, green means not", whichever
+/// window they are in (`assets/tokens/colors.nix`). A state that DECLARED a
+/// tone wears it: a question waiting on the person is a warning, whatever its
+/// id, and the colour is what is seen before the word is read.
+#[must_use]
+fn state_colour(is_base: bool, tone: ronoctua_protocol::Tone) -> tokens::Color {
+    use ronoctua_protocol::Tone;
+    match tone {
+        Tone::Standard if is_base => tokens::color::MODELINE_STATE_NORMAL,
+        Tone::Standard => tokens::color::MODELINE_STATE_ALTERNATE,
+        Tone::Accent => tokens::color::STATE_ACCENT,
+        Tone::Success => tokens::color::STATE_SUCCESS,
+        Tone::Warning => tokens::color::STATE_WARNING,
+        Tone::Error => tokens::color::STATE_ERROR,
+    }
+}
+
 /// Each segment's color — emphasis by COLOR AND WEIGHT, never by a container
 /// (section 5.1).
 fn segment_color(
     id: &str,
     footer_with_keyboard: bool,
-    state_is_base: bool,
+    state_paint: tokens::Color,
     battery_danger: bool,
     alarmed: &[&'static str],
     current_workspace: Option<&'static str>,
@@ -30186,6 +36103,15 @@ fn segment_color(
         "camera" | "gestures" | "resizer" => tokens::color::MODELINE_WATCHING,
         // A KEY MODE IS ON: every key means something else until it ends.
         "compositor-mode" => tokens::color::STATE_ACCENT,
+
+        // A BRAIN MODULE'S MARK, in the colour its tone MEANS — watching is
+        // the gestures' faded pink beside the camera's, danger is the
+        // recording's red (`brain::tone_colour`).
+        _ if crate::brain::is_mark(id) => crate::brain::colour_of(id),
+
+        // THE PASSWORDLESS WINDOW'S END: danger, as the watch's shield is.
+        "security-until" => tokens::color::STATE_ERROR,
+
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
         // only thing next to the name; now the state sits beside it saying what
         // is HAPPENING, and between "this is an icon browser" and "it is showing
@@ -30200,8 +36126,7 @@ fn segment_color(
         // THE STATE. Two colours and not one per state: what a reader has to
         // learn is "quiet means the usual, green means not", and that holds
         // whichever buffer they are in. See `assets/tokens/colors.nix`.
-        "state" if state_is_base => tokens::color::MODELINE_STATE_NORMAL,
-        "state" => tokens::color::MODELINE_STATE_ALTERNATE,
+        "state" => state_paint,
         // THE FOCUSED BUFFER, and the place the accent moves to.
         //
         // While the footer has the keyboard — leader, `M-x`, manual —, no window
@@ -30267,6 +36192,75 @@ fn narrow_buffer_keymap(
 
 #[cfg(test)]
 mod tests {
+    /// FAILS IF: a brain's kill for lack of memory is not recognised as the
+    /// bus's own kind of notification, or reaches the footer without the
+    /// cgroup and the second the footer matches it to the bus's kill by — one
+    /// kill would be two notifications. By the catalogue's tag: whichever
+    /// compiled module tells one, the footer names none.
+    #[test]
+    fn a_kill_the_brain_tells_carries_what_matches_it_to_the_bus() {
+        use ronoctua_brain::module::Arg;
+        let texts = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let book = ronoctua_notify::Book::distro();
+        let is_a_kill = |tag: &str| {
+            book.entry(tag)
+                .is_some_and(|e| e.tags.iter().any(|t| t == super::MEMORY_KILLED))
+        };
+        let told = ronoctua_brain::compiled::EVENTS
+            .iter()
+            .map(|(_, e)| e.tag)
+            .find(|tag| is_a_kill(tag))
+            .expect("no compiled brain module tells a kill for lack of memory");
+        // AND AN EVENT OF ANOTHER KIND IS NOT ONE.
+        assert!(
+            ronoctua_brain::compiled::EVENTS
+                .iter()
+                .any(|(_, e)| book.entry(e.tag).is_some() && !is_a_kill(e.tag)),
+            "every event the brain tells reads as a kill"
+        );
+        let hog = "/user.slice/user-1000.slice/user@1000.service/app.slice/hog.service";
+        let said = |seq: u64| ronoctua_brain::mind::Said {
+            seq,
+            tag: told.to_owned().into(),
+            args: vec![
+                ("what".into(), Arg::Text("hog.service".to_owned())),
+                (
+                    ronoctua_notify::oom::CGROUP_ARG.into(),
+                    Arg::Text(hog.to_owned()),
+                ),
+                (
+                    ronoctua_notify::oom::EPOCH_ARG.into(),
+                    Arg::Number(1_790_000_000),
+                ),
+            ],
+        };
+        let mind = |events| ronoctua_brain::Mind {
+            events,
+            ..ronoctua_brain::Mind::default()
+        };
+        let zone = ronoctua_files::when::Zone::utc();
+        let mut watch = crate::events::Watch::default();
+        let _ = watch.of_brain(&mind(vec![said(1)]), &zone, &texts);
+        let heard = watch.of_brain(&mind(vec![said(1), said(2)]), &zone, &texts);
+        assert_eq!(heard.len(), 1);
+        let (cgroup, at) = super::kill_of(&heard[0]);
+        assert_eq!(cgroup, hog);
+        assert_eq!(
+            at,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000),
+            "the kill's second did not cross as a number"
+        );
+        // AND THE BUS'S NOTIFICATION OF IT, raised first, is the one amended.
+        let mut kills = ronoctua_notify::oom::Kills::fresh_one();
+        assert!(kills.from_the_bus(hog, at));
+        let key = ronoctua_notify::RecordKey { id: 3, at };
+        kills.raised(hog, at, key);
+        assert_eq!(
+            kills.from_the_brain(cgroup, at),
+            ronoctua_notify::oom::Told::Amend(key)
+        );
+    }
+
     /// FAILS IF: an event's actions are drawn in different cells on two
     /// screens of different widths — the pointer's table is one, so a click
     /// on the other screen's action missed and a click in the air ran it —
@@ -30395,7 +36389,14 @@ mod tests {
     fn a_device_has_its_colour_and_the_alarm_wins() {
         use ronoctua_tokens::color;
         let paint = |id, alarmed: &[&'static str], current| {
-            super::segment_color(id, false, true, false, alarmed, current)
+            super::segment_color(
+                id,
+                false,
+                ronoctua_tokens::color::MODELINE_STATE_NORMAL,
+                false,
+                alarmed,
+                current,
+            )
         };
         assert_eq!(paint("bt-2", &[], None), color::MODELINE_DEVICE);
         assert_eq!(paint("camera", &[], None), color::MODELINE_WATCHING);
@@ -31939,5 +37940,115 @@ mod tests {
                 "{sym:?} should do nothing with CtrlRight held"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod capitals_tests {
+    use super::{ViewState, region_types_capitals};
+
+    /// FAILS IF: with Caps Lock on, a text edited in the footer's region
+    /// types small letters where the same text in the window types capitals
+    /// (the owner's rule: both doors type the same), or a view whose letters
+    /// are keys starts reading capitals.
+    #[test]
+    fn the_region_types_capitals_where_the_window_does() {
+        let caps = smithay_client_toolkit::seat::keyboard::Modifiers {
+            caps_lock: true,
+            ..Default::default()
+        };
+        let mut player = crate::player::View::fresh();
+        assert!(!region_types_capitals(
+            ViewState::Player,
+            Some(&player),
+            None
+        ));
+        assert!(crate::door::keys::lock_undone(caps, false));
+        player.edit_text(crate::text_area::TextArea::new("about", "words"));
+        let typing = region_types_capitals(ViewState::Player, Some(&player), None);
+        assert!(
+            typing,
+            "the player's text in the region does not type capitals"
+        );
+        assert!(
+            !crate::door::keys::lock_undone(caps, typing),
+            "the Lock was undone"
+        );
+        assert_eq!(crate::door::keys::without_caps_lock('A', false), 'A');
+        // ANOTHER VIEW ON TOP is the one asked, not the player behind it.
+        assert!(!region_types_capitals(
+            ViewState::Files,
+            Some(&player),
+            None
+        ));
+        // AND A CHORD is still a chord, typing or not.
+        let chord = smithay_client_toolkit::seat::keyboard::Modifiers { ctrl: true, ..caps };
+        assert!(crate::door::keys::lock_undone(chord, typing));
+    }
+}
+
+#[cfg(test)]
+mod state_tone_tests {
+    use super::state_colour;
+    use ronoctua_protocol::Tone;
+    use ronoctua_tokens::color;
+
+    /// FAILS IF: a state's declared tone does not reach the modeline — the
+    /// standard rule wins over a `warning`, or two tones share a colour.
+    #[test]
+    fn a_state_wears_the_tone_it_declared() {
+        assert_eq!(
+            state_colour(true, Tone::Standard),
+            color::MODELINE_STATE_NORMAL
+        );
+        assert_eq!(
+            state_colour(false, Tone::Standard),
+            color::MODELINE_STATE_ALTERNATE
+        );
+        assert_eq!(state_colour(false, Tone::Warning), color::STATE_WARNING);
+        assert_eq!(state_colour(true, Tone::Warning), color::STATE_WARNING);
+        assert_eq!(state_colour(false, Tone::Error), color::STATE_ERROR);
+        assert_eq!(state_colour(false, Tone::Accent), color::STATE_ACCENT);
+        assert_eq!(state_colour(false, Tone::Success), color::STATE_SUCCESS);
+        // AND IT TRAVELS: the line a window tells the footer is read back
+        // with its tone, and an old one without it is the standard.
+        let line = crate::door::state_order(42, "permission", Tone::Warning);
+        assert_eq!(line, "state 42 permission warning");
+        assert_eq!(crate::leader::tone_of(Some("warning")), Tone::Warning);
+        assert_eq!(crate::leader::tone_of(None), Tone::Standard);
+        assert_eq!(crate::leader::tone_of(Some("loud")), Tone::Standard);
+    }
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::pending_line;
+
+    /// FAILS IF: the minibuffer stops a level short while a submenu built at
+    /// run time is open — `LEADER w-` over the list of states, `LEADER-`
+    /// over the focused buffer's group.
+    #[test]
+    fn the_minibuffer_says_the_runtime_submenus() {
+        assert_eq!(pending_line("LEADER w", None, &[]), "LEADER w-");
+        assert_eq!(
+            pending_line("LEADER w", Some(crate::leader::STATE_KEY), &[]),
+            "LEADER w s-"
+        );
+        assert_eq!(
+            pending_line(
+                "LEADER",
+                None,
+                &[ronoctua_protocol::LOCAL_PREFIX.to_owned()]
+            ),
+            "LEADER ,-"
+        );
+        assert_eq!(
+            pending_line(
+                "LEADER",
+                None,
+                &[ronoctua_protocol::LOCAL_PREFIX.to_owned(), "r".to_owned()]
+            ),
+            "LEADER , r-"
+        );
     }
 }

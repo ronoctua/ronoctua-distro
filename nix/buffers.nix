@@ -14,14 +14,6 @@
   stdenv,
   rustToolchain,
   rustPlatform,
-  glyphdb,
-  unicodedb,
-  lucidedb,
-  # The languages, from `assets/i18n/languages.nix`. The three browsers carry
-  # one tag list per language and have to know which ones they carry: the
-  # generator writes `tags_en`, `tags_pt`, … and this is what says how to
-  # enumerate them without a JSON parser (invariant 11).
-  languages,
   wit ? ../crates/ronoctua-protocol/wit,
   protocolCrate ? ../crates/ronoctua-protocol,
   designCrate ? ../crates/ronoctua-design,
@@ -222,47 +214,6 @@ lib.fix (all: {
     src = ../buffers/example;
   };
 
-  glyphs = buffer {
-    name = "glyphs";
-    src = ../buffers/glyphs;
-    # The database comes in through a VARIABLE because the component embeds it: it
-    # has no filesystem to read it from (invariant 11).
-    extra.RONOCTUA_GLYPHS_JSON = "${glyphdb.db}/glyphs.json";
-    # The SUBTAGS of the languages whose tags this database carries, in the same
-    # order — the first is the SOURCE, English, which is where the words come
-    # from. `pt-BR` becomes `pt`: a translation is of the language, not of the
-    # region.
-    extra.RONOCTUA_TAG_LANGUAGES = lib.concatStringsSep "," (
-      map (l: lib.toLower (builtins.head (lib.splitString "-" l))) languages
-    );
-  };
-
-  unicode = buffer {
-    name = "unicode";
-    src = ../buffers/unicode;
-    extra.RONOCTUA_UNICODE_JSON = "${unicodedb.db}/unicode.json";
-    # The SUBTAGS of the languages whose tags this database carries, in the same
-    # order — the first is the SOURCE, English, which is where the words come
-    # from. `pt-BR` becomes `pt`: a translation is of the language, not of the
-    # region.
-    extra.RONOCTUA_TAG_LANGUAGES = lib.concatStringsSep "," (
-      map (l: lib.toLower (builtins.head (lib.splitString "-" l))) languages
-    );
-  };
-
-  lucide = buffer {
-    name = "lucide";
-    src = ../buffers/lucide;
-    extra.RONOCTUA_LUCIDE_JSON = "${lucidedb.db}/lucide.json";
-    # The SUBTAGS of the languages whose tags this database carries, in the same
-    # order — the first is the SOURCE, English, which is where the words come
-    # from. `pt-BR` becomes `pt`: a translation is of the language, not of the
-    # region.
-    extra.RONOCTUA_TAG_LANGUAGES = lib.concatStringsSep "," (
-      map (l: lib.toLower (builtins.head (lib.splitString "-" l))) languages
-    );
-  };
-
   # The memory panel — `LEADER s m`. It embeds NOTHING, and it is the first one
   # that could not: every number it draws is read by the host at that moment and
   # pushed in through `input::survey`. What it declares instead of a database is
@@ -357,14 +308,12 @@ lib.fix (all: {
   # the whole tree). And `nix/buffers.nix` BUILDS them, which is not the same
   # thing: a build takes warnings and carries on.
   #
-  # So the only lint they ever got was somebody running it by hand, and the
-  # three with a baked table cannot even be linted that way — `include_str!`
-  # of `RONOCTUA_*_JSON` fails at compile time outside Nix, so `cargo clippy`
-  # in the directory stops before it reads a line of code. What that cost was
-  # measured: `ordered` sat dead in `buffers/unicode` across releases, a
-  # function whose whole doc-comment describes an ordering the file had
-  # stopped asking for, with the same ordering written out inline beside it.
-  # Nothing in the tree could see it.
+  # So the only lint they ever got was somebody running it by hand, and a
+  # buffer with a baked table could not even be linted that way — its
+  # `include_str!` failed at compile time outside Nix. What that cost was
+  # measured: `ordered` sat dead in the old Unicode browser across releases, a
+  # function whose whole doc-comment described an ordering the file had
+  # stopped asking for. Nothing in the tree could see it.
   #
   # Here the variables are already set — they are the same derivation — so
   # clippy reads the code the buffer actually compiles.

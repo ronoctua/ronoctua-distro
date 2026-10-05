@@ -382,3 +382,24 @@ fn a_comma_separated_row_becomes_cells_and_the_quotes_do_not_reach_the_screen() 
         vec!["a,b", r#"he said "no""#, "7"]
     );
 }
+
+#[test]
+fn a_part_made_to_run_the_parser_out_of_stack_is_refused() {
+    // `roxmltree` recurses once per level: a hundred thousand of them would
+    // abort the footer on a preview. Through the guard it is a refusal, on a
+    // thread with the inspector's default stack.
+    let deep = format!("<office:text>{}</office:text>", "<text:p>".repeat(100_000));
+    let refused = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || super::flow(&deep, &["p"], &[]).err())
+        .expect("a thread")
+        .join()
+        .expect("the read came back");
+    assert_eq!(refused, Some(Refusal::Failed));
+    // And a real document's depth reads: eighteen levels, the deepest measured.
+    let real = format!("{}words{}", "<a>".repeat(18), "</a>".repeat(18));
+    assert_eq!(
+        super::flow(&real, &["a"], &[]).map(|l| l.join(" ")),
+        Ok("words".to_owned())
+    );
+}

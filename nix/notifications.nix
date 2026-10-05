@@ -25,8 +25,24 @@
   glyphdb,
   notificationsFile,
   sharedFile,
+  # THE BRAIN MODULES' EVENTS that declared a notification (brain.md §3), as
+  # entries of this same catalogue: `<module>-<event>`, recognised by that tag.
+  # The flake's one loader's `notifications`.
+  brainNotifications,
 }:
 
+let
+  declared = import notificationsFile;
+  # ONE ID, ONE ENTRY: a module's event named like an entry of the file would
+  # be two recognitions of one tag, and the first in the table would win.
+  clashes = builtins.filter (n: builtins.hasAttr n declared.entries) (
+    builtins.attrNames brainNotifications
+  );
+  merged =
+    assert lib.assertMsg (clashes == [ ])
+      "a brain module's event is also an entry of assets/notifications.nix: ${lib.concatStringsSep ", " clashes}";
+    declared // { entries = declared.entries // brainNotifications; };
+in
 stdenvNoCC.mkDerivation {
   pname = "ronoctua-notifications-rs";
   version = "1";
@@ -39,7 +55,7 @@ stdenvNoCC.mkDerivation {
     runHook preBuild
     mkdir -p $out
     python3 ${./scripts/gen-notifications.py} \
-      --notifications ${writeText "notifications.json" (builtins.toJSON (import notificationsFile))} \
+      --notifications ${writeText "notifications.json" (builtins.toJSON merged)} \
       --shared ${sharedFile} \
       --icons ${glyphdb.db}/icons.json \
       --glyphs ${glyphdb.db}/glyphs.json \

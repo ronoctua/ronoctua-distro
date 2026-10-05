@@ -63,6 +63,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+pub mod multipart;
 #[cfg(feature = "tls")]
 pub mod tls;
 #[cfg(feature = "tls")]
@@ -215,6 +216,16 @@ impl Answer {
 #[must_use]
 pub fn request_of(call: &Call<'_>) -> String {
     let content = call.body.unwrap_or_default();
+    let mut out = head_of(call, content.len() as u64);
+    out.push_str(content);
+    out
+}
+
+/// The request's head, up to and with the blank line, for a body of
+/// `length` bytes that the caller writes after it — [`request_of`]'s own
+/// head, and a streamed body's ([`multipart`]).
+#[must_use]
+pub fn head_of(call: &Call<'_>, length: u64) -> String {
     let mut out = format!("{} {} HTTP/1.1\r\n", call.method, call.path);
     out.push_str(&format!("Host: {}\r\n", call.host));
     out.push_str("Connection: close\r\n");
@@ -227,8 +238,7 @@ pub fn request_of(call: &Call<'_>) -> String {
     // that never comes, and the call then dies on the deadline instead of on
     // an answer — a bug that reads as "the daemon is down".
     out.push_str(&format!("Content-Type: {}\r\n", call.content_type));
-    out.push_str(&format!("Content-Length: {}\r\n\r\n", content.len()));
-    out.push_str(content);
+    out.push_str(&format!("Content-Length: {length}\r\n\r\n"));
     out
 }
 

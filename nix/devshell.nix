@@ -74,6 +74,14 @@ pkgs.mkShell {
     pkgs.pkg-config
   ];
 
+  # What the workspace LINKS, as in `nix/rust.nix`'s `buildInputs`: SQLite for
+  # the catalogues and libpam for `ronoctua-pam`. As build inputs, so pkg-config
+  # finds their `.pc` files the way crane's build does.
+  buildInputs = [
+    pkgs.sqlite
+    pkgs.linux-pam
+  ];
+
   # The renderer links wgpu; the loader has to find the libs at run
   # time inside the devshell.
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [

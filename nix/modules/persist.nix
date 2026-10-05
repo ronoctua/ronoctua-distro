@@ -8,13 +8,194 @@
 # the start.
 {
   config,
+  options,
   lib,
   pkgs,
+  utils,
   ...
 }:
 
 let
   cfg = config.ronoctua;
+
+  # WHAT THE HOME USED TO SEND TO /persist, until 2026-09-30.
+  #
+  # Three directories of the person's were bound from `/persist/home/<user>`
+  # over their own place in the home, and it went wrong on the first reboot:
+  # `tmpfiles` made each of them again as `0755 root root`, the bind laid the
+  # root-owned copy over the person's, and from then on NO preference of the
+  # footer could be written — the bars' mode, the theme's answers, the
+  # notification history, Syncthing's state — while the footer said nothing
+  # but a line in a log. The home is `@home`, which the wipe never touches
+  # (section 7.2), so none of them needed persisting at all: they leave the
+  # list, an assertion keeps any other line under `/home` out of it, and the
+  # unit below gives what was kept in `/persist/home` back to the home, with
+  # its owner.
+  legacyHome = [
+    ".config/ronoctua"
+    ".local/state/ronoctua"
+    ".local/state/syncthing"
+  ];
+
+  # THE RETURN, once: what `/persist/home/<user>` holds of those three is
+  # copied into the home — the persisted copy wins, since it is the one the
+  # person was writing into while the bind stood — the directories and every
+  # root-owned parent on the way (`~/.config`, `~/.local`, `~/.local/state`,
+  # which the bind's mount points made as root) given back to the person, and
+  # `/persist/home` renamed to `/persist/home-returned-<date>`: never deleted,
+  # the recovery window the wipe keeps for the same reason.
+  #
+  # AT BOOT ONLY. Every switch restarts the active targets, so the first
+  # switch to this configuration STARTS the new unit under a live session —
+  # the footer writing `modeline.json`, Syncthing its index — and a copy laid
+  # over files in use lets the persisted copy win over a newer one. So the
+  # program asks the manager where it is: `initializing` or `starting` is the
+  # boot, before `systemd-user-sessions`; anything else is a switch, and it
+  # returns at once, leaving everything for the next boot.
+  #
+  # A directory that is STILL a mount point is left alone and the rename
+  # waits: copying a bind onto itself is `cp` refusing "the same file". The
+  # next boot, with no bind, does it.
+  homeReturn = pkgs.writeShellApplication {
+    name = "ronoctua-persist-home-return";
+    runtimeInputs = with pkgs; [
+      coreutils
+      util-linux
+      config.systemd.package
+    ];
+    text = ''
+      root=/persist/home
+      if [ ! -d "$root" ]; then
+        exit 0
+      fi
+      state=$(systemctl is-system-running || true)
+      case "$state" in
+        initializing | starting) ;;
+        *)
+          echo "ronoctua: the system is $state, not booting; the next boot returns the home"
+          exit 0
+          ;;
+      esac
+      user=${lib.escapeShellArg cfg.user}
+      home=/home/$user
+      group=$(id -gn "$user")
+      waiting=0
+      for d in ${lib.escapeShellArgs legacyHome}; do
+        kept="$root/$user/$d"
+        if [ ! -d "$kept" ]; then
+          continue
+        fi
+        if mountpoint -q "$home/$d"; then
+          echo "ronoctua: $home/$d is still a bind; the next boot returns it"
+          waiting=1
+          continue
+        fi
+        mkdir -p "$home/$d"
+        cp -a --reflink=auto "$kept/." "$home/$d/"
+        chown -R "$user:$group" "$home/$d"
+        echo "ronoctua: returned $d to $home"
+      done
+      # THE PARENTS THE MOUNT POINTS MADE, given back when they are root's.
+      for parent in .config .local .local/state; do
+        if [ -d "$home/$parent" ] && [ "$(stat -c %u "$home/$parent")" = 0 ]; then
+          chown "$user:$group" "$home/$parent"
+        fi
+      done
+      if [ "$waiting" = 1 ]; then
+        exit 0
+      fi
+      target="/persist/home-returned-$(date +%Y%m%d%H%M%S)"
+      n=0
+      while [ -e "$target" ]; do
+        n=$((n + 1))
+        target="/persist/home-returned-$(date +%Y%m%d%H%M%S)-$n"
+      done
+      mv "$root" "$target"
+      echo "ronoctua: /persist/home kept as $target"
+    '';
+  };
+
+  # THE SOURCE OF EVERY BIND, before the bind.
+  #
+  # A bind from a directory that does not exist is a mount that fails, and
+  # the first boot after a line is added to `directories` is exactly that:
+  # `tmpfiles` makes `/persist<dir>` too late, after `local-fs.target`. And a
+  # bind from an EMPTY directory hides what the root already held there — the
+  # browser extension's key, made on an earlier boot, would vanish under it
+  # and be made again: a new id, another extension to Chrome.
+  #
+  # THE SWITCH MAKES THE EMPTY ONE. A `nixos-rebuild switch` that adds a line
+  # reactivates `sysinit` first, so `systemd-tmpfiles-resetup` makes
+  # `/persist<dir>` (the `d` rule below) — empty — before any unit of the new
+  # configuration starts. So a `/persist` copy that is missing OR EMPTY is
+  # seeded from what the root holds at that path (nothing, on a wiped root);
+  # one that holds anything is never touched — it is the one the wipe keeps,
+  # and the newer. A path that is already a mount point (a switch, with the
+  # binds up) is left as it is.
+  #
+  # THROUGH A DRAFT: the copy is made beside the target and renamed over the
+  # empty directory, so a copy cut short (a full disk) leaves the `/persist`
+  # side empty — seeded again next time — and never half a key. The
+  # directory's owner and mode go with it, which `tmpfiles`' `-` would not
+  # give (`0755 root`).
+  seed = pkgs.writeShellApplication {
+    name = "ronoctua-persist-seed";
+    runtimeInputs = with pkgs; [
+      coreutils
+      findutils
+      util-linux
+    ];
+    # AN ARRAY, NOT A WORD LIST: with one directory the loop runs once, and
+    # shellcheck (SC2043) refuses a literal `for` that can only run once.
+    text = ''
+      directories=(${lib.escapeShellArgs cfg.persist.directories})
+      for d in "''${directories[@]}"; do
+        kept="/persist$d"
+        if [ -e "$kept" ] && [ -n "$(find "$kept" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+          continue
+        fi
+        if [ ! -d "$d" ] || mountpoint -q "$d"; then
+          mkdir -p "$kept"
+          continue
+        fi
+        if [ -z "$(find "$d" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+          mkdir -p "$kept"
+          continue
+        fi
+        draft="$kept.seeding"
+        rm -rf "$draft"
+        mkdir -p "$(dirname "$kept")"
+        cp -a --reflink=auto "$d" "$draft"
+        if [ -e "$kept" ]; then
+          rmdir "$kept"
+        fi
+        mv "$draft" "$kept"
+        echo "ronoctua: $d seeded into /persist"
+      done
+    '';
+  };
+
+  # EVERY BIND ASKS FOR THE SEED, wherever the mount is started from: the
+  # boot's `local-fs.target`, a switch's start phase, or a unit that restarts
+  # with `RequiresMountsFor=` on the path (the browser extension's) — the
+  # last one is a transaction of its own, and without this it mounts the
+  # empty copy the switch's `tmpfiles` made. `x-systemd.requires=` is a
+  # `Requires=` and an `After=`.
+  binds = lib.listToAttrs (
+    map (d: {
+      name = d;
+      value = {
+        device = "/persist${d}";
+        fsType = "none";
+        options = [
+          "bind"
+          "x-systemd.requires-mounts-for=/persist"
+          "x-systemd.requires=ronoctua-persist-seed.service"
+        ];
+        depends = [ "/persist" ];
+      };
+    }) cfg.persist.directories
+  );
 in
 {
   options.ronoctua.persist = {
@@ -78,6 +259,14 @@ in
         # UPower's history: what feeds `TimeToEmpty` and the charge graph.
         # Losing it costs accuracy for the first hours, not correctness.
         "/var/lib/upower"
+        # THE SECURITY CENTRE'S STATE: the person's firewall rules and
+        # profiles, and the list of who may answer sudo with a finger. Lost,
+        # the rules the person made are gone and every network is back on the
+        # profile it was first given.
+        "/var/lib/ronoctua-security"
+        # The enrolled fingerprints (fprintd's). Lost, every finger has to be
+        # enrolled again, through the password.
+        "/var/lib/fprint"
         # TOR'S GUARDS. Without them every start picks three new entry relays,
         # which is exactly what guards exist to prevent — and this is state
         # that is only worth anything by being old.
@@ -89,24 +278,10 @@ in
         # Section 7.2 + lanzaboote: the Secure Boot keys are local and
         # never enter the repository (section 9).
         "/etc/secureboot"
-        # The user's app id -> glyph table (section 4.2): an override read at
-        # runtime, with hot reload. Losing this would mean losing customisation.
-        "/home/${cfg.user}/.config/ronoctua"
-        # THE NOTIFICATION HISTORY, which is fifteen days of it (section 4.2).
-        #
-        # `$XDG_STATE_HOME`, which is the directory for exactly this: machine
-        # local, machine written, and it outlives a reboot. Without the line the
-        # wipe takes it, and the symptom is a manager that is empty every
-        # morning with nothing saying why.
-        "/home/${cfg.user}/.local/state/ronoctua"
-        # SYNCTHING'S STATE — index, device key and the list of folders the
-        # person added.
-        #
-        # Losing this does not lose files, but it loses the IDENTITY: the
-        # device is reborn with a new id, the others stop recognising it,
-        # and every folder has to be re-introduced on both ends. On top of
-        # that the index of hundreds of gigabytes would be rebuilt from scratch.
-        "/home/${cfg.user}/.local/state/syncthing"
+        # NOTHING OF THE HOME. The footer's preferences, the notification
+        # history and Syncthing's identity live in `@home`, which the wipe
+        # never touches; persisting them bound a root-owned copy over the
+        # person's own (`legacyHome` above, and the assertion below).
         # THE WI-FI PASSWORD sealed in the TPM needs no line here: it already
         # lives in `/persist/etc/ronoctua/wifi`, and the wipe only renames `@root`.
         # A bind mount here would create an empty `/etc/ronoctua` that nobody reads.
@@ -120,13 +295,32 @@ in
       #
       # The system Flatpak installation: its remote and anything installed
       # `--system`. The person's own lives in `$HOME`, which is never wiped.
-      ++ lib.optional config.ronoctua.software.flatpak "/var/lib/flatpak"
+      ++ lib.optional (config.ronoctua.software.flatpak or false) "/var/lib/flatpak"
       # The Android image the person asked for — a gigabyte, downloaded once —
       # and everything installed inside it.
-      ++ lib.optional config.ronoctua.software.android "/var/lib/waydroid";
+      ++ lib.optional (config.ronoctua.software.android or false) "/var/lib/waydroid"
+      # THE BROWSER EXTENSION'S KEY, and the counter of its version. Lost, the
+      # key is made again at the next boot, and a new key is a new extension
+      # id: another extension to Chrome, the old one left force-installed by
+      # a policy nothing writes any more, and the person's switch and history
+      # with it (`nix/modules/browser-extension.nix`). `or false` because a
+      # machine without the browser module has no option to read.
+      ++ lib.optional (config.ronoctua.browser.enable or false) "/var/lib/ronoctua-browser";
       defaultText = lib.literalMD ''
         the machine's own state, plus `/var/lib/flatpak` and `/var/lib/waydroid`
-        where `ronoctua.software` turns those supports on
+        where `ronoctua.software` turns those supports on, and
+        `/var/lib/ronoctua-browser` where the browser is
+      '';
+    };
+
+    binds = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      readOnly = true;
+      internal = true;
+      description = ''
+        The bind of every entry of `directories`, as `fileSystems` takes it.
+        Read by a test VM, whose `virtualisation.fileSystems` replace
+        `fileSystems`: it carries the module's own binds, seed included.
       '';
     };
 
@@ -146,29 +340,83 @@ in
   config = lib.mkIf cfg.persist.enable {
     # Routing by bind mount. Simple and readable; it does not depend on the
     # third-party impermanence module, which keeps the input graph small.
-    systemd.tmpfiles.rules = map (d: "d /persist${d} 0755 root root -") cfg.persist.directories ++ [
+    # `-` FOR MODE, USER AND GROUP: a missing directory is made as root,
+    # 0755 — tmpfiles' own default — and an existing one is left as it is.
+    # With `0755 root root` every boot took back the owner a service had set
+    # (`StateDirectory=` for Tor and Tailscale), and it is what made the home's
+    # directories root's (`legacyHome`).
+    systemd.tmpfiles.rules = map (d: "d /persist${d} - - - -") cfg.persist.directories ++ [
       "d /persist/etc/shadow 0700 root root -"
     ];
+
+    # THE HOME'S DIRECTORIES BACK FROM /persist, once (`homeReturn`). Before
+    # any login, as the cache's subvolume unit is (`filesystem.nix`): nothing
+    # of the person's has a file open in there yet. A switch starts it too —
+    # it is new, and the switch restarts the targets that want it — and the
+    # program returns at once there, since only the boot comes before the
+    # logins. Only where there IS a person (`base.nix` declares
+    # `ronoctua.user`): a test that imports this module alone has no home to
+    # return anything to.
+    systemd.services = {
+      ronoctua-persist-seed = {
+        description = "Gives every bind from /persist its source, seeded from the root";
+        wantedBy = [ "local-fs.target" ];
+        before = [
+          "local-fs.target"
+        ]
+        ++ map (d: "${utils.escapeSystemdPath d}.mount") cfg.persist.directories;
+        unitConfig = {
+          # BEFORE THE ORDINARY ORDER EXISTS: the binds are part of
+          # `local-fs.target`, and the default dependencies would put this
+          # after it.
+          DefaultDependencies = false;
+          RequiresMountsFor = [ "/persist" ];
+        };
+        # NEVER RESTARTED BY A SWITCH: every bind `Requires=` it, and a restart
+        # of a required unit restarts its dependants — every bind, under a
+        # live session. Being inactive between runs, a switch has nothing to
+        # restart anyway; this says it.
+        restartIfChanged = false;
+        # NOT `RemainAfterExit`: a seed that stayed active would be a no-op
+        # for the next mount that asks for it (a switch's), and it is the
+        # mount that has to find its source. It runs before every bind that
+        # starts, and does nothing where the copy already holds something.
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${seed}/bin/ronoctua-persist-seed";
+        };
+      };
+    }
+    // lib.optionalAttrs (options.ronoctua ? user) {
+      ronoctua-persist-home-return = {
+        description = "Returns what /persist kept of the home to the home";
+        wantedBy = [ "multi-user.target" ];
+        before = [ "systemd-user-sessions.service" ];
+        unitConfig = {
+          ConditionPathExists = "/persist/home";
+          RequiresMountsFor = [
+            "/persist"
+            "/home/${cfg.user}"
+          ];
+        };
+        # A CHANGED program is not re-run by a switch; a NEW unit is started by
+        # one, and the program's own gate lets it do nothing then.
+        restartIfChanged = false;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${homeReturn}/bin/ronoctua-persist-home-return";
+        };
+      };
+    };
 
     # A single fileSystems definition: /persist (which has to be up before
     # anything else) plus the bind mounts.
     fileSystems = {
       "/persist".neededForBoot = true;
     }
-    // lib.listToAttrs (
-      map (d: {
-        name = d;
-        value = {
-          device = "/persist${d}";
-          fsType = "none";
-          options = [
-            "bind"
-            "x-systemd.requires-mounts-for=/persist"
-          ];
-          depends = [ "/persist" ];
-        };
-      }) cfg.persist.directories
-    );
+    // binds;
+    ronoctua.persist.binds = binds;
 
     # THE WIPE.
     #
@@ -253,7 +501,15 @@ in
     assertions = [
       {
         assertion = !cfg.persist.wipeRoot || cfg.persist.enable;
-        message = "ronoctua.persist.wipeRoot exige ronoctua.persist.enable.";
+        message = "ronoctua.persist.wipeRoot requires ronoctua.persist.enable.";
+      }
+      {
+        assertion = !lib.any (d: d == "/home" || lib.hasPrefix "/home/" d) cfg.persist.directories;
+        message = ''
+          ronoctua.persist: no entry under /home — the home is `@home`, which the
+          wipe never touches, and a bind over it hides the home's own copy while
+          tmpfiles makes the persisted one root's.
+        '';
       }
     ];
   };

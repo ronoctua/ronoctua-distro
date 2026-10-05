@@ -49,6 +49,7 @@ impl Palette for Wit {
             Role::Danger => wit::Color::StateError,
             Role::Warning => wit::Color::StateWarning,
             Role::Once => wit::Color::TextOnce,
+            Role::Watching => wit::Color::ModelineWatching,
             Role::Hover => wit::Color::SurfaceHover,
             Role::HoverOf(0) => wit::Color::CursorHoverOne,
             Role::HoverOf(1) => wit::Color::CursorHoverTwo,

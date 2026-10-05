@@ -76,6 +76,23 @@ members = [
   "crates/ronoctua-browser",
   "crates/ronoctua-transfers",
   "crates/ronoctua-rescue",
+  # THE 2026-09-30 WAVE. Each is a boundary of its own (AGENTS.md's table):
+  # one crate per service, and the rest of the tree asks it.
+  "crates/ronoctua-consent",
+  "crates/ronoctua-words",
+  "crates/ronoctua-calc",
+  "crates/ronoctua-iconset",
+  "crates/ronoctua-index",
+  "crates/ronoctua-websearch",
+  "crates/ronoctua-journal",
+  "crates/ronoctua-pam",
+  "crates/ronoctua-video-metrics",
+  "crates/ronoctua-git",
+  "crates/ronoctua-archive",
+  "crates/ronoctua-containers",
+  "crates/ronoctua-security",
+  "crates/ronoctua-belongings",
+  "crates/ronoctua-resolve",
   "crates/ronoctua-shell",
 ]
 
@@ -197,6 +214,10 @@ alacritty_terminal = "0.26"
 # in four calls. It is already in the tree underneath wasmtime — as a
 # direct dependency it brings nothing new.
 rustix = { version = "1.1", features = [ "pty", "termios", "process", "stdio", "fs" ] }
+# A STOP HANDLER that a `forbid(unsafe_code)` daemon can install: the
+# transfer queue's `SIGTERM` unwinds its copies before it exits. Already in the
+# lock (`alacritty_terminal` pulls the same version), so nothing new is fetched.
+signal-hook = "0.4"
 
 # --- D-Bus: notifications and tray ------------------------------------
 # zbus's BLOCKING API (`blocking-api`), on a thread of its own.
@@ -248,6 +269,41 @@ rustls-pki-types = "1"
 rustls-pemfile = "2"
 ring = "0.17"
 base64 = "0.22"
+
+# --- the 2026-09-30 wave: search, arithmetic, catalogues, belongings ----
+# Approved with the plan. Every one is PURE RUST except `rusqlite`, which links
+# the system `libsqlite3` (never `bundled`: no C build of our own, and the
+# store's SQLite is the one FTS5 is measured against).
+#
+# THE HEAVY THREE ARE OPTIONAL in the crates that use them — `tantivy` behind
+# `ronoctua-index/engine`, `rusqlite` behind `ronoctua-video-metrics/db`,
+# `age` behind `ronoctua-belongings/crypt` — and off by default, so the
+# workspace does not compile them until the lane that needs one turns it on.
+# They are in `Cargo.lock` anyway: the lock is resolved with every feature of
+# every member, which is what lets it change ONCE, here.
+
+# THE SUPER INDEX (fast-access). An FST term dictionary (prefix and
+# Levenshtein), immutable mmapped segments, one writer and many reading
+# processes with no server. `mmap` for the segments, `lz4-compression` for the
+# stored fields; no stemmer, no stop words, no zstd — names are not prose.
+tantivy = { version = "0.26.2", default-features = false, features = [ "mmap", "lz4-compression" ] }
+# THE CATALOGUES (the player's channels, video-metrics). FTS5 comes from the
+# system library. No default features: they add a wasm-only backend to the
+# lock; `cache` is `prepare_cached`.
+rusqlite = { version = "0.40.2", default-features = false, features = [ "cache" ] }
+# THE CALCULATOR'S EXACT ARITHMETIC: `BigRational` for + − × ÷ and integer
+# powers; only a transcendental becomes an approximation. `num-rational` 0.4
+# is built on `num-bigint` 0.4 — the 0.5 line would be a second `BigInt`.
+num-bigint = "0.4.6"
+num-rational = { version = "0.4.2", default-features = false, features = [ "num-bigint", "std" ] }
+num-traits = "0.2.19"
+# THE BELONGINGS' ENCRYPTION: X25519 recipients and one scrypt passphrase
+# (`key.age`), recoverable with the `age` CLI and no distro. No default
+# features: no armour, no plugins, no SSH keys.
+age = { version = "0.12.1", default-features = false }
+# A secret wiped from memory when it is dropped (`ronoctua_consent::keys::Secret`).
+# Already in the lock, underneath the TLS stack.
+zeroize = "1.9.0"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

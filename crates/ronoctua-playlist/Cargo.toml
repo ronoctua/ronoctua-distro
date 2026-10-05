@@ -17,7 +17,12 @@ publish.workspace = true
 # radio's server is a text anyone could have written.
 ronoctua-xml = { path = "../ronoctua-xml" }
 serde.workspace = true
-serde_json.workspace = true
+# `float_roundtrip`: a `.rset` or `.rqueue` read back holds the very seconds
+# it was written with. The default parser is off by one unit in the last
+# place for about one float in ten (a lane's start from a drag,
+# 113.36993149664731 read back as …733), and the player's "not saved" is a
+# hash of the queue: it said a queue kept whole had changed after a restart.
+serde_json = { workspace = true, features = [ "float_roundtrip" ] }
 
 [lints]
 workspace = true

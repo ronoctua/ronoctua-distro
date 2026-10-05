@@ -16,10 +16,17 @@
 //! numberings, and a reader that pooled them would draw the second object out
 //! of the first object's points.
 
-use super::xml::tagged;
+use super::xml::{parse, tagged};
 use super::{Mesh, Read, Shape, TRIANGLE_CEILING};
 use crate::Refusal;
 use crate::zip::{member_bytes, members};
+use ronoctua_xml::roxmltree;
+
+/// How deep an AMF document may nest.
+///
+/// The shared ceiling, and far above the format, whose deepest element is a
+/// triangle's corner: `amf > object > mesh > volume > triangle > v1`, six.
+const XML_DEPTH: usize = ronoctua_xml::DEPTH_MOST;
 
 /// Reads an AMF, compressed or not.
 ///
@@ -49,7 +56,7 @@ pub fn read(bytes: &[u8]) -> Result<Read, Refusal> {
 /// One `<amf>` document.
 fn document(bytes: &[u8]) -> Result<Read, Refusal> {
     let text = std::str::from_utf8(bytes).map_err(|_| Refusal::Failed)?;
-    let doc = roxmltree::Document::parse(text).map_err(|_| Refusal::Failed)?;
+    let doc = parse(text, XML_DEPTH)?;
     let root = doc.root_element();
     if !tagged(root, "amf") {
         return Err(Refusal::Failed);
@@ -154,7 +161,28 @@ fn millimetres_per(unit: &str) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::read;
+    use super::{XML_DEPTH, read};
+    use crate::Refusal;
+
+    #[test]
+    fn a_document_made_to_run_the_parser_out_of_stack_is_refused() {
+        let at = |levels: usize| {
+            format!(
+                "<amf>{}{}</amf>",
+                "<a>".repeat(levels),
+                "</a>".repeat(levels)
+            )
+        };
+        // At the ceiling it is parsed (and has no mesh); past it, refused.
+        assert!(ronoctua_xml::shallow(&at(XML_DEPTH - 1), XML_DEPTH));
+        let deep = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || read(at(100_000).as_bytes()).err())
+            .expect("a thread")
+            .join()
+            .expect("the read came back");
+        assert_eq!(deep, Some(Refusal::Failed));
+    }
     use crate::mesh::fixture::zip_of;
 
     const PLAIN: &str = r#"<?xml version="1.0"?>

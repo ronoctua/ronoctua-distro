@@ -19,7 +19,7 @@
 #
 # # Why no Python
 #
-# `nix/updates.nix` needs a generator because a step is a command line with
+# The update's `sequence.nix` needs a generator because a step is a command line with
 # preconditions and an order to validate. This is four integers and a word. A
 # generator would be a file to read before believing the numbers.
 {
@@ -110,12 +110,51 @@ assert lib.assertMsg (declared.systemGenerations >= 2)
 # not spend what it has left on a relief every heartbeat.
 assert lib.assertMsg (declared.reliefGapMinutes >= 60)
   "assets/cache.nix: `reliefGapMinutes` (${toString declared.reliefGapMinutes}) must be at least 60";
+# THE "NEARLY FULL" LINE, UNDER THE FLOOR — and its cap under the floor's. At
+# or above the floor, the modeline's mark would come up every time the relief
+# starts and go away every time it works: a mark about something the machine
+# is already handling.
+assert percent "diskWarnPercent" declared.diskWarnPercent;
+assert positive "diskWarnCapGiB" declared.diskWarnCapGiB;
+assert lib.assertMsg (declared.diskWarnPercent < declared.diskFloorPercent)
+  "assets/cache.nix: `diskWarnPercent` (${toString declared.diskWarnPercent}) must be smaller than `diskFloorPercent` (${toString declared.diskFloorPercent})";
+assert lib.assertMsg (declared.diskWarnCapGiB < declared.diskFloorCapGiB)
+  "assets/cache.nix: `diskWarnCapGiB` (${toString declared.diskWarnCapGiB}) must be smaller than `diskFloorCapGiB` (${toString declared.diskFloorCapGiB})";
 # THE PLAYER'S SUBTITLES: a ceiling of nothing would read every track again at
 # every lane change, which is the cost the cache exists to spare.
 assert positive "playerSubtitlesMib" declared.playerSubtitlesMib;
 # AND ITS CACHE ON DISK: a ceiling of nothing would take every cover out of
 # its file again at every song.
 assert positive "playerMib" declared.playerMib;
+# THE TRANSLATIONS KEPT: a bound of nothing would ask the host again for every
+# song that comes round, spending the person's quota on an answer the process
+# had.
+assert positive "wordsCacheEntries" declared.wordsCacheEntries;
+# THE RATES' AGE: an age of nothing would ask the ECB again at every currency
+# typed.
+assert positive "ratesStaleHours" declared.ratesStaleHours;
+# THE PLAYER'S CATALOGUE: a ceiling of nothing would refuse every ingest.
+assert positive "playerCatalogMib" declared.playerCatalogMib;
+# THE VIDEO-METRICS THUMBNAILS: a ceiling of nothing would fetch every picture
+# again at every scan.
+assert positive "videoMetricsThumbsMib" declared.videoMetricsThumbsMib;
+# archive-luks: THE ARCHIVE LISTINGS KEPT and THE OPENED MEMBERS' CEILING — a
+# bound of nothing would list an archive again at every step into it, and
+# extract a member only to throw it away before it opened.
+assert positive "archiveListings" declared.archiveListings;
+assert positive "archiveOpenedMib" declared.archiveOpenedMib;
+# THE GIT BROWSER'S OLD VERSIONS: a bound of nothing would remove every copy
+# the moment it was made, before the program opening it had read it.
+assert positive "gitVersionsMost" declared.gitVersionsMost;
+# THE CALCULATOR'S HISTORY: a bound of nothing would keep no answer at all.
+assert positive "calcHistoryEntries" declared.calcHistoryEntries;
+# THE CATALOGUE'S POSTERS: a ceiling of nothing would fetch every poster again
+# at every scroll.
+assert positive "playerPostersMib" declared.playerPostersMib;
+# FAST-ACCESS: a ceiling of nothing would fetch every picture of a search
+# again, and a history of nothing would remember nothing it opened.
+assert positive "webThumbsMiB" declared.webThumbsMiB;
+assert positive "fastAccessRecentMost" declared.fastAccessRecentMost;
 
 writeTextFile {
   name = "ronoctua-cache-rs";
@@ -170,11 +209,53 @@ writeTextFile {
     /// How long a relief waits after the last one, in minutes.
     pub const RELIEF_GAP_MINUTES: u32 = ${toString declared.reliefGapMinutes};
 
+    /// Below this much free space, in per cent of the filesystem, the disk is
+    /// nearly full and the modeline says so.
+    pub const DISK_WARN_PERCENT: u8 = ${toString declared.diskWarnPercent};
+
+    /// That line is never more than this, in GiB.
+    pub const DISK_WARN_CAP_GIB: u32 = ${toString declared.diskWarnCapGiB};
+
     /// The most the player's daemon keeps, in memory, of the subtitle tracks
     /// it read, in MiB.
     pub const PLAYER_SUBTITLES_MIB: u32 = ${toString declared.playerSubtitlesMib};
 
     /// The most the player keeps in its cache directory on disk, in MiB.
     pub const PLAYER_MIB: u32 = ${toString declared.playerMib};
+
+    /// The most translations a process keeps in memory, in entries.
+    pub const WORDS_CACHE_ENTRIES: usize = ${toString declared.wordsCacheEntries};
+
+    /// How old the cached exchange rates may be before a currency typed asks
+    /// for fresh ones, in hours.
+    pub const RATES_STALE_HOURS: u32 = ${toString declared.ratesStaleHours};
+
+    /// The most the player's local catalogue (its two SQLite files) may hold,
+    /// in MiB.
+    pub const PLAYER_CATALOG_MIB: u32 = ${toString declared.playerCatalogMib};
+
+    /// The most the video-metrics scanner keeps of its thumbnails, in MiB.
+    pub const VIDEO_METRICS_THUMBS_MIB: u32 = ${toString declared.videoMetricsThumbsMib};
+
+    /// How many archive listings a process keeps, in listings.
+    pub const ARCHIVE_LISTINGS: usize = ${toString declared.archiveListings};
+
+    /// The most the members opened out of archives may weigh, in MiB.
+    pub const ARCHIVE_OPENED_MIB: u32 = ${toString declared.archiveOpenedMib};
+
+    /// The most old versions the git browser keeps copied out, in copies.
+    pub const GIT_VERSIONS_MOST: usize = ${toString declared.gitVersionsMost};
+
+    /// The most answers the calculator's history keeps (`calc.json`).
+    pub const CALC_HISTORY_ENTRIES: usize = ${toString declared.calcHistoryEntries};
+
+    /// The most the player's catalogue keeps of its posters, in MiB.
+    pub const PLAYER_POSTERS_MIB: u32 = ${toString declared.playerPostersMib};
+
+    /// The most fast-access keeps of YouTube's pictures, in MiB.
+    pub const WEB_THUMBS_MIB: u32 = ${toString declared.webThumbsMiB};
+
+    /// The most entries fast-access remembers of what was opened from it.
+    pub const FAST_ACCESS_RECENT_MOST: usize = ${toString declared.fastAccessRecentMost};
   '';
 }

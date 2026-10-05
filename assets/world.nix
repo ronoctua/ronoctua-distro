@@ -1,6 +1,6 @@
 # The places `LEADER g` glances at — the distro's defaults, in one file.
 #
-# ONE PLACE, the shape `assets/notifications.nix` and `assets/updates.nix`
+# ONE PLACE, the shape `assets/notifications.nix` and the update's `steps.nix`
 # already have: the data is declared here and everything else is generated from
 # it — the Rust table the line draws, the text keys both languages have to
 # carry, and the refusal of a zone that does not exist.

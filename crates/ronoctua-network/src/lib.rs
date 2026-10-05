@@ -21,8 +21,13 @@
 
 pub mod agent;
 pub mod nm;
+pub mod privacy;
+pub mod refusal;
 pub mod secret;
+mod stored;
 pub mod vpn;
+
+pub use stored::Stored;
 
 use std::collections::HashMap;
 
@@ -85,6 +90,41 @@ impl Band {
     }
 }
 
+/// A refusal the screen says in a sentence of its own — a closed set, carried
+/// inside the `anyhow::Error` the call returns, so a door can tell it from
+/// the daemon's own words (`downcast_ref`) and say it in the person's
+/// language. The `Display` is English, for the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// NetworkManager has no Bluetooth device for that phone: it is not
+    /// paired, or it does not offer its connection (PAN).
+    NoPhone,
+    /// There is no VPN profile by that name — it went between the import
+    /// and the answer.
+    NoVpn,
+    /// The profile by that name is not a VPN's (it has no `vpn` section).
+    NotVpn,
+}
+
+impl Refusal {
+    /// Every refusal, for the test that demands a sentence for each.
+    pub const ALL: [Self; 3] = [Self::NoPhone, Self::NoVpn, Self::NotVpn];
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoPhone => {
+                "NetworkManager has no Bluetooth device by that address: the phone is not paired, or does not share its connection"
+            }
+            Self::NoVpn => "there is no VPN profile by that name",
+            Self::NotVpn => "the profile has no vpn section",
+        })
+    }
+}
+
+impl std::error::Error for Refusal {}
+
 /// How the machine is on the network.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Medium {
@@ -92,6 +132,23 @@ pub enum Medium {
     Wired,
     /// Radio.
     Radio,
+    /// A phone's connection, shared over Bluetooth (PAN) — NetworkManager's
+    /// `bnep` interface. See [`Manager::tether`] for who owns it.
+    Phone,
+}
+
+impl Medium {
+    /// Which link carries the traffic when several are up: the cable, then
+    /// the radio, then a phone — the order of NetworkManager's own route
+    /// metrics for the three.
+    #[must_use]
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Wired => 0,
+            Self::Radio => 1,
+            Self::Phone => 2,
+        }
+    }
 }
 
 /// Where a device stands.
@@ -811,12 +868,30 @@ impl Manager {
             let medium = match kind {
                 nm::ETHERNET_KIND => Medium::Wired,
                 nm::WIFI_KIND => Medium::Radio,
+                nm::BLUETOOTH_KIND => Medium::Phone,
                 // Loopback, tunnel, bridge: they are not how the person is on the
                 // network, and listing them would fill the screen with useless rows.
                 _ => continue,
             };
             let state = State::from_nm(d.state().unwrap_or(0));
-            let interface = d.interface().unwrap_or_default();
+            // A PHONE'S LINK IS NAMED BY ITS IP SIDE, `bnep0`: its
+            // `Interface` is the phone's hardware address, and the Bluetooth
+            // view names the same interface — the two screens agree on it.
+            //
+            // A PHONE WITH NO LINK IS NO LINK: every paired phone that offers
+            // its connection is a Bluetooth device to NetworkManager, up or
+            // not, and listed here each would be a "disconnected" row named
+            // by a hardware address. Only the one in use, with its `bnep0`,
+            // is how this machine is on a network; the others are the
+            // Bluetooth view's rows, with their own switch.
+            let interface = if medium == Medium::Phone {
+                match d.ip_interface() {
+                    Ok(ip) if !ip.is_empty() => ip,
+                    _ => continue,
+                }
+            } else {
+                d.interface().unwrap_or_default()
+            };
 
             let serving = medium == Medium::Radio
                 && self
@@ -824,6 +899,15 @@ impl Manager {
                     .is_ok_and(|r| r.mode().unwrap_or(0) == nm::RADIO_IS_AP);
             let (network, rate_kbps, signal, band) = if medium == Medium::Radio {
                 self.radio_detail(&path)
+            } else if medium == Medium::Phone {
+                // THE PHONE'S NAME is the network this link is on.
+                let name = nm::BluetoothDeviceProxyBlocking::builder(&self.connection)
+                    .path(path.clone())
+                    .and_then(zbus::blocking::proxy::Builder::build)
+                    .ok()
+                    .and_then(|b| b.name().ok())
+                    .filter(|n| !n.is_empty());
+                (name, 0, 0, Band::Other)
             } else {
                 let c = nm::WiredProxyBlocking::builder(&self.connection)
                     .path(path.clone())?
@@ -964,12 +1048,16 @@ impl Manager {
         if out.status.success() {
             return Ok(());
         }
+        // NMCLI'S WORDS GO TO THE LOG: they are English, and the door says
+        // the refusal by its name (`refusal::Refusal::ImportRefused`).
         let said = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        anyhow::bail!(if said.is_empty() {
+        let said = if said.is_empty() {
             String::from_utf8_lossy(&out.stdout).trim().to_owned()
         } else {
             said
-        })
+        };
+        tracing::warn!(%said, "nmcli would not import the file");
+        Err(refusal::Named(refusal::Refusal::ImportRefused).into())
     }
 
     /// Brings a stored profile up — a tunnel, a network connected to before.
@@ -1052,11 +1140,11 @@ impl Manager {
             .devices_of_kind(nm::WIFI_KIND)?
             .into_iter()
             .next()
-            .context("this machine has no Wi-Fi radio")?;
+            .ok_or(refusal::Named(refusal::Refusal::NoRadio))?;
 
         let access_point = self
             .access_point_at(&device, ssid)?
-            .context("that network is no longer in range")?;
+            .ok_or(refusal::Named(refusal::Refusal::OutOfRange))?;
 
         if password.is_none()
             && let Some(profile) = self.profile_of(ssid)?
@@ -1184,7 +1272,7 @@ impl Manager {
             .devices_of_kind(nm::WIFI_KIND)?
             .into_iter()
             .next()
-            .context("this machine has no Wi-Fi radio")?;
+            .ok_or(refusal::Named(refusal::Refusal::NoRadio))?;
         let mut connection: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
         connection.insert(
             "connection",
@@ -1231,13 +1319,191 @@ impl Manager {
         let kind = match medium {
             Medium::Wired => nm::ETHERNET_KIND,
             Medium::Radio => nm::WIFI_KIND,
+            Medium::Phone => nm::BLUETOOTH_KIND,
         };
         let path = self
             .devices_of_kind(kind)?
             .into_iter()
             .next()
-            .context("no device of that kind")?;
+            .ok_or(refusal::Named(refusal::Refusal::NoDevice))?;
         self.device(&path)?.disconnect()?;
+        Ok(())
+    }
+
+    /// Takes down whatever is active on ONE link: the device of that medium
+    /// whose interface is the one named — `wlan0`, `enp1s0`, or a phone's
+    /// `bnep0` (its IP side, the name [`Manager::links`] gives it).
+    ///
+    /// BY THE LINK, NOT THE MEDIUM: with two phones paired, the first
+    /// Bluetooth device NetworkManager lists may be the one that is not in
+    /// use, and `RET` on the link in use would take down nothing — or the
+    /// other phone.
+    ///
+    /// # Errors
+    ///
+    /// No device of that medium has that interface, or the bus refused.
+    pub fn disconnect_link(&self, medium: Medium, interface: &str) -> Result<()> {
+        let kind = match medium {
+            Medium::Wired => nm::ETHERNET_KIND,
+            Medium::Radio => nm::WIFI_KIND,
+            Medium::Phone => nm::BLUETOOTH_KIND,
+        };
+        let path = self
+            .devices_of_kind(kind)?
+            .into_iter()
+            .find(|path| {
+                self.device(path).is_ok_and(|d| {
+                    d.interface().is_ok_and(|i| i == interface)
+                        || d.ip_interface().is_ok_and(|i| i == interface)
+                })
+            })
+            .context("no device has that interface")?;
+        self.device(&path)?.disconnect()?;
+        Ok(())
+    }
+
+    /// Uses a phone's connection over Bluetooth, or stops — PAN, through
+    /// NetworkManager.
+    ///
+    /// # Who owns `bnep0`
+    ///
+    /// NETWORKMANAGER, and this is the decision both views keep. BlueZ's
+    /// `Network1.Connect("nap")` alone makes the `bnep0` interface and stops
+    /// there: nothing asks it for an address, and the phone's internet is a
+    /// cable plugged into nothing. NetworkManager's Bluetooth device does the
+    /// whole of it — it asks BlueZ for the link, runs DHCP on `bnep0` and
+    /// puts the route in — so the Bluetooth view's switch comes HERE, and
+    /// both views then read the one link from their own daemon: the network
+    /// view NetworkManager's `bnep0` link, the Bluetooth view BlueZ's
+    /// `Network1.Interface`, the same name.
+    ///
+    /// A profile already stored for the phone is brought up; with none, one
+    /// is made — `panu`, never on its own (`autoconnect` off: a phone's
+    /// data plan is not something a machine starts spending by itself).
+    ///
+    /// # Errors
+    ///
+    /// NetworkManager has no Bluetooth device for that address (not paired,
+    /// or the phone does not offer its connection), or it refused.
+    pub fn tether(&self, address: &str, on: bool) -> Result<()> {
+        let device = self
+            .devices_of_kind(nm::BLUETOOTH_KIND)?
+            .into_iter()
+            .find(|path| {
+                nm::BluetoothDeviceProxyBlocking::builder(&self.connection)
+                    .path(path.clone())
+                    .and_then(zbus::blocking::proxy::Builder::build)
+                    .and_then(|b| b.hw_address())
+                    .is_ok_and(|a| a.eq_ignore_ascii_case(address))
+            })
+            .ok_or(Refusal::NoPhone)?;
+        if !on {
+            self.device(&device)?.disconnect()?;
+            return Ok(());
+        }
+        let g = self.manager()?;
+        let none = zbus::zvariant::ObjectPath::try_from("/")?;
+        if let Some(profile) = self.tether_profile_of(address)? {
+            g.activate_connection(&profile.as_ref(), &device.as_ref(), &none)?;
+            return Ok(());
+        }
+        // An address BlueZ did not give is no phone NetworkManager has.
+        let bytes = hardware_bytes(address).ok_or(Refusal::NoPhone)?;
+        let mut connection: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+        connection.insert(
+            "connection",
+            HashMap::from([
+                ("id", Value::from(address)),
+                ("type", Value::from("bluetooth")),
+                ("autoconnect", Value::from(false)),
+            ]),
+        );
+        connection.insert(
+            "bluetooth",
+            HashMap::from([
+                ("bdaddr", Value::from(bytes)),
+                ("type", Value::from("panu")),
+            ]),
+        );
+        g.add_and_activate_connection(connection, &device.as_ref(), &none)?;
+        Ok(())
+    }
+
+    /// The stored Bluetooth profile for a phone, when there is one.
+    fn tether_profile_of(&self, address: &str) -> Result<Option<OwnedObjectPath>> {
+        let wanted = hardware_bytes(address);
+        let profiles = nm::ProfilesProxyBlocking::new(&self.connection)?;
+        for path in profiles.list_connections()? {
+            let Ok(cfg) = self.profile(&path)?.get_settings() else {
+                continue;
+            };
+            let bdaddr = cfg
+                .get("bluetooth")
+                .and_then(|b| b.get("bdaddr"))
+                .and_then(|v| Vec::<u8>::try_from(v.clone()).ok());
+            if bdaddr.is_some() && bdaddr == wanted {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Stores a VPN profile's user and password, so it comes up without
+    /// asking — what an imported `.ovpn` with `auth-user-pass` needs once.
+    ///
+    /// `GetSettings` + `GetSecrets` + `Update`: the profile as it is, the
+    /// secrets it already had carried along (an `Update` replaces the WHOLE
+    /// profile, and a secret it does not carry is deleted), the user name in
+    /// `vpn.data`, and the password in `vpn.secrets` with `password-flags=0`
+    /// — stored by NetworkManager, root-owned, in the profile. The password
+    /// travels in this one call and nowhere else: never an `argv` (`nmcli`
+    /// would put it in one), never a log.
+    ///
+    /// # Errors
+    ///
+    /// There is no VPN profile by that name, or NetworkManager refused.
+    pub fn store_vpn_secret(&self, tunnel: &str, user: &str, password: &str) -> Result<()> {
+        let profiles = nm::ProfilesProxyBlocking::new(&self.connection)?;
+        let mut found = None;
+        for path in profiles.list_connections()? {
+            let Ok(cfg) = self.profile(&path)?.get_settings() else {
+                continue;
+            };
+            let field = |section: &str, key: &str| {
+                cfg.get(section)
+                    .and_then(|s| s.get(key))
+                    .and_then(|v| String::try_from(v.clone()).ok())
+            };
+            if field("connection", "id").as_deref() == Some(tunnel)
+                && field("connection", "type").as_deref() == Some("vpn")
+            {
+                found = Some((path, cfg));
+                break;
+            }
+        }
+        let (path, cfg) = found.ok_or(Refusal::NoVpn)?;
+        let profile = self.profile(&path)?;
+        let kept: HashMap<String, String> = profile
+            .get_secrets("vpn")
+            .ok()
+            .and_then(|s| s.get("vpn").cloned())
+            .and_then(|v| v.get("secrets").cloned())
+            .and_then(|v| HashMap::<String, String>::try_from(v).ok())
+            .unwrap_or_default();
+        let settings = vpn_secret_settings(&cfg, &kept, user, password)?;
+        let borrowed: HashMap<&str, HashMap<&str, Value<'_>>> = settings
+            .iter()
+            .map(|(section, fields)| {
+                (
+                    section.as_str(),
+                    fields
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), Value::from(v.clone())))
+                        .collect(),
+                )
+            })
+            .collect();
+        profile.update(borrowed)?;
         Ok(())
     }
 
@@ -1262,7 +1528,7 @@ impl Manager {
     pub fn forget(&self, ssid: &str) -> Result<()> {
         let path = self
             .profile_of(ssid)?
-            .context("there is no saved profile by that name")?;
+            .ok_or(refusal::Named(refusal::Refusal::NoProfile))?;
         self.profile(&path)?.delete()?;
         // THE BLOB GOES WITH IT. The agent deletes it too on `DeleteSecrets`, and having
         // both paths is on purpose: the agent's covers whoever deleted the
@@ -1273,6 +1539,54 @@ impl Manager {
         }
         Ok(())
     }
+}
+
+/// A hardware address's six bytes, `AA:BB:CC:DD:EE:FF` → `[0xaa, …]`.
+#[must_use]
+pub fn hardware_bytes(address: &str) -> Option<Vec<u8>> {
+    let bytes: Vec<u8> = address
+        .split(':')
+        .map(|part| u8::from_str_radix(part, 16).ok())
+        .collect::<Option<_>>()?;
+    (bytes.len() == 6).then_some(bytes)
+}
+
+/// The profile `Update` takes to store a VPN's user and password: every
+/// section as it was read, `vpn.data` with the user and `password-flags=0`
+/// laid over, and `vpn.secrets` the ones kept plus the password.
+///
+/// PURE, so the merge is tested without a daemon — the part that would lose
+/// a profile's other settings, or another secret, if it were wrong.
+///
+/// # Errors
+///
+/// The profile has no `vpn` section, so it is no VPN.
+pub fn vpn_secret_settings(
+    cfg: &HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>,
+    kept: &HashMap<String, String>,
+    user: &str,
+    password: &str,
+) -> Result<HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>> {
+    let mut settings = cfg.clone();
+    let vpn = settings.get_mut("vpn").ok_or(Refusal::NotVpn)?;
+    let mut data: HashMap<String, String> = vpn
+        .get("data")
+        .and_then(|v| HashMap::<String, String>::try_from(v.clone()).ok())
+        .unwrap_or_default();
+    if !user.is_empty() {
+        data.insert("username".to_owned(), user.to_owned());
+    }
+    data.insert("password-flags".to_owned(), "0".to_owned());
+    let mut secrets = kept.clone();
+    secrets.insert("password".to_owned(), password.to_owned());
+    vpn.insert("data".to_owned(), owned_map(data)?);
+    vpn.insert("secrets".to_owned(), owned_map(secrets)?);
+    Ok(settings)
+}
+
+/// A string map as the `a{ss}` NetworkManager keeps `vpn.data` in.
+fn owned_map(map: HashMap<String, String>) -> Result<zbus::zvariant::OwnedValue> {
+    zbus::zvariant::OwnedValue::try_from(Value::from(map)).context("a map that is no D-Bus value")
 }
 
 /// Watches the radio until a scan FINISHES, then calls `on_scan` — once.
@@ -1348,7 +1662,7 @@ where
         .devices_of_kind(nm::WIFI_KIND)?
         .into_iter()
         .next()
-        .context("this machine has no Wi-Fi radio")?;
+        .ok_or(refusal::Named(refusal::Refusal::NoRadio))?;
 
     std::thread::Builder::new()
         .name("ronoctua-scan".to_owned())
@@ -1562,6 +1876,66 @@ mod tests {
         assert!(!wpa3_only(0));
     }
     use super::*;
+
+    #[test]
+    fn a_hardware_address_is_six_bytes_or_nothing() {
+        assert_eq!(
+            hardware_bytes("AA:bb:0C:00:11:22"),
+            Some(vec![0xaa, 0xbb, 0x0c, 0x00, 0x11, 0x22])
+        );
+        assert_eq!(hardware_bytes("AA:BB"), None);
+        assert_eq!(hardware_bytes("not:an:address:at:all:zz"), None);
+    }
+
+    #[test]
+    fn storing_a_vpn_password_keeps_the_profile_and_its_other_secrets() {
+        // AN `Update` REPLACES THE WHOLE PROFILE: a merge that dropped a
+        // section, a `vpn.data` key or a secret it was not told about would
+        // break the tunnel it is meant to finish.
+        let owned = |v: Value<'_>| zbus::zvariant::OwnedValue::try_from(v).unwrap();
+        let mut cfg: HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>> = HashMap::new();
+        cfg.insert(
+            "connection".into(),
+            HashMap::from([("id".to_owned(), owned(Value::from("work")))]),
+        );
+        cfg.insert(
+            "vpn".into(),
+            HashMap::from([
+                (
+                    "data".to_owned(),
+                    owned(Value::from(HashMap::from([
+                        ("remote".to_owned(), "vpn.example.org".to_owned()),
+                        ("connection-type".to_owned(), "password".to_owned()),
+                    ]))),
+                ),
+                (
+                    "service-type".to_owned(),
+                    owned(Value::from("org.freedesktop.NetworkManager.openvpn")),
+                ),
+            ]),
+        );
+        let kept = HashMap::from([("cert-pass".to_owned(), "kept".to_owned())]);
+        let out = vpn_secret_settings(&cfg, &kept, "ana", "s3cret").unwrap();
+        assert!(out.contains_key("connection"));
+        let vpn = &out["vpn"];
+        assert!(vpn.contains_key("service-type"));
+        let data = HashMap::<String, String>::try_from(vpn["data"].clone()).unwrap();
+        assert_eq!(data["remote"], "vpn.example.org");
+        assert_eq!(data["username"], "ana");
+        assert_eq!(data["password-flags"], "0");
+        let secrets = HashMap::<String, String>::try_from(vpn["secrets"].clone()).unwrap();
+        assert_eq!(secrets["password"], "s3cret");
+        assert_eq!(secrets["cert-pass"], "kept");
+        // AND NO VPN SECTION IS NO VPN.
+        cfg.remove("vpn");
+        assert!(vpn_secret_settings(&cfg, &kept, "ana", "x").is_err());
+    }
+
+    #[test]
+    fn the_cable_carries_before_the_radio_and_the_radio_before_a_phone() {
+        assert!(Medium::Wired.rank() < Medium::Radio.rank());
+        assert!(Medium::Radio.rank() < Medium::Phone.rank());
+    }
 
     #[test]
     fn the_band_comes_from_the_frequency() {

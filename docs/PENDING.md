@@ -37,23 +37,6 @@ Tudo abaixo é decisão, não esquecimento.
   e é honesto: o painel diz o que está lá dentro em vez de dizer que não sabe. Dar texto a um
   desenho é decisão própria, e ninguém a pediu.
 
-### 0.0000001. A opção "usar IA" da linha de resgate · médio
-
-A linha que aparece quando o rodapé cai (`ronoctua-shell lifeline`) oferece quatro coisas, e três
-funcionam: ver os logs, reiniciar e fechar. A quarta é **desenhada e recusa**, com frase própria — a
-pedido do dono, que pediu a opção existindo e a implementação para depois: *"deixar a implementação
-dessa funcionalidade de no pending, pois será implementada mais tarde"*.
-
-O que falta é o que ela faria: pegar o que já está na mão naquele instante — a unidade, o
-`Result=`, as últimas linhas do journal, o coredump se houver — e levar a alguém que responda. Isso
-é uma decisão de rede e de privacidade antes de ser uma de código: o que sai desta máquina, para
-onde, e com o quê. Nada disso está decidido.
-
-- **como saber que acabou**: a quarta opção deixa de recusar, e o que ela manda está escrito na tela
-  antes de sair daqui.
-- **o que NÃO fazer sem decidir**: mandar log a lugar nenhum por padrão. O invariante 13 vale aqui
-  como em qualquer outro lugar, e um backtrace carrega caminhos de arquivo.
-
 ### 0.0000001-A. Os pacotes de rua — o que ficou de fora depois de entregues · pequeno
 
 As ruas por região EXISTEM: `LEADER s g` (duas portas), `Work::Atlas` na fila, o leitor de
@@ -93,16 +76,6 @@ Tudo abaixo é decisão, não esquecimento.
   àquela frase é **editar um invariante**, e isso é do dono. Um buffer que quisesse o globo emitiria
   sete `command::svg` (um por `Ink`, um token cada, sem mudar o WIT) com a malha de 110 m, sem ruas
   e sem ponteiro, porque buffer não tem disco nem recebe valor de token.
-
-### 0.0000001-D. O país da coordenada acende pela CAIXA · pequeno
-
-O `Ink::Here` acende todo país cuja caixa envolvente contém o ponto (`ronoctua-atlas/src/globe.rs`):
-uma coordenada em Londres acende também a Holanda e a Rússia. O atlas já sabe dizer em que país um
-ponto está pelos anéis (`lookup::country_at`, o que o endereço usa); o acendimento pergunta só à
-caixa. Anterior à reforma do player, visto nas fotos do globo.
-
-- acabou quando: uma coordenada acende só o país cujos anéis a contêm, com um teste que planta um
-  ponto em Londres e confere que só o GB acende
 
 ### 0.0000001-C. As miniaturas — o que elas deliberadamente NÃO fazem · registro
 
@@ -154,40 +127,6 @@ compartilhada, qualquer conta decidindo o que um update de root roda.
 **Como saber que acabou:** `m t` num passo root mudando o que a unidade executa, sem que nenhum
 diretório de root tenha virado gravável por grupo.
 
-**Uma tarefa de execução única ainda não existe.** `Task::kind` existe, a WIT a carrega, a listagem
-desenha o glifo e a cor, e as quatro tarefas de hoje são rotineiras. A distinção nasceu antes da
-primeira de propósito: acrescentá-la no dia em que uma aparece mudaria o sentido de toda linha da
-página de uma vez.
-**Como saber que acabou:** uma tarefa que roda, escreve o que fez, e sai da lista.
-
-### 0.0000003. Tirar a coordenada de um arquivo antes de enviá-lo · pequeno
-
-A ficha mostra onde a fotografia foi tirada, porque esconder um fato de quem já tem o arquivo não
-protegia ninguém (o `docs/ARCHITECTURE.md` guarda o argumento inteiro). O que MUDOU com isso é a
-escala: cinco decimais numa linha passam despercebidos numa tela compartilhada, um globo apontando
-para a casa de alguém não passa.
-
-O que resolve isso não é esconder de novo — é um COMANDO que remove o GPS do arquivo antes de ele
-sair daqui, no menu de ações do gerenciador, ao lado de copiar e renomear. O `exiftool` que o flake
-já pina faz (`-gps:all=`), então não há programa novo; o que falta é decidir se ele escreve no
-arquivo ou numa cópia, e dizer na tela qual dos dois.
-
-- **como saber que acabou**: uma ação no `C-m` que apaga a coordenada, e a linha do lugar
-  desaparecendo da ficha do mesmo arquivo em seguida.
-- **o que NÃO fazer sem decidir**: mexer no arquivo original sem perguntar. O gesto que se desfaz
-  com `Esc` é o padrão da casa, e este não se desfaz.
-
-### 0.0000002. Um rodapé que TRAVA não é um rodapé que morre · pequeno
-
-`OnFailure=` vê processo que morre. Um que para de responder — laço apertado, GPU travada, espera
-sem prazo — continua `active` e a linha nunca nasce. O que resolveria é um `WatchdogSec=` na unidade
-e um `sd_notify` no laço de eventos, e as duas coisas são um relógio novo numa porta cujo desenho
-inteiro é não ter relógio em repouso.
-
-- **como saber que acabou**: matar o rodapé com `SIGSTOP` levanta a linha.
-- **o preço**: um `sd_notify` por intervalo, para sempre, em troca de um modo de falha que ninguém
-  relatou ainda.
-
 ## Regra de manutenção — leia antes de mexer
 
 **Ao concluir um item daqui, remova-o.** Se ele mudar *como o sistema funciona*, registre o porquê
@@ -204,45 +143,29 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ---
 
-
-
 ## Funcionalidade especificada e ausente
 
-### 0.0000028. A folga do disco — o que só uma máquina da distro prova · pequeno cada
+### 0.0000028. A folga do disco — o que nem os testes nem as VMs escritas alcançam · pequeno cada
 
-A folga (`docs/ARCHITECTURE.md`, "Quando o disco aperta") foi provada por teste com árvores
-plantadas, por sabotagem e por um ensaio lido num disco real; estas coisas não:
+A folga (`docs/ARCHITECTURE.md`, "Quando o disco aperta", e o `why.md` do módulo `disk-space`) foi
+provada por teste com árvores plantadas, por sabotagem e por um ensaio lido num disco real; as VMs
+escritas (`disk-space-vm`, `store-vm`, `cache-subvolume-vm`) rodam na bateria final. Fica de fora
+delas:
 
-- **A unidade no sandbox dela.** Que `nix-store --gc --print-roots` alcança o daemon sob
-  `ProtectSystem=strict`, `PrivateNetwork` e `SystemCallFilter=@system-service`, como a pessoa, está
-  medido (uma unidade transiente com as mesmas propriedades: 369 raízes, saída 0); falta o
-  `--gc --max-freed`, que apaga, e a unidade de verdade numa máquina da distro. Um `space-vm` (~90 s):
-  um btrfs pequeno cheio até abaixo do piso, uma árvore do cargo e lixo no store plantados; o
-  cérebro dispara a folga, o disco volta à meta, a raiz plantada e a geração ficam.
-- **O caminho inteiro até a linha.** Cérebro → unidade → relatório → `Relieved` no `Mind` →
-  `disk-relieved` no minibuffer, e `disk-still-short` quando nada mais sai. Cada pedaço tem teste;
-  a costura, não.
-- **A página da tarefa mostra cadência e janela** ("roda a cada 7 dias", "entre qualquer hora"),
-  que uma tarefa sem calendário não usa — como as duas vigias já mostram. A linha da lista diz o
-  certo ("quando falta disco"); a página precisaria esconder as duas linhas quando `why_not` diz que
-  não há calendário, e isso é o buffer do cérebro, com foto.
-
-- **A aparagem numa troca de verdade.** Que o trecho de ativação grava
-  `/run/ronoctua-generations/previous-system` antes de `/run/current-system` mudar, que a
-  `ronoctua-system-generations-at-activation` roda a cada `switch` sem derrubá-lo, e que o menu de
-  uma ESP real (systemd-boot) é lido. Provado em fixture com o `nix-env` de verdade, não numa troca.
-  Um `store-vm` (~75 s): gerações plantadas, uma especialização, um rollback e uma troca.
-- **A montagem por bind.** `STATX_ATTR_MOUNT_ROOT` foi provado em `/` e num diretório comum; um
-  bind dentro do cache precisa de root. Um subteste de VM planta um e roda as duas varreduras.
-- **A conversão do `~/.cache` num boot de verdade**: que ela vê `starting`, que o login espera por
-  ela, e que o limite de 10 minutos corta e o bilhete segura a próxima. Provado com um
-  `systemctl` substituto; o `cache-subvolume-vm` oferecido prova o resto.
-- acabou quando: o `space-vm` passa e a foto da linha "espaço aberto no disco" está numa cena
+- **O cérebro disparando a folga sozinho.** A VM a pede pela unidade; a costura inteira — cérebro →
+  unidade → relatório → o evento `disk-space-relieved` no anel `Mind.events` → a frase no
+  minibuffer, e `disk-space-still-short` quando nada mais sai — tem teste por pedaço, não junta.
+- **A marca de "quase cheio" na modeline**, que só uma cena do `.#shot` fotografa (um disco pequeno
+  enchido até abaixo da linha).
+- **A montagem por bind dentro do cache.** `STATX_ATTR_MOUNT_ROOT` foi provado em `/` e num
+  diretório comum; um bind dentro do cache precisa de root e de um subteste que o plante.
+- acabou quando: a foto da marca e a da linha "espaço aberto no disco" estão numa cena do `.#shot`,
+  e um subteste planta um bind no cache e roda as duas varreduras
 
 ### 0.0000029. O rodapé transparente — o que só a GPU do dono prova · minúsculo
 
-Nos modos ocultos (`LEADER LEADER`, `LEADER Alt LEADER`; `docs/ARCHITECTURE.md`, "Os modos
-ocultos"), o que empurra as janelas fica sobre a cor da mesa, opaca, e não depende de nada. O que
+Nos modos ocultos (um toque de `Ctrl` na raiz da leader gira normal → empurra → cobre;
+`docs/ARCHITECTURE.md`, "Os modos ocultos"), o que empurra as janelas fica sobre a cor da mesa, opaca, e não depende de nada. O que
 depende de a superfície do rodapé aceitar o modo `PreMultiplied`
 (`ronoctua_render::gpu::alpha_mode_for`) é o que fica POR CIMA das janelas: o véu (o minibuffer
 sozinho e a lista da leader nos dois modos, e tudo no `Cover`) e o pixel transparente da borda em
@@ -251,8 +174,8 @@ oferece o modo, só ela responde. Sem ele o rodapé fica opaco, registra
 `the surface cannot be see-through here` e diz `echo-footer-opaque` uma vez: as barras somem e fica
 uma faixa de chrome.
 
-- **como saber que acabou**: na máquina do dono, com `LEADER LEADER` o minibuffer sozinho (um eco)
-  e com `LEADER Alt LEADER` uma vista aberta mostram a janela através do véu, a linha de baixo da
+- **como saber que acabou**: na máquina do dono, no modo que empurra o minibuffer sozinho (um eco)
+  e no que cobre uma vista aberta mostram a janela através do véu, a linha de baixo da
   tela em repouso mostra a janela e não uma faixa de chrome, e nem a frase nem o aviso no journal
   aparecem. Se o driver recusar, a decisão do dono sobre isso fica escrita no `ARCHITECTURE.md` e o
   item sai.
@@ -286,15 +209,13 @@ avaliação; estas coisas não:
 - **Câmera MIPI atrás do libcamera** (muitos laptops novos com sensor Intel IPU): ela não é um nó
   V4L2 de captura comum e não aparece. Acaba quando uma dessas é fonte, provada numa máquina que a
   tem. Médio.
-- **Formatos multiplanares** (`VIDEO_CAPTURE_MPLANE`) são ignorados pela varredura. Pequeno.
-- **Duas cadeias de efeito na mesma câmera** (uma para a prévia, outra para a câmera virtual): hoje o
-  efeito é da FONTE. Acaba quando o `Sends::Camera` pode levar uma cadeia própria. Pequeno.
-- **Texto como fonte de cena**: declarado no plano, não entrou. Pequeno.
-- **Recuo para `wlr-screencopy`** quando o compositor não anuncia `ext-image-copy-capture-v1`. O
-  pinado anuncia; outro compositor pode não anunciar. Pequeno.
-- **A instância `.#dev` grava de verdade**: o plano dizia que ela só ENSAIARIA, como o cérebro, e
-  ela não ensaia — um laço aninhado abre a câmera e escreve em `Videos`. Acaba com a decisão do dono
-  sobre isso. Minúsculo.
+- **Câmera só multiplanar não grava.** A varredura lê os formatos dela (`VIDEO_CAPTURE_MPLANE`), e
+  tamanhos e taxas aparecem na vista ao lado da frase `camera-about-cannot-stream`; quem não a abre
+  é a entrada V4L2 do ffmpeg, que só fala plano único. Acaba com a mesma ponte do item de cima (o
+  libcamera, ou um `v4l2-relayd` declarado). Médio.
+- **O recuo para `wlr-screencopy` nunca rodou contra um compositor de verdade.** Ele existe
+  (`ronoctua-studio`, `screen.rs`) e a conversão de pixels é testada, mas o pinado anuncia o
+  `ext-image-copy-capture-v1`, então só outro compositor o exercita. Pequeno.
 
 ### 0.0000036. O Chrome quiosque — o que só o Chrome de verdade, numa máquina, prova · pequeno cada
 
@@ -324,82 +245,21 @@ Chrome 151 real, offline, e o `kiosk-vm` repete o que importa. Isto a VM não mo
 - acabou quando: cada item foi visto no hardware do dono e virou frase no `ARCHITECTURE.md`, ou
   conserto
 
-### 0.0000037. `/var/lib/ronoctua-browser` não sobrevive à impermanência · pequeno
+### 0.0000039. As colunas: o que ficou para depois · pequeno
 
-`nix/modules/persist.nix` não guarda o diretório. Com impermanência, a chave e o contador da versão
-renascem a cada boot, e a extensão ganha outro id a cada boot: é outra extensão para o Chrome (o
-comentário da chave em `nix/modules/browser-extension.nix` diz o que se perde com isso). O defeito é
-anterior ao quiosque.
+- **A coluna em duas telas de verdade**: que cada tela mostra a coluna do seu espaço, e que uma tela
+  que some estaciona a coluna. Nenhum teste a cobre (o subteste de duas saídas do `player-vm` é da
+  janela cheia, não da coluna).
 
-- acabou quando: `/var/lib/ronoctua-browser` está em `persist.nix`, e dois boots da `.#vm` dão o
-  mesmo id
+- acabou quando: o teste de duas telas da coluna existe
 
-### 0.0000038. O redimensionador de tela: o que ficou de fora · pequeno cada
+### 0.00000395. Os checks oferecidos do redimensionador, das colunas e do quiosque · pequeno
 
-- **O cursor de redimensionar sobre as bordas.** `cursor_shape.rs` pede a seta a cada `enter`, e a
-  porta precisa de um gancho para pedir outra forma sobre uma alça.
-- **Tamanhos prontos**, além das setas e do arrasto.
-- **A captura limitada à sala.** Hoje ela usa a saída inteira, cortinas inclusive.
-- **Lembrar o último tamanho.** Ligar de novo começa do maior.
+- `native-hosts-take-chromes-origin` — ESCRITO e registrado, nunca construído: ele precisa dos
+  binários `rust.transfers` e `rust.browser`, e a leva não construía o workspace no Nix. Falta
+  rodá-lo, quebrá-lo de propósito e ver a mensagem.
 
-- acabou quando: cada um existe, ou está escrito no `ARCHITECTURE.md` por que não
-
-### 0.0000039. As colunas: o que ficou para depois · pequeno cada
-
-- **O shim do `column.pid` antigo** (`right_column::LEGACY`): sai quando nenhuma coluna aberta
-  por um binário anterior ao slot por espaço puder estar de pé.
-- **Duas telas de verdade**: que cada uma mostra a coluna do seu espaço, e que uma tela que some
-  estaciona a coluna. O `player-vm` tem uma saída só.
-- **`about-column-widen` existe e ninguém a lê**: a barra não tem frase (decisão do dono). Decidir
-  se a chave fica para um manual ou sai dos dois `.ftl`.
-
-- acabou quando: o shim saiu, o teste de duas telas existe, e a chave tem destino
-
-### 0.00000395. Os checks oferecidos do redimensionador, das colunas e do quiosque · pequeno cada
-
-Foram oferecidos com a entrega e não foram escritos. O que cada um pega:
-
-- `layer-surfaces-are-the-ones-we-know` — censo de `create_layer_surface`: uma superfície
-  layer-shell fora das conhecidas (rodapé, linha de vida, coluna, captura, cortinas) derruba o
-  build. É o inv. 14 conferido por máquina.
-- `a-column-is-a-column` — só `column.rs` cria superfície no namespace `ronoctua-column`: uma coluna
-  que não passa pela base perde tamanho, linha de foco e espaço de trabalho.
-- `focus_line` único em `separators-come-from-chrome` — a linha de foco só sai de
-  `chrome::focus_line`.
-- `one-browser-boundary` — só o `ronoctua-browser` fala o enquadramento do native messaging, lê o
-  `Preferences` de um perfil e monta a linha de comando do quiosque.
-- `native-hosts-take-chromes-origin` — comportamental e sem VM: cada host de native messaging,
-  chamado com `chrome-extension://<id>/` como primeiro argumento, responde ao enquadramento.
-- `extension-version-moves` — sem VM: duas builds diferentes da extensão saem com versões
-  crescentes, e a mesma build mantém o número. Hoje só o `extension-vm` confere.
-- `browser-socket-is-private` — o socket da ponte nasce no diretório de runtime da pessoa, nunca num
-  diretório compartilhado.
-- `extension-reads-extensions-only` — a permissão `management` só lê a lista (`getAll`): nenhuma
-  chamada liga, desliga ou remove extensão.
-- `resizer-vm`, no `slow` — liga o redimensionador, arrasta, confere a sala pelo retângulo que o
-  compositor dá ao espaço, e desliga.
-
-- acabou quando: cada um existe, foi quebrado de propósito, a mensagem exata foi vista e o arquivo
-  restaurado
-
-### 0.000004. O que falta de `LEADER s l`, e o relance que não existe · médio cada
-
-A vista de idioma e região existe nas duas portas (`s l l` e `s l w`), troca de idioma ao vivo nas
-dez portas, e o relógio e a ordem da data alcançam toda data do sistema. Duas coisas do pedido do
-dono ficaram de fora, e nenhuma está começada — não há meio código no caminho de ninguém.
-
-- **A MOEDA de um lugar ainda não se escolhe na tela.** Acrescentar e remover lugares, escolher o
-  fuso desta interface e o que cada lugar mostra já são teclas (`LEADER s l`); o par de câmbio
-  (`GBP` → `BRL`) continua vindo do `assets/world.nix` e um lugar acrescentado à mão nasce sem
-  nenhum, então a linha do câmbio dele fica desligada. São três letras digitadas de cada lado, e
-  o caminho já existe — é o mesmo `Asking` do fuso e da coordenada. **Como saber que acabou:**
-  acrescentar Lisboa, ligar o câmbio dela e ver `1 EUR = …` no relance.
-
-- **Não há completação ao digitar um fuso.** A linha da porta pergunta — o minibuffer no rodapé, o
-  cabeçalho na janela — e o nome é conferido contra o ARQUIVO (`a_real_zone`), então errar diz "não
-  existe fuso com esse nome" — o que é honesto e não é ajuda. São umas quatrocentas zonas e o
-  instalador já lê a lista (`available_timezones`, do `zone1970.tab`). **Como saber que acabou:**
-  digitar `Lis` e ver `Europe/Lisbon` oferecido, nas duas portas.
+- acabou quando: ele foi quebrado de propósito, a mensagem exata foi vista e o arquivo restaurado
 
 ### 0.000005. O que a exibição de escritas ainda não alcança · pequeno cada
 
@@ -451,27 +311,6 @@ O que ESTÁ medido de ponta a ponta é o Ghostty: o `ghostty-config-includes-the
 `ghostty-size.conf` e pergunta ao binário a configuração EFETIVA, que respondeu `11 -> 22` no teto
 da faixa. É o único aplicativo estrangeiro que este repositório consegue interrogar sem sessão.
 
-- **Dois valores em pixel não escalam.** `space.rule.thickness` é 1 px, e é defensável — uma régua é
-  uma linha, e uma linha é um pixel lógico em qualquer tamanho. Já `space.files.pictureAir` são 6 px
-  e a justificativa dele está escrita **em células** ("uma célula inteira — 10,8 px no rodapé — é
-  mais do que o vão precisa"): a 200% a célula tem 21,6 px e 6 deixa de ser a fração que o
-  argumento supunha. **Como saber que acabou:** ou o ar da figura vira fração de célula, ou o
-  comentário passa a dizer por que 6 px vale em toda a faixa.
-
-### 0.0000103. Um teclado ligado com a janela aberta só aparece depois · pequeno
-
-O `LEADER s k` lê `/proc/bus/input/devices` quando a janela abre e de novo depois de cada mudança —
-que é quando os números da tela realmente mudam. Um teclado ligado ENQUANTO a janela está aberta não
-aparece até que se mexa em alguma coisa ou se feche e abra.
-
-O conserto é um socket `udev` numa thread, no molde da thread de sinais do `ronoctua-bluetooth`: o
-kernel avisa `add`/`remove` de `input`, e a chegada manda a lista inteira. Não foi feito porque três
-quilobytes lidos na abertura resolvem o caso comum, e uma thread e um socket para uma lista que
-ninguém olha enquanto muda é preço antes de necessidade.
-
-**Como saber que acabou:** com a janela aberta, parear o teclado Bluetooth e ver a linha aparecer
-sem tocar em nada. **Tamanho:** pequeno.
-
 ### 0.0000104. O que o som ainda não faz · pequeno cada
 
 O `LEADER s a` cobre o que a máquina toca, o que ela ouve, o que cada programa faz com os dois, e a
@@ -492,41 +331,14 @@ placa por trás disso. Quatro coisas ficaram de fora, e cada uma tem uma razão:
 
 - acabou quando: alguém pedir um deles, e não antes
 
-### 0.000013. As telas não se empilham na vertical · pequeno
+### 0.000014. Os DESENHOS nascem em pixel físico — falta a foto em escala 2 · pequeno
 
-A disposição (`s d d` → `m`) move a tela sob o cursor com `←`/`→` e grava só o `x`
-(`display.rs`, `Target::Place`). O `beside_said` sabe DIZER que uma tela está acima ou abaixo de
-outra (`display-above` / `display-below`, as duas usadas), então a vista descreve uma relação que
-não sabe criar. A frase da tela diz que as setas movem de um lado para o outro, o que é honesto;
-o gesto do outro eixo é que falta.
-
-`↑`/`↓` são o cursor, então precisa de um terceiro — `S-<setas>` é a família "mesma tecla, outro
-sentido" que o sistema já usa no gerenciador e está livre nesse nível. **Como saber que acabou:**
-duas telas empilhadas na foto, e o `y=` no fragmento.
-
-### 0.000014. As LETRAS ficaram nítidas; os DESENHOS não · médio
-
-As dez portas seguem a escala da tela e o texto é rasterizado nela (`hidpi.rs`), mas toda TEXTURA
-continua nascendo em pixel lógico e é esticada pelo mesmo fator: o ícone do localizador
-(`apps::pixmap_side`, tamanho lógico), a prévia do clipboard, os painéis do gerenciador (`Fit` medido
-em lógico) e o `Command::Svg` dos buffers (`buffer.rs`, lado tirado de `paint::cell()`).
-
-O `hidpi.rs` declara essa fronteira ("só duas coisas são físicas"), então é um limite escrito e não
-uma contradição — mas o entregável se chama "o shell desenha nítido", e agora que a letra ao lado
-está nítida a diferença aparece MAIS do que antes, não menos.
-
-**O SVG é o que custa nada**: ele é rasterizado por nós, com o lado que a gente escolhe. Bastaria
-multiplicar o lado pela escala e desenhar na caixa lógica. **O ícone custa uma CHAVE**: o cache do
-localizador é indexado pelo nome nu do `Icon=` (`surface.rs`, `im.missing(key)`), e
-`request_visible_icons` filtra o que já está em `self.icons` — então uma vez decodificado a 18 px ele
-nunca é pedido de novo, nem numa troca de escala nem numa troca de tamanho do texto. É a mesma classe
-que o AGENTS.md já registra para a paleta ("leva a paleta na chave do cache"), com `scale` e `size`
-faltando; o `files::Stamp::key()` já carrega o passo de decodificação e está certo por isso.
-
-**E as MINIATURAS saíram desta lista**, que é o que este item queria de cada textura: o alvo delas é
-tirado do pixel FÍSICO (`files::thumb_side` recebe a célula e a linha já multiplicadas pela escala),
-e a chave é o `Stamp`, que carrega esse passo. Sobram o ícone do localizador, a prévia do clipboard,
-os painéis do gerenciador e o `Command::Svg`.
+O ícone do localizador, os painéis do gerenciador e o `Command::Svg` dos buffers nascem agora no
+pixel FÍSICO, com a escala na chave do cache (`hidpi.rs` diz onde cada um); a prévia do clipboard é
+a imagem copiada no tamanho dela, só reduzida. O que o item pedia como prova
+ainda não existe: nenhuma foto foi tirada numa saída em `scale 2`, e o `render-png` não desenha
+vetor (nenhum buffer usa `svg`, que está atrás da trava `vector`), então o `Command::Svg` só tem
+teste de unidade.
 
 **Como saber que acabou:** uma foto do localizador numa saída em `scale 2` com o ícone e a letra ao
 lado, e o `render-png --scale 2` de um buffer com `Command::Svg`.
@@ -547,25 +359,6 @@ sub-pixel numa fonte monoespaçada, e o dono não tem monitor em escala fracion�
 diferença. **Como saber que acabou:** uma foto dos dois caminhos na mesma saída em 1,5, e o número
 de energia de borda que a nota do `hidpi.rs` já usa; se a diferença não aparecer, a decisão vira
 "fica inteiro" escrita no `hidpi.rs`, e este item sai.
-
-### 0.000016. Nove tamanhos de janela escritos como número · invariante 9
-
-Nove dos dez `configure` caem num padrão quando o compositor não dá tamanho:
-`cfg.new_size.0.map_or(900, NonZeroU32::get)` nas sete janelas de vista, `640`/`400` no hospedeiro de
-buffer e no terminal. São medidas em pixels escritas à mão, e o invariante 9 diz que valor visual
-nenhum é literal — cor, fonte, tamanho, espaçamento e codepoint saem de token.
-
-**Oito dos nove são anteriores ao `hidpi.rs`; o nono é deste entregável** — a janela das telas
-(`display_window.rs`) nasceu aqui e escreveu `900`/`600` como os outros, porque não há
-`space.window` para ela ler. A frase que estava aqui dizia que TODOS eram herdados, e não era
-verdade: uma nota que absolve o entregável de um número que ele acabou de escrever é pior que
-número nenhum, porque o próximo a ler não confere. Está aqui em vez de consertado porque
-a correção não é mecânica, é uma decisão de design sobre QUAL token. Um `space.window`
-com uma largura e uma altura para todas responde bem para as sete vistas e mal para o terminal, que
-quer um tamanho em CÉLULAS — 80×24 é a medida dele, não 640×400.
-
-- acabou quando: os nove números saem de `assets/tokens/`, e o terminal declara o dele na unidade em
-  que ele pensa
 
 ### 0.000017. O keymap do aninhado espera UMA medição para poder sumir · minúsculo
 
@@ -600,72 +393,6 @@ que se ganha.
 
 - acabou quando: o dono disser que faz falta, ou o compositor ganhar espaço persistente
 
-### 0.000017b. A palavra de uma recusa sem nome sai em inglês nas quatro vistas · pequeno
-
-`echo-display-refused = As telas recusaram: { $why } ({ $words })` — o `$why` é traduzido, o
-`$words` não. Para as cinco recusas COM NOME isso foi consertado: a frase traduzida já diz o fato
-inteiro, e a palavra inglesa ao lado dela dizia a mesma coisa duas vezes, uma no idioma errado. Mas
-o `Refusal::Other` fica, e tem de ficar: é a recusa sem nome, e a palavra é a única coisa que diz o
-que deu errado. Ela é inglesa porque o invariante 18 exige que todo `bail!` e todo `.context` sejam.
-
-**A mesma forma existe na energia, na rede e no rádio** (`echo-power-refused`,
-`echo-network-refused`, `echo-bluetooth-refused`), então não é desta feature — mas é o invariante 8
-e está aqui em vez de escondido. Numa máquina pt-BR, um DDC/CI que responde errado lê
-"As telas recusaram: não funcionou (the monitor did not answer)".
-
-A saída provável: cada erro que pode chegar à linha de mensagem vira uma variante com nome e uma
-chave, e o `Other` deixa de ter `$words` — quatro vistas de encanamento, e uma delas não é esta.
-
-- acabou quando: nenhuma frase na linha de mensagem tem uma metade num idioma que a pessoa não
-  escolheu, nas quatro vistas
-
-### 0.000019b. O tamanho do texto dos apps vive num banco, e nada o remove · invariante 6
-
-`toolkits.rs` escreve `/org/gnome/desktop/interface/text-scaling-factor` no dconf com um `Command`.
-É estado persistente da máquina, fora do flake e fora do `ronoctua-store` — e a regra desta casa é
-que **o arquivo É o broadcast**, sem banco. Desligar `ronoctua.display.enable` não desfaz a chave.
-
-O cabeçalho do módulo defende a escolha e a defesa é honesta: os dois `settings.ini` que o
-`foreign.nix` escreve são caminhos do store, read-only, então o dconf é a única camada VIVA que
-GTK e Qt leem. Não há conserto óbvio que não seja reimplementar a camada. Fica como decisão.
-
-- acabou quando: o dono decide que é aceitável e isso vira uma linha no ARCHITECTURE, ou aparece
-  um caminho declarativo que os toolkits leiam a quente
-
-### 0.000018. A disposição anda 10 px por tecla, e cada tecla recarrega o compositor · médio
-
-`NUDGE` são 10 px lógicos, e a razão está escrita: um passo que a pessoa consegue segurar. O custo
-não estava. Passar um monitor de 1920 para o outro lado do vizinho são 192 teclas, e cada uma emite
-um `Order::Keep`: uma leitura (`/sys/class/drm` mais duas conexões ao compositor), uma reescrita do
-fragmento, **a releitura que o `Keep` pede em seguida — que é uma carga inteira da configuração** —,
-e a leitura que o `watch` tira depois. Três leituras e uma recarga por repetição de tecla.
-
-O rename em si deixou de custar (este compositor não vigia arquivo nenhum); quem custa é o pedido de
-releitura, que é obrigatório justamente por isso.
-
-**Duas saídas, e a escolha é do dono.** Ou as setas ENCOSTAM a tela nas bordas dos vizinhos (o
-`beside_said` já fala nessa linguagem — "à direita de eDP-1"), o que faz do gesto dois ou três
-toques em vez de 192; ou a escrita é adiada até a tecla parar, o que precisa de um relógio que a
-vista não tem. A primeira é uma decisão de desenho e por isso está aqui em vez de feita.
-
-- acabou quando: pôr um monitor ao lado do outro custa menos de dez teclas, e segurar a seta não
-  recarrega a configuração do compositor a cada repetição
-
-### 0.000019. Uma tela apagada esconde o que está gravado nela · pequeno
-
-Numa tela que o compositor não está desenhando, as quatro linhas de "A imagem" trocam o VALOR pela
-frase que diz que ela está apagada — então uma escala, um modo, um giro e um lugar que estão no
-arquivo ficam ilegíveis, e o `a` (que devolveria um deles) é recusado na ficha inteira. Sobra o `d`,
-que joga tudo fora.
-
-A linha de sessão já foi consertada (ela lia `dark` e agora lê `wanted.off`, que é o que o
-`kdl_of` realmente curto-circuita). As outras quatro precisam de uma decisão: mostrar o VALOR
-gravado com a frase de apagada ao lado custa uma coluna, e a ficha já tem a linha "Acionada"
-dizendo que a tela está apagada.
-
-- acabou quando: numa tela de tampa fechada dá para ler o que está gravado para ela sem abrir o
-  `display.json`
-
 ### 0.00002. A luz noturna e o espelhamento de telas · médio o primeiro, nenhum o segundo
 
 A vista de telas mexe em modo, taxa, escala, rotação, posição, VRR e brilho. Duas coisas que as
@@ -689,60 +416,29 @@ na tela oferecendo espelhar seria um interruptor que não interrompe — que é 
 `switches-that-do-nothing-say-so` existe para recusar. **Como saber que acabou:** o dia em que o
 compositor fixado tiver como espelhar, a linha entra na ficha de um monitor, ao lado da rotação.
 
-### 0.00003. A profundidade de bits existe no compositor e não na vista · minúsculo
+### 0.00003. A profundidade de bits não volta lida do compositor · minúsculo
 
-A vista de telas mexe em modo, taxa, escala, rotação, posição e VRR. **Não mexe na profundidade de
-bits**, e a razão MUDOU com a troca de compositor: antes era ausência dele — o fixado não tinha o
-botão e respondia com um erro de parsing —, e agora o botão existe. `output <nome> render_bit_depth
-6|8|10` está no `scroll-output.5`, e a partir de 10 o compositor implicitamente o eleva quando o HDR
-está ligado.
+A linha está na ficha de um monitor (6, 8, 10 ou automática), escrita no fragmento como as outras
+(`render_bit_depth`) e relida pelo `Compositor::reread`. O que o item pedia e não existe é a leitura
+de volta: o IPC do Scroll fixado não informa a profundidade (o `ipc-json.c` não tem o campo), então
+a linha diz o que está ARQUIVADO e diz que o compositor não confirma — um monitor que não aceita 10
+é desenhado em outra profundidade (`scroll-output.5`) sem que a vista saiba.
 
-Então isto deixou de ser espera e virou trabalho: um `Ask` novo, um feito declarado em
-`assets/compositor-deeds.nix`, um campo em `Wanted` e uma linha no fragmento, mais a leitura de
-volta para confirmar (porque `Ok` não é "aconteceu"). **Como saber que acabou:** a linha na ficha de
-um monitor, ao lado do VRR, com o valor lido de volta batendo com o pedido.
+**Como saber que acabou:** o dia em que o compositor fixado informar a profundidade de uma saída, a
+linha mostra o valor lido ao lado do pedido.
 
-
-### 0.00004. A rede não sabe nomes, e três coisas do plano ficaram medidas · pequeno cada
+### 0.00004. A rede: o que ainda falta · pequeno cada
 
 A vista da rede está inteira: uma `View` com duas portas (`s n n` e `s n w`), dez seções com
 prateleiras de altura fixa, anel de `TAB`, dica GERADA da `OF_THE_VIEW`, cinco marcas na modeline
 (a da Tailscale desenhada por nós), VPN com prévia antes de importar, Tailscale, Tor, portas,
-monitor, quem está na rede, redes lembradas e hotspot. O que ficou de fora tem motivo, e cada um é
-pequeno:
+monitor, quem está na rede (com nome, IPv6 e a latência do roteador sob pedido), redes lembradas,
+hotspot com a senha nas duas portas, e VPN que guarda a senha. O que ficou de fora tem motivo, e
+cada um é pequeno:
 
-- **Nome de máquina na LAN.** As linhas de "esta rede" mostram endereço, fabricante (OUI do nmap) e
-  interface — não o NOME. Quem sabe o nome de um vizinho é o `resolve1.ResolveAddress`, uma chamada
-  de barramento por host em thread; a fronteira com o `systemd-resolved` ainda não existe neste
-  projeto (o `ronoctua-network` só fala NetworkManager). É uma coluna a mais, não uma seção.
-- **Latência na varredura.** O `ronoctua_lan::ping` mede uma máquina de cada vez e mede certo; a
-  VARREDURA não traz número, e isso é uma decisão medida: o primeiro pacote para uma máquina cujo
-  endereço de hardware o kernel não conhece espera o ARP — três segundos, medidos na rede do dono —
-  e o número apareceria como um enlace péssimo para uma máquina na sala ao lado. A linha do gateway
-  é onde um número honesto caberia, sob demanda.
-- **IPv6 na vizinhança.** `/proc/net/arp` é IPv4 e o kernel não tem arquivo equivalente para IPv6 —
-  os vizinhos v6 vivem no netlink, que é outra conversa. O título diz qual é.
 - **Hotspot na TELA do dono.** Está implementado e provado por teste unitário (a linha oferece o
   outro estado, diz o que custa e recusa com o rádio desligado), mas nunca foi acionado: ligá-lo
   derruba o Wi-Fi da máquina de quem está lendo isto. Falta uma VM com `mac80211_hwsim`.
-- **A senha do hotspot só aparece na porta que o ligou.** A linha lê o `View::sharing` da própria
-  vista, que só o `Hotspot(true)` daquela porta preenche: ligado no rodapé, a janela diz "hotspot
-  ligado" sem a senha, e o contrário também; reabrir a vista do rodapé também a perde. O conserto
-  que a revisão propôs — ler a senha do perfil ativo no NetworkManager (`GetSecrets`) — pede uma
-  decisão: para um perfil de sistema essa chamada pode exigir autorização, e nada que o sistema faz
-  sozinho pode perguntar. A outra saída é um arquivo `0600` no diretório de runtime, escrito por
-  quem liga e apagado quando o hotspot cai (o `bluetooth::standing` é o precedente) — uma senha a
-  mais em disco, ainda que em tmpfs. Pequeno, depois da escolha.
-- **Perfil de VPN com senha.** Importar um `.ovpn` que pede senha traz o perfil; a senha em si ainda
-  é digitada no `nmcli` ou no primeiro `RET` do NetworkManager. O `store_vpn_secret` do plano
-  (`GetSecrets` + `Update` com `password-flags=0`) não foi escrito.
-- **Um check oferecido e não escrito.** Dos três que a revisão do entregável propôs, dois foram
-  escritos depois — `the-footer-draws-what-the-keyboard-drives` (existe, e a ordem que ele prende
-  deixou de ser mantida à mão: toda porta pergunta ao `view()`) e o das famílias do rádio, que virou
-  o `every_service_this_table_names_has_a_sentence` mais as três enumerações do BlueZ que passaram a
-  ter chave. Falta o terceiro: um check que prenda o `Errand` de cada vista sendo tratado nas DUAS
-  portas sem `_ =>`. Hoje o compilador já pega o que falta numa porta (`match` sem `_`), mas não pega
-  os dois lados tratando o MESMO `Errand` de jeitos diferentes.
 - **Um emoji num rótulo come uma célula do ar.** `layout::width` conta CLUSTERES e o avanço de um
   emoji é 1,245 em contra os 0,600 da célula — quase duas. A coluna do valor é calculada com essa
   régua, então um SSID com um emoji desenha uma célula mais larga do que foi medido. As duas células
@@ -761,28 +457,24 @@ pequeno:
 
 - acabou quando: cada item acima ou existe, ou está escrito aqui com o motivo de não existir
 
-### 0.00006. O Bluetooth não faz três coisas que o BlueZ oferece · média cada
+### 0.00006. O Bluetooth deixa duas coisas do BlueZ de fora, de propósito · registro
 
 O detalhe do dispositivo mostra e deixa mudar tudo o que o `Device1` tem — inclusive o `WakeAllowed`
-e o perfil de áudio (este por PipeWire, ver `ronoctua_bluetooth::audio`). Faltam três interfaces
-inteiras, e cada uma é uma decisão e não um esquecimento:
+e o perfil de áudio (este por PipeWire, ver `ronoctua_bluetooth::audio`), e a internet de um
+celular (PAN, `org.bluez.Network1`). Faltam duas interfaces, e cada uma é uma decisão e não um
+esquecimento:
 
 - **`org.bluez.MediaPlayer1`/`MediaControl1`** (tocar, pausar, faixa de um celular ou caixa). Fora
   **de propósito**: o PipeWire já publica isso como MPRIS, o `playerctl` fala MPRIS, e uma segunda
   implementação aqui seria uma segunda resposta para "o que está tocando" — a mesma razão pela qual
   o crate não reimplementa layout de janela.
-- **`org.bluez.Network1`** (PAN: usar a internet do celular). É a única que vale a pena e não foi
-  feita: precisa de uma linha na vista, de um `Ask` e de uma decisão sobre o que o NetworkManager faz
-  com a interface `bnep0` que aparece — ou seja, atravessa a fronteira do `ronoctua-network`, e as
-  duas vistas teriam de concordar sobre quem manda nela.
 - **`ManufacturerData`, `ServiceData`, `AdvertisingFlags`, `Sets`, `CablePairing`.** Bytes crus de
   anúncio; o `Sets` (LE Audio) e o `CablePairing` estão em toda máquina moderna. São FATOS sem frase
   possível hoje: mostrar `0x004C: 0215...` é encher a tela com o que ninguém lê.
 
-- acabou quando: a linha do PAN existe e as duas vistas concordam sobre quem manda no `bnep0`, ou
-  este parágrafo diz por que não
+- acabou quando: é registro; sai quando uma das duas deixar de ser decisão
 
-### 0.0001. O realce de sintaxe deixa quatro coisas de fora, de propósito · pequeno cada
+### 0.0001. O realce de sintaxe deixa duas coisas de fora, de propósito · pequeno cada
 
 Não são esquecimentos; cada uma tem um motivo estrutural escrito no `ARCHITECTURE`, e estão aqui para
 que ninguém as descubra achando que achou um defeito.
@@ -792,30 +484,9 @@ que ninguém as descubra achando que achou um defeito.
   `Copy` e poria uma alocação no orçamento do frame.
 - **Título setext** do markdown (o sublinhado de `===`). Precisaria do conteúdo da linha ANTERIOR, e
   o desenho inteiro é "uma linha mais oito bytes".
-- **Linguagem dentro de `<script>` e `<style>`** no HTML. O `State::inner` já tem a vaga; o que falta
-  é o markup delegar, e isso não custa mudança de tipo nenhuma.
-- **A segunda leva de linguagens** — `erlang`, `elixir`, `lisp`, `ocaml`, `crystal`, `julia`,
-  `fortran`, `verilog`, `vhdl`, `tcl`, `groovy`, `d`, `vala`, `nim`, `qml`, `gherkin`, `rpm-spec`,
-  `gettext` e o resto. **É só dado**: um attrset cada em `assets/syntax.nix`, zero Rust, zero papel
-  novo, zero cor nova. É esse o ponto da forma.
 
 - acabou quando: o item que se resolveu sai desta lista; nenhum deles muda como o sistema funciona,
   então nenhum precisa de linha no `AGENTS.md`
-
-### 0.0002. Nenhum buffer wasm usa o realce ainda · pequeno
-
-O caminho está inteiro e provado por teste: `ronoctua-design` tem a feature `syntax`, o
-`Palette::syntax` está implementado dos DOIS lados, o `Screen::code` faz a aritmética byte→célula uma
-vez, e o `nix/buffers.nix` já copia o crate e passa a tabela. O que não existe é um buffer que peça a
-feature — nenhum dos oito mostra conteúdo de arquivo.
-
-Medido, para quando alguém for: com o crate na árvore e a feature DESLIGADA, o `format.wasm` cresceu
-366 bytes; a tabela são 55 KB de fonte, e é isso que um buffer paga ao ligá-la.
-
-- acabou quando: um buffer liga `features = [ "syntax" ]` e desenha uma linha colorida numa foto do
-  `nix run .#png`
-
-
 
 ### 0.0003. A linha do tempo do miniplayer não está numa foto · pequeno, e tem preço
 
@@ -838,10 +509,11 @@ saída `bin`; a `lib` e a `data` já vinham pelo mpv), a mídia 9,9 MiB e o daem
 ~180 MiB são a tabela de decodificadores (`nix/player-tools.nix`: o zxtune e o Qt5 que ele puxa,
 ~130 MiB; a soundfont, 31 MiB; vgmstream, uade…), mais uma segunda avaliação do nixpkgs para o único
 decodificador não livre. As cenas de `film.mp4` e `subbed.mkv` não usam a tabela: o mpv decodifica os
-dois sozinho. Ela está lá para que uma cena abra qualquer arquivo do `MEDIA`.
+dois sozinho. Por isso (decisão delegada C4, 2026-10-04) a tabela saiu do palco padrão: só o
+`nix run .#shot -- --player-tools <cena>` a constrói, e só lá `start_player(tools=True)` a entrega ao
+daemon.
 
-- acabou quando: uma cena do `.#shot` arrasta o cursor da linha do tempo e mede que ele andou; e o
-  dono decide se a tabela de decodificadores fica no palco ou sai dele
+- acabou quando: uma cena do `.#shot` arrasta o cursor da linha do tempo e mede que ele andou
 
 ### 0.00031. O que a câmera das portas e o palco do player ainda não provaram · pequeno cada
 
@@ -877,33 +549,6 @@ VM numa máquina com menos de 25 GB livres — então não foram feitas:
 
 - acabou quando: cada item acima sai daqui com a foto que o prova
 
-### 0.00032. A home do player com uma fila grande, e o nome de uma língua · pequeno cada
-
-- **A fila não tem teto na home.** Ela vem antes de Ouvir e assistir e de Recursos variados, então
-  com duzentos itens esses ficam duzentas linhas abaixo, e o rodapé mostra umas quinze. A fila já é
-  árvore (`player_queue`) e uma playlist de duzentos dobra numa linha, mas duzentos arquivos soltos
-  no nível de cima continuam duzentas linhas: falta a home mostrar a atual e algumas em volta, com
-  uma linha "Fila · N" que abre a página inteira.
-- **Uma faixa diz o código da língua** (`eng`, `por`), cru, como o mpv o dá; duas iguais já ganham
-  o codec e o número (`player::track_name`). Na página das legendas, uma faixa diz também o código
-  que o arquivo declara (`pt-BR · Portuguese`, `player_subtitles::name`). O nome da língua sai da
-  tabela gerada de línguas que as buscas trazem.
-
-- acabou quando: a home mostra uma janela da fila e a faixa diz o nome da língua, nos dois idiomas
-
-### 0.00033. O XML da prévia ainda não passa pela guarda de profundidade · pequeno
-
-As listas, as legendas e as tags do Matroska leem XML pelo `ronoctua_xml::parse`, que mede o
-aninhamento antes de o `roxmltree` recursar. O `ronoctua-inspect` ainda chama o `roxmltree` direto
-em oito lugares (`document.rs`: o texto corrido dos documentos, o livro, as planilhas ODF e
-OOXML; `mesh/`: AMF e DAE), e um
-arquivo feito para isso derruba o rodapé na prévia. Não entrou no mesmo passo porque o teto não é
-o mesmo: uma cena DAE aninha nós de verdade (um esqueleto passa de vinte níveis), e 48 é o teto
-medido para listas e legendas.
-
-- acabou quando: todo `Document::parse` do workspace passa pela guarda, com o teto de cada formato
-  medido, e um check (`one-xml-reader`, no molde do `one-zip-reader`) recusa um novo leitor direto
-
 ### 0.00034. Os sons ambientes sem gravações, e o par da modeline sem foto · pequeno cada
 
 - **As gravações não foram publicadas.** Os laços saem de três originais aprovados de ouvido, que
@@ -935,10 +580,6 @@ medido para listas e legendas.
   aritmética dividida com a janela (`player_rows::deck_at`, `Deck::press`), provada pelos testes da
   janela. Falta o `.#shot`: um conjunto tocando, o deck no "Agora", uma banda arrastada (o fantasma),
   a frase sob o ponteiro na linha da mensagem e o `Esc` que cancela.
-- **A régua fica rala num trilho curto.** Na coluna média, com os nomes, o trilho tem ~17 células e
-  só o `0:00` cabe inteiro antes do fim (`ticks` só escreve o rótulo que termina dentro do trilho).
-  Deslocar o último rótulo para terminar no fim do trilho daria uma segunda marca; é decisão de
-  desenho, não feita.
 - **O roteamento por tela no rodapé não foi visto na tela.** Cada superfície do rodapé compõe as
   imagens roteadas ao conector dela (`player_media::placed_on_screen`), provado por teste; falta o
   `.#shot` com duas saídas: um filme só numa, a capa só na outra, e o esquema da página Disposição
@@ -948,8 +589,6 @@ medido para listas e legendas.
   `set_fullscreen(Some(output))` e que cada janela mostra só o que vai à tela dela.
 - **Os glifos das linhas são pequenos** ao lado do texto: a forma na Disposição, o `◀`/`▶` e os tipos
   de saída de som são desenhados no tamanho do texto, como toda marca de linha da vista.
-- **Uma faixa desligada não tem comprimento dito** (o daemon só manda `lane_states` das ligadas), e
-  a banda dela, cinza, corre até o fim do trilho como uma ao vivo.
 - **O que o rodapé ganhou na revisão não foi visto na tela**: um tamanho só por imagem entre as
   telas que a mostram, o arrasto do deck que acaba com a vista, a garra das saídas refeita depois de
   um player reiniciado, a pasta ao lado do filme lida numa thread e a Disposição medida na caixa do
@@ -961,14 +600,9 @@ medido para listas e legendas.
   - no canto, as imagens pequenas ficam SOBRE a primeira, com um anel do chão (invariante 15).
   (Tomadas em 2026-09-29: `C-↑`/`C-↓` movem uma entrada ou um grupo; a página da faixa ganhou nome,
   fim e imagem; uma nota nunca perde linha; o clique numa banda escolhe e o segundo abre.)
-- **Um clique abaixo da última linha da lista do player escolhe a última linha** (`row_at` devolve
-  um índice além das linhas, e `Row::owner` o prende à última): visto fotografando a página que
-  escolhe uma capa. Antigo, não desta mudança.
 
 - acabou quando: a foto do rodapé existe, a VM de duas saídas mostra cada tela com as suas imagens,
   e cada decisão acima foi tomada
-
-
 
 ### 0.00036. Os metadados do player — o que ainda não foi visto ou feito · pequeno cada
 
@@ -985,38 +619,29 @@ medido para listas e legendas.
   lane E8; falta a volta inteira: a porta pedindo a mesa quando a geração anda, a capa sugerida
   buscada ao abrir a página, e o teste de uma chave dizendo "aceitou" — num `player-vm` com o palco
   do `lookups-vm`, ou no `.#dev` com uma chave de verdade. E no rodapé, que a câmera não alcança.
-- **O que ainda é só leitura.** O dono escolheu o genérico: toda linha de Todas as etiquetas que o
-  formato grava age, e "Acrescentar uma etiqueta" pergunta nome e valor. Ficaram sem linha que os
-  mude a língua, o título e as marcas de um fluxo (`Edit::Stream`, que o escritor do Matroska já
-  faz) e o título de um capítulo; e as etiquetas de uma faixa do Matroska dizem que não são gravadas
-  (`NotGlobal`: o `--tags track:<n>:` do `mkvpropedit` substitui as de uma faixa, e a faixa teria
-  de ser achada pelo `TrackUID` no `mkvmerge -J`).
-- **Tirar o último campo de um FLAC é recusado.** O lofty 0.25.4 não grava um comentário Vorbis
-  VAZIO num FLAC: o rascunho relido não confere (`native::verify`) e é jogado fora, o arquivo como
-  estava, e a tela diz que a gravação falhou. Vale para `d` no único campo ou na única etiqueta.
 - **Etiquetas pelo próprio nome não foram gravadas por um daemon de verdade.** O escritor foi provado
   em arquivos feitos no teste (FLAC, MP3, M4A, e um Ogg com o ffmpeg de verdade) e com programas de
   mentira para o Matroska e o remux; a página, fotografada com folhas dadas (`--sheet`). Falta a volta
   inteira — gravar, a folha nova chegando pela geração — com um player de verdade.
-- **Gravar Matroska com o `mkvtoolnix` de verdade.** O escritor foi testado com programas de
-  mentira (`/bin/sh`), nunca com os três programas. Um subteste no `player-vm` com o perfil de
-  mídia.
-- **Etiquetas de um MP4 acima de 512 MiB.** O lofty reescreve com o arquivo inteiro na memória, e a
-  folha diz que é grande demais — quase todo filme em MP4. Um escritor que não segure o arquivo
-  (reescrever só o `moov`, ou o remux do ffmpeg onde ele guarda tudo).
+- **Gravar Matroska com o `mkvtoolnix` de verdade.** O escritor tem testes com os três programas de
+  verdade (a etiqueta de uma faixa pelo `TrackUID`, o título de um capítulo), mas eles só rodam onde
+  `RONOCTUA_MKVEXTRACT`, `RONOCTUA_MKVMERGE` e `RONOCTUA_MKVPROPEDIT` os nomeiam — a derivação
+  `tests` do Nix não os passa, e lá os testes se dizem pulados. Falta passá-los, e um subteste no
+  `player-vm` com o perfil de mídia.
 - **Os formatos de resposta** do MusicBrainz, Cover Art Archive, Wikidata, TMDB, OpenSubtitles e
   SubDL vêm da documentação, com fixtures escritas à mão; só o do LRCLIB foi conferido contra uma
-  resposta de verdade. E o moviehash contra os vetores publicados (`breakdance.avi`, 12,9 MB) tem o
-  teste, `#[ignore]`, sem o download pinado que o alimenta.
+  resposta de verdade. O moviehash contra o `dummy.bin` publicado (4 GiB) só roda à mão; o
+  `breakdance.avi` roda no `moviehash-published-vectors`.
 - **Os códigos de língua do OpenSubtitles e do SubDL** em `assets/tongues.nix` foram escritos das
   listas dos serviços e só conferidos na forma: as duas listas pedem a chave de uma conta.
 - **O Podnapisi** volta quando o domínio responder (`podnapisi::AWAKE`).
-- **`lookups-vm` e `directories-vm`**: os palcos dos lanes E8 e E9 (uma CA descartável,
-  `networking.hosts` para um falso HTTPS de cada host) como testes de VM.
+- **`lookups-vm` e `directories-vm` foram escritos e ainda não rodaram** (uma CA descartável,
+  `networking.hosts` para um falso HTTPS de cada host). O `lookups-vm` não confere o `0600` de uma
+  chave: quem a grava é a porta, com o que a pessoa digita, e o teste a grava como a porta gravaria
+  (`lookup-keys-are-private` prende como o arquivo nasce). O `directories-vm` não abre um filme
+  inteiro do archive deixado (só a recusa sem a permissão) nem a TV além da recusa.
 - **`ronoctua_lookup::keys::write_private_file`** mora no crate das buscas e guarda também as máquinas
   pareadas: é do `ronoctua-store`.
-- **A cidade de um canal de TV** é dita e não desenhada: o atlas não acha um lugar pelo nome dentro
-  de um país (`ronoctua_atlas::place_named`, e usá-lo em `AtlasMap::place`).
 - **Os diretórios (P9) não foram vistos com um daemon de verdade nem no rodapé.** As páginas (Rádios
   e TVs do mundo com o globo, a lista de um país, gêneros, línguas, uma busca, os temas com as três
   fontes, favoritos, tocados há pouco) foram fotografadas na janela e na coluna com mesas dadas e o
@@ -1029,8 +654,6 @@ medido para listas e legendas.
 - **As páginas de estações e a recusa na hora não foram vistas contra o radio-browser**: o `offset`
   de uma página seguinte e a recusa que volta à página (`Told::Listing`) são testados com falsos e
   fotografados com `--desk`/`--refused`.
-- **Uma página com o diretório não permitido mostra a lista que a mesa ainda guarda**, de antes de a
-  permissão ser tirada: a linha que pergunta vem em cima, mas a lista velha fica.
 
 - acabou quando: a foto do rodapé existe, o rascunho e uma etiqueta foram vistos ida e volta, os
   diretórios foram vistos contra um daemon, cada formato de serviço tem uma resposta de verdade como
@@ -1043,22 +666,9 @@ medido para listas e legendas.
   e o subteste que a vê no quadro, com as faixas de texto subindo para a banda de cima.
 - **A trilha de dentro de um filme que toca pela rede** (seguindo outra máquina) só aparece sozinha:
   a chave de acesso à mídia vai num cabeçalho, e o ffmpeg a levaria no `argv`.
-- **Um SAMI com várias línguas** mostra a primeira classe que diz algo; escolher outra pede um
-  parâmetro que a faixa não tem.
 
 - acabou quando: a legenda de imagem tem subteste com pixel, e as outras duas existem ou estão no
   `ARCHITECTURE.md` como decisão
-
-### 0.00038. Faixas: o que ficou sem fazer · pequeno cada
-
-- **Um conjunto com todas as faixas desligadas** não toca nada e nunca acaba: a thread do relógio
-  anda enquanto ele "toca".
-- **A porta não pede o contorno.** O `watch` manda o contorno da fila antes do estado que vai com
-  ele, e a porta guarda o último; uma porta cujo contorno ficasse mais velho que o `revision` do
-  estado (uma linha perdida) não pede o outro (`Ask::Queue`).
-
-- acabou quando: um conjunto sem faixa ligada termina (com teste), e a porta pede o contorno quando
-  a revisão do estado passa a dela
 
 ### 0.0. As TREZE vistas do rodapé não têm estado · pequeno, e é uma decisão
 
@@ -1075,63 +685,20 @@ que isso cria (`t t` sem estado, `t w` com) é menor que a de inventar um segund
 - acabou quando: uma vista do rodapé aparece na modeline com o mesmo vocabulário de um buffer, sem
   um segundo mecanismo de relato
 
-### 0.001. O minibuffer não mostra os submenus montados em runtime · pequeno
-
-`SPC ,` e `SPC w s` são listados a partir do que a janela em foco publicou, e por isso não estão na
-`ronoctua_keymap::Tree` — as ligações dela são `&'static str`. A consequência é que a sequência
-pendente que o minibuffer desenha vem só do `Leader`, e ela **para no nível anterior**: com a lista
-de estados na tela, a linha diz `LEADER w-` e não `LEADER w s-`.
-
-Isto **não é novo**: o `SPC ,` (antes `SPC m`) faz o mesmo desde que existe, e o `buffer_pending` dele nunca foi
-alimentado no prefixo. O estado só acrescentou um segundo caso, e por isso vira item — dois é
-padrão, um era acidente.
-
-O conserto é um só e serve para ambos: o prefixo do minibuffer passa a somar o que os submenus de
-runtime têm pendente, em vez de ler só a sequência do `Leader`.
-
-- acabou quando: com a lista de estados aberta, o minibuffer diz `LEADER w s-`, e o `SPC ,` diz
-  `LEADER ,-`
-
-### 0.01. Nenhum buffer usa o `tone` explícito · pequeno
-
-O descritor deixa um estado escolher o papel da cor (`accent`, `success`, `warning`, `error`) em vez
-de aceitar a regra padrão, e os seis buffers usam `standard`. O caminho está provado no runtime (um
-tom desconhecido cai em `standard` em vez de sumir) e no teste de forma, mas **não** ponta a ponta
-numa tela.
-
-O primeiro candidato real é a pergunta de permissão do gerenciador de arquivos, que é `warning` de
-verdade — e ela depende do item acima.
-
-- acabou quando: um estado sai numa cor que não é o verde de todos os outros, e há check disso
-
-
 ### 0.015. Os passos que o brain desenha e os que a unidade roda não têm quem os compare · pequeno
 
-A tabela é uma só (`assets/updates.nix` gera, e o brain a LÊ por `build.rs`), então os ids não têm
-mais como divergir — foi assim que o defeito anterior morreu. O que continua sem prova é a outra
+A tabela é uma só (o `steps.nix` do módulo `system-update` gera, e o brain a LÊ pelo
+`tables.nix`), então os ids não têm mais como divergir — foi assim que o defeito anterior morreu. O que continua sem prova é a outra
 ponta: a **unidade** escreve o relatório com esses ids, e nada confere que ela escreve os mesmos.
 Hoje é o mesmo gerador que produz os dois, o que torna a divergência improvável e não impossível.
 
 - acabou quando: um check lê os ids da tabela e os ids que o roteiro gerado escreve no relatório, e
   falha se um lado tiver um que o outro não tem
 
-### 0.016. A faixa de notificação não é descontada do teto da expansão · pequeno
-
-`expansion_ceiling` recebe quanto é fixo, e o rodapé passa `FOOTER_LINES + brain_line()`. A faixa de
-notificação — até três linhas — continua de fora, então com ela na tela a região passa do percentual
-que o token promete. É anterior à linha do cérebro e não foi criado por ela; o que a linha fez foi
-tornar o número um parâmetro, que é o que permite consertar isto numa linha.
-
-O que falta decidir é se ela DEVE entrar: a faixa é transitória de um jeito que as outras linhas não
-são, e descontá-la faria a lista encolher e crescer sozinha enquanto uma notificação passa.
-
-- decidir: se a faixa entra no termo fixo; se entrar, é um argumento a mais na chamada
-
 ### 0.03. Glifo por nome só vale para o que é DECLARADO · pequeno, e é uma decisão
 
 **Isto está em uso**: a entrada `screenshot` nomeia `md-monitor_screenshot`, porque nada no design
 system diz "captura de tela" — o token `camera` é uma câmera de vídeo. O que falta é a outra porta.
-
 
 `assets/notifications.nix` aceita um token (`camera`) ou um nome Nerd Fonts qualquer
 (`md-camera_iris`), e resolve os dois no BUILD. Isso cobre tudo o que existe hoje: a distro declara,
@@ -1162,35 +729,6 @@ vídeo que não baixa, não como erro do gerador.
   pagar isso por uma sonda que hoje não é usada.
 - acabou quando: ou o aviso some, ou está escrito aqui que ele parou de bastar
 
-### 0.15. Apagar num pendrive não tem lixeira · pequeno, e é uma decisão adiada
-
-`trash.rs` recusa atravessar sistema de arquivos com `EXDEV` em vez de copiar, e a recusa está
-certa: mover para a lixeira promete ser instantâneo, e copiar quarenta gigas atrás desse gesto seria
-a promessa quebrada. O que faltava era a pessoa saber POR QUE dois caminhos estavam em sistemas
-diferentes — e a barra lateral resolve isso, porque agora o pendrive está na tela com linha própria.
-
-**A barra melhorou a recusa em vez de criar a necessidade de substituí-la**, e é por isso que isto
-fica aqui em vez de ter entrado junto. O que falta é o `$topdir/.Trash-$uid` da especificação, e ele
-tem um modo de falhar que é próprio de removível: apagar escreve o arquivo de volta NO pendrive, e
-quem desconecta em seguida acha que liberou espaço. Some a isso que num vfat não há dono, então
-`.Trash-$uid` e o `$topdir/.Trash` da especificação respondem diferente a "quem pode ler isto".
-
-Custo real: um teste honesto precisa de um SEGUNDO sistema de arquivos, o que quer dizer VM — e as
-quatro provas que `trash.rs` tem hoje rodam contra uma árvore temporária, sem barramento e sem
-máquina.
-
-- acabou quando: apagar um arquivo num pendrive o põe em `$topdir/.Trash-$uid`, o gerenciador o
-  lista de volta, e desmontar não deixa a lixeira num volume que não está mais lá
-
-### 0.2. Matar a unidade no meio de uma cópia deixa o pedaço · pequeno
-
-Desistir pelo painel desenrola e remove o que foi escrito; `systemctl --user stop` não — o processo
-não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo num crate que é
-`forbid(unsafe_code)`. `TimeoutStopSec=5` limita o atraso, não a sujeira.
-
-- acabou quando: parar a unidade com uma cópia em andamento não deixa arquivo pela metade no destino
-
-
 ### 3. Desempenho medido só em host não-NixOS · pequeno
 
 `nix run .#bench` mede num compositor **aninhado** dentro de outro, com o contorno de driver de
@@ -1198,84 +736,270 @@ não tem tratador de `SIGTERM`, e escrever um exigiria `unsafe` ou um crate novo
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
-### 4. O `--execute` chega ao passo 5 de 10 · pequeno
+### 0.0000029b. O alívio do disco confia na conta do Nix · pequeno
 
-**Três defeitos do instalador saíram daqui, e nenhum deles o modo ensaio podia ver** — ele imprime os
-comandos em vez de rodá-los. Os três estão corrigidos:
+O módulo `disk-space` faz uma coleta só, `nix-store --gc --max-freed`, e não mede o disco de novo
+depois. Quando o Nix conta como liberado o que o disco não ganhou de volta (um caminho morto numa
+camada só de leitura, medido no `disk-space-vm`: 263,8 MiB "liberados" e nada no `df`), a coleta para
+antes de chegar ao lixo de verdade.
 
-- **O diretório de trabalho ERA o store.** `cp -rT` não segue symlink dado na linha de comando, e
-  `/etc/nixos` é link para o store: escrever o `host.nix` dava `Read-only file system`. É `-rTL`.
-- **O `disko` não podia funcionar.** O `host.nix` gerado diz `facterReport = ./facter.json`, e o
-  `disko --flake #noctua` AVALIA esse arquivo — que só era criado três passos depois, dentro do
-  `/mnt` que o disko ainda não montou. Toda instalação morreria no passo quatro. O `nixos-facter`
-  roda antes agora, no diretório de trabalho.
-- **O nó instalador não bootava.** Raiz em disco de rascunho depende do `autoFormat`, que o initrd do
-  systemd não implementa (`Can't find ext4 filesystem`, pânico aos 2,7 s; sem o initrd do systemd,
-  `Attempted to kill init!` aos 1,2 s). Raiz em **tmpfs** não tem esse passo, e deixa o `/dev/vda`
-  inteiro para o disko.
+- acabou quando: o alívio mede o espaço livre depois de cada coleta e repete até a meta ou até a
+  coleta não liberar mais nada, com um teste que planta um caminho cuja conta engana
 
-**O teste existe em `tests/installer-vm.nix` e NÃO está ligado ao `tests/checks.nix`** — check
-vermelho que todo mundo aprende a ignorar é pior do que lacuna assumida.
+### 4. O `--execute` chega ao passo 10 de 12 · médio
 
-**Onde ele para: custo, não defeito.** O passo 5 (`disko --mode destroy,format,mount --flake`)
-avalia a configuração NixOS inteira DENTRO da VM, e os 900 s de timeout padrão do driver não bastam —
-sai com 124 sem terminar. A próxima tentativa é: `timeout` maior no `execute`, mais memória no nó, e
-o `diskoScript` no `system.extraDependencies` para a avaliação ter menos a fazer.
+`tests/installer-vm.nix` instala de verdade num disco virtual e **não é check** (decisão do dono,
+2026-10-05): check vermelho que todo mundo aprende a ignorar é pior do que lacuna assumida. A leva de
+2026-09-30 o levou do passo 5 ao 10 e consertou três defeitos que o modo ensaio não via: o `disko`
+pedia confirmação de novo num stdin que ninguém responde (agora `--yes-wipe-all-disks`), a cópia do
+flake falhava porque o `disko` não cria `/mnt/etc` (um passo `inst-step-target` antes dela), e o
+`executor::run` lia o stdout até o fim antes do stderr — o `nixos-install` enchia o cano do stderr e
+a instalação ficava parada até o prazo global (agora um cano só, lido em bytes).
 
-- acabou quando: `--execute` roda até o fim contra um disco virtual, e o sistema que ele instala boota
+O que falta é do TESTE, não do instalador: sem rede, o `nixos-install` dentro da VM quer construir
+o sistema-alvo do zero (4684 derivações, do `hex0-seed` ao workspace), porque as respostas do teste
+(tema, língua, teclado, o `facter.json` gerado lá dentro) o fazem diferente do alvo que o nó traz no
+store. O caminho é construir o `target` com as MESMAS respostas e um `facter.json` fixo, e pôr as
+ferramentas de build no `extraDependencies`; custa ~1 h por tentativa e um fecho bem maior.
 
-### 6. A porta-janela do clipboard · decidir antes, e a decisão MUDOU
+- acabou quando: `--execute` roda até o fim contra um disco virtual, o sistema que ele instala
+  boota, e o teste volta para o `tests/checks.nix` (no `slow`)
 
-O clipboard virou uma vista (`clipboard_view.rs`) com tabela, dica gerada, seções e os ajustes do
-ClipCascade — mas continua tendo UMA porta, o rodapé. Todas as outras vistas do sistema têm duas.
+### Os painéis fora do gerenciador — o que a B1 deixou para depois · pequeno cada
 
-**E o obstáculo não é a tecla, é o DESENHO.** O histórico do clipboard não é um arquivo nem um
-programa: é um `VecDeque` na memória do rodapé, alimentado pelo `zwlr_data_control` daquele processo.
-Uma segunda porta teria de abrir um segundo vigia e passaria a guardar uma SEGUNDA história — que é
-exatamente o defeito que o `ronoctua-clipcascade` existe para evitar um crate ao lado, e a razão de
-o cliente ser nativo em vez de ser o programa do upstream rodando ao lado do nosso.
+A B1 tirou a prévia e os fatos do `files::View` sem mudar nada na tela (`inspection.rs`,
+`inspection_sheet.rs`); o detalhe do fast-access é a porta sem listagem (`Subject::of_path` e
+`Panel::focus`). Duas coisas ficaram de fora, de propósito:
+- **O rodapé não se fotografa.** A câmera do gerenciador (`photograph --door files`) é a da janela;
+  a vista do rodapé desenha as mesmas seções pela aritmética dele, e só a VM a vê.
+  - pronto quando: a câmera tirar a vista do rodapé, ou a VM comparar as duas portas
+- **Um filme e uma forma não se fotografam.** A câmera pede a resposta do inspetor na hora, mas não
+  sobe o player nem o palco da forma: um vídeo aparece sem quadro e um `.stl` sem desenho.
+  - pronto quando: `--frame` (ou um palco na hora) valer para a janela do gerenciador
 
-O histórico do Atuin não tem esse obstáculo (é um binário e um arquivo, e um segundo processo lê os
-dois), e é por isso que a janela DELE existe e a deste não.
+### Atalhos, rodapé e modeline (leva de 2026-09-30) — o que só a tela e o compositor provam · pequeno cada
 
-- decidir: ou a janela fala com o rodapé pelo socket de controle e não vigia nada (uma história,
-  duas telas — é trabalho de protocolo, não de vista), ou o clipboard fica com uma porta só e a
-  linha do `AGENTS.md` sobre "duas portas" ganha a exceção escrita
-- e a TECLA continua em aberto: o `AGENTS.md` registra, com motivo, que `m` é a miscelânea *"e é o
-  que libera `c` para ser o clipboard SOZINHO — comando, não prefixo"*. `LEADER m c` respeita essa
-  linha; `c c`/`c w` a desmente e obriga a reescrevê-la
+- **Fotografar no `.#shot` o que só o rodapé mostra**: a barra de alerta máximo nas duas fases, as
+  horas no minibuffer livre, a dica que fica e a gaveta que cresce sob o ponteiro parado (medir que
+  não há laço, amostrando muitos quadros), a linha `CTRL footer-bars-cycle` na raiz e a dica do
+  próximo conjunto. O `photograph` não alcança o rodapé.
+- **Medir o bind transitório `Ctrl+↑/↓`** (`wm-fold-keys-hold`) no compositor de verdade: que o
+  `$ronoctua_shell` do config resolve, que o bind sai quando a dica sai, e se ele rouba de um
+  programa em foco uma tecla que a pessoa esperava enquanto a mão está no rodapé.
+- **Medir o `which-key` com a leader fechada entre as aberturas** (`.#bench`): a contagem agora é
+  conferida, e a primeira rodada diz se o `leader-close` pelo soquete chega a tempo.
+- acabou quando: as cenas existem com asserção, e as duas medidas estão escritas no
+  `ARCHITECTURE.md`
 
-### 9. Os checks das quatro superfícies novas · médio
+### Lembretes e vigias do journal: o que falta ver e decidir · pequeno cada
 
-O plano previa dez. **Um está escrito** — o `every-modal-view-has-a-hint`, que é a classe do defeito
-fotografado: ele lê o `enum ViewState` e exige um braço no `match` de dicas para toda vista que pega
-o teclado, com quatro exceções nomeadas e justificadas. Foi sabotado (o braço do clipboard removido),
-a mensagem exata observada, e o arquivo restaurado por md5. Achou de quebra que o localizador de apps
-também não tinha braço — e essa é uma exceção legítima, agora escrita.
+- **A faixa do cérebro com o alarme nunca foi fotografada.** O `photograph` não alcança o rodapé;
+  uma cena do `.#shot` que peça um lembrete para daqui a um minuto (pelo socket do cérebro) e
+  fotografe a faixa quando ele tocar fecha isso, e também a linha da pergunta do `LEADER :`
+  `reminders-new` no rodapé e na janela.
+- **Da faixa só se adia pelo primeiro adiamento** (5 min, `, z`): a faixa e a lista de avisos do
+  cérebro oferecem só o primeiro da lista; os de 10 e 60 minutos estão na página do módulo, uma
+  linha cada. Se o dono quiser os três na faixa, é o `brain.rs` e o buffer que precisam de um
+  seletor, não o módulo.
+- **Um texto longo de lembrete é cortado na coluna do rótulo** da página (o que o buffer faz com todo
+  rótulo). O aviso da faixa e a lista de avisos mostram a frase inteira.
+- **A palavra do systemd sobre uma unidade de gerente delegado que não seja `user@<uid>.service`**
+  (um contêiner, um serviço com `Delegate=`) é tomada por folha: numa morte dentro dele, a linha do
+  kernel pode casar com ela em vez da unidade de dentro, se esta chegar mais longe no tempo.
+- acabou quando: a foto da faixa tocando existe nas duas línguas, e o dono decidiu os adiamentos na
+  faixa
 
-Os outros nove faltam, e cada um fecha um buraco que hoje só um teste de unidade cobre:
+### O seletor de arquivos — o que ficou de fora · pequeno cada
 
-- `clipboard-draws-inside-its-region` — qualquer linha do clipboard calculada contra `end`
-- `text-keys-are-constants` — uma `.t("literal")` fora de teste
-- `one-http-writer` estendido — um quarto HTTP, ou um segundo TLS à mão
-- `one-clipcascade-boundary` — um segundo crate falando `/clipsocket`
-- `clipcascade-cipher-matches-upstream` — o vetor divergindo
-- `tor-socks-is-declared-once` — o literal do Rust contra o `SOCKSPort` do torrc
-- `tor-flake-owned-rows-refuse` — uma linha `fixed` que o módulo não fixa
-- `atuin-options-have-text` e `tor-options-have-text` — chave de tabela sem texto num idioma
-- `atuin-config-is-seeded-once` — o `config.toml` deixando de ser semeado e voltando a ser link
+- **O pendrive espetado com ele aberto** entra nos lugares (e sai quando é tirado) pela vigia do
+  `ronoctua-disks` enquanto o seletor está na tela (`watch_while`); isso tem teste de estado, e ainda
+  não foi visto com um pendrive de verdade.
+- **O `photograph` não alcança o seletor fora do player**: a região do rodapé (o seletor do player, a
+  célula acesa, a faixa do cursor) e as portas de programas, Syncthing, rede e câmera, onde ele é
+  lista, não são portas dele. Até lá, esses quadros só têm teste de estado.
+- acabou quando: um pendrive espetado aparece no seletor aberto, e cada quadro acima tem foto
 
-- pronto quando: cada um existir, tiver sido quebrado de propósito, a mensagem exata observada, e o
-  arquivo restaurado por md5
+### 0.00000042. O navegador do git e os arquivos compactados: o que falta provar · pequeno cada
 
-### 5. Migrar o `options.rs` do Syncthing para o `ronoctua-options` · pequeno
+- **O lançamento pelo `C-h` da janela do gerenciador**: ele lança `ronoctua-shell git-browser
+  <raiz>` por `systemd-run --user --scope`, que só existe com o gerenciador de usuário. Fora da VM
+  viu-se o comando e a janela que ele abre (`br.ronoctua.git`, sob o Scroll do flake), e a linha do
+  rodapé mudando sozinha com um ramo novo, um commit e um push; o lançamento em si pede um subteste
+  de VM, que não existe.
+- **A janela da fila com um trabalho de arquivo compactado** só foi vista por uma sonda fora do
+  repositório: o `render-png` não recebe uma fila (o `--mind` é só do cérebro), e a conversão de
+  produção (`transfers::queue_of`) mora no binário do shell. Dar ao `render-png` um `--queue` pede
+  tirar essa conversão para um arquivo puro, como o `mind_wire.rs`.
+- **A pergunta secreta no rodapé** (a senha de um arquivo, a frase-senha de um disco, no minibuffer)
+  só se fotografa no `.#shot`; a da janela está nas fotos do `photograph --door files`.
+- **Pôr membros numa pasta de DENTRO do arquivo**: hoje eles entram no topo (soltar ou `archive-add`),
+  e soltar numa subpasta é recusado com uma frase — o `7zz a` guarda o caminho relativo à pasta de
+  onde parte, e montar essa árvore pediria copiar os arquivos antes.
+- acabou quando: o subteste do `C-h` existe, o `render-png` desenha uma fila, a pergunta secreta do
+  rodapé tem foto, e soltar numa subpasta põe o membro lá
 
-O crate `ronoctua-options` nasceu com as tabelas do Tor, do ClipCascade e do Atuin: o que cada uma
-precisa — para que palavra um anel gira, que passo uma seta dá, que chave de texto uma palavra tem —
-é idêntico, e sem ele seriam três cópias.
+### O app de ícones e a calculadora — o que ainda não foi visto · pequeno cada
 
-O Syncthing tem a sua própria, mais velha e moldada em `serde_json::Value`, e ela **não** foi
-migrada: cento e vinte e uma opções funcionando não valem um refactor no meio de outra entrega.
+- **A porta do rodapé só foi fotografada à mão.** O `photograph` alcança a janela (`--door icons`);
+  a região do rodapé (abas na primeira linha, grade, painel, página, o ponteiro que ela toma) foi
+  vista num Xvfb com o compositor pinado e o rodapé da pista, nas duas línguas, mas nenhuma cena do
+  `.#shot` nem check a refaz.
+  - como saber que acabou: uma cena do `.#shot` abre `LEADER m i`, passa o ponteiro numa aba e numa
+    célula, abre o painel, a página e a fotografa nas duas línguas.
+- **O nome do ícone numa linha da vista** (a da busca), e não na linha de explicação do cabeçalho,
+  como o desenho aprovado pedia — o porquê está no `ARCHITECTURE.md` ("A grade, e por que ela acende
+  uma CÉLULA").
+  - como saber que acabou: o dono confirma a linha, ou diz onde o nome mora com o cabeçalho fechado.
+- **Calculadora no rodapé em foto.** A vista do rodapé só se fotografa no `.#shot`; falta uma cena
+  com os três modos, estreito e largo, nas duas línguas (as da janela estão no `photograph`).
+  - como saber que acabou: a cena existe, com asserção.
 
-- pronto quando: `crates/ronoctua-syncthing/src/options.rs` usar o `Kind`, o `turn`, o `nudge` e o
-  `word_key` compartilhados, e a bateria passar sem mudar uma linha de `assets/syncthing-options.nix`
+### O motor do player (leva de 2026-09-30): o que só se prova no fim · médio
+
+- **Um vídeo do YouTube de verdade num `.#dev`** — o laço não rodou (abriria um compositor e som na
+  tela do dono). Que TOCA já está provado fora dele (2026-10-04, `aqz-KE-bpKQ`, o yt-dlp 2026.08.19
+  do overlay `nix/yt-dlp.nix`, o `pot-provider` 1.3.2, o deno, as opções do `engine::options`, mpv
+  0.41 sem tela e sem som): token GVS cunhado, formatos do cliente `VISIONOS`, 77 s de AV1 4K e Opus
+  com 183 MB lidos e nenhum 403, sem pedidos em faixas (o 403 depois de ~2 MiB era o yt-dlp
+  2026.07.04 do nixpkgs; veja o player no `ARCHITECTURE.md`). Falta o que só o laço mostra:
+  1. `nix run .#dev`; conferir no terminal do laço que `RONOCTUA_POT_HOME`, `RONOCTUA_POT_PLUGINS` e
+     `RONOCTUA_DENO` estão exportados (`env | grep -E 'POT|DENO'`), e que
+     `$RONOCTUA_POT_PLUGINS/plugin/yt_dlp_plugins/extractor/getpot_bgutil_script.py` existe (a
+     variável é a RAIZ do gerador; `yt-dlp -v --plugin-dirs "$RONOCTUA_POT_PLUGINS"` diz
+     "Plugin directories: …/plugin/yt_dlp_plugins");
+  2. num terminal do laço (o ambiente dele, `RONOCTUA_INSTANCE=dev`), `ronoctua-shell play
+     'https://www.youtube.com/watch?v=aqz-KE-bpKQ'` (Big Buck Bunny, licença livre) — ou a página
+     "Vídeo de um site" do player (`LEADER p h`), quando a pista das portas chegar — e ver: a folha
+     entra com o endereço, TOCA, e em segundos ganha o título do vídeo (o `yt-dlp --print title`, ou
+     o `media-title` no `FILE_LOADED`);
+  3. `journalctl --user -t ronoctua-player -f` (ou o log do laço) durante o play: nenhuma linha
+     `ytdl_hook` de erro; com `RUST_LOG=ronoctua_player::engine=debug` (o alvo é o crate do binário),
+     a linha "a voice's yt-dlp options" traz `plugin-dirs=<raiz do gerador>`, e `pgrep -af yt-dlp`
+     durante o carregamento mostra o `--plugin-dirs`;
+  4. um vídeo que não toca (um id que não existe, `https://youtu.be/aaaaaaaaaaa`): a recusa diz
+     "yt-dlp disse: [youtube] …" com a linha `ERROR:` do yt-dlp, e não só "falha ao carregar" (e o
+     `ytdl_hook` do mpv entrega essa linha sozinha, uma por evento — se vier colada às outras, o
+     `said_of` ainda a acha, mas o comentário do `voice.rs` fica errado);
+  5. o endereço de uma página que é lista, fora do YouTube (um álbum do Bandcamp): a folha ganha o
+     nome do ÁLBUM, e não o da primeira faixa, em segundos (`--playlist-items 0 --print
+     playlist:title`);
+  6. o mesmo endereço posto duas vezes com `once` (a porta do ranking, ou um `put` à mão no socket
+     do player, `{"ask":"put","what":["<endereço>"],"once":true}`): a segunda é a pergunta "já está
+     na fila".
+  - pronto quando: os seis passos se comportam assim, e o custo do gerador no fecho foi medido de
+    novo (`nix path-info -S` do `pot-provider`: 53,6 MiB na última medida) numa instalação com mídia.
+
+- **Player, portas: o rodapé sem foto.** O rodapé com a imagem recolhida, os saltos do relógio no
+  painel, o globo de uma página do mundo com a imagem recolhida e a pergunta "já está na fila?" na
+  região não foram fotografados: só o `.#shot` alcança o rodapé.
+  - pronto quando: a cena existe, com asserção.
+
+### 0.32. O catálogo nas portas: o que a onda não rodou · pequeno
+
+O motor ingere e as portas listam; o que falta é prova de máquina.
+
+- **Sem prova de máquina, só de unidade** (os subtestes do `player-vm` não os alcançam): a cerca do
+  redirecionamento em claro (uma lista em `localhost` que redireciona para `127.0.0.1` tem de ser
+  recusada), a fonte colada direto no catálogo adulto, e a janela que recebe uma listagem adulta e
+  pede a senha.
+- **O rodapé só foi fotografado pelos testes de estado**: o `photograph` não alcança a vista do
+  player no rodapé. Falta uma cena `.#shot` com a listagem, a grade de pôsteres e a tranca no
+  rodapé, e a entrega da listagem à janela em tela cheia (`F`).
+- **Um vídeo real de cada fonte padrão** tocado a partir da listagem (a NASA pelo `collection.json`,
+  o archive pela página do item): só os testes de unidade o cobrem.
+- pronto quando: os três casos acima têm subteste, e a cena do rodapé mostra as cinco disposições
+  nas duas línguas.
+
+- **Video metrics no rodapé, visto.** A vista da região (`LEADER v v`) só foi fotografada pela
+  janela, que desenha as mesmas linhas; a do rodapé, com a grade e as miniaturas como capas, o
+  realce da célula (base + `FIELDS_LEAD` + célula) contra a célula do clique
+  (`cell_under_pointer`), a fila abrindo depois de um download e a pergunta "já está na fila"
+  seguida, precisa de uma cena do `.#shot`.
+- **Uma varredura contra o YouTube de verdade**, pelo `.#dev`: acrescentar um canal por `@handle`,
+  varrer, e ver miniaturas, detalhes e uma recusa (bot-check) dita na página.
+
+### Central de segurança: o que falta provar · pequeno cada
+
+- **A região da central no rodapé ainda não foi fotografada.** A janela foi (`photograph --door
+  security`), e as duas portas desenham as mesmas linhas (`security::View::rows`), mas a região do
+  rodapé só se fotografa no `.#shot`: falta uma cena com a central aberta (`LEADER s e e`), a pergunta
+  do envio ao VirusTotal, o escudo do vigia na modeline, a rolagem até a seção pedida
+  (`security-open privacy`) e o evento "rede nova tratada como pública" no minibuffer com a ação
+  "tratar como de casa".
+- **Nenhum teste de VM passa pela página.** O `security-vm` prova a fundação e o `files-vm` a troca de
+  dono pela porta do sudo; o caminho inteiro de um clique na página (senha na pergunta secreta →
+  helper → `firewall.json` → a página relida pela vigia da pasta) só está coberto por testes de
+  unidade de cada lado.
+- acabou quando: a cena da região existe, e um subteste de VM percorre o clique da página até a
+  página relida
+
+### 0.00000043. Containers: o que a vista não provou · pequeno
+
+- **A região do rodapé não foi fotografada** (fora do `.#shot` nenhuma ferramenta a alcança); o que
+  ela desenha é o layout empilhado da janela estreita, fotografado com `photograph --door containers
+  --columns 80`. O realce por zona (um tipo, uma aba) e o log que segue o fim enquanto o fim está à
+  vista foram testados só no nível da vista.
+- acabou quando: uma cena do `.#shot` com o podman substituto fotografa a região, o realce e o log
+
+### 0.0000004. Os pertences — o que só uma máquina de verdade, com um servidor git, prova · pequeno cada
+
+Os testes do crate rodam contra um remoto `file://` bare com o git real (volta completa, senha
+errada, conflitos, nada em claro no repositório, `0600` mantido, apagamentos, corrida de push,
+senha nova). O que eles não alcançam:
+
+- **SSH e HTTPS de verdade**: a chave de implantação num servidor (`known_hosts` próprio,
+  `accept-new`) e o token pelo `GIT_ASKPASS` só se provam contra um servidor. Um teste de VM com um
+  `sshd` e um `git-http-backend` no segundo nó fecharia isso;
+- **a fila de ponta a ponta**: a ordem `Work::Belongings` sai da porta, a fila roda o CLI extraído
+  e o `status.json` volta à vista — cada metade está testada, a travessia não;
+- **as fotos que nenhuma câmera tira**: a porta do rodapé e a marca da modeline pedem o `.#shot`, e a
+  linha da fila (a ordem dita na língua da pessoa) pede uma entrada de fila no `render-png`, que
+  hoje não existe.
+
+- acabou quando: um teste de VM sincroniza duas máquinas por SSH e por token, e as três telas acima
+  foram fotografadas.
+
+### 0.3. fast-access: o que ficou sem prova · pequeno cada
+
+- **A região do rodapé (`LEADER d d`) não foi fotografada**: é a mesma vista e o mesmo desenho da
+  janela (`fast_access_rows::draw`), mas só o `.#shot` a mostra. Falta uma cena.
+- **Vídeo apagado do catálogo sai do índice** (`Videos::gone_since`, testado contra um catálogo de
+  mentira); falta ver com o catálogo de verdade e a unidade rodando: um vídeo em `ronoctua-index
+  query` depois de uma varredura, e fora dela depois de apagado no player.
+- **Web, YouTube, dicionário e tradução não foram fotografados com resposta**: o fotógrafo não pede
+  host; o grid do YouTube foi fotografado sobre uma resposta de mentira (`--videos`).
+- **Instalar um programa pela fila** faz as perguntas da central (licença não livre, download acima
+  do limite da pessoa) a partir do que o motor dela lê (`ronoctua_software::details`); não pergunta
+  o que a central só sabe depois de uma falha anterior do CLI (`last_failure`), que a fila então
+  recusa e diz.
+- pronto quando: a cena do rodapé existe, e o vídeo apagado sai do índice com a unidade de verdade.
+
+- **O ranking no rodapé só foi visto em teste.** A janela e a coluna foram fotografadas
+  (`photograph --ranking`); o rodapé só se fotografa no `.#shot`, e a cena ainda não existe: abrir
+  `LEADER p k` sobre um catálogo semeado pela linha de comando (`ronoctua-video-metrics add` +
+  `scan --details <n>` contra a origem de loopback do `video-metrics-vm` e um yt-dlp substituto que
+  responde a duração), ver a faixa do ponteiro nas palavras e não na miniatura, o `⋯` só na linha
+  dele, o "já está na fila" com o "não" primeiro, e o `kiosk-open` que o rodapé roda ele mesmo. A
+  origem de loopback não baixa miniatura (por desenho): a cena as escreve no disco.
+  - pronto quando: a cena existe, roda, e as fotos têm asserção.
+
+### Instalar firmware — fora, por decisão do dono · registro
+
+O fwupd entra só para LER: o nível HSI e as atualizações conhecidas, na central de segurança.
+Instalar firmware seria uma categoria nova de ato imperativo (invariante 6), e o dono a deixou de
+fora na leva de 2026-09-30; o porquê está no `ARCHITECTURE.md` ("Firmware só lido").
+
+- acabou quando: o dono decidir que instalar firmware entra, e com que forma de exceção
+
+### A tela de bloqueio — fora, porque pede uma exceção do invariante 3 · médio
+
+A central de segurança registra a falta na própria página. Uma tela de bloqueio honesta pede o
+`ext-session-lock-v1` (o compositor esconde tudo e só a nossa superfície recebe entrada); bloquear
+desenhando por cima, com layer-shell, deixaria as janelas alcançáveis por baixo. É um protocolo
+Wayland padrão, mas cada protocolo é uma exceção do invariante 3 aprovada uma a uma, e esta não foi
+pedida.
+
+- acabou quando: o dono aprovar o `ext-session-lock-v1` como exceção (uma linha na tabela do
+  `AGENTS.md`, um arquivo só e um check `one-session-lock`), e a tela tranca e destranca pela senha
+  da conta numa VM
+

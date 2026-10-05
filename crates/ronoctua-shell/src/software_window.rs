@@ -223,7 +223,9 @@ pub fn host_it(opening: Opening) -> Result<()> {
             ),
             other => (other, None),
         };
-        let (view, errand) = View::fresh(opening, &readings, &w.texts);
+        let (mut view, errand) = View::fresh(opening, &readings, &w.texts);
+        // THE FILE PICKER'S FOLDER, watched through the door's wake.
+        view.watch_with(w.wake());
         let mut me = Software {
             view,
             readings,
@@ -387,6 +389,15 @@ impl Software {
             return;
         };
         ui.message = None;
+        // THE FILE PICKER, while it is up over the view, takes what it reads
+        // — every letter, and its own keys (`crate::file_picker`).
+        self.view.page_is(ui.room_for_rows());
+        if self.view.picking()
+            && let Some(errand) = self.view.pick_key(key, &self.readings, &ui.texts)
+        {
+            self.apply(ui, errand);
+            return;
+        }
         let errand = match crate::software::stroke_of(key) {
             Some(Stroke::Press(press)) => {
                 self.pressed(ui, press);
@@ -407,6 +418,7 @@ impl Software {
     fn pressed(&mut self, ui: &mut Ui, press: Press) {
         ui.message = None;
         self.readings.now = crate::software_feed::seconds_now();
+        self.view.page_is(ui.room_for_rows());
         let errand = self.view.key(press, &self.readings, ui.columns, &ui.texts);
         self.apply(ui, errand);
     }
@@ -462,15 +474,26 @@ impl Software {
             // other door, and closed its own software view on the way.
             Errand::Launch(desktop_id) => ui.launch_entry(&desktop_id),
             Errand::OpenOnce { url, profile } => self.open_once(ui, &url, &profile),
-            Errand::Copy(text) => ui.message = Some(crate::chrome::copied(&text, &ui.texts)),
+            Errand::Copy(text) => ui.say_for(
+                crate::chrome::copied(&text, &ui.texts),
+                crate::echo::Echo::Brief,
+            ),
             Errand::Browse(url) => Self::open_the_page(ui, &url),
-            Errand::Say(sentence) => ui.message = Some(sentence),
+            Errand::Say(sentence) => ui.say(sentence),
             Errand::Tweak(tweak) => self.tweak(ui, &tweak),
             Errand::Run(id) => Self::run(ui, id),
             // THE CLIPBOARD'S TEXT, into the search: read off the loop by the
             // door, and handed to `pasted`.
             Errand::Paste => ui.paste(),
             Errand::PasteImage => self.paste_image(ui),
+            // A CATALOGUE'S HOSTS LET: its row goes, and the next search asks
+            // it. A consent that could not be kept is said, never dropped.
+            Errand::Let(source) => match crate::consent_rows::allow(source.hosts(), &ui.texts) {
+                Ok(()) => {
+                    self.readings.reread_consents();
+                }
+                Err(said) => ui.say_for(said, crate::echo::Echo::Long),
+            },
         }
         None
     }
@@ -492,7 +515,7 @@ impl Software {
                 Some(w) => ui.launch(&me, &["buffer".to_owned(), w], None),
                 None => {
                     tracing::error!("RONOCTUA_BUFFER_BRAIN is not in the environment");
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::ECHO_NO_BUFFER));
                 }
             },
             other => {
@@ -510,7 +533,7 @@ impl Software {
     /// `image_kept`.
     fn paste_image(&self, ui: &mut Ui) {
         let Some(roots) = self.feed.as_ref().map(|f| f.roots().clone()) else {
-            ui.message = Some(ui.texts.t(ronoctua_i18n::key::SOFTWARE_IMAGE_NOT_KEPT));
+            ui.say(ui.texts.t(ronoctua_i18n::key::SOFTWARE_IMAGE_NOT_KEPT));
             return;
         };
         let back = self.pasted_image.clone();
@@ -527,7 +550,7 @@ impl Software {
                 self.apply(ui, errand);
             }
             Err(said) => {
-                ui.message = Some(ui.texts.t(said));
+                ui.say(ui.texts.t(said));
                 ui.ask_paint();
             }
         }
@@ -546,13 +569,13 @@ impl Software {
             if let Err(e) = ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work })
             {
                 tracing::warn!(error = %e, "the transfer queue did not take the order");
-                ui.message = Some(ui.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE));
+                ui.say(ui.texts.t(ronoctua_i18n::key::TRANSFERS_OFFLINE));
                 return;
             }
             last = Some(q.label);
         }
         if let Some(label) = last {
-            ui.message = Some(crate::software::queued_said(
+            ui.say(crate::software::queued_said(
                 &label,
                 &self.readings,
                 &ui.texts,
@@ -572,7 +595,7 @@ impl Software {
                 }
             }
             Err(why) => {
-                ui.message = Some(ui.texts.t(crate::software_words::refusal_key(why)));
+                ui.say(ui.texts.t(crate::software_words::refusal_key(why)));
             }
         }
     }
@@ -583,7 +606,7 @@ impl Software {
             Some(opener) => ui.launch(opener, &[url.to_owned()], None),
             None => {
                 tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
-                ui.message = Some(
+                ui.say(
                     ui.texts
                         .t_with(ronoctua_i18n::key::ECHO_NO_OPENED, &[("program", url)]),
                 );
@@ -603,9 +626,12 @@ impl Software {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "could not write software.json");
-                ui.message = Some(ui.texts.t(crate::software_words::refusal_key(
-                    ronoctua_software::Refusal::WillNotParse,
-                )));
+                ui.say_for(
+                    ui.texts.t(crate::software_words::refusal_key(
+                        ronoctua_software::Refusal::WillNotParse,
+                    )),
+                    crate::echo::Echo::Long,
+                );
             }
         }
     }
@@ -630,6 +656,13 @@ fn picture_area(
 }
 
 impl Content for Software {
+    /// A thread of the window's woke the loop — the file picker's folder
+    /// moved, or its devices were read: its rows again, when they changed.
+    fn woken(&mut self, ui: &mut Ui) {
+        if self.view.look() {
+            ui.ask_paint();
+        }
+    }
     type Hand = ();
 
     fn app_id(&self) -> &'static str {

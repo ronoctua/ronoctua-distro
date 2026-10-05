@@ -34,6 +34,7 @@ pub fn parse(text: &str) -> Vec<LyricLine> {
                 plain.push(LyricLine {
                     at: None,
                     text: words,
+                    translated: None,
                 });
             }
             continue;
@@ -42,6 +43,7 @@ pub fn parse(text: &str) -> Vec<LyricLine> {
             timed.push(LyricLine {
                 at: Some(at),
                 text: words.clone(),
+                translated: None,
             });
         }
     }

@@ -85,11 +85,14 @@ pub enum Refusal {
     WillNotParse,
     /// This order runs as root only (the Android image), or never as root.
     WrongUser,
+    /// The host was not let in the person's `consent.json` (a refusal kept
+    /// there, or the consent could not be written), and nothing was sent.
+    NotLet,
 }
 
 impl Refusal {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::UnfreeNeedsConsent,
         Self::UnverifiedNeedsConsent,
         Self::BigNeedsConsent,
@@ -125,6 +128,7 @@ impl Refusal {
         Self::SessionDown,
         Self::WillNotParse,
         Self::WrongUser,
+        Self::NotLet,
     ];
 
     /// The stem of its text key (`software-refusal-<word>`).
@@ -166,6 +170,7 @@ impl Refusal {
             Self::SessionDown => "session-down",
             Self::WillNotParse => "will-not-parse",
             Self::WrongUser => "wrong-user",
+            Self::NotLet => "not-let",
         }
     }
 }

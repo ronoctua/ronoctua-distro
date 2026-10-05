@@ -26,6 +26,11 @@ let
     gst-libav
     gst-vaapi
   ];
+  # The player's table, asked for its Matroska half (below).
+  matroska = import ../player-tools.nix {
+    inherit pkgs;
+    matroska = true;
+  };
 in
 {
   options.ronoctua.media.enable =
@@ -134,6 +139,18 @@ in
     "${pkgs.poppler-utils}/bin/pdfinfo";
   config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_XLS2CSV =
     "${pkgs.catdoc}/bin/xls2csv";
+  # AND MATROSKA'S THREE, for the files panel's tag program: the footer runs
+  # `ronoctua-tags` as a child, and the child reads its tools from the
+  # environment it inherits. Without them a `.mkv` the player can retag was
+  # "cannot be changed here: mkvpropedit" in the panel. The SAME table and the
+  # same switch as the player's unit (`nix/modules/player.nix`): mkvtoolnix
+  # pulls Qt, which only the media profile carries.
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_MKVEXTRACT =
+    lib.mkIf config.ronoctua.media.enable matroska.RONOCTUA_MKVEXTRACT;
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_MKVMERGE =
+    lib.mkIf config.ronoctua.media.enable matroska.RONOCTUA_MKVMERGE;
+  config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_MKVPROPEDIT =
+    lib.mkIf config.ronoctua.media.enable matroska.RONOCTUA_MKVPROPEDIT;
 
   # PLAYERCTL IS NOT HERE, and that is the point: it moved to
   # `nix/modules/base.nix`. The media keys are bound by the compositor's config

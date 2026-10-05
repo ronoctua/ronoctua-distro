@@ -39,6 +39,9 @@ pub const SERVICE: &str = "org.freedesktop.NetworkManager";
 pub const ETHERNET_KIND: u32 = 1;
 /// Likewise, Wi-Fi radio.
 pub const WIFI_KIND: u32 = 2;
+/// Likewise, a Bluetooth device — what a phone's shared connection (PAN)
+/// arrives as. Its IP side is the `bnep` interface, NetworkManager's.
+pub const BLUETOOTH_KIND: u32 = 5;
 
 /// `NM_DEVICE_STATE_ACTIVATED` — the only state that counts as connected.
 pub const STATE_ACTIVATED: u32 = 100;
@@ -148,6 +151,11 @@ pub trait Active {
     /// Where it stands: 2 is activated.
     #[zbus(property)]
     fn state(&self) -> zbus::Result<u32>;
+
+    /// The stored profile it was made from — what the security centre reads
+    /// the connection's privacy settings out of.
+    #[zbus(property)]
+    fn connection(&self) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[zbus::proxy(
@@ -166,6 +174,12 @@ pub trait Device {
     /// `wlan0`, `enp1s0`.
     #[zbus(property)]
     fn interface(&self) -> zbus::Result<String>;
+
+    /// The interface the ADDRESSES live on, when it is not `interface`: a
+    /// Bluetooth device is named by the phone's hardware address, and its
+    /// traffic goes through `bnep0`.
+    #[zbus(property)]
+    fn ip_interface(&self) -> zbus::Result<String>;
 
     /// Where this device's IPv4 configuration lives — addresses, gateway and
     /// resolvers. `/` while the device has none, which is how NetworkManager
@@ -336,18 +350,48 @@ pub trait Profiles {
     fn list_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
+/// A Bluetooth device as NetworkManager sees it — the phone whose connection
+/// can be shared over Bluetooth.
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Device.Bluetooth",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+pub trait BluetoothDevice {
+    /// The phone's hardware address, `AA:BB:…`, which is how BlueZ names it
+    /// too — the one fact the two daemons agree on.
+    #[zbus(property)]
+    fn hw_address(&self) -> zbus::Result<String>;
+
+    /// The phone's name.
+    #[zbus(property)]
+    fn name(&self) -> zbus::Result<String>;
+}
+
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager.Settings.Connection",
     default_service = "org.freedesktop.NetworkManager"
 )]
 pub trait Profile {
     /// The whole profile. The password does NOT come here — it is a secret, and
-    /// NetworkManager only hands it over through `GetSecrets`, which this crate does not
-    /// call: there is no reason for a saved password to travel as far as the screen.
+    /// NetworkManager only hands it over through `GetSecrets`.
     #[allow(clippy::type_complexity)]
     fn get_settings(
         &self,
     ) -> zbus::Result<HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>>;
+
+    /// The secrets of one setting of the profile — called ONLY to carry the
+    /// ones already stored back into an `Update` that adds one
+    /// (`Manager::store_vpn_secret`): an `Update` replaces the whole profile,
+    /// and the secrets it does not carry are gone. Nothing read here travels
+    /// to a screen.
+    #[allow(clippy::type_complexity)]
+    fn get_secrets(
+        &self,
+        setting_name: &str,
+    ) -> zbus::Result<HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>>;
+
+    /// Replaces the profile, and writes it to disk.
+    fn update(&self, properties: HashMap<&str, HashMap<&str, Value<'_>>>) -> zbus::Result<()>;
 
     /// Deletes the profile. It is "forget this network".
     fn delete(&self) -> zbus::Result<()>;

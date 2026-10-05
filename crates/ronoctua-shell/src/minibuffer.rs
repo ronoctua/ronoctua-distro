@@ -207,6 +207,31 @@ impl Minibuffer {
         self.cursor = 0;
     }
 
+    /// The same, the question in the words of its own key — a brain module's
+    /// action, whose key its module declared (`crate::line::Line::asking`).
+    pub fn request_asking(&mut self, id: &'static str, asks: &'static str) {
+        self.request_with(id, false, None);
+        if let Some(line) = self.asking.as_mut() {
+            line.asks = Some(asks);
+        }
+    }
+
+    /// The same, with the whole line a view built — a SECRET in the words of
+    /// its own key included, which neither of the two above can ask: the
+    /// three steps of a new passphrase are one command, hidden, each with its
+    /// own question (`belongings::Ask::line`). What the line holds already is
+    /// taken as one line, as [`Minibuffer::request_with`] takes it.
+    pub fn request_line(&mut self, line: crate::line::Line) {
+        self.request_with(
+            line.id,
+            line.secret,
+            Some(line.text.as_str()).filter(|t| !t.is_empty()),
+        );
+        if let Some(asking) = self.asking.as_mut() {
+            asking.asks = line.asks;
+        }
+    }
+
     /// What appears on the minibuffer's line, in the person's own language.
     ///
     /// THE COMMAND'S ID IS NOT A SENTENCE. It used to be drawn raw —
@@ -373,12 +398,13 @@ impl Minibuffer {
             };
         }
 
-        // PASTING IS THE MINIBUFFER'S ALONE, and not a gesture of the lists
-        // that share `gesture_of`: there `C-v` is the file manager's preview.
-        // `C-y` is Emacs's yank, which is the notation this line is written in.
-        // This side does not hold the clipboard; the footer does, and answers
-        // with [`Minibuffer::paste`].
-        if t.mods.ctrl && matches!(t.sym, Sym::Char('v' | 'y')) {
+        // PASTING, by the one answer every text input asks (`line::pastes`):
+        // `C-v`, and `C-y`, Emacs's yank, which is the notation this line is
+        // written in. It is not a gesture of `gesture_of`, which the file
+        // manager's listing shares, and where `C-v` with nothing typed is the
+        // preview. This side does not hold the clipboard; the footer does, and
+        // answers with [`Minibuffer::paste`].
+        if crate::line::pastes(t) {
             return Action::WantsPaste;
         }
 
@@ -787,11 +813,7 @@ mod tests {
         for language in ["en-GB", "pt-BR"] {
             let texts = ronoctua_i18n::Texts::fresh(language).expect("a language");
             let mut m = super::Minibuffer::default();
-            m.request_with(
-                "player-save-set-folder",
-                false,
-                Some("/home/someone/Music/sets"),
-            );
+            m.request_with("player-enqueue", false, Some("/home/someone/Music/sets"));
             let line = m.line().expect("a question on the line");
             for columns in [24_u16, 30, 36] {
                 let pieces = crate::door::list::question_pieces(line, &texts, columns);

@@ -669,6 +669,12 @@ pub trait Tenant: Sized + 'static {
         let _ = (ui, text);
     }
 
+    /// See `Content::types_capitals` — whether a text is being typed where
+    /// Caps Lock means capitals. Not, by default.
+    fn types_capitals(&self) -> bool {
+        false
+    }
+
     /// See `Content::released`.
     fn released(&mut self, ui: &mut Ui, event: &KeyEvent) {
         let _ = (ui, event);
@@ -770,6 +776,14 @@ pub trait Tenant: Sized + 'static {
     fn acts_without_rows(&self, key: ronoctua_keymap::Key) -> bool {
         let _ = key;
         true
+    }
+
+    /// Whether the tenant holds a QUESTION OF ITS OWN on its rows, waiting
+    /// for an answer — "no" first, drawn where the bar draws nothing: the
+    /// column goes back to its size while one waits, as it does for the
+    /// door's own line. None, by default.
+    fn waits_for_an_answer(&self) -> bool {
+        false
     }
 }
 
@@ -1502,7 +1516,7 @@ impl<T: Tenant> Column<T> {
     /// the end of the ring says nothing.
     fn refused(&self, ui: &mut Ui, why: Option<Offer>) {
         if let Some(key) = why.and_then(Offer::refusal) {
-            ui.message = Some(ui.texts.t(key));
+            ui.say(ui.texts.t(key));
             ui.ask_paint();
         }
     }
@@ -1774,6 +1788,12 @@ impl<T: Tenant> Content for Column<T> {
         self.tenant.pasted(ui, text);
     }
 
+    /// THE TENANT'S ANSWER: a text it is editing types the capitals the
+    /// window's would (`door::keys::lock_undone`).
+    fn types_capitals(&self) -> bool {
+        self.tenant.types_capitals()
+    }
+
     fn released(&mut self, ui: &mut Ui, event: &KeyEvent) {
         self.tenant.released(ui, event);
     }
@@ -1796,7 +1816,10 @@ impl<T: Tenant> Content for Column<T> {
     }
 
     fn default_size(&self) -> (u32, u32) {
-        (width_px(self.sizing.asked, self.output_width()), 720)
+        (
+            width_px(self.sizing.asked, self.output_width()),
+            u32::from(ronoctua_tokens::space::WINDOW_COLUMNHEIGHTPX),
+        )
     }
 
     fn margin(&self) -> u16 {
@@ -1885,10 +1908,13 @@ impl<T: Tenant> Content for Column<T> {
     }
 
     /// A QUESTION IS TYPED WHERE IT IS DRAWN, and the bar draws none: one
-    /// asked there puts the column back to its size.
+    /// asked there — on the door's line, or among the tenant's rows — puts
+    /// the column back to its size.
     fn each_turn(&mut self, ui: &mut Ui) {
         self.tell_where_it_was_born(ui);
-        if ui.asking.is_some() && self.sizing.asked == Size::Bar {
+        if (ui.asking.is_some() || self.tenant.waits_for_an_answer())
+            && self.sizing.asked == Size::Bar
+        {
             self.restore(ui);
         }
         self.tenant.each_turn(ui);
@@ -2510,6 +2536,10 @@ mod tests {
         closed: bool,
         /// Every screen it was told it is on, in order.
         placed: Vec<Option<String>>,
+        /// A question of its own waits on its rows.
+        asking: bool,
+        /// A text of its own is being typed.
+        typing: bool,
     }
 
     impl Tenant for Nobody {
@@ -2533,6 +2563,44 @@ mod tests {
         fn placed_on(&mut self, _: &mut Ui, on: Option<&str>) {
             self.placed.push(on.map(ToOwned::to_owned));
         }
+        fn waits_for_an_answer(&self) -> bool {
+            self.asking
+        }
+        fn types_capitals(&self) -> bool {
+            self.typing
+        }
+    }
+
+    /// FAILS IF: a text the tenant is editing in the column types small
+    /// letters with Caps Lock on, where the same tenant in a window types
+    /// capitals — the column did not pass the tenant's answer on.
+    #[test]
+    fn the_column_types_the_capitals_its_tenant_types() {
+        let ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").unwrap());
+        let mut c = a_column(&ui);
+        assert!(!Content::types_capitals(&c));
+        c.tenant.typing = true;
+        assert!(
+            Content::types_capitals(&c),
+            "the column kept its tenant's capitals"
+        );
+    }
+
+    /// FAILS IF: a question of the tenant's own — drawn on its rows, which
+    /// the bar does not draw — waits unseen while the column is shrunk to its
+    /// bar, instead of the column going back to the size it had; or the bar
+    /// is left when nothing waits.
+    #[test]
+    fn a_question_of_the_tenant_widens_the_bar() {
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").unwrap());
+        let mut c = a_column_at(&ui, Size::Small);
+        c.set_size(&mut ui, Size::Bar);
+        assert_eq!(c.sizing.asked, Size::Bar);
+        c.each_turn(&mut ui);
+        assert_eq!(c.sizing.asked, Size::Bar, "nothing waits: the bar stays");
+        c.tenant.asking = true;
+        c.each_turn(&mut ui);
+        assert_eq!(c.sizing.asked, Size::Small, "back to the size it had");
     }
 
     /// FAILS IF: the tenant is not told the screen the column is on each time

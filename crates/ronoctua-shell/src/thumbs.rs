@@ -2,8 +2,8 @@
 //!
 //! # Why a POOL, and not the one thread the preview has
 //!
-//! Because they want opposite things. `files::inspector` is one thread that
-//! drains its queue to the NEWEST and throws the rest away, and that is right
+//! Because they want opposite things. `inspection::inspector` is one thread
+//! that drains its queue to the NEWEST and throws the rest away, and that is right
 //! for a panel about the file under the cursor: holding an arrow key down over
 //! a folder of videos is sixty asks a second and fifty-nine of them are about
 //! files the cursor has already left.

@@ -19,7 +19,7 @@
 # `ronoctua_tunnel::tor::UNIT` and compares them — in BOTH directions, so a
 # rule that grew and a rule that stopped matching the crate both fail.
 #
-# There is no polkit agent in this session (see `nix/modules/update.nix`), so
+# There is no polkit agent in this session (see the update's `module.nix`), so
 # the rule answers `YES` and never `AUTH_SELF_KEEP`: what buys that width back
 # is that the door is one millimetre wide.
 #

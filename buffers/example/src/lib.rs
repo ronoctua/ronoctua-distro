@@ -48,7 +48,27 @@ mod key {
         "example-item-six",
     ];
     pub const FIELDS: [&str; 2] = ["example-field-name", "example-field-note"];
+    pub const CODE: &str = "example-code";
 }
+
+/// A piece of HTML with a script and a style inside, drawn coloured.
+///
+/// CODE, AND NO PROSE: tags, an attribute, a property, numbers — not one
+/// word a person reads in a language, so nothing in it is owed a
+/// translation, and every word AROUND it is a key. A sample of code is DATA,
+/// like a file a buffer opened (invariant 8, approved 2026-10-04), so it may
+/// hold prose; this one needs none. It is HTML
+/// because one line of it exercises three grammars: the markup, and the two
+/// languages its elements hand their content to.
+const SAMPLE: &str = "<!-- 1 -->
+<p class=\"n2\">3 &amp; 4</p>
+<style>p { color: red; }</style>
+<script>
+  const n = 5; // 6
+</script>";
+
+/// The fence tag the sample is coloured as.
+const SAMPLE_TAG: &str = "html";
 
 /// The keys this buffer binds, under `m`.
 const KEYMAP: &[(&str, &str)] = &[(", c", "example-clear")];
@@ -138,6 +158,21 @@ impl State {
             screen.put(line, run.at(second).within(columns.saturating_sub(second)));
             self.lines.push((line, n));
             line += 1;
+        }
+        // THE CODE, line by line: what one line leaves open — a comment, the
+        // script's content — is what the next one is given.
+        line += 1;
+        screen.put(line, Run::label(key::CODE).dim());
+        line += 1;
+        if let Some(language) = ronoctua_syntax::of_tag(SAMPLE_TAG) {
+            let mut open = ronoctua_syntax::State::fresh();
+            for row in SAMPLE.lines() {
+                if line >= screen.lines() {
+                    break;
+                }
+                open = screen.code(line, 2, columns.saturating_sub(2), row, language, open);
+                line += 1;
+            }
         }
         screen.finish_wit()
     }
@@ -270,7 +305,7 @@ ronoctua_design::bindings::export!(Component with_types_in ronoctua_design::bind
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_design::types::{Heights, Pointed, Position};
+    use ronoctua_design::types::{Heights, Pointed, Position, Text};
 
     fn context() -> Context {
         Context {
@@ -309,6 +344,33 @@ mod tests {
         assert_eq!(s.values[0], "ab");
         assert_eq!(s.values[1], "xy");
         assert!(s.carets.many());
+    }
+
+    /// FAILS IF: the sample stops being coloured — the buffer draws it as
+    /// plain text, or the feature is off and nothing names a syntax role.
+    #[test]
+    fn the_sample_is_drawn_in_colour() {
+        let mut s = State::default();
+        let frame = s.draw(&context());
+        let colour_of = |word: &str| {
+            frame
+                .iter()
+                .filter_map(|c| match c {
+                    Command::Text(t) if matches!(&t.content, Text::Data(d) if d.trim() == word.trim() || d.contains(word)) => {
+                        Some(t.color)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let keyword = colour_of("const");
+        assert_eq!(keyword.len(), 1, "the script's keyword is its own run");
+        // AND IT IS NOT THE NAME'S COLOUR: one run per word in one colour
+        // would pass the count and draw nothing.
+        // The plain text between highlights is one run, " n = ".
+        let name = colour_of(" n ");
+        assert_eq!(name.len(), 1, "the script's name is drawn once");
+        assert_ne!(keyword[0], name[0], "keyword and name in one colour");
     }
 
     /// FAILS IF: a click moves some other hand's caret.

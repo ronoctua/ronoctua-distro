@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_compositor::{
-    Ask, Compositor, Corner, Deed, Device, Event, Events, FocusFollows, Output, Seat, SeatAsk,
-    Setting, Window, Workspace,
+    Ask, Compositor, Corner, Deed, Device, Event, Events, FocusFollows, Output, Portion, Seat,
+    SeatAsk, Setting, Window, Workspace,
 };
 use serde_json::Value;
 
@@ -284,6 +284,10 @@ impl Compositor for Scroll {
         let decoration =
             read::decoration_in(&tree, id).context("the window is not laid out yet")?;
         self.run(&wire::corner_command(id, corner, room, decoration))
+    }
+
+    fn float_centred(&mut self, id: u64, portion: Portion) -> Result<()> {
+        self.run(&wire::centred_command(id, portion))
     }
 
     fn back_in_the_layout(&mut self, id: u64) -> Result<()> {

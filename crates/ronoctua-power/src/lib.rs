@@ -1135,7 +1135,14 @@ pub enum Refusal {
     NotAvailable,
     /// The pair or the value was refused by the driver or the daemon.
     Invalid,
-    /// Anything else; the words travel alongside.
+    /// The daemon did not answer in time.
+    TimedOut,
+    /// The daemon said it tried and could not (`Failed`).
+    Failed,
+    /// The system bus itself could not be reached.
+    NoBus,
+    /// Anything else. Its words go to the log, never to the screen: they are
+    /// the daemon's English (invariant 8).
     Other,
 }
 
@@ -1156,6 +1163,13 @@ fn refusal_named(name: &str) -> Refusal {
         | "org.freedesktop.login1.SleepVerbNotSupported" => Refusal::NotAvailable,
         "org.freedesktop.DBus.Error.InvalidArgs"
         | "org.freedesktop.DBus.Error.PropertyReadOnly" => Refusal::Invalid,
+        "org.freedesktop.DBus.Error.NoReply"
+        | "org.freedesktop.DBus.Error.Timeout"
+        | "org.freedesktop.DBus.Error.TimedOut" => Refusal::TimedOut,
+        "org.freedesktop.DBus.Error.Failed" => Refusal::Failed,
+        "org.freedesktop.DBus.Error.NoServer"
+        | "org.freedesktop.DBus.Error.Disconnected"
+        | "org.freedesktop.DBus.Error.NoNetwork" => Refusal::NoBus,
         _ => Refusal::Other,
     }
 }
@@ -1187,8 +1201,17 @@ pub fn refusal(e: &anyhow::Error) -> Refusal {
                 | F::UnknownProperty(_)
                 | F::NotSupported(_) => Refusal::NotAvailable,
                 F::InvalidArgs(_) | F::PropertyReadOnly(_) => Refusal::Invalid,
+                F::NoReply(_) | F::Timeout(_) | F::TimedOut(_) => Refusal::TimedOut,
+                F::Failed(_) => Refusal::Failed,
+                F::NoServer(_) | F::Disconnected(_) | F::NoNetwork(_) => Refusal::NoBus,
                 _ => Refusal::Other,
             };
+        }
+        // THE BUS ITSELF: a connection that never came up, or went away.
+        if let Some(zbus::Error::InputOutput(_) | zbus::Error::Address(_)) =
+            cause.downcast_ref::<zbus::Error>()
+        {
+            return Refusal::NoBus;
         }
         // THE SYSFS WRITES fail as I/O errors, and the kind says which door
         // shut: EACCES is the udev rule not having reached the file, EINVAL
@@ -1200,6 +1223,7 @@ pub fn refusal(e: &anyhow::Error) -> Refusal {
                 std::io::ErrorKind::PermissionDenied => Refusal::NotAuthorized,
                 std::io::ErrorKind::InvalidInput => Refusal::Invalid,
                 std::io::ErrorKind::NotFound => Refusal::NotAvailable,
+                std::io::ErrorKind::TimedOut => Refusal::TimedOut,
                 _ => Refusal::Other,
             };
         }
@@ -1641,6 +1665,14 @@ mod tests {
         );
         assert_eq!(
             refusal(&wrapped(zbus::fdo::Error::Failed("something".into()))),
+            Refusal::Failed
+        );
+        assert_eq!(
+            refusal(&wrapped(zbus::fdo::Error::NoReply("late".into()))),
+            Refusal::TimedOut
+        );
+        assert_eq!(
+            refusal(&wrapped(zbus::fdo::Error::IOError("odd".into()))),
             Refusal::Other
         );
         let io = |kind: std::io::ErrorKind| {

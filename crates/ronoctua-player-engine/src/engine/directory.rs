@@ -1,18 +1,16 @@
-//! The directories: the world's radio (radio-browser), the world's TV
-//! (iptv-org), a theme's films (the Internet Archive) and what is live on
-//! YouTube now — listed for every door, with what the globe draws of them.
+//! The directories: the world's radio (radio-browser) and the world's TV
+//! (iptv-org) — listed for every door, with what the globe draws of them.
+//! Channels by theme are the local catalogue's (`catalog.rs`): the three
+//! desks a theme's page was — its TV, its films, its lives — are retired.
 //!
-//! # Five desks, the lookups' shape
+//! # Two desks, the lookups' shape
 //!
-//! Each of radio, television, channels (a theme's live TV), archive and lives
-//! is a desk ([`DeskKind`]) with a thread of its own, started the first time
-//! it is asked and asleep on its mailbox after that. A listing is numbered
-//! when it is asked, and what it finds is posted only while its number is
-//! still the desk's: a new one REPLACES the one under way. The state carries
-//! each desk's summary; a door asks for the page when its generation moves
-//! (`Ask::Desk`). A theme's page is three desks — its TV, its films, its
-//! lives — so each section is asked, renewed and refused on its own, and the
-//! world's TV page is not replaced by a theme's.
+//! Each of radio and television is a desk ([`DeskKind`]) with a thread of its
+//! own, started the first time it is asked and asleep on its mailbox after
+//! that. A listing is numbered when it is asked, and what it finds is posted
+//! only while its number is still the desk's: a new one REPLACES the one
+//! under way. The state carries each desk's summary; a door asks for the page
+//! when its generation moves (`Ask::Desk`).
 //!
 //! # A list is shown at once, and renewed behind it
 //!
@@ -46,9 +44,8 @@
 //! # Consent
 //!
 //! Each directory is let apart, by a press on a row that names its host,
-//! and born not let; the lives need yt-dlp, which only the media profile
-//! installs. A listing of one not let — or of the lives without yt-dlp — is
-//! refused AT ONCE, before anything is read or asked.
+//! and born not let. A listing of one not let is refused AT ONCE, before
+//! anything is read or asked.
 
 use std::{
     collections::HashMap,
@@ -68,12 +65,12 @@ use ronoctua_broadcast::{
     iptv::{self, Channel, Index},
     picks::{Change, Kind, Pick, Shelf},
     radio::{self, By, CountryCount, Named, Radio, Station},
-    table::{self, Category},
+    table,
 };
 use ronoctua_player::{
     find::{
-        ArchiveRow, CHANNELS_MOST, ChannelRow, CountryRow, Desk, Directory, Globe, Listed, LiveRow,
-        Mark, MarkKind, NamedRow, Page, Query, RadioList, StationRow, TvList,
+        CHANNELS_MOST, ChannelRow, CountryRow, Desk, Directory, Globe, Listed, Mark, MarkKind,
+        NamedRow, Page, Query, RadioList, StationRow, TvList,
     },
     own::{Origin, Stream},
     prefs::{self, Preferences},
@@ -81,7 +78,6 @@ use ronoctua_player::{
     tongues,
     wire::{DeskKind, DeskSummary, Say, Trouble},
 };
-use ronoctua_ytdlp::Live;
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{Engine, Fetch, Refused, Shared, desk::with_engine};
@@ -99,13 +95,7 @@ const MIB: u64 = 1024 * 1024;
 const NAMED_MOST: u32 = 300;
 
 /// The desks the directories keep, in the order the state lists them.
-pub(super) const KINDS: [DeskKind; 5] = [
-    DeskKind::Radio,
-    DeskKind::Television,
-    DeskKind::Channels,
-    DeskKind::Archive,
-    DeskKind::Lives,
-];
+pub(super) const KINDS: [DeskKind; 2] = [DeskKind::Radio, DeskKind::Television];
 
 /// The cache every directory keeps its lists in; `None` with no home, and
 /// then nothing is kept and every list is asked.
@@ -315,8 +305,8 @@ impl Engine {
     /// A directory's listing asked (`Ask::Find`): its consent checked now,
     /// then listed on its desk's thread, replacing the one under way.
     pub(super) fn look(&mut self, query: Query) -> Result<(), Refused> {
-        let prefs = prefs::store().read();
-        admitted(&prefs, &query, ronoctua_ytdlp::installed())?;
+        let prefs = prefs::read();
+        admitted(&prefs, &query)?;
         let shared = self.shared()?;
         let kind = query.desk();
         let context = self.directories.context.clone();
@@ -389,7 +379,7 @@ impl Engine {
         else {
             return;
         };
-        let prefs = prefs::store().read();
+        let prefs = prefs::read();
         let owed = self
             .directories
             .started(current, &stream, &prefs, unix(SystemTime::now()));
@@ -468,9 +458,8 @@ fn unix(at: SystemTime) -> i64 {
 
 /// Whether this listing may be asked now — refused AT ONCE otherwise,
 /// before anything is read or asked: a directory the person did not let
-/// (naming its host), the lives without yt-dlp, a theme that has none of
-/// what is asked, a search with no words.
-pub(super) fn admitted(prefs: &Preferences, query: &Query, yt_dlp: bool) -> Result<(), Trouble> {
+/// (naming its host), a search with no words.
+pub(super) fn admitted(prefs: &Preferences, query: &Query) -> Result<(), Trouble> {
     let Some(directory) = query.directory() else {
         return Ok(());
     };
@@ -480,14 +469,6 @@ pub(super) fn admitted(prefs: &Preferences, query: &Query, yt_dlp: bool) -> Resu
         });
     }
     let no_words = |source: Source| Trouble::Directory(Refusal::new(source, Why::NothingToAsk));
-    let theme = |id: &str, has: fn(&Category) -> bool| {
-        Category::of(id)
-            .filter(|c| has(c))
-            .map(drop)
-            .ok_or_else(|| Trouble::NoSuchCategory {
-                category: id.to_owned(),
-            })
-    };
     match query {
         Query::Radio(
             RadioList::Search { words: w, .. }
@@ -496,19 +477,6 @@ pub(super) fn admitted(prefs: &Preferences, query: &Query, yt_dlp: bool) -> Resu
         ) if w.trim().is_empty() => Err(no_words(Source::Radio)),
         Query::Tv(TvList::Search { words }) if words.trim().is_empty() => {
             Err(no_words(Source::Iptv))
-        }
-        Query::Tv(TvList::Category { category }) => theme(category, |c| !c.iptv.is_empty()),
-        Query::Archive { category, .. } => theme(category, |c| !c.archive.is_empty()),
-        Query::Lives { category } => {
-            theme(category, |c| !c.lives.is_empty())?;
-            if yt_dlp {
-                Ok(())
-            } else {
-                Err(Trouble::Listing {
-                    what: category.clone(),
-                    why: ronoctua_ytdlp::Trouble::Absent,
-                })
-            }
         }
         _ => Ok(()),
     }
@@ -519,10 +487,7 @@ fn spawn_worker(kind: DeskKind, shared: Shared, context: Context) -> mpsc::Sende
     let (tx, rx) = mpsc::channel::<Job>();
     let name = match kind {
         DeskKind::Radio => "player-radio",
-        DeskKind::Television => "player-television",
-        DeskKind::Channels => "player-channels",
-        DeskKind::Archive => "player-archive",
-        _ => "player-lives",
+        _ => "player-television",
     };
     let _ = std::thread::Builder::new()
         .name(name.into())
@@ -565,8 +530,6 @@ fn run(kind: DeskKind, job: &Job, shared: &Shared, context: &Context) {
         index: &context.index,
         seed: seed(),
         now: SystemTime::now(),
-        yt_dlp: ronoctua_ytdlp::installed(),
-        lives: &ronoctua_ytdlp::search_lives,
     };
     let mut post = |page: Page, refused: Vec<Trouble>| {
         with_engine(shared, |e| e.post_listing(kind, job.serial, page, refused));
@@ -589,8 +552,15 @@ pub(super) trait Map: Sync {
 /// The atlas the doors draw the globe with (`RONOCTUA_ATLAS`), read ONCE and
 /// kept as what the pages need of it: the few hundred anchors. Without it
 /// every row is "no place on the map", and says so.
+#[derive(Default)]
 struct AtlasMap {
     anchors: HashMap<Code, Spot>,
+    /// The table's bytes, kept: a place found by its name is asked which
+    /// country it is in.
+    bytes: Vec<u8>,
+    /// Every named place, by its name as it is compared
+    /// (`ronoctua_atlas::folded`): where it is, and its weight.
+    places: HashMap<String, Vec<(ronoctua_atlas::Point, u16)>>,
 }
 
 impl Map for AtlasMap {
@@ -598,65 +568,133 @@ impl Map for AtlasMap {
         self.anchors.get(&country).copied()
     }
 
-    /// NOT YET: the atlas finds the place NEAR a coordinate, and has no
-    /// finder by name — its places carry no country to search within
-    /// (`ronoctua_atlas::place_near`). Until it has one, a channel's city is
-    /// said on its row and the channel is drawn on its country's anchor.
-    fn place(&self, _country: Code, _name: &str) -> Option<Spot> {
-        None
+    /// The place a TV feed names, IN ITS COUNTRY (`ronoctua_atlas::
+    /// place_named`'s rule, over the index made once): of the places that
+    /// bear the name, the weightiest the atlas puts in `country`. A city the
+    /// atlas does not know is said on its row, and the channel is drawn on
+    /// its country's anchor.
+    fn place(&self, country: Code, name: &str) -> Option<Spot> {
+        let candidates = self.places.get(&ronoctua_atlas::folded(name))?;
+        let atlas = ronoctua_atlas::Atlas::open(&self.bytes).ok()?;
+        candidates
+            .iter()
+            .filter(|(at, _)| ronoctua_atlas::in_country(&atlas, *at, country.0))
+            .max_by_key(|(_, weight)| *weight)
+            .map(|(at, _)| Spot {
+                lat: at.lat,
+                lon: at.lon,
+            })
     }
 }
 
 fn atlas_map() -> &'static AtlasMap {
     static MAP: OnceLock<AtlasMap> = OnceLock::new();
     MAP.get_or_init(|| {
-        let mut anchors = HashMap::new();
         // FROM THE ENVIRONMENT, as the shell reads it (`globe::world`): the
         // unit sets it where the atlas is installed, and a build with none
         // runs with none. A file named and not read is said: a silent
         // fallback would be a globe with every station in no place.
         let Some(path) = std::env::var_os("RONOCTUA_ATLAS") else {
             tracing::info!("no atlas: the directories' rows have no place on the map");
-            return AtlasMap { anchors };
+            return AtlasMap::default();
         };
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
+        match std::fs::read(&path) {
+            Ok(bytes) => map_of(bytes),
             Err(e) => {
                 tracing::warn!(error = %e, "the atlas could not be read: the directories' rows have no place");
-                return AtlasMap { anchors };
-            }
-        };
-        let Ok(atlas) = ronoctua_atlas::Atlas::open(&bytes) else {
-            tracing::warn!("the atlas would not open: the directories' rows have no place");
-            return AtlasMap { anchors };
-        };
-        for a in b'A'..=b'Z' {
-            for b in b'A'..=b'Z' {
-                let letters = [a, b];
-                let Ok(code) = country::normal(std::str::from_utf8(&letters).unwrap_or("")) else {
-                    continue;
-                };
-                if code.0 == letters
-                    && let Some(at) = ronoctua_atlas::anchor_of(&atlas, letters)
-                {
-                    anchors.insert(
-                        code,
-                        Spot {
-                            lat: at.lat,
-                            lon: at.lon,
-                        },
-                    );
-                }
+                AtlasMap::default()
             }
         }
-        AtlasMap { anchors }
     })
 }
 
-/// yt-dlp's search of what is live (`ronoctua_ytdlp::search_lives`), as a
-/// seam: a test hands its own, and never runs a program.
-pub(super) type SearchLives<'a> =
-    dyn Fn(&str, usize) -> Result<Vec<Live>, ronoctua_ytdlp::Trouble> + 'a;
+/// What the pages need of an atlas's bytes: every country's anchor, and
+/// every named place by its name.
+fn map_of(bytes: Vec<u8>) -> AtlasMap {
+    let (anchors, places) = {
+        let Ok(atlas) = ronoctua_atlas::Atlas::open(&bytes) else {
+            tracing::warn!("the atlas would not open: the directories' rows have no place");
+            return AtlasMap::default();
+        };
+        indexes_of(&atlas)
+    };
+    AtlasMap {
+        anchors,
+        bytes,
+        places,
+    }
+}
+
+/// An atlas's anchors, by country, and its named places, by name.
+#[allow(clippy::type_complexity)]
+fn indexes_of(
+    atlas: &ronoctua_atlas::Atlas<'_>,
+) -> (
+    HashMap<Code, Spot>,
+    HashMap<String, Vec<(ronoctua_atlas::Point, u16)>>,
+) {
+    let mut anchors = HashMap::new();
+    for a in b'A'..=b'Z' {
+        for b in b'A'..=b'Z' {
+            let letters = [a, b];
+            let Ok(code) = country::normal(std::str::from_utf8(&letters).unwrap_or("")) else {
+                continue;
+            };
+            if code.0 == letters
+                && let Some(at) = ronoctua_atlas::anchor_of(atlas, letters)
+            {
+                anchors.insert(
+                    code,
+                    Spot {
+                        lat: at.lat,
+                        lon: at.lon,
+                    },
+                );
+            }
+        }
+    }
+    let mut places: HashMap<String, Vec<(ronoctua_atlas::Point, u16)>> = HashMap::new();
+    for (name, at, weight) in ronoctua_atlas::places(atlas) {
+        places
+            .entry(ronoctua_atlas::folded(&name))
+            .or_default()
+            .push((at, weight));
+    }
+    (anchors, places)
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::{Map, map_of};
+    use ronoctua_broadcast::country;
+
+    /// FAILS IF: a TV channel's city is not placed on the map where the
+    /// atlas has it, in its own country — or a city of another country with
+    /// the same name is taken. Run where `RONOCTUA_ATLAS` names the atlas
+    /// (the Nix tests set it); skipped, and said, elsewhere.
+    #[test]
+    fn a_channel_s_city_is_placed_in_its_country() {
+        let Some(path) = std::env::var_os("RONOCTUA_ATLAS") else {
+            eprintln!("skipped: RONOCTUA_ATLAS is not set, so no city was placed");
+            return;
+        };
+        let map = map_of(std::fs::read(path).expect("the atlas"));
+        let germany = country::normal("DE").expect("DE");
+        let spot = map.place(germany, "Munich").expect("the city, in Germany");
+        assert!(
+            (spot.lat - 48.1).abs() < 1.0 && (spot.lon - 11.6).abs() < 1.0,
+            "{spot:?}"
+        );
+        assert_eq!(map.place(germany, "Lisbon"), None, "Lisbon is Portugal's");
+        // A HARBOUR CITY, a little out to sea on the drawn coast.
+        let portugal = country::normal("PT").expect("PT");
+        assert!(
+            map.place(portugal, "Lisbon")
+                .or(map.place(portugal, "Lisboa"))
+                .is_some()
+        );
+    }
+}
 
 /// What a listing works with — the network, the cache, the map and yt-dlp,
 /// each a seam a test hands its own.
@@ -668,8 +706,6 @@ pub(super) struct Tools<'a> {
     pub(super) index: &'a Mutex<()>,
     pub(super) seed: u64,
     pub(super) now: SystemTime,
-    pub(super) yt_dlp: bool,
-    pub(super) lives: &'a SearchLives<'a>,
 }
 
 /// Where a listing's pages go: a stale one first when there is one, then the
@@ -690,16 +726,10 @@ pub(super) fn look(
 ) -> Result<(), Trouble> {
     // CHECKED AGAIN here, not only when asked: this is the one function that
     // reaches a directory, and nothing reaches one that is not let.
-    admitted(prefs, query, tools.yt_dlp)?;
+    admitted(prefs, query)?;
     match query {
         Query::Radio(list) => radio_list(list, tools, post),
         Query::Tv(list) => tv_list(list, tools, post),
-        Query::Archive {
-            category,
-            words,
-            page,
-        } => archive_page(category, words.as_deref(), *page, tools, post),
-        Query::Lives { category } => lives(category, tools, post),
         Query::Suggest { .. } | Query::Subtitles { .. } | Query::Lyrics { .. } => {
             Err(Trouble::NotUnderstood {
                 why: "a lookup about a file is not a directory's listing".to_owned(),
@@ -747,8 +777,16 @@ fn listed<T: Serialize + DeserializeOwned>(
     Ok(())
 }
 
-/// A directory's refusal, as the trouble a page says.
-const fn refused(r: Refusal) -> Trouble {
+/// A directory's refusal, as the trouble a page says. A host the person has
+/// not let in `consent.json` ([`Why::NotLet`]: nothing was sent) is the
+/// directory's consent row (`Trouble::Off`, naming the host that row lets),
+/// so its press lets it and asks again.
+fn refused(r: Refusal) -> Trouble {
+    if r.why == Why::NotLet {
+        return Trouble::Off {
+            host: r.source.host().to_owned(),
+        };
+    }
     Trouble::Directory(r)
 }
 
@@ -1022,9 +1060,6 @@ fn tv_page(list: &TvList, index: &Index, map: &dyn Map, listed: Listed) -> Page 
             };
         }
         TvList::Country { country } => index.in_country(*country),
-        TvList::Category { category } => {
-            Category::of(category).map_or_else(Vec::new, |c| index.in_categories(c.iptv))
-        }
         TvList::Search { words } => index.search(words, index.channels.len()),
         // NO PLACE ON THE MAP: no country, or one the map has no point for —
         // the world page's count, open.
@@ -1042,142 +1077,6 @@ fn tv_page(list: &TvList, index: &Index, map: &dyn Map, listed: Listed) -> Page 
         globe,
         listed,
     }
-}
-
-fn archive_page(
-    category: &str,
-    words: Option<&str>,
-    page: u32,
-    tools: &Tools<'_>,
-    post: Post<'_>,
-) -> Result<(), Trouble> {
-    let c = Category::of(category).ok_or_else(|| Trouble::NoSuchCategory {
-        category: category.to_owned(),
-    })?;
-    let words = words.map(str::trim).filter(|w| !w.is_empty());
-    let page = page.max(1);
-    // A PAGE OF THE THEME ITSELF is kept; one a person's words made is not.
-    let name = words
-        .is_none()
-        .then(|| format!("archive-{}-{page}.json", c.id));
-    listed(
-        tools,
-        name.as_deref(),
-        table::FRESH_ARCHIVE_MINUTES,
-        || {
-            let search = archive::Search {
-                collections: c.archive,
-                subjects: c.subjects,
-                words,
-                page,
-                rows: table::ARCHIVE_ROWS,
-            };
-            Ok((
-                archive::search(tools.net, &search).map_err(refused)?,
-                Vec::new(),
-            ))
-        },
-        |found: archive::Found, listed, refused| {
-            let items = found
-                .items
-                .into_iter()
-                .filter_map(|item| {
-                    Some(ArchiveRow {
-                        stream: item.stream()?,
-                        item,
-                    })
-                })
-                .collect();
-            post(
-                Page::Archive {
-                    category: c.id.to_owned(),
-                    items,
-                    total: found.total,
-                    number: found.page,
-                    more: found.more,
-                    listed,
-                },
-                refused,
-            );
-        },
-    )
-}
-
-/// A live found on YouTube, as the queue plays it.
-fn live_stream(live: &Live) -> Stream {
-    Stream {
-        url: live.url.clone(),
-        title: Some(live.title.trim().to_owned()).filter(|t| !t.is_empty()),
-        referrer: None,
-        user_agent: None,
-        alternates: Vec::new(),
-        origin: Origin::YouTube {
-            id: live.id.clone(),
-        },
-        live: true,
-    }
-}
-
-fn lives(category: &str, tools: &Tools<'_>, post: Post<'_>) -> Result<(), Trouble> {
-    let c = Category::of(category).ok_or_else(|| Trouble::NoSuchCategory {
-        category: category.to_owned(),
-    })?;
-    listed(
-        tools,
-        Some(&format!("lives-{}.json", c.id)),
-        table::FRESH_LIVES_MINUTES,
-        || {
-            let mut rows: Vec<LiveRow> = Vec::new();
-            let mut gave_nothing: Vec<Trouble> = Vec::new();
-            for words in c.lives {
-                match (tools.lives)(words, table::LIVES_MOST) {
-                    Ok(found) => {
-                        for live in found {
-                            if !rows.iter().any(|r| r.live.id == live.id) {
-                                rows.push(LiveRow {
-                                    stream: live_stream(&live),
-                                    asked: (*words).to_owned(),
-                                    live,
-                                });
-                            }
-                        }
-                    }
-                    // SAID BY THE THEME, never by the words it searched
-                    // with: those are the table's, in English, and the door
-                    // names the theme in the person's language — once, however
-                    // many of its searches failed the same way.
-                    Err(why) => {
-                        let t = Trouble::Listing {
-                            what: c.id.to_owned(),
-                            why,
-                        };
-                        if !gave_nothing.contains(&t) {
-                            gave_nothing.push(t);
-                        }
-                    }
-                }
-            }
-            // NOTHING AT ALL, and a search that failed: the failure is the
-            // page's. Every search answering with nothing live is a page of
-            // nothing, which is true.
-            if rows.is_empty()
-                && let Some(first) = gave_nothing.first()
-            {
-                return Err(first.clone());
-            }
-            Ok((rows, gave_nothing))
-        },
-        |rows: Vec<LiveRow>, listed, refused| {
-            post(
-                Page::Lives {
-                    category: c.id.to_owned(),
-                    lives: rows,
-                    listed,
-                },
-                refused,
-            );
-        },
-    )
 }
 
 /// The marks of a page, made as its rows are.

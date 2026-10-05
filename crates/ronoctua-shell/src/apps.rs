@@ -86,6 +86,11 @@ pub enum Action {
     /// from, so it never refuses here: a program the flake installed is the
     /// sheet's to refuse, with the sentence that says why.
     Remove(usize),
+    /// `C-v` or `C-y`: the host reads the clipboard — the LIVE selection,
+    /// off the loop (`crate::pasting`) — and hands it to [`Finder::paste`].
+    /// Every text input of this system pastes (`every-text-input-pastes`),
+    /// and the query was the one that did not.
+    WantsPaste,
 }
 
 /// The launcher's own keys, and the command each one runs.
@@ -320,6 +325,11 @@ impl Finder {
         {
             return self.command(id);
         }
+        // `C-v` AND `C-y` PASTE into the query, as they do on the minibuffer's
+        // line (`line::Line::key`) — Emacs's yank and everybody else's paste.
+        if crate::line::pastes(t) {
+            return Action::WantsPaste;
+        }
         match crate::minibuffer::gesture_of(t) {
             Gesture::Cancel => Action::Closed,
             Gesture::Down => self.move_by(1),
@@ -346,6 +356,20 @@ impl Finder {
                 None => self.command(SEARCH_TO_INSTALL),
             },
         }
+    }
+
+    /// The clipboard's text, typed into the query as if each character had
+    /// been — one line of it: a query is one line, and a paste that carried a
+    /// newline would be a query nobody can see the end of
+    /// (`line::one_line`).
+    pub fn paste(&mut self, text: &str) -> Action {
+        let typed = crate::line::one_line(text);
+        if typed.is_empty() {
+            return Action::Nothing;
+        }
+        self.query.push_str(&typed);
+        self.filter_by();
+        Action::Changed
     }
 
     /// What one of the launcher's commands asks for, on the focused row.
@@ -831,15 +855,44 @@ fn subdirectories(
 /// The catalogue is deduplicated by id with the first occurrence winning, and
 /// `directories()` puts `$XDG_DATA_HOME` first — so an entry the person wrote
 /// themselves already beats the system's. That is the freedesktop override
-/// mechanism, and it is the whole of the preference this needs: a real
-/// `mimeapps.list` would add a per-type default on top, and it is the obvious
-/// next row of this function rather than a different design.
+/// mechanism for WHO an entry is.
+///
+/// # A default comes before every declaration
+///
+/// What opens a type by CHOICE is the `[Default Applications]` of the
+/// `mimeapps.list` files (`ronoctua_apps::defaults`, read now, in the
+/// specification's order): the person's own, the distribution's `/etc/xdg`
+/// (`nix/modules/workshop.nix` sends models to OrcaSlicer there), a
+/// package's. The first entry a list names that IS in the catalogue wins;
+/// one that is not installed is skipped. Only when no list names an
+/// installed entry for the type do the declarations below answer — and that
+/// order is what keeps a `.step`, which the database makes a `text/plain`,
+/// out of the first editor that declares `text/plain`.
 #[must_use]
 pub fn opens<'a>(
     catalogue: &'a Catalogue,
     of_type: &str,
 ) -> Option<&'a ronoctua_apps::DesktopEntry> {
+    opens_by(catalogue, &ronoctua_apps::defaults(), of_type)
+}
+
+/// [`opens`], with the defaults given — what a test hands in, so it never
+/// reads the machine's own lists.
+#[must_use]
+pub fn opens_by<'a>(
+    catalogue: &'a Catalogue,
+    defaults: &ronoctua_apps::defaults::Defaults,
+    of_type: &str,
+) -> Option<&'a ronoctua_apps::DesktopEntry> {
     let wanted = ronoctua_files::mime::canonical(of_type);
+    // THE ALIAS COUNTS: a list may spell `model/3mf` as the old
+    // `application/vnd.ms-3mfdocument`, and both name one type.
+    let chosen = defaults
+        .for_type(|m| ronoctua_files::mime::canonical(m) == wanted)
+        .find_map(|id| catalogue.iter().find(|e| e.id == id));
+    if chosen.is_some() {
+        return chosen;
+    }
     // OURS FIRST, then anybody's. The player claims every audio and video
     // type, and so do the mpv and the VLC the full profile installs; the
     // catalogue's order between entries of one directory is the order the
@@ -986,14 +1039,52 @@ mod tests {
         let mut ours = input_of("br.ronoctua.player", "Player", &[]);
         ours.mime_types = vec!["video/mp4".into()];
         let c = Arc::new(vec![mpv, ours]);
+        let none = ronoctua_apps::defaults::Defaults::default();
         assert_eq!(
-            crate::apps::opens(&c, "video/mp4").map(|e| e.id.as_str()),
+            crate::apps::opens_by(&c, &none, "video/mp4").map(|e| e.id.as_str()),
             Some("br.ronoctua.player")
         );
         assert_eq!(
-            crate::apps::opens(&c, "text/plain").map(|e| e.id.as_str()),
+            crate::apps::opens_by(&c, &none, "text/plain").map(|e| e.id.as_str()),
             None
         );
+    }
+
+    /// FAILS IF: a `.step` — `model/step`, a `text/plain` by the database —
+    /// goes to the editor that declares `text/plain` while a list chose
+    /// OrcaSlicer for it; or a default naming a program that is not installed
+    /// is obeyed instead of skipped; or the old alias of a type is not read
+    /// as the type.
+    #[test]
+    fn a_default_opens_a_model_before_any_editor() {
+        let mut editor = input_of("emacs", "Emacs", &[]);
+        editor.mime_types = vec!["text/plain".into()];
+        let mut orca = input_of("OrcaSlicer", "OrcaSlicer", &[]);
+        orca.mime_types = vec!["model/stl".into(), "model/3mf".into()];
+        let c = Arc::new(vec![editor, orca]);
+        let opener = |defaults: &ronoctua_apps::defaults::Defaults, t: &str| {
+            crate::apps::opens_by(&c, defaults, t).map(|e| e.id.clone())
+        };
+
+        let none = ronoctua_apps::defaults::Defaults::default();
+        // WITHOUT a list, the parent type answers — the defect.
+        assert_eq!(opener(&none, "model/step").as_deref(), Some("emacs"));
+
+        let chosen = ronoctua_apps::defaults::Defaults::of_text(
+            "[Default Applications]\n\
+             model/step=gone.desktop;OrcaSlicer.desktop;\n\
+             application/vnd.ms-3mfdocument=OrcaSlicer.desktop\n",
+        );
+        assert_eq!(opener(&chosen, "model/step").as_deref(), Some("OrcaSlicer"));
+        assert_eq!(opener(&chosen, "model/3mf").as_deref(), Some("OrcaSlicer"));
+        // A type no list names still goes by the declarations.
+        assert_eq!(opener(&chosen, "text/plain").as_deref(), Some("emacs"));
+
+        // A default that names only what is not installed is no answer.
+        let gone = ronoctua_apps::defaults::Defaults::of_text(
+            "[Default Applications]\nmodel/step=gone.desktop\n",
+        );
+        assert_eq!(opener(&gone, "model/step").as_deref(), Some("emacs"));
     }
 
     /// THE DEFECT: without folding the query, `calculo` does not find `Cálculo` — and
@@ -1442,5 +1533,39 @@ mod tests {
         // path, so the separator has to be a byte a filename cannot hold: with
         // a printable one, ("a", 1) and ("a<SEP>1", ...) collide.
         assert_ne!(pixmap_key("a\u{1}1", 8), pixmap_key("a", 18));
+    }
+
+    /// FAILS IF: `C-v` or `C-y` in the query is not a paste — a letter, or
+    /// nothing — or the pasted text does not filter as typing does, or a
+    /// newline in it reaches the query.
+    #[test]
+    fn the_query_pastes() {
+        let mut l = Finder::fresh(catalogue());
+        for c in ['v', 'y'] {
+            let key = Key {
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+                sym: Sym::Char(c),
+            };
+            assert_eq!(l.key(key), Action::WantsPaste, "C-{c}");
+            assert_eq!(l.query(), "", "C-{c} typed a letter");
+        }
+        assert_eq!(l.paste("fire\nfox"), Action::Changed);
+        assert_eq!(l.query(), "fire fox");
+        let mut typed = Finder::fresh(catalogue());
+        type_in(&mut typed, "ne");
+        assert_eq!(typed.paste("o"), Action::Changed);
+        assert_eq!(
+            typed.query(),
+            "neo",
+            "the paste did not go on from what was typed"
+        );
+        assert_eq!(
+            typed.paste("  \n "),
+            Action::Nothing,
+            "a blank paste changed the query"
+        );
     }
 }

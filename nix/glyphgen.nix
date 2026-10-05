@@ -40,6 +40,11 @@
   # instead of against `glyphnames.json` and the Nerd Font — and is checked
   # just as hard, against the real cmap of the real face.
   marksdb,
+  # THE BRAIN MODULES' GLYPHS (brain.md §3), `<module>-<name>` -> glyph name,
+  # merged into the SAME table and measured like every other token: a mark on
+  # the modeline sits beside the chrome's own glyphs and has to answer the same
+  # band. The flake's one loader's `glyphs`.
+  brainGlyphs,
 }:
 
 let
@@ -57,7 +62,15 @@ let
   # The tokens live in Nix (source of truth, section 7.6) but the generator is
   # Python. The bridge is JSON, generated here — there is no Nix parser in Python, and
   # writing one would be reimplementing Nix logic (invariant 5).
-  iconTokensJson = writeText "icon-tokens.json" (builtins.toJSON (import iconTokensFile));
+  #
+  # A module's token that is also a chrome token would be one name for two
+  # drawings, and the second would win in silence — refused here, by name.
+  iconTokens = import iconTokensFile;
+  clashes = builtins.filter (t: builtins.hasAttr t iconTokens) (builtins.attrNames brainGlyphs);
+  iconTokensJson =
+    assert lib.assertMsg (clashes == [ ])
+      "a brain module's glyph token is also one of assets/tokens/icons.nix: ${lib.concatStringsSep ", " clashes}";
+    writeText "icon-tokens.json" (builtins.toJSON (iconTokens // brainGlyphs));
   trayJson = writeText "tray-glyphs.json" (builtins.toJSON (import trayTableFile));
   typographyJson = writeText "typography.json" (builtins.toJSON (import typographyFile));
 

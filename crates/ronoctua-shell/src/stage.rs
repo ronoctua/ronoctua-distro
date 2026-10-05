@@ -15,7 +15,7 @@
 //! # Why the body lives HERE and not in the answer
 //!
 //! Because it is large and the answer is small. The 3DBenchy's 225 154
-//! triangles are eight megabytes of positions, and `files::Looked` is `Box`ed,
+//! triangles are eight megabytes of positions, and `inspection::Looked` is `Box`ed,
 //! cloned and compared by the door — putting a mesh through it would move eight
 //! megabytes down a channel to be compared field by field. So this thread reads
 //! the file once, keeps what it read for as long as the cursor stays on it, and

@@ -62,7 +62,10 @@ pub struct Flat {
 }
 
 /// One entry of a listed playlist.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `Default`, so an entry written by hand names only what it says
+/// (`..FlatEntry::default()`) and a field added later breaks none of them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FlatEntry {
     /// The address that plays it.
     pub url: String,
@@ -70,7 +73,19 @@ pub struct FlatEntry {
     pub title: String,
     /// How long it is, when the list said.
     pub duration_seconds: Option<f64>,
+    /// The address of its picture, when the list gave one: a poster for the
+    /// player's catalogue. The widest no wider than [`THUMBNAIL_MOST_WIDTH`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Who published it (the channel, else the uploader), when said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
+
+/// The widest picture of an entry a listing keeps, in pixels: a poster in a
+/// grid is a few hundred wide, and YouTube lists the same frame at up to
+/// 1280 — the size a poster is fetched at is the size it costs.
+pub const THUMBNAIL_MOST_WIDTH: u64 = 640;
 
 /// A broadcast that is live now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,7 +220,7 @@ pub fn search_lives(words: &str, most: usize) -> Result<Vec<Live>, Trouble> {
 }
 
 /// The document, which must be an object with an `entries` array.
-fn entries_of(bytes: &[u8]) -> Result<(Value, Vec<Value>), Trouble> {
+pub(crate) fn entries_of(bytes: &[u8]) -> Result<(Value, Vec<Value>), Trouble> {
     let mut top: Value = serde_json::from_slice(bytes).map_err(|_| Trouble::Garbled)?;
     if !top.is_object() {
         return Err(Trouble::Garbled);
@@ -219,7 +234,7 @@ fn entries_of(bytes: &[u8]) -> Result<(Value, Vec<Value>), Trouble> {
     }
 }
 
-fn text(v: &Value, name: &str) -> Option<String> {
+pub(crate) fn text(v: &Value, name: &str) -> Option<String> {
     v.get(name)
         .and_then(Value::as_str)
         .map(str::trim)
@@ -228,7 +243,7 @@ fn text(v: &Value, name: &str) -> Option<String> {
 }
 
 /// A YouTube video id: eleven of letters, digits, `-` and `_`.
-fn is_video_id(id: &str) -> bool {
+pub(crate) fn is_video_id(id: &str) -> bool {
     id.len() == 11
         && id
             .bytes()
@@ -237,13 +252,37 @@ fn is_video_id(id: &str) -> bool {
 
 /// Where an entry plays: its own address, or — for a YouTube entry that
 /// gave none — the watch page of its id.
-fn address_of(entry: &Value) -> Option<String> {
+pub(crate) fn address_of(entry: &Value) -> Option<String> {
     if let Some(url) = text(entry, "url").filter(|u| is_address(u)) {
         return Some(url);
     }
     let youtube = text(entry, "ie_key").is_some_and(|k| k.eq_ignore_ascii_case("youtube"));
     let id = text(entry, "id").filter(|id| is_video_id(id))?;
     youtube.then(|| format!("https://www.youtube.com/watch?v={id}"))
+}
+
+/// An entry's picture: its `thumbnail`, else the widest of its `thumbnails`
+/// no wider than [`THUMBNAIL_MOST_WIDTH`] (the narrowest, when every one is
+/// wider). Only a web address is a picture.
+pub(crate) fn thumbnail_of(entry: &Value) -> Option<String> {
+    if let Some(one) = text(entry, "thumbnail").filter(|u| is_address(u)) {
+        return Some(one);
+    }
+    let all: Vec<(u64, String)> = entry
+        .get("thumbnails")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|t| {
+            let url = text(t, "url").filter(|u| is_address(u))?;
+            Some((t.get("width").and_then(Value::as_u64).unwrap_or(0), url))
+        })
+        .collect();
+    let fits = all
+        .iter()
+        .filter(|(w, _)| *w <= THUMBNAIL_MOST_WIDTH)
+        .max_by_key(|(w, _)| *w);
+    fits.or_else(|| all.iter().min_by_key(|(w, _)| *w))
+        .map(|(_, url)| url.clone())
 }
 
 /// The titles YouTube gives an entry that cannot be played by anybody.
@@ -275,6 +314,8 @@ pub fn parse_flat(bytes: &[u8], most: usize) -> Result<Flat, Trouble> {
                     .get("duration")
                     .and_then(Value::as_f64)
                     .filter(|d| d.is_finite() && *d >= 0.0),
+                thumbnail: thumbnail_of(e),
+                channel: text(e, "channel").or_else(|| text(e, "uploader")),
             })
         })
         .take(most)
@@ -357,6 +398,57 @@ mod tests {
         assert_eq!(flat.entries[1].title, "");
         assert_eq!(flat.entries[2].title, "");
         assert_eq!(flat.entries[2].duration_seconds, None);
+    }
+
+    /// FAILS IF: an entry's picture or its channel is lost, or a picture too
+    /// wide for a poster is the one kept.
+    #[test]
+    fn an_entry_keeps_a_poster_sized_picture_and_its_channel() {
+        let list = r#"{"entries": [
+            {"ie_key": "Youtube", "id": "aaaaaaaaaaa", "title": "One", "channel": "Somebody",
+             "uploader": "Somebody else",
+             "thumbnails": [
+                {"url": "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg?sqp=a", "width": 168, "height": 94},
+                {"url": "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg?sqp=b", "width": 336, "height": 188},
+                {"url": "https://i.ytimg.com/vi/aaaaaaaaaaa/maxresdefault.jpg", "width": 1280, "height": 720},
+                {"url": "not an address", "width": 480}
+             ]},
+            {"ie_key": "Youtube", "id": "bbbbbbbbbbb", "title": "Two", "uploader": "Uploader",
+             "thumbnail": "https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg"},
+            {"ie_key": "Youtube", "id": "ccccccccccc", "title": "Three",
+             "thumbnails": [{"url": "https://i.ytimg.com/vi/ccccccccccc/maxres.jpg", "width": 1920}]},
+            {"ie_key": "Youtube", "id": "ddddddddddd", "title": "Four"}
+        ]}"#;
+        let flat = parse_flat(list.as_bytes(), FLAT_MOST).unwrap();
+        let e = &flat.entries;
+        assert_eq!(
+            e[0].thumbnail.as_deref(),
+            Some("https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg?sqp=b"),
+            "the widest that fits a poster"
+        );
+        assert_eq!(
+            e[0].channel.as_deref(),
+            Some("Somebody"),
+            "the channel first"
+        );
+        assert_eq!(
+            e[1].thumbnail.as_deref(),
+            Some("https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg")
+        );
+        assert_eq!(
+            e[1].channel.as_deref(),
+            Some("Uploader"),
+            "else the uploader"
+        );
+        assert_eq!(
+            e[2].thumbnail.as_deref(),
+            Some("https://i.ytimg.com/vi/ccccccccccc/maxres.jpg"),
+            "only wide ones: the narrowest"
+        );
+        assert_eq!(
+            (e[3].thumbnail.as_deref(), e[3].channel.as_deref()),
+            (None, None)
+        );
     }
 
     #[test]

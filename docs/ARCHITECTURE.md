@@ -680,175 +680,16 @@ entra em `tags_pt` sem traduzir. Barulhento de propósito: subir a versão do Ne
 até os glifos novos serem traduzidos.
 
 Resultado medido: léxico de 390 → **2.565** entradas, **0 glifos sem tag pt**, cobertura de 63,3% →
-**92,0%**. O custo temido não veio: a base foi de 2,66 para 2,70 MB e o `.wasm` de 2,51 para 2,74 MB,
-com instanciação em **0,011 ms** de p99 contra um teto de 5 ms.
+**92,0%**. O custo temido não veio: a base foi de 2,66 para 2,70 MB.
 
-#### A ficha do glifo, e uma área de transferência que não existia
+#### Quem mostra as três coleções
 
-`Enter` num glifo trocava a tela por nada: ele "copiava". Agora ele abre a **ficha** — a mesma
-superfície, o conteúdo inteiro substituído (invariante 14: não há janela nova nem popup). O estado da
-listagem não é tocado, então `Esc` devolve a tela como ela estava; voltar é uma volta, e não um
-recomeço.
+O app de ícones (`LEADER m i`, capítulo 5, *O app de ícones*) é a única vista das três tabelas, e
+o `ronoctua-iconset` a única biblioteca que as lê; o fast-access mostra a mesma página de um ícone
+no painel dele. Os três buffers WASM que vinham antes (cada um com a sua busca, a sua grade e a sua
+ficha) saíram, e o que eles ensinaram sobre busca, grade, página e cópia está naquela seção.
 
-Dentro dela: o glifo em `Scale::Huge` (token `xxlarge`, 116 px = exatamente quatro alturas de
-célula, para o que vem embaixo não cair por cima dele), nome e apelidos, identidade técnica, uso no
-sistema, tags nos dois idiomas, e as nove opções de cópia — **com o valor de verdade ao lado do
-rótulo**, porque ver `nf nf-cod-folder` antes de copiar é metade da utilidade. `↑↓` andam nas opções,
-`←→` trocam de glifo sem sair da ficha, `Enter` copia a selecionada.
-
-**Copiar não existia.** `Effect::Copy` chegava ao host e virava `tracing::info!("copiar pedido pelo
-buffer")` — os nove formatos nunca puseram nada em lugar nenhum. Não estava no `PENDING.md`, e este
-próprio documento falava de "copiar" como se funcionasse: é o fallback silencioso na forma mais cara,
-em que a funcionalidade **parece** pronta e a documentação confirma.
-
-Agora é `wl-copy`, e a razão não é preguiça: quem é **dono** da seleção precisa continuar vivo para
-servi-la quando alguém colar, e a janela do buffer morre quando se fecha o navegador — copiar um
-glifo **para** fechar e colar é o uso. Dono que morre junto entregaria uma área de transferência
-vazia, que é pior do que não copiar. É a mesma escolha do `scrollmsg`: o cliente que já existe,
-em vez de reimplementar o outro lado do protocolo.
-
-**O feedback é do HOST, e volta ao buffer.** Copiar sem dizer nada é
-indistinguível de não copiar — foi assim que a cópia passou meses quebrada. Mas quem sabe se deu
-certo é o host, não o componente: um "copiado!" que o buffer mostrasse por conta própria seria
-otimista, e mentiria exatamente quando importa. Por isso existe `input::copied(bool)` — o veredito
-volta, a ficha o mostra na linha da ajuda, e a tecla seguinte o apaga (aviso que fica deixa de ser
-resposta e vira decoração).
-
-`Ctrl+V` fecha o par: o host lê a área de transferência e entrega `input::paste(string)`. O buffer
-não lê clipboard como não lê arquivo (invariante 11). Antes, `Ctrl+V` caía na guarda de `Ctrl` do
-host e não fazia nada — sem log, sem tela, indistinguível de "não havia nada copiado".
-
-**Colar o próprio glifo acha o glifo.** É o gesto mais natural do navegador — pegar um ícone que se
-vê num CSS, num commit, numa mensagem, e perguntar *qual é este* — e era o que a tela não respondia:
-a busca olhava nome, conjunto e tag, e o caractere não é nenhum dos três. Agora ele é o **primeiro**
-critério: identidade vence tudo, e não há o que ordenar depois dela.
-
-Isso fechou o círculo com a cópia: copiar o glifo na ficha e colar de volta na busca devolve
-exatamente ele. E a mesma passagem tirou uma duplicação — o filtro por prefixo (`fa:folder`) e a
-pontuação da lista faziam a mesma pergunta com código próprio, e nada impedia um de ganhar um critério
-que o outro não tivesse. Hoje é uma função só (`Glyph::match_score`), e a nota que ela devolve **é** a
-ordem da lista.
-
-**Rótulo traduzido não cabe por acaso.** A ficha alinha os valores numa coluna fixa, e o rótulo é uma
-**chave**: o buffer nunca vê o texto traduzido nem o comprimento dele. "Token do design system" (22
-células) saía como `Design system …` em qualquer tamanho de janela, porque o corte vinha do orçamento
-declarado e não do espaço na tela. A coluna passou a caber o mais longo — e quem garante que continue
-cabendo é o teste, que tem os dois lados: o orçamento que o buffer declarou na display list, e o
-`.ftl` de verdade, nos dois idiomas.
-
-**Três armadilhas que só o teste de VM encontrou**, e as três são de spawn:
-
-1. `wl-copy` faz `exec cat` para servir a seleção. Sob uma unidade do systemd o `PATH` é mínimo e o
-   `cat` não está lá — `exec cat: No such file or directory`. É a armadilha do `AGENTS.md` um nível
-   mais fundo: quem spawna **por nome** é o programa que nós spawnamos por caminho. Daí o
-   `RONOCTUA_WL_COPY_PATH`.
-2. `wait_with_output()` lê os canos até EOF, e o filho que o `wl-copy` deixa servindo herda esses
-   canos — o EOF só viria quando ele morresse. O laço de eventos do buffer travava ali, e na tela
-   isso apareceria como "o buffer parou de responder depois de copiar". `wait()` e `stderr`
-   herdado: o erro do `wl-copy` cai no nosso journal, que é onde ele serve.
-3. O `wl-paste` do `Ctrl+V` precisa do **mesmo** `PATH`, e sem ele voltava vazio — que o código
-   tratava como "não havia nada copiado", porque área vazia não é erro. Duas causas com o mesmo
-   sintoma: a correção foi dar o `PATH` **e** pôr o motivo no log, para as duas deixarem de ser a
-   mesma linha.
-
-O critério do check é a **área de transferência do sistema** (`wl-paste` dentro da VM), e não "o
-`wl-copy` foi chamado" — essa segunda forma repetiria o defeito de hoje um nível acima.
-
-#### As tags do glifo em foco, no que sobra do rodapé
-
-Elas são as palavras que **acham** aquele glifo, e até agora eram invisíveis: dava para procurar por
-"mapa", cair no `cod-location` e nunca descobrir por quê.
-
-Ordem **do leitor primeiro** — é o que faz a elisão cortar o idioma dos OUTROS numa tela estreita.
-A palavra que já apareceu não repete: ver a mesma duas vezes na mesma linha parece defeito.
-
-Era ordem FIXA, pt primeiro, e isso foi um defeito desde o dia em que houve dois leitores: quem lia
-a interface em inglês tinha o próprio idioma cortado primeiro, justamente na linha que existe para
-dizer como o glifo se chama. O arranjo "que funciona sem saber" resolve ORDENAR duas coisas
-mostradas; não resolve escolher entre elas, e foi por isso que aqui entrou uma porta.
-
-A porta é a chave reservada **`-language`**, que o hospedeiro semeia junto das frases. Ela não afrouxa
-o invariante 11: o valor é uma ETIQUETA, nunca uma frase, e a única coisa que o buffer pode fazer com
-ela é INDEXAR dado que já tinha — escolher qual das próprias listas de tags mostra primeiro. Um buffer
-que a usasse para escolher entre duas strings escritas por ele estaria escrevendo UI num idioma, que
-é exatamente o que o invariante proíbe. O `-` na frente não é enfeite: em Fluent um nome com `-` é um
-TERMO, e o `KEY` do gerador exclui termos de propósito — então `-language` não pode colidir com chave
-de texto nenhuma **por construção**.
-
-Discretas por construção, e não por ajuste: `TextDim` é a cor de menor prioridade da paleta, e
-`Scale::Small` é o token `font.size.small` (15 px) contra os 18 px do corpo do buffer. **O nome
-nunca cede espaço** — quem procura pelo nome está lendo o nome; abaixo de doze células livres as tags
-não são emitidas, porque ali não se mostra uma palavra, mostra-se um toco elidido que ocupa a linha
-para não dizer nada.
-
-#### Três papéis, três corpos — e uma célula de distância entre tudo
-
-O navegador tinha um corpo só para quase tudo (`Scale::Normal`, 18 px — 20 px na época): o convite da busca, o
-contador, a lupa. O resultado é uma tela sem hierarquia, onde o que se lê de relance tem o mesmo peso
-do que se lê com atenção, e onde um ícone — que é um **desenho** — sai com o corpo de uma letra e
-fica fino ao lado dela.
-
-A regra passou a ser por **papel**, e não por trecho:
-
-| papel | escala | px | onde |
-|---|---|---|---|
-| glifo mostrado como ícone | `Large` | 40 | a lupa, o filtro, a grade e o glifo em foco no rodapé |
-| conteúdo do buffer | `Normal` | 20 | o nome do glifo, as opções do painel, os valores da ficha |
-| interface | `Base` | 18 | o campo de busca |
-| acessório | `Small` | 15 | o contador, as tags, os rótulos da ficha |
-
-`Scale::Base` é nova, e o que ela expõe já existia: `font.size.base`, o corpo do rodapé e do
-minibuffer. **Um campo de busca é um minibuffer** — mesma função, mesma pergunta —, e ver os dois em
-corpos diferentes na mesma tela é o tipo de detalhe que faz o sistema parecer montado de peças de
-origens diferentes. O convite e o que se digita compartilham a escala de propósito: se só o convite
-mudasse, o campo pularia de tamanho na primeira tecla.
-
-##### O espaço entre blocos JÁ VEM na caixa da linha
-
-Esta é a medida que muda tudo, e que eu não tinha feito: a caixa da fonte é **1,25 em** (ascendente
-0,965 + descendente 0,285, em de 1000) e a entrelinha é **1,45** — então todo trecho já carrega
-`0,10 em` de ar em cima e `0,10 em` embaixo, e a tinta de um ícone Nerd ocupa só `0,60 em` da caixa.
-Somar uma célula vazia entre dois blocos é folga sobre folga: rendeu linha em branco em cima e
-embaixo do cabeçalho, linha em branco entre as fileiras de ícones, e **um terço dos glifos fora da
-tela**.
-
-A regra é a inversa: **os blocos são adjacentes**, e o único branco que sobra é o que não completa
-uma fileira. Pela mesma razão a margem do buffer é assimétrica — `marginX = 2`, `marginY = 0`. Na
-horizontal a tinta ocupa o avanço inteiro (os glifos Nerd vão de 0 a 600 unidades num avanço de 600,
-sem folga lateral) e sem margem o primeiro caractere encosta na janela; na vertical a folga já está
-na caixa.
-
-O mesmo vale para o vão da grade, que o dono pediu igual em todas as direções. Ele **não** é ajustável
-nas duas: na vertical é o que sobra da caixa (`1,45 − 0,60 = 0,85 em`, a 40 px dá **34 px**) e não há
-como encurtar sem sobrepor; na horizontal ele anda de 10,8 em 10,8 pixels (`0,600 × 18`). Três
-colunas dão **36 px** — dois de diferença, o mais perto que a grade de células permite. Duas colunas
-dariam 24 px, dez a menos, mas caberiam mais ícones por linha: é uma troca entre densidade e
-regularidade, e o passo é uma constante só (`HORIZONTAL_GAP`).
-
-**O rodapé é ancorado no fundo da janela.** Grudado na grade, a sobra da divisão ia toda para *baixo*
-dele: uma faixa vazia no fim da tela. Ancorado, ela vira o vão acima do rodapé, e o check exige que
-seja **menor que uma fileira** — se coubesse mais uma fileira de ícones ali, ela tinha de ter sido
-usada. E o glifo em foco saiu para trecho próprio: junto do nome, ele herdava o corpo do texto.
-
-##### Uma linha é o que compartilha um MEIO
-
-Misturar corpos numa linha só funciona se eles se alinharem por algum lugar, e o lugar é o **meio** —
-é o que o olho lê como "estão na mesma linha". Enquanto tudo tinha um tamanho isso não aparecia:
-topo, meio e base andavam juntos, e o renderer punha cada trecho em `linha × entrelinha`. Bastou o
-ícone de 40 px ao lado do texto de 18 px para o texto subir para o topo do ícone.
-
-O renderer centraliza a **caixa**, e isso acerta a tinta por construção: a entrelinha é simétrica, o
-meio da caixa da linha é o meio da caixa da fonte, e o meio da caixa da fonte fica `0,34 em` acima da
-base — exatamente o meio da tinta de um ícone Nerd, que vai de `0,04` a `0,64 em`. Centralizar a
-caixa, medir a tinta e centralizar a tinta dão o mesmo número, e a caixa é a única das três que o
-renderer sabe sem abrir a fonte.
-
-Numa linha de um corpo só a conta devolve `linha × entrelinha`, que é o que havia antes — é o que faz
-o rodapé do sistema e a modeline não mudarem um pixel, já que eles nunca misturam tamanhos. Isso tem
-uma consequência na ficha: o nome **não** pode dividir a linha do glifo `huge`, senão desceria para
-o meio dele e os apelidos, que vêm depois, apareceriam acima. Ele tem linha própria.
-
-##### Negrito de ícone não existe, e o build prova
+#### Negrito de ícone não existe, e o build prova
 
 O pedido de ícones "em bold" não tem como ser atendido, e vale registrar por que para não ser tentado
 de novo. As 27 variantes são patcheadas com os **mesmos** contornos de ícone: em `cod-search`,
@@ -858,41 +699,6 @@ byte a byte entre a Regular e a Bold — só as letras latinas engordam (`A` vai
 binário e não mudaria um pixel: seria o fallback silencioso com outra roupa. Ícone fica mais pesado
 **crescendo**, ou trocando por uma variante preenchida que o conjunto de origem tenha desenhado
 (`cod-filter_filled`) — as duas são decisões de token, não de renderer.
-
----
-
-#### O painel de conjuntos: um ícone, e o filtro que se acha sem saber o nome
-
-Os cinco filtros sempre existiram como **prefixo na busca** (`md:`, `bloco:f0`, `tag:seta`).
-Isso é rápido e é invisível: para digitar `md:` é preciso já saber que o conjunto se chama `md`, e
-nada na tela contava. Quem não sabia tinha 10.473 glifos e nenhuma forma de recortá-los por origem.
-
-O painel é a descoberta que faltava, e **não** um segundo mecanismo de filtro: escolher "Material
-Design" escreve `md:` na busca, que continua editável. Ele desenha no **conteúdo do próprio buffer**,
-entre a busca e a régua — nenhuma superfície nova, nenhum popup (invariante 14) —, e o que ele ocupa
-sai da grade. O termo livre sobrevive à troca: quem digitou `folder` e escolheu Material Design fica
-com `md:folder`.
-
-**A lista sai da BASE, não de uma lista escrita no código.** A próxima versão das Nerd Fonts pode
-trazer um conjunto novo, e uma lista à mão ficaria para trás em silêncio — o painel simplesmente não
-o ofereceria. A ordem é por tamanho, e não alfabética, porque alfabética seria a ordem do nome
-**traduzido**, que o buffer não vê (invariante 11): ordenar pelo prefixo daria uma ordem que não é a
-que está na tela.
-
-**Os nomes dos conjuntos existem em dois lugares, e um check os amarra.** No `.ftl` porque são texto
-de interface e alguns se traduzem ("Clima", "Personalizados", "Logos de distribuições"); no `SETS` do
-`gen-glyphdb.py` porque de lá viram **tag de busca**. Nada obriga os dois a concordarem, e "Clima" no
-painel com "weather" na busca seria uma tela que ensina uma palavra que não funciona. Por isso o
-`browser-filters` exige que o rótulo que se lê ache, digitado na busca, o conjunto inteiro — e por
-isso o `SETS` passou a ser acentuado, já que a forma sem acento sai de graça do `no_accent`.
-
-A chave é **montada em tempo de execução** (`glifos-conjunto-` mais o prefixo), então o compilador
-não protege nada aqui: um conjunto novo sem tradução sairia como `[glifos-conjunto-xyz]`, que é o
-fallback silencioso de sempre. O mesmo check confere existência nos dois idiomas e o orçamento de 24
-células, como já fazia com os rótulos da ficha.
-
-O ícone fica à direita do contador e **acende** quando há filtro em uso. Sem isso, uma lista restrita
-e a base inteira teriam a mesma cara, e "sumiu metade dos glifos" viraria um mistério.
 
 ---
 
@@ -1027,9 +833,9 @@ na tela em que o ponteiro está, e as outras ficam num pixel (ver "Os modos ocul
 **Consequência a respeitar:** o estado do minibuffer vive **no daemon, não na superfície**. Se o
 output em foco desaparecer no meio de um prompt, o estado migra sem perder o que foi digitado.
 
-### O redimensionador de tela — `LEADER d r`, e por que são cortinas
+### O redimensionador de tela — `LEADER / r`, e por que são cortinas
 
-É uma ferramenta de desenvolvimento, e o grupo `LEADER d` existe para ela: ver o sistema inteiro
+É uma ferramenta de desenvolvimento, e o grupo `LEADER /` existe para ela: ver o sistema inteiro
 numa tela menor, mudando a largura e a altura com o ponteiro ou com as teclas, com rodapé, coluna
 e janelas se rearranjando ao vivo. Ligado, ele põe uma marca na modeline (a cor é a da marca dos
 gestos, `MODELINE_WATCHING`), e um clique nela o desliga.
@@ -1113,9 +919,9 @@ monitor. Uma coluna média ocupava 77% de uma sala de 700 px e, abaixo de uns 54
 esquerda da sala. Agora o teto sai da sala (`column::room_of`, sobre `resizer::room_width`), e a
 coluna vigia o `resizer.json` como o rodapé e diz a largura de novo quando a sala muda.
 
-**`d` era o relance, que foi para `g`.** O dono deu o `LEADER d` ao grupo de desenvolvimento. O
-relance (`world-glance`) é `g`, ligado pela constante `GLANCE_KEYS`, que é a mesma que as frases
-ensinam.
+**`d` era o relance, que foi para `g`.** O dono deu o `LEADER d` ao grupo de desenvolvimento, e
+em 2026-09-30 o desenvolvimento foi para `/`, deixando o `d` ao acesso rápido. O relance
+(`world-glance`) é `g`, ligado pela constante `GLANCE_KEYS`, que é a mesma que as frases ensinam.
 
 **O que ele não simula.** Tela cheia ignora a área útil (`sway/tree/arrange.c`), e as cortinas
 cobrem as bordas dela. Janelas flutuantes, popups de apps, a captura, a visão geral e o ponteiro
@@ -1807,9 +1613,8 @@ até o topo.
 **A pasta `..` é o primeiro renque, e é o único a que nada pode ser feito.** `read_dir` nunca a
 devolve — é propriedade da syscall —, então ela é posta DEPOIS da ordenação: não é um dos nomes
 sendo ordenados, é a saída, e uma saída que fosse para o meio da lista ao ordenar por tamanho seria
-uma saída que se procura. Na raiz não há renque, porque não há para onde ir. `Entry::hidden` a
-excepciona (começa por ponto e não é oculta: esconder a saída com `C-h` a tiraria de quem apertou),
-o cursor abre PASSANDO por ela, e ela carrega o modo, o dono e a data reais do pai — por isso
+uma saída que se procura. Na raiz não há renque, porque não há para onde ir. O cursor abre
+PASSANDO por ela, e ela carrega o modo, o dono e a data reais do pai — por isso
 **toda célula dela responde a saída**: um bit de permissão clicável ali mudaria a pasta em que se
 está, a partir de um renque que diz "voltar". Marcar, medir e o menu a recusam do mesmo jeito, e
 `focused_path` resolve o pai em vez de devolver um caminho com `..` dentro.
@@ -1926,14 +1731,19 @@ acorde. Deduzir um do outro seria a tela ensinando o gesto errado.
 
 ---
 
-### Os modos ocultos — `LEADER LEADER` empurra, `LEADER Alt LEADER` cobre
+### Os modos ocultos — empurra e cobre, e o toque de `Ctrl` gira os três
+
+Desde 2026-09-30 um toque de `Ctrl` na raiz da leader gira normal → empurra → cobre
+(`hidden::next_mode`), e a LEADER repetida passou a andar pelos conjuntos (ver *Atalhos, rodapé e
+modeline — a leva de 2026-09-30*). Os gestos antigos nomeados abaixo descrevem o que cada modo FAZ;
+o gesto que o liga é o de hoje.
 
 O dono pediu um rodapé que some: modeline e minibuffer fora da tela em repouso, de volta quando se
 pede. São dois modos, e o que os separa é o que o rodapé faz com as janelas enquanto mostra alguma
 coisa. A tabela é dele, e `hidden::Shape::of` a responde inteira (o teste percorre todas as
 combinações):
 
-| | `LEADER LEADER` — empurra | `LEADER Alt LEADER` — cobre |
+| | empurra | cobre |
 |---|---|---|
 | o minibuffer sozinho (eco, pergunta, a sequência) e a lista da leader | por cima, com véu | por cima, com véu |
 | uma vista-app do rodapé aberta | empurra, sobre a mesa | por cima, com véu |
@@ -2003,7 +1813,7 @@ visíveis ele fica em `top` com a zona do tamanho dele, como sempre; a camada s�
 é trocado, por tecla. Uma camada que muda é mandada na hora, num commit sem quadro (o comentário do
 `apply_geometry`). Cobra `the_edge_never_moves_a_hidden_footer_to_another_layer`.
 
-O preço, escrito: oculto, o rodapé ignora as cortinas do redimensionador de tela (`LEADER d r`,
+O preço, escrito: oculto, o rodapé ignora as cortinas do redimensionador de tela (`LEADER / r`,
 ferramenta de desenvolvimento) — por cima, a zona `-1` ignora toda outra zona; empurrando, ele é
 reservado antes das cortinas, criadas depois na mesma camada. Nos dois casos ele não senta na tela
 menor que elas fazem: fica na borda de baixo de verdade, e a cortina de baixo é desenhada por cima
@@ -3460,6 +3270,12 @@ silencioso com outra roupa.
 
 ### Três conjuntos da leader — o que vem logo depois dela
 
+Desde 2026-09-30 o conjunto é escolhido pela LEADER repetida (`LEADER LEADER` as janelas,
+`LEADER LEADER LEADER` a árvore inteira), não por um toque de `Alt` ou `Ctrl`; o `Ctrl` tocado gira
+os modos das barras e o `Alt` não escolhe nada (ver *Atalhos, rodapé e modeline — a leva de
+2026-09-30*). O que esta seção diz sobre a dobra, as três árvores e o toque como gesto continua
+valendo; onde ela diz `Alt` e `Ctrl` como conjunto, leia a LEADER de novo.
+
 O dono pediu que a tecla que abria o SUBMENU de um app abrisse o app: `LEADER s n` é a rede no
 rodapé, onde era `LEADER s n n`. Um toque de `Alt` logo depois da leader faz a mesma tecla abrir a
 JANELA do app, e um toque de `Ctrl` devolve a árvore de antes, com cada submenu como era. São três
@@ -3473,7 +3289,7 @@ modo avião) fica a um toque de `Ctrl`. Só a dobra mais de fora conta. Uma list
 das tabelas seria mais uma coisa a esquecer no dia em que um app ganhasse janela; o
 `the_collapsed_groups_are_these` fixa o que a regra responde hoje, e um grupo novo que dobre é uma
 decisão tomada de propósito. Hoje são dezessete: `.`, `p`, `t`, `n`, `i`, `s h`, `s n`, `s s`, `s d`,
-`s a`, `s c`, `s i`, `s p`, `s b`, `s l`, `s g` e `s u` (cuja janela é a `update-watch`).
+`s a`, `s c`, `s i`, `s p`, `s b`, `s l`, `s g` e `s u` (cuja janela é a `system-update-watch`).
 
 **O `w` não dobra, e a regra diz por quê sem exceção**: a tecla dobrada dele É o `w` dele (`w w`), um
 binding e não duas portas. **E nada embaixo do `w` dobra.** Ali estão os níveis do menu da janela,
@@ -4030,453 +3846,225 @@ closure do sistema já tem.
 
 ---
 
-### O navegador de glifos é uma GRADE
-
-Uma lista mostrava ~20 ícones por tela em 10.473, e cada linha gastava a largura inteira com um
-**nome** que ninguém lê quando está procurando uma **forma**. Em grade cabem centenas, e o olho varre
-por desenho — que é como se escolhe ícone.
-
-O nome continua existindo: aparece embaixo, só o do glifo em foco. É a mesma economia do vertico —
-detalhe do item atual, não de todos.
-
-A grade obrigou duas coisas: `input` ganhou `left`/`right` no WIT (com dois sentidos, andar
-para o lado só acontece por transbordo, e o cursor pula de uma ponta à outra da tela), e o componente
-passou a guardar o último `context` que o `render` recebeu — o `event` não recebe contexto, e sem
-ele `Down` não sabe quantas colunas pular. Havia ali um `80x24` chutado.
-
-**E o host de buffers passou a mandar tecla.** Ele chamava `render` uma vez e parava: nenhuma tecla
-chegava ao componente, e o navegador era uma imagem — não dava para buscar, rolar nem escolher. Agora
-ele guarda a `Instance` viva, traduz tecla em `Input` e executa os `Effect` que voltam.
-
----
-
-### O navegador de símbolos Unicode — `LEADER i u`
-
-O grupo `i` nasceu dizendo que o navegador de Nerd Fonts "é a primeira coleção, e vão entrar outras".
-Esta é a segunda, e é a outra metade da mesma pergunta: aquele acha o **ícone** certo entre 10.473,
-este acha o **caractere** certo — a seta, o operador, o bloco de desenho, a letra grega.
-
-#### A base é a interseção da fonte com o UCD, e o número é o argumento
-
-O renderizador embute os arquivos de fonte que usa e não tem cadeia de fallback descoberta em tempo
-de execução — é deliberado. Um caractere que a
-Iosevka não desenha apareceria como tofu — o fallback silencioso com outra roupa. Então a base não é
-"todo o Unicode": é `cmap ∩ UnicodeData.txt`, medida em **7.529 caracteres**. Dois geradores, o mesmo
-princípio das duas autoridades: lá `cmap − base_cmap` dá os glifos Nerd; aqui o `base_cmap` cruzado
-com o UCD dá os caracteres com nome.
-
-O `unicode-character-database` do nixpkgs entra pinado, e a versão é escrita **à mão** no
-`unicodegen.nix`. Tirá-la de `lib.getVersion` seria uma guarda que não guarda: ela seguiria o pacote,
-e um `nix flake update` trocaria a base inteira sem nada acusar. O gerador confere a constante contra
-o cabeçalho do próprio `Blocks.txt` (`# Blocks-17.0.0.txt`), e um `assert` de eval pega o caso comum
-antes do build.
-
-#### O léxico serve os dois navegadores
-
-Os nomes Unicode são em inglês, e o mesmo `tags.en-pt.toml` que traduz `arrow` e `folder` traduz
-`LEFTWARDS` e `MATHEMATICAL`. Ele já cobria **45,9%** das palavras; ~420 entradas depois cobre
-**95,3%**, e **nenhum** dos 7.529 fica sem uma palavra em português. Dois léxicos significariam
-traduzir `arrow` duas vezes e vê-los divergir — o vocabulário é do português, não do buffer. O trato
-do arquivo virou `nix/scripts/lexicon.py`, importado pelos dois geradores, pela mesma razão.
-
-#### Três armadilhas que o molde do navegador de glifos não cobre
-
-**`}` está dentro desta base.** O componente não tem parser de JSON e divide os registros por `"},"`;
-o navegador de glifos pode se dar a esse luxo porque a base dele começa em `U+E000`. Aqui `U+007D`
-existe, e `"`, `,`, `[`, `]` e `:` também. O que salva **não é o parser**: é o gerador não emitir
-nenhum campo de string com caractere arbitrário — o caractere viaja como número em `cp` e em
-`shows`. Provado nos dois lados: um check conta os campos de string com pontuação de JSON, e o teste
-do componente exige o total exato de 7.529. Com o campo `char` de volta, o primeiro acusa **7 campos**.
-
-**302 caracteres têm avanço zero.** Desenhados sozinhos numa grade eles somem ou pintam sobre a
-célula vizinha. A convenção é mostrá-los sobre `U+25CC`, e quem compõe é o **gerador** — o componente
-não pode escrever codepoint (invariantes 9 e 11). Daí o campo `shows`, uma lista de codepoints. E a
-regra que separa as duas coisas: **o desenho nunca é o que se copia**. Colar `◌́` no documento de quem
-usa é o pior defeito que esta funcionalidade pode ter, e o único que sobrevive a qualquer inspeção
-visual — por isso o teste afirma que a cópia devolve **um** caractere e que ele não é o círculo.
-
-**23 caracteres têm avanço dobrado** (as setas longas). O orçamento do trecho acompanha a tinta,
-senão o host elide um caractere só em `…`. O passo da grade (5) absorve as 4 colunas de tinta, e o
-teste afirma a **relação** — quem apertar o vão horizontal amanhã faz os 23 pintarem sobre o vizinho,
-e nada mais na tela diria isso.
-
-#### Abre filtrado, e o `Esc` tem duas camadas
-
-O buffer nasce com `simbolos:` **escrito no campo**, e não com um sinalizador escondido: quem abre vê
-3.899 de 7.529 e vê por quê. Um filtro invisível na abertura seria a pior variante de estado oculto.
-
-Por isso o `Esc` ganhou uma camada: `simbolos:seta` → `simbolos:` → `` (os 7.529) → nada. Uma camada
-só derrubaria o filtro no primeiro toque, de surpresa; nenhuma prenderia quem quer chegar às letras.
-Cada toque muda o campo e o contador, então não existe aqui a tecla que parece não fazer nada.
-
-O painel oferece **sete famílias**, e não os 73 blocos: o nome de bloco mais longo tem 39 células
-contra as 24 que o painel reserva, e 73 blocos × 2 idiomas seriam 146 chaves de nome próprio. Os
-blocos continuam alcançáveis pelo prefixo `bloco:`, **por nome** e não por faixa hexadecimal — as
-fronteiras dos blocos do Unicode não caem em múltiplos redondos, e o atalho do outro navegador
-responderia errado em todas elas.
-
-#### Os emoji, e a segunda face que eles obrigaram
-
-A Iosevka desenha **75 dos 1.184** emoji de codepoint único (6%) e **nenhuma** das 2.760 sequências.
-Emoji de verdade exigiram embutir uma segunda face — e é a primeira vez que o renderizador tem mais
-de uma.
-
-**Isso não contradiz a regra da fonte única.** O que ela proíbe é o renderizador *consultar* o
-fontconfig; a cadeia
-aqui é **declarada** em duas linhas de código, não descoberta em tempo de execução. "Qual face
-desenhou isto" continua tendo resposta fixa, e o check `renderer-loads-four-faces` a fixa. A guarda
-conta o número **exato** de faces, e não `> 0`: com `> 0`, a face de emoji poderia sumir do build e o
-único sintoma seria o tofu voltando na tela de quem procura um emoji.
-
-A escolhida é a **colorida**. Medi as duas moldando os 3.944 com harfbuzz: a monocromática acerta
-2.612 (66%), decompõe 1.258 — 👩💻 em vez de 👩‍💻 — e dá tofu em 74; a colorida acerta **3.944
-(100%)**. Emoji são conteúdo, como a prévia de imagem do clipboard, não chrome — a paleta própria
-deles não briga com o invariante 9. Custou 10,2 MB no binário e **nada** na moldagem: o alvo continua
-em 0,1 ms.
-
-**A base virou a UNIÃO das duas faces.** Enquanto havia uma face, `cmap ∩ UCD` era a verdade; com
-duas, a interseção antiga passaria a esconder caracteres que aparecem perfeitamente. São 11.614
-registros, dos quais 3.944 emoji.
-
-**As tags de emoji vêm do CLDR, não do léxico.** `cldr-annotations` dá nome e palavras-chave oficiais
-em pt e en para **100%** dos 3.944, incluindo sequências (👩‍💻 → *tecnóloga*) e bandeiras
-(🇧🇷 → *bandeira: Brasil*). Passar `grinning face` pelo léxico daria "rosto" e "sorridente" e mais
-nada; o CLDR dá *engraçado*, *feliz*, *lol*, *rindo*. O léxico continua servindo o resto da base.
-
-**A guarda que o `cmap` não dá.** Uma sequência ZWJ tem todos os codepoints no cmap e mesmo assim sai
-decomposta se a fonte não tiver a ligadura. Por isso o gerador **molda cada sequência com harfbuzz** e
-derruba o build se alguma não virar um glifo só — é o que impede a base de prometer 3.944 e a tela
-entregar pedaços. Trocando pela fonte monocromática, ele acusa **1.332**.
-
-##### Os nove grupos de emoji são uma SEÇÃO do painel, e ficam sempre visíveis
-
-O painel mostra os nove grupos do `emoji-test.txt` o tempo todo, separados por uma régua e sob um
-rótulo pequeno e apagado (*só emoji*).
-
-A objeção óbvia é boa: em `familia:letra`, `grupo:comida` recorta zero, e oferecer na tela um recorte
-que não recorta nada é pior do que não oferecer. Mostrá-los só com a família `emoji` escolhida atende
-a objeção e cobra caro por isso — um painel que **muda de tamanho embaixo da mão**, com as opções
-andando de lugar entre um `Tab` e o seguinte, e sem nenhum jeito de descobrir que os subfiltros
-existem. A resposta não é esconder, é **separar**.
-
-Isso obriga o painel a não ser um retângulo. Com seções, a conta "índice n vai na linha n / colunas"
-para de valer — ela não sabe das linhas que não têm opção nenhuma. `Panel` monta uma **lista
-explícita de linhas** (régua, rótulo, opções), e `cell`/`at` são duas leituras da mesma lista em vez
-de duas contas que precisam concordar. E ele **rola** em vez de paginar: paginar exigiria dividir por
-"quantas opções cabem numa página", e com seções de tamanhos diferentes isso deixa de ser uma
-divisão. A seleção é clampada, porque a lista cresce ao escolher o emoji e encolhe ao sair dele.
-
-Os 98 subgrupos ficam fora do painel e alcançáveis por `subgrupo:`, pela mesma razão dos 73 blocos.
-
-##### Abrir num filtro obrigou a gramática a ceder
-
-Com `familia:emoji` na abertura, digitar era impossível: `familia:` consumia todo o resto, e a
-primeira letra virava `familia:emojir` — o valor deixava de existir e a tela esvaziava sem dizer por
-quê. Os filtros de **enumeração** (`familia:`, `cat:`, `grupo:`) passaram a tomar uma palavra e deixar
-o resto como termo livre; os de **texto livre** (`bloco:`, `subgrupo:`, `nome:`) continuam tomando o
-resto inteiro, porque `bloco:box drawing` tem espaço dentro do valor.
-
-#### A busca casava substring, e isso dava duas respostas erradas
-
-As capturas de tela mostraram os dois sintomas ao mesmo tempo: `seta para cima` devolvia **zero**, e
-`seta` punha **PESETA SIGN** em primeiro.
-
-Três causas, e uma regra que resolve as três. `has_tag` casava o termo **inteiro** contra cada tag, e
-as tags são palavras soltas — nenhuma contém uma frase. `match_score` dava nota 2 a "o nome contém" e
-4 a "tem tag", então `pe·seta·` vencia a tag `seta`. E `filter_by` **descartava a pontuação sempre que
-havia prefixo ativo** — como o buffer abre com um, a relevância estava desligada justamente na postura
-de abertura, e a lista saía em ordem alfabética do nome em inglês.
-
-A regra agora é **prefixo de palavra**, e a consulta é partida em palavras que precisam casar
-**todas**, com a nota sendo a pior delas. Prefixo e não palavra inteira porque a busca é incremental:
-quem digitou `arr` ainda não terminou de escrever `arrow`. A consulta e o texto são partidos pela
-**mesma** fronteira — sem isso `seti-ui` seria um token só e não acharia a tag que o texto parte em
-duas. E a fronteira é a pontuação ASCII, não "tudo que não é alfanumérico": um caractere colado não é
-alfanumérico, e parti-lo por aí deixaria a consulta vazia — o gesto de colar um caractere para saber
-qual é mostraria a base inteira.
-
-O mesmo conserto foi para o navegador de Nerd Fonts, que tinha os dois defeitos idênticos.
-
----
-
-#### Um defeito que só esta base tem
-
-A nota de identidade da busca (`is_this`) era "o termo **contém** este caractere". No navegador de
-glifos isso é seguro: os glifos são todos da PUA e ninguém os digita por acaso. Aqui a base tem o
-alfabeto — digitar `LONG LEFTWARDS ARROW` dava nota de identidade ao `a`, e a **letra a** aparecia em
-primeiro na busca por uma seta. Aconteceu, e o teste da largura dupla foi quem pegou. Agora a
-identidade exige que o termo, aparado, seja **um** caractere; o gesto que ela atende é colar um
-caractere para saber qual é, e esse gesto derruba até o filtro de abertura.
-
----
-
-### O navegador de ícones Lucide — `LEADER i l`
-
-O terceiro da família, e o primeiro em que a fonte não **delimita** a base: ela é **reescrita**.
-
-#### 634 codepoints já eram de outra pessoa
-
-A Lucide publica os 1.668 ícones em `U+E038..U+E6BB`. A Iosevka daqui é patcheada com Nerd Fonts, e
-o Nerd Fonts ocupa **634 daqueles mesmos codepoints** — Powerline, Font Awesome Extension, Weather,
-Seti-UI. A face primária é a pedida por nome, e por isso ela **vence a cadeia de fallback**.
-
-Sem tratar isso, 38% dos ícones apareceriam desenhados como outro símbolo. **Não como tofu** — tofu
-se vê. Como um ícone bonito e errado, que nenhuma inspeção visual pega, porque não há nada de
-estranho na tela: há a coisa errada, com toda a confiança da coisa certa.
-
-O gerador reescreve o `cmap` para `U+F2000..U+F2683`, no plano 15, e **confere que a faixa inteira
-está livre nas outras duas faces** antes de gravar. O fixture negativo é a faixa de origem: ele
-derruba o build dizendo os 634. Sai o `GSUB` junto — a fonte original casa o nome do ícone por
-ligadura, e uma ligadura viva faria a palavra `home` escrita em qualquer lugar virar um desenho.
-
-**A sonda que decidiu o desenho.** Antes de escrever qualquer coisa, perguntei ao `cosmic-text` qual
-face desenha um codepoint que só a terceira tem. Ele acha por **codepoint**, sem precisar do nome da
-família — e é por isso que o WIT **não mudou uma linha**: os ícones viajam como dado, como os emoji,
-e nenhum buffer futuro ganhou superfície nova. Se a resposta tivesse sido outra, teria sido preciso
-pôr um seletor de face no protocolo.
-
-#### Dois codepoints por ícone, e eles não são cópias um do outro
-
-Cada registro traz `cp` e `lcp`. O `cp` é o que a **tela desenha**, na face remapeada; o `lcp` é o
-que a **Lucide publica**, e é o que serve a quem cola numa página com a fonte deles.
-
-Isso parece a armadilha de sempre — duas representações do mesmo fato — e não é: são fatos de
-**fontes diferentes**, sobre **fontes diferentes**. A ficha mostra o `lcp`, a cópia do caractere
-devolve o `lcp`, e o critério que amarra isso está escrito no driver de testes: `house` é `U+E0F5`.
-
-Um caso obrigou uma regra: a ferramenta que gera a fonte **funde desenhos idênticos num glifo só**.
-No 0.563.0, `clock` e `clock-4` têm o mesmo traço e a fonte guarda só `clock-4`. A regra sai do
-desenho, não de uma lista de exceções: quem ficou sem glifo procura o ícone de nós idênticos aos
-seus. Uma versão que funda outro par continua funcionando; uma que perca um ícone de verdade para o
-build.
-
-#### A personalização é do artefato — e a prévia é o artefato
-
-O site da Lucide oferece cor, tamanho, espessura e traço absoluto. O que ela muda é o **texto
-copiado**, e aí ela é exata, inclusive a conta do traço absoluto (`espessura × 24 ÷ tamanho`, a mesma
-da lucide.dev). São **19 formas de cópia**: as oito abas do site (SVG, JSX, HTML, React, Vue, Svelte,
-Preact, Solid, Angular), mais o que ele não tem e este sistema usa — o caractere da fonte, o
-codepoint, o traçado cru, o data URI, o base64, a regra de CSS e o sprite. O desenho sai do **SVG de
-origem**, não do contorno do glifo: um contorno seria um preenchido que não responde a
-`stroke-width` nenhum.
-
-O `Tab` restaura os cinco ajustes de uma vez. Desfazer cinco linhas uma a uma é o tipo de trabalho
-que faz ninguém experimentar.
-
-**Um glifo continua não podendo honrar a espessura** — ele tem o traço assado dentro dele, a Lucide
-publica uma espessura só, e nenhuma fonte faria isso variar. Durante dois marcos a conclusão foi que
-a tela então não mostra, e que *fingir que varia seria mentir*. A premissa estava certa; a conclusão,
-não — ela só valia enquanto a única coisa que a tela sabia desenhar fosse **glifo**.
-
-O que a ficha mostra hoje, no canto superior direito, é o **SVG rasterizado** — literalmente o
-documento que a cópia entrega, pela mesma chamada a `svg()`. Não há um segundo construtor, e é isso
-que faz a prévia ser o artefato em vez de uma aproximação dele: um critério compara os dois **byte a
-byte**, antes e depois de mexer no traço. O glifo `Huge` da esquerda fica: um é o que a fonte
-desenha (o que a cópia do *caractere* entrega), o outro é o que o SVG entrega, e vê-los lado a lado é
-informação.
-
-#### As duas primitivas que faltavam, e a regra minha que estava errada
-
-Escrevi no `docs/PENDING.md` que um buffer não podia ter um container que rola, porque nenhuma das
-cinco primitivas era uma região rolável e inventar uma seria um sexto vocabulário. O dono disse que
-a regra está errada. Está, e o raciocínio também: **um buffer já desenha a janela de lista que
-quiser** — ele é dono do deslocamento, emite as linhas que quer, e o hospedeiro não recorta nada.
-Não faltava nada no desenho.
-
-Faltavam duas coisas, e nenhuma delas é uma região.
-
-**`command::bar` — o polegar.** É uma fração de um trilho em PIXELS, e este lado conta CÉLULAS. Uma
-barra feita de blocos seria uma sexta barra parecida com as cinco de verdade e igual a nenhuma delas.
-Então a barra atravessa como NÚMEROS — total, mostrados, deslocamento — e o hospedeiro a desenha com
-o `ronoctua_design::Scroll`, que compila dos dois lados da parede desde o dia em que foi escrito e é
-a mesma aritmética das nove vistas. O resíduo de pixel continua sendo do hospedeiro, que é o único
-que conhece a superfície. Nada é desenhado quando a lista cabe (`Scroll::cut`).
-
-**`input::wheel` — a mão.** Em LINHAS e nunca em pixels, a mesma parede que o `click` respeita, pela
-aritmética única do `surface::axis_lines` — a que guarda a fração entre eventos, que é o que faz um
-gesto lento mover alguma coisa. Uma barra que ninguém pega é o retrato de um controle.
-
-**E `command::paragraph`, pela mesma razão do outro lado.** Um buffer segura uma CHAVE. O `text`
-desenha UMA linha e o hospedeiro a elide no orçamento — certo para um rótulo, inútil para uma
-descrição, que cortada na largura de uma coluna é uma descrição que ninguém lê. E quebrar linha
-precisa da string TRADUZIDA, que este lado nunca vê e não saberia medir. Então o RETÂNGULO atravessa
-e o hospedeiro o preenche, com o mesmo `layout::wrap` que um nome de arquivo comprido já usa, e elide
-a última linha quando sobra texto. É o que deixa um buffer ter um rodapé que explica o que está sob o
-cursor — a forma que toda vista do rodapé tem e nenhum buffer podia ter.
-
-E o portão do `nothing_is_covered` aprendeu a distinguir **CHÃO de TINTA**: uma seleção existe para
-ficar embaixo, e um rodapé com fundo próprio e um parágrafo em cima dele se denunciava como defeito.
-Uma RÉGUA não é chão — um título alto que alcança a régua abaixo dele é exatamente o defeito que
-aquele portão foi escrito para pegar —, e uma BARRA também não: o que mantém uma barra honesta fora
-disso é o teste de COLUNA, não uma isenção.
-
-#### A display list ganhou a primeira primitiva de pixel — e a trava que faltava
-
-`command::svg` é a quinta primitiva, ao lado de texto, régua, grade e seleção, e a primeira que
-produz pixel arbitrário. O cabeçalho do WIT diz por que a lista é curta: *"cada capability a mais é
-superfície que todo buffer futuro passa a poder usar"*. Ela entra com três limites:
-
-- **Capacidade.** Quem a emitir sem declarar `vector` no descritor é recusado — e o primeiro `render`
-  acontece antes de a janela existir, então a recusa é na partida. Até aqui a linha do WIT que diz
-  *"o host recusa quem usar sem ter pedido"* era **promessa**: `validate` conferia o prefixo do keymap
-  e mais nada, e nenhuma capacidade era exigida de ninguém. A trava vale em **todo** quadro, não só
-  no primeiro: a prévia só existe na ficha, e conferir uma vez seria conferir o quadro sem ela.
-- **A superfície é menor do que "um SVG".** O `resvg` está na árvore sem motor de texto — `<text>`
-  não desenha — e sem `resources-dir`, então referência a arquivo externo não carrega.
-- **A cor não atravessa como valor** (invariante 11): o buffer manda o token, e o host o substitui
-  onde o documento diz `currentColor`. Sem isso a prévia sairia **preta sobre fundo preto**, que é
-  indistinguível de "esta primitiva ainda não está implementada". Quando a pessoa digita a cor dela,
-  não há `currentColor` para substituir e o desenho sai como o artefato sairia — ali é conteúdo, não
-  chrome, a mesma fronteira da prévia de imagem do clipboard.
-
-O custo é por **tecla**, não por quadro: `render` só roda quando o componente pede, e o cache é
-indexado pela string do SVG — que já codifica o ícone e os cinco ajustes, então a chave é exata. Um
-documento que não rasterize deixa a área vazia, e é o que se vê ao digitar uma cor pela metade
-(`#8ab`): a prévia some e volta. Inventar um desenho no lugar seria pior.
-
-#### Preencher a caixa apagava o ajuste de tamanho
-
-O retângulo que o buffer pede é o **teto**, não o alvo. Rasterizando para *preencher*, um
-`width="24"` e um `width="512"` produzem a mesma imagem — o SVG da Lucide tem `viewBox` fixo de 24, e
-o que muda entre os dois é só a escala, que o preenchimento desfaz. A prévia mostrava com confiança
-um tamanho que não era o escolhido, e o ajuste que a pessoa acabara de mexer não tinha efeito nenhum.
-
-`Fit::Natural` é a resposta: o desenho sai no tamanho que o **documento declara**, e só encolhe
-quando não cabe — como qualquer visualizador. Acima do que a caixa comporta ele para de crescer, e o
-número da linha continua dizendo o tamanho real.
-
-A escolha oposta continua certa para **ícone de aplicativo** (`Fit::Fill`): ali o tamanho
-intrínseco do arquivo não quer dizer nada — o mesmo tema publica `.svg` de 16 e de 512 — e o que
-importa é ocupar a célula que a linha reservou. É por isso que ela é um parâmetro com nome, e não um
-padrão: as duas respostas certas são opostas, e confundi-las foi exatamente o que aconteceu.
-
-O mesmo cuidado vale um passo adiante, na `Area`: `encaixar` cresce até a borda e desfaria a
-rasterização natural. Quem desenha a prévia usa `centrar`, que **não amplia**.
-
-#### A marca diz o que a tecla faz, e ela sai da mesma tabela que a tecla lê
-
-As 24 linhas da ficha tinham exatamente a mesma cara, e a seta lateral fazia **três** coisas
-conforme a linha: mudava o valor, trocava de ícone, ou — na da cor — **nada**, em silêncio. Era tecla
-morta, e o `typing` (que decide se o próximo dígito substitui ou acrescenta) não tinha
-representação nenhuma na tela.
-
-O defeito de fundo era que **quem desenha não sabia o que a tecla faz**: a afordância estava
-espalhada por `step_by`, `type_in`, `delete` e o despacho de `Paste`, e o desenho não consultava
-nenhum deles. Desenhar a marca a partir de uma segunda lista só adiaria o problema — ela divergiria
-no primeiro ajuste novo, e uma marca que promete uma tecla que não faz nada é pior do que marca
-nenhuma. Agora há uma `affordance(n)`, e **quem age pergunta a ela antes de agir**.
-
-Duas células reservadas antes do valor, em toda linha — inclusive nas sem marca. É a regra que o
-navegador de símbolos já escreveu para o marcador dele: reservar só onde há marca faria a coluna do
-valor andar de lugar de linha para linha. E a linha da cor passou a trocar de ícone como as de
-cópia, para *"sem marca de seta"* querer dizer uma coisa só.
-
-#### 24 linhas acionáveis não cabem, e por isso a ficha rola
-
-A ficha do navegador de símbolos tem 9 linhas de ação; esta tem **24** (5 ajustes + 19 cópias). Numa
-janela baixa elas não cabem, e sem rolagem as últimas seriam inalcançáveis: a tecla anda, o realce
-some da tela, e nada denuncia. O critério correspondente percorre as 24 numa janela de 20 linhas e
-exige que a seleção esteja visível em **todas**, e que a última copie de verdade — chegar lá e ver não
-é a mesma coisa que agir.
-
-#### O rótulo do painel tem de achar a própria categoria
-
-São 43 categorias, e o rótulo é lido na tela **e** digitado na busca: o painel diz "Setas", a base
-diz `arrows`. Duas representações do mesmo fato, e sem amarrá-las elas divergem em silêncio — o
-painel continua bonito e o que ele promete deixa de ser achável.
-
-O critério exige que cada rótulo, nos **dois idiomas**, ache a categoria inteira. Ele já pegou uma:
-`medical` estava traduzido no léxico como `medico`, sem acento, e o rótulo `Médico` achava 4 de 42.
-
-#### Um check citado num comentário não é um check
-
-O `text.rs` prometeu por dois marcos um check com nome e tudo, e ele **não existia** — ninguém
-confere se o nome citado num comentário corresponde a algo. `renderer-loads-four-faces` faz mais do
-que contar faces: afirma qual delas desenha texto, qual desenha emoji e qual desenha ícone, e
-**testemunha a colisão**, exigindo que a Iosevka ainda responda por `U+E0A0`. No dia em que ela
-deixar de responder, o check falha e alguém relê a decisão do remapeamento em vez de redescobri-la
-pela tela.
-
-
-#### Cortar por codepoint inventa desenho
-
-`layout::width` contava **codepoints**, sob a premissa de que a fonte é monoespaçada de verdade e
-cada codepoint ocupa uma célula. Isso vale enquanto há uma face só. Com a de emoji, `👩‍❤️‍👨` são
-**seis** codepoints e **um** glifo; uma bandeira são dois, um tom de pele, dois, uma marca sobre o
-círculo pontilhado, dois.
-
-O sintoma não é "texto cortado curto demais" — é **outro desenho**. Com orçamento de 4 células, o
-casal vira `👩‍❤` + `…`, que remolda como uma mulher, um coração e reticências: centenas de células de
-uma vez, e nenhuma delas parecendo erro de corte. Parecem emoji errados.
-
-O corte opera sobre **clusters** (`unicode-segmentation`, que já estava na árvore via
-`cosmic-text`). Um cluster é o que o renderizador desenha como uma coisa, e é a única unidade em que
-cortar não inventa conteúdo. Três testes fixam os quatro casos que esta base tem: ZWJ, bandeira, tom
-de pele e marca combinante.
-
-**A lição não é sobre emoji.** É que a premissa estava escrita — em maiúsculas, no comentário certo —
-e mesmo assim sobreviveu à mudança que a invalidou, porque nada a *verificava*. Um comentário que
-explica uma premissa não a defende.
-
-#### Onde está a seleção, quando a cor não obedece
-
-Num buffer monocromático o token de cor resolve: o item em foco vira `state-accent`. Emoji **não
-obedecem** — a cor deles está dentro do glifo (bitmap CBDT), e `state-accent` não muda um pixel. Em
-3.944 das 11.614 células a seleção era invisível, e justamente nas que o buffer abre mostrando.
-
-O marcador é um **ícone de token** (`selection` → `cod-triangle_up`) na linha **abaixo** da célula em
-foco, apontando para ela. Embaixo, e não em volta: a fileira tem três células de altura para uma
-caixa de duas e pouco, e essa sobra estava sem uso. Um contorno exigiria pintar fundo, que o
-protocolo não tem e o invariante 15 não quer.
-
-#### Tom de pele: cinco filtros que saem da sequência, não do nome
-
-`tom:claro` … `tom:escuro`, 406 emoji cada. O tom vem do **codepoint modificador** (`U+1F3FB..FF`) na
-sequência, e não do nome: em inglês o CLDR escreve *"light skin tone"* no fim, em português *"pele
-clara"*, e há emoji cujo nome cita pele sem ter modificador nenhum. O codepoint está lá, ou não está.
-
-Vale um filtro por consulta, como todos os outros — `tom:escuro grupo:pessoas` não cruza os dois. O
-que convive com ele é o **termo livre**, e é ele que atende o gesto real: `tom:escuro mao` → 79.
-
-
-#### A face primária vencia o fallback, e 75 emoji saíam em monocromático
-
-`UP!` aparecia como uma caixinha branca de letras pretas ao lado de `ATM` e
-`SOON` coloridos. A causa é a mesma que obrigou o remapeamento da Lucide, do
-outro lado da fronteira: **quem tem o codepoint primeiro, ganha**. A face
-primária é a pedida por nome (`Family::Name`), e a Iosevka traz **75** dos emoji
-de presença padrão desenhados como texto.
-
-Não era tofu — tofu se vê. Era o emoji **errado**, e a tela não tinha como
-denunciar: os dois existem e os dois aparecem. Foi o dono quem viu, numa
-captura.
-
-**O seletor de variação não resolve.** Medido: `U+1F199 U+FE0F` continua na
-Iosevka e vira **dois** glifos, porque a primária tem os dois codepoints e o
-`cosmic-text` não implementa a regra de "prefira a fonte colorida quando houver
-`FE0F`". Sair um glifo a mais é pior do que sair o glifo errado.
-
-O corte é na cópia que o renderizador embute, e a regra é do Unicode, não nossa:
-**`Emoji_Presentation=Yes`** quer dizer "a forma padrão deste caractere é o
-emoji". Medido no 17.0.0: 154 codepoints nas duas faces, dos quais **75** de
-presença de emoji (saem) e **79** de presença de texto (ficam) — `#`, os
-dígitos, `©`, `®`, `™`, as setas. Esses são bases de sequência, e desenhá-los
-coloridos por padrão quebraria texto comum.
-
-Duas autoridades independentes dão o mesmo conjunto, e conferi que concordam: a
-propriedade `Emoji_Presentation` do `emoji-data.txt`, e as linhas
-`fully-qualified` de um codepoint sem `FE0F` do `emoji-test.txt`.
-
-Só a cópia do renderizador é cortada. As outras duas leituras da fonte são
-autoridades sobre outra coisa — o `glyphgen` pergunta "que glifos o Nerd Fonts
-acrescentou", o `unicodegen` pergunta "que caracteres existem" —, e a base
-continua cobrindo os 75, agora pela face certa.
-
-**Esta é a terceira vez que a mesma pergunta aparece com outra roupa:** qual
-face desenha o quê. Por isso o check `renderer-loads-four-faces` deixou de
-contar faces e passou a nomear casos: os 75 na face de emoji, `#` e `©` na
-primária, e `U+E0A0` ainda na Iosevka (que é a premissa do remapeamento da
-Lucide).
+### O app de ícones — `LEADER m i`
+
+Três coleções, um app: os glifos das Nerd Fonts, os ícones Lucide e os caracteres Unicode (emoji
+inclusive). Eram três buffers WASM, cada um com sua busca, sua aritmética de grade, sua ficha e sua
+linha de atalhos; hoje as tabelas, a busca e os formatos de cópia são uma biblioteca
+(`ronoctua-iconset`) e a vista é uma só (`crates/ronoctua-shell/src/icons.rs`), com duas portas: a
+região do rodapé (`LEADER m i`, a dobra de `m i i`) e a janela `br.ronoctua.icons` (`m i w`). Uma
+tela por coleção atrás de três abas (`C-1`…`C-3`, `C-TAB` anda por elas); `m i n|l|u` abre uma
+tela no conjunto `Ctrl`. A página de um ícone é `icons_page.rs`, que o fast-access desenha no seu
+painel de detalhe.
+
+#### As tabelas são lidas em tempo de execução, e só enquanto uma vista as mostra
+
+`glyphs.json`, `lucide.json` e `unicode.json` (~9 MB lidos) saem dos três geradores e chegam por
+`RONOCTUA_ICONSET` (`atRunTime` no `nix/rust.nix`, um diretório de links montado por
+`nix/iconset.nix`), nunca por `include_str!`: embutidas, uma nova versão das Nerd Fonts ou uma
+edição do léxico recompilava o workspace. `ronoctua_iconset::shared()` guarda o conjunto atrás de
+um `Weak`: ele existe enquanto uma vista o segura e morre com a última — o rodapé vive meses. A
+leitura custa algumas centenas de milissegundos, então cada porta a faz numa thread e recebe o
+resultado por um canal (`icons::read_the_tables`); até lá a linha diz que está lendo. Cobra
+`iconset-is-at-run-time`.
+
+#### A grade, e por que ela acende uma CÉLULA
+
+Uma lista mostrava ~20 ícones por tela em 10.473, e cada linha gastava a largura com um nome que
+ninguém lê quando procura uma **forma**. Em grade cabem centenas, e o olho varre por desenho. O
+nome continua: fica na linha logo abaixo das abas, a linha da busca, junto do que foi digitado, do
+contador e da marca de filtro — nome e etiquetas do ícone sob o ponteiro enquanto foi o ponteiro que
+se moveu por último, e do cursor depois de uma tecla, porque é o cursor que as teclas movem. A grade
+começa na linha seguinte e vai até a última, sem régua nem ar em cima e sem linha presa embaixo; os
+atalhos são a linha do sistema (o cabeçalho da janela, o minibuffer do rodapé), nunca uma linha da
+vista.
+
+O desenho aprovado punha o nome na **linha de explicação** do cabeçalho, e a grade direto sob ele. Não
+deu: essa linha só existe com o cabeçalho ABERTO e uma tecla sob o ponteiro (`chrome::Hinted::rows`),
+então o nome sumiria sempre que ela fecha — e a busca, posta no cabeçalho junto das abas, empurrava
+os atalhos para fora da linha numa largura comum. A linha da busca é uma linha da vista, mas é a
+única, e diz, no registro da explicação, o que um controle da vista sob o ponteiro faz (a marca
+de filtro; no rodapé, as abas). Fica para o dono confirmar.
+
+Numa GRADE a célula sob o ponteiro acende sozinha, nunca uma faixa de linha, e a célula do cursor
+veste `surface.selection` — a exceção do gerenciador de arquivos estendida a toda grade (emenda do
+AGENTS.md). Aqui não há alternativa: a cor de um emoji está dentro do glifo (CBDT), e
+`state-accent` não muda um pixel; em 3.944 das 11.614 células uma seleção feita de cor seria
+invisível. O ícone é desenhado a `space.icons.gridScale` vezes o tamanho do texto, de modo que a
+caixa dele tem um número inteiro de linhas e de células; a largura de um item vem por coleção
+(`nerdCells`, `lucideCells` — a face da Lucide não é monoespaçada e desenha um em inteiro — e
+`unicodeCells`, orçada para o mais largo). O layout é o `ronoctua_design::Grid`, e desenho, hover e
+clique leem a mesma aritmética (`chrome::Shelves`: a caixa de um item e, na volta, o
+`Grid::index_at`), a de toda grade de figuras — e as grades de células de texto acham a célula pelo
+`chrome::in_cell` (`a-grid-cell-is-lit-alone`); a grade rola por linha inteira, com a própria barra.
+
+#### A busca, uma só
+
+Casava substring, e isso dava duas respostas erradas ao mesmo tempo: `seta para cima` devolvia
+**zero** e `seta` punha **PESETA SIGN** em primeiro. A regra é **prefixo de palavra**, todas as
+palavras precisam casar, e a nota é a da pior. Prefixo e não palavra inteira porque a busca é
+incremental; consulta e texto são partidos pela mesma fronteira (pontuação ASCII — um caractere
+colado não é alfanumérico, e parti-lo por aí esvaziaria a consulta). As três cópias viraram uma
+`ronoctua_iconset::search` sobre um índice montado uma vez, na carga: cada palavra é um id de um
+vocabulário ordenado e uma tecla faz algumas buscas binárias por registro, sem alocar (cobra
+`one-icon-search`). Empates vão para o nome mais curto e depois para o nome; um glifo que nenhuma
+tabela nomeia (126 da fonte) vai por último, senão a grade abria justamente nos que ninguém acha.
+
+A identidade vale só para **um** caractere colado — o gesto de colar um caractere para saber qual
+é. Quando valia para "o termo contém este caractere", digitar `LONG LEFTWARDS ARROW` punha a letra
+`a` em primeiro.
+
+A linguagem de busca é interface: `familia:letra`, `bloco:`, `md:` são o que a pessoa DIGITA, e as
+palavras vêm do `.ftl` de todos os idiomas (`Grammar::new`). Os filtros de enumeração tomam uma
+palavra e deixam o resto como termo livre; os de texto livre (`bloco:box drawing`, `nome:`) tomam o
+resto. Tom de pele (`tom:`) sai do **codepoint modificador** da sequência, não do nome.
+
+A tela Unicode abre com `simbolos:` **escrito no campo** — quem abre vê 4.000 de 11.614 e vê por
+quê; um filtro invisível seria estado oculto. Por isso o `Esc` tem camadas: `simbolos:seta` →
+`simbolos:` → vazio → fecha. Cada toque muda o campo e o contador, então não existe a tecla que
+parece não fazer nada.
+
+#### O painel de filtros: o filtro que se acha sem saber o nome
+
+Os filtros sempre existiram como **prefixo na busca** (`md:`, `categoria:setas`, `familia:letra`,
+`bloco:f0`, `etiqueta:seta`). Isso é rápido e é invisível: para digitar `md:` é preciso já saber que o
+conjunto se chama `md`, e nada na tela contava. Quem não sabia tinha 10.473 glifos e nenhuma forma de
+recortá-los por origem. Os três buffers antigos tinham cada um o seu painel, e o app de ícones
+(`icons.rs`) manteve um por tela: os conjuntos das Nerd Fonts, as categorias da Lucide, as famílias
+do Unicode e, numa seção própria ("Só emoji"), os nove grupos de emoji e os tons de pele — sempre
+ali, porque escondidos até alguém escolher `emoji` eles eram um painel que mudava de tamanho sob a
+mão e que ninguém achava sem já conhecer.
+
+O painel é a descoberta que faltava, e **não** um segundo mecanismo de filtro: escolher "Material
+Design" escreve `md:` na busca, que continua editável. Abre com `TAB` ou com a marca de filtro ao lado
+do contador (as duas são o mesmo controle), já com o cursor no filtro em uso. Ele ocupa linhas da
+própria região, entre a linha da busca e a grade — nenhuma superfície nova, nenhum popup (invariante
+14) — no máximo `space.icons.panelSharePct` delas, e o que ele ocupa sai da grade. Quando não cabe,
+rola: pelas setas, pela roda sobre ele e pela própria barra, que tem a coluna dela (as escolhas são
+dispostas de novo sem ela). O termo livre sobrevive à troca: quem digitou `folder` e escolheu Material
+Design fica com `md:folder`; "Todos" tira o filtro e deixa as palavras. Na tela Unicode, escolher uma
+família substitui o `simbolos:` com que ela abre. O valor é escrito na palavra do leitor quando a
+língua tem uma (`familia:letra`): o que se escreve é o que ele digitaria. Clique e `RET` seguem o
+invariante 19: o primeiro clique seleciona, o segundo escolhe.
+
+**A lista sai da TABELA, não de uma lista escrita no código** (`Set::sets`, `Set::categories`). A
+próxima versão das Nerd Fonts pode trazer um conjunto novo, e uma lista à mão ficaria para trás em
+silêncio. A ordem é por tamanho, e não alfabética, porque alfabética seria a ordem do nome
+**traduzido**, diferente em cada idioma.
+
+**Os nomes dos conjuntos existem em dois lugares, e um teste os amarra.** No `.ftl` porque são texto
+de interface e alguns se traduzem ("Clima", "Personalizados", "Logos de distribuições"); no `SETS` do
+`gen-glyphdb.py` porque de lá viram **tag de busca**. Nada obriga os dois a concordarem, e "Clima" no
+painel com "weather" na busca seria uma tela que ensina uma palavra que não funciona. Por isso o
+teste `every_panel_label_finds_its_whole_category_in_every_language` do `ronoctua-iconset` exige que
+o rótulo que se lê ache, digitado na busca, o conjunto inteiro — e por isso o `SETS` passou a ser
+acentuado, já que a forma sem acento sai de graça do `no_accent`. A chave é **montada em tempo de
+execução** (`icons-set-`, `icons-category-`, `icons-family-`, `icons-group-`, `icons-tone-` mais o
+id), então o compilador não protege nada aqui; o mesmo teste confere que ela existe nos dois idiomas.
+
+Três perguntas, três respostas na cor: a escolha sob o cursor no acento, a que está em uso na tinta
+de título, as outras na tinta do que age. Um filtro que nenhuma escolha escreve (uma tag, um bloco)
+não marca nenhuma — dizer "Todos" ali seria mentira. A marca ao lado do contador **acende** quando há
+filtro em uso. Sem isso, uma lista restrita e a base inteira teriam a mesma cara, e "sumiu metade dos
+glifos" viraria um mistério.
+
+#### O que as tabelas precisam dizer, e por quê
+
+**A base Unicode é a união das faces com o UCD.** O renderizador embute as fontes e não tem cadeia
+descoberta em tempo de execução; um caractere que nenhuma face desenha seria tofu. Com a face de
+emoji, a interseção antiga esconderia caracteres que aparecem bem. O UCD entra pinado e a versão é
+escrita à mão no `unicodegen.nix` (seguir `lib.getVersion` seria uma guarda que não guarda; cobra
+`unicode-version-mismatch-fails`).
+
+**O léxico serve as coleções.** O mesmo `tags.en-pt.toml` que traduz `arrow` traduz `LEFTWARDS`;
+dois léxicos veriam `arrow` divergir. As etiquetas de emoji vêm do CLDR, não do léxico. E o gerador
+**molda cada sequência ZWJ com harfbuzz** e derruba o build se alguma não virar um glifo só.
+
+**O desenho nunca é o que se copia.** 302 caracteres têm avanço zero e são mostrados sobre `U+25CC`
+— quem compõe é o gerador (`shows`) —, mas a cópia devolve **um** caractere, nunca o círculo. Colar
+`◌́` no documento de alguém é o pior defeito desta funcionalidade e o único que sobrevive a qualquer
+inspeção visual; o teste `a_combining_mark_copies_alone` o prende. Os 23 de avanço dobrado (as
+setas longas, e todo emoji) ocupam duas células de tinta, e é isso que a coluna da grade orça.
+
+**A Lucide é remapeada.** A Iosevka daqui é patcheada com Nerd Fonts, que ocupa 634 dos codepoints
+que a Lucide publica; a face primária vence a cadeia, e 38% dos ícones sairiam como outro símbolo —
+não tofu, a coisa errada com toda a confiança. O gerador reescreve o `cmap` para
+`U+F2000..U+F2683`, confere que a faixa está livre nas outras faces (cobra
+`lucide-range-taken-fails`) e tira o `GSUB`. Cada registro traz `cp` (o que a tela desenha) e `lcp`
+(o que a Lucide publica, o que se copia): `house` é `U+E0F5`.
+
+**A face primária vencia o fallback em 75 emoji**, que saíam monocromáticos; a cópia embutida pelo
+renderizador corta os de `Emoji_Presentation=Yes` (`renderer-loads-four-faces` nomeia os casos).
+Cortar texto por codepoint inventa desenho (`👩‍❤` + `…`): o corte é por cluster.
+
+#### A página do ícone: um palco quadrado, e o ícone cresce do centro
+
+`RET` abre a página: um **palco** quadrado em `surface.container` (um fundo medido), de lado
+`space.icons.stageSharePct` da largura ou a altura, o que for menor, sem deixar a lista abaixo de
+`listCells`. No palco, os **limites** do ícone — a caixa do em de um glifo, o viewBox 24 da Lucide —
+na régua que um fundo elevado pede (`chrome::outline`, `rule.raised`: a régua padrão nesse fundo é
+ΔE 0,047), e o ícone em `centro − tamanho/2` (`icons_page::placed`). Um tamanho que muda com `←`/`→`
+muda a caixa em volta de UM ponto: o ícone cresce em toda direção e nunca anda para um canto. Cobra
+`the-icon-grows-from-its-centre`, que fotografa a página duas vezes e compara os centros.
+
+O centro é um pixel que o renderizador alcança exatamente. Um glifo é uma run de texto, e uma run
+com `Size::Placed(x, y, px)` começa `x` pixels à direita da borda da célula que ela nomeia e desce
+`y` pixels da linha dela — qualquer pixel nos dois eixos (2026-10-04; antes, `Size::Lowered`
+centrava a run numa célula e um caractere de duas células ficava meio avanço adiante). O
+`icons_page::centred_run` põe a borda esquerda no centro menos metade da largura da run no tamanho
+dela, e o meio de uma run de uma ou de duas células cai no centro exatamente, em todo tamanho. A
+caixa da fonte centrada é a tinta centrada: o meio da caixa fica a 0,34 em da linha de base, o meio
+da tinta de um ícone Nerd. Os limites de um caractere largo são a caixa da run — duas células de largura e
+uma linha do próprio tamanho de altura —, e não a caixa do em: a tinta de um emoji colorido tem
+~1,1 em de altura e 1,2 em de largura, e um contorno de 1 em era cruzado nos quatro lados (teste
+`a_wide_character_is_inside_its_bounds`).
+
+**A Lucide é o próprio SVG.** O palco rasteriza, pelo resvg e em `Fit::Natural`, o mesmo texto que a
+cópia entrega (`lucide::svg`) — byte a byte, antes e depois de mexer no traço (teste
+`the_copy_is_the_svg_the_stage_draws`). `Natural` e não `Fill`: preenchendo, um `width="24"` e um
+`width="512"` dariam a mesma imagem e o ajuste de tamanho não teria efeito. A chave da textura é o
+documento, o lado e a paleta. O `currentColor` vira o valor do token na hora (invariante 11 do lado
+de lá, conteúdo do lado de cá); uma cor que a pessoa digitou fica como ela digitou.
+
+**A personalização é do artefato.** Tamanho, espessura, cor (perguntada na linha de pergunta da
+porta, `icons-colour`), pontas e traço absoluto (a conta da lucide.dev, `espessura × 24 ÷ tamanho`),
+guardados enquanto a vista vive — o tamanho escolhido para um ícone é o do próximo. `TAB` restaura
+os ajustes de uma vez. São 19 formatos de cópia da Lucide, 9 das Nerd Fonts, 9 do Unicode.
+
+**A marca diz o que a tecla faz, e sai da mesma tabela que a tecla lê.** Duas células antes do
+valor, em toda linha: a marca `adjust` onde `←`/`→` ajustam, nada onde eles trocam de ícone (a cor
+e as cópias). Quem desenha e quem age perguntam à mesma `icons_page::affordance`.
+
+**A lista rola, com a própria barra**: a página da Lucide tem 29 linhas, e sem rolagem as últimas
+seriam inalcançáveis. Ela abre rolada até o cursor, que nasce na primeira linha que age (o tamanho),
+abaixo de todos os fatos: numa porta baixa, o rodapé principalmente, ele nasceria fora da tela. O
+valor de um fato **quebra** nas linhas de baixo e nunca é cortado com `…` (`chrome::note_lines`): as
+etiquetas do outro idioma e as categorias de uma figura não estão em lugar nenhum mais. Por isso a
+lista conta LINHAS — o deslocamento, a barra e o ponteiro —, e o cursor continua sendo uma linha da
+tabela. `RET` sobre um número (tamanho, espessura) sobe um passo e, do máximo, volta ao mínimo: é a
+linha onde a página abre, e o segundo clique é `RET` (invariante 19); uma tecla que não muda nada
+ali parece quebrada. A linha de atalhos diz `mudar` no lugar de `copiar` quando o cursor está num
+ajuste. Uma linha de etiquetas por idioma (`icons-sheet-tags-<subtag>`, cobra
+`buffer-tag-rows-have-text`): quem lê um idioma sabe as palavras do outro, e a busca acha as duas.
+
+#### As duas portas
+
+A janela é uma `Door` (`icons_window.rs`): o cabeçalho leva o glifo do app, as abas, o que foi
+digitado e os atalhos do sistema numa linha, e a gaveta do cabeçalho abre como em toda janela. O
+hover de cada ponteiro viaja como o código de um alvo (`Target::code`) no lugar da "linha" da mão,
+então cada cursor acende a própria célula na própria cor. Um arrasto na grade é a barra, nunca uma
+varredura de texto (`text_area` responde `None`).
+
+No rodapé a vista toma a região com linhas em branco — tantas quanto o teto da região — e desenha
+por cima delas, com o mesmo `View::draw`: as abas na primeira linha da região, a linha do nome,
+a grade ou a página. O ponteiro sobre a região é dela (`Footer::icons_took_the_pointer`), pela
+mesma aritmética com que foi desenhado; a área sai do `metric`, nunca do que a região contém (cobra
+`the-footer-does-not-ask-itself`). Como na janela, cada mão guarda o próprio alvo (`Target::code` na
+"linha" do ponteiro) e acende na própria cor (`pointers.lit`). Uma aba sob o ponteiro acende e diz o
+que faz na linha da busca, logo abaixo dela — a janela diz a mesma frase na linha de explicação do
+cabeçalho. Digitar, colar (`PasteFor::Icons`), perguntar a cor (o minibuffer) e copiar funcionam nas
+duas. O comando `icons-colour` rodado pelo nome (`LEADER :`) pergunta a cor quando a vista está
+aberta, e com ela fechada diz como abri-la — nunca silêncio.
 
 ---
 
@@ -5414,7 +5002,8 @@ desafio BotGuard do Google, que é JavaScript ofuscado.
 
 #### O gerador roda quando é preciso e sai — e essa é a forma, não um detalhe
 
-`ronoctua.transfers.poToken = "on-demand"` liga o gerador; o padrão é `none`.
+`ronoctua.transfers.poToken = "on-demand"` liga o gerador; o padrão é `on-demand` onde há
+`ronoctua.media` e `none` onde não há (desde 2026-09-30: o YouTube do player não tocava sem ele).
 
 O custo é **53,6 MiB**, e ele é menor do que parece — o que foi medido, e não
 suposto. Cunhar exige um runtime de JavaScript, e a primeira conta que fiz
@@ -5426,8 +5015,7 @@ nixos-system → system-path → yt-dlp-2026.07.04 → deno-2.8.3
 
 O yt-dlp do nixpkgs **já depende do Deno** (ele o usa para decifrar assinatura),
 então o runtime está pago de qualquer jeito e esta opção acrescenta só o
-gerador. Continua desligada por padrão porque é um subprocesso por token numa
-máquina que pode nunca baixar vídeo — não porque pese.
+gerador. Numa máquina sem `ronoctua.media` ela fica desligada, porque não há yt-dlp que a use.
 
 Upstream oferece duas formas, e a escolha entre elas é a razão de
 `nix/pot-provider.nix` existir:
@@ -5927,18 +5515,18 @@ O pedido nomeava `/boot` e as duas partições do pendrive. A medição diz que 
 partições EFI — a `/boot` pelo GUID do GPT, e a de 4 MiB do pendrive pelo tipo `0xef` do MBR — com
 `HintIgnore`. Honrar o hint contraria o pedido; ignorá-lo põe uma ESP de 4 MiB na barra de alguém.
 
-A saída não foi um mecanismo novo: `HintIgnore` virou `Volume.quiet`, e `quiet` anda sob o gesto que
-já governa os dotfiles. *"Escondido pela única regra que o Unix tem: o nome começa com ponto"* tem
-aqui o gêmeo exato — **discreto pela única regra que o udisks tem** —, e é o `C-h` que já existia.
+A saída não foi um mecanismo novo: `HintIgnore` virou `Volume.quiet`, e uma linha discreta aparece
+sempre, por último no bloco e no registro discreto (o `C-h` que a revelava saiu com o que escondia os
+dotfiles — ver "A linha inteira é a linha, e os ocultos não se escondem mais").
 
 #### Nenhuma regra polkit nossa, e isso inverte o padrão do repositório
 
-`files.nix`, `rescue.nix` e `memory.nix` escrevem uma regra estreita **porque a unidade é NOSSA** e
+`rescue.nix`, `memory.nix` e `security.nix` escrevem uma regra estreita **porque a unidade é NOSSA** e
 mais ninguém a autoriza. O udisks não é nosso: ele traz ações que já separam removível de sistema
 pelo `HintSystem` — `filesystem-mount` é `allow_active: yes`, `filesystem-mount-system` é
 `auth_admin_keep`. Uma regra nossa só poderia ALARGAR isso, e seria um segundo lugar para manter em
 dia com ids de ação de terceiros, que o polkit interpreta em runtime — id defasado é silêncio.
-Por isso o check é o INVERSO do `files-polkit-is-narrow`, e ele confere as duas pontas: que o udisks
+Por isso o check é o INVERSO do `security-polkit-is-narrow`, e ele confere as duas pontas: que o udisks
 está ligado, que não escrevemos regra nenhuma, e que **as quatro regras que devem existir continuam
 existindo** — sem essa última ele passaria numa árvore onde todas foram apagadas.
 
@@ -6665,10 +6253,10 @@ caso especial.
 anterior. Com um `preview_offset` o mesmo buraco abriria de novo, e pior: na linha trezentos do
 arquivo anterior.
 
-O conserto é causal e fica num lugar só: no `View::looked`, quando o CAMINHO muda. Cobre os dezesseis
-sítios, toda troca de diretório e os dois painéis, em três linhas — e re-decodificar o MESMO arquivo
-(arrastar a borda da janela pede de novo num `target` novo) mantém o lugar, porque jogar alguém de
-volta à linha um enquanto lê é pior do que o arrasto.
+O conserto é causal e fica num lugar só: no `inspection::Panel::looked`, quando o CAMINHO muda.
+Cobre os dezesseis sítios, toda troca de diretório e os dois painéis, em três linhas — e
+re-decodificar o MESMO arquivo (arrastar a borda da janela pede de novo num `target` novo) mantém
+o lugar, porque jogar alguém de volta à linha um enquanto lê é pior do que o arrasto.
 
 ##### E duas contas que, sem conserto, deixariam a feature sem servir
 
@@ -8701,7 +8289,8 @@ concedida por nome: um limite por contagem nas gerações do SISTEMA, que sempre
 execução e a do boot. Todo tamanho é porcentagem do disco de quem instala — o piso e a meta com um
 teto em GiB, como o journald faz com os dele —, e os números moram em `assets/cache.nix`; o cérebro
 lê os mesmos pelo `nix/cache.nix`, que recusa o build quando uma relação entre eles se quebra (piso
-abaixo da meta, e os tetos na mesma ordem; teto do cargo dentro do que a meta deixa; N ≥ 2).
+abaixo da meta, e os tetos na mesma ordem; a linha de "quase cheio" abaixo do piso, e o teto dela
+abaixo do dele; teto do cargo dentro do que a meta deixa; N ≥ 2).
 
 #### O que quebrava a garantia
 
@@ -8875,34 +8464,17 @@ da fase 1. As fases 1 e 2 da bateria constroem com `--out-link` no diretório de
 #### Quando o disco aperta: o cérebro abre espaço, na hora
 
 O piso do Nix só age enquanto algo compila, e só no store; um disco cheio por qualquer outra coisa —
-o cargo, antes de tudo — fica cheio até alguém ver. Quem vê é o cérebro: o pulso de cada tique já lê
-o `statvfs` do sistema de arquivos do `/nix/store` e do da home (`Pulse::disk_short`: algum deles
-abaixo do próprio piso, porcentagem com teto; `Pulse::disk_free_per_mille`, o mais cheio, é o que a
-tela diz). Nada avisa um processo que um disco está enchendo — o inotify fala de arquivos, não de
-capacidade —, então o evento é o tique que já existe, sem relógio novo.
+o cargo, antes de tudo — fica cheio até alguém ver. Quem vê é o cérebro, e o QUANDO é um módulo dele,
+`disk-space`, o primeiro a ganhar a própria pasta: o pulso que lê os sistemas de
+arquivos, nunca pelo calendário e fora do portão, a folga que não se repete sobre o mesmo aperto, a
+marca de "quase cheio" na modeline e o que a pessoa ouve estão no `why.md` dele
+(`crates/ronoctua-brain/modules/disk-space/`). O que fica aqui é o trabalho de apagar.
 
-A tarefa `disk-space` (`tasks/space.rs`) nunca vence pelo calendário: a linha dela diz "quando falta
-disco". Ela entra por `Task::wanted_now` — abaixo do piso, e se o último INÍCIO foi há mais de
-`reliefGapMinutes`, ensaio incluído (o runner guarda quando cada tarefa começou; o diário, onde
-ensaio não é execução, não sabe, e o cérebro do `.#dev`, que só ensaia, disparava a folga a cada
-tique) — e é a única que `Task::gated` tira do portão: a máquina está mais ocupada justamente
-enquanto um build enche o disco, e uma folga que esperasse a memória acalmar esperaria o disco
-lotar. Pelo mesmo motivo ela entra na CABEÇA da fila (`Shared::queue_first`): o runner só olha a
-cabeça, e atrás de uma varredura retida pelo portão ela ficaria retida também. Roda em prioridade
-ociosa, então ceder é trabalho do escalonador, não de um bloqueio.
-
-**Uma folga que deixou o disco curto não se repete.** Quando o que enche o disco é da pessoa —
-arquivos, programas, cinco closures do sistema —, nada mais sai sem ela, e uma folga por hora
-andaria o cache e coletaria o store à toa, dizendo "continua sem espaço" a cada vez. Depois de uma
-assim, a seguinte espera, além do intervalo, o disco encher MAIS do que ela o deixou: só então há
-algo novo para liberar.
-
-O trabalho é `ronoctua-disk-relief` (crate da varredura, unidade de usuário em
-`nix/modules/space.nix`, o sandbox dela copiado da varredura, com `-%C` para uma pessoa sem
-`~/.cache` ainda), em dois passos, e os números chegam como argumentos da mesma tabela de onde o
-piso do cérebro é compilado — por isso não há opção para eles, nem interruptor para a folga (quem
-a desliga é a página do cérebro; um segundo interruptor deixaria a tarefa pedindo uma unidade que
-não existe, de hora em hora):
+O trabalho é `ronoctua-disk-relief` (crate da varredura, unidade de usuário no `module.nix` do
+módulo, o sandbox dela copiado da varredura, com `-%C` para uma pessoa sem `~/.cache` ainda), em
+dois passos, e os números chegam como argumentos da mesma tabela de onde o piso do cérebro é
+compilado — por isso não há opção para eles, nem interruptor para a folga além do módulo (quem a
+desliga é a página do cérebro, ou `ronoctua.brain.modules.<id>.enable`, que leva as unidades junto):
 
 - **`cargo-builds`**, só quando o sistema de arquivos do CACHE está abaixo da meta — onde `/nix` e
   a home são dois, um store cheio não fica mais folgado recompilando as crates de alguém: o
@@ -8975,24 +8547,8 @@ dez dias o viu ficar. A tag é aberta com `O_NOATIME` (recusado num arquivo de o
 226/NAMESPACE antes do programa rodar (medido com uma unidade transiente). Só o script da
 atualização o criava, então numa sessão em que nenhuma atualização tinha rodado a varredura e o lixo
 nem começavam, e o cérebro esperava a paciência inteira. As três unidades declaram
-`RuntimeDirectory = "ronoctua-brain"` com `Preserve`, e o `the-brain-reads-what-the-units-write`
-cobra uma por unidade que escreve ali.
-
-**O que a pessoa ouve.** A tarefa mede antes e depois e põe um `Relieved` no `Mind` (o maior ganho
-entre os sistemas de arquivos, o quanto sobra no mais cheio, e se algum continua abaixo do piso); o
-rodapé o transforma no evento `disk-relieved` ("espaço aberto no disco: 12,3 GB liberados") ou
-`disk-still-short` — este o único evento do catálogo sem `auto-read`, porque o que falta liberar é
-decisão da pessoa, e dito UMA vez por aperto: outra folga que acha o mesmo não o repete, só uma que
-abriu espaço antes. O primeiro `Mind` que o rodapé vê é a base, e um ensaio nunca chega ali. O btrfs
-devolve o espaço quando a transação fecha, não quando o arquivo sai; a folga pede `syncfs` aos dois
-sistemas de arquivos antes de dizer que terminou, senão "liberado" sairia menor e "continua sem
-espaço" seria dito de um disco que não está.
-
-**O que ela precisa.** Uma sessão gráfica: o cérebro roda numa. Uma máquina em que ninguém entra
-graficamente fica com o piso do Nix durante os builds e a aparagem a cada ativação, e nada que ande
-um cache. As máquinas dos testes de VM desligam a tarefa (`disk-space` no `brain.json`, ao lado do
-`system-update`): um disco de teste pequeno cruza o piso fácil, e a coleta levaria os caminhos que um
-teste registrou e não enraizou.
+`RuntimeDirectory = "ronoctua-brain"` com `Preserve`; o `the-brain-reads-what-the-units-write`
+cobra as da varredura e do lixo, e o check do próprio módulo, as da folga.
 
 Ensaio num disco de 1,9 TB, sem apagar nada: o cache fica acima da meta e nada é levado; forçando a
 meta a 99% e o teto a 1%, 13 173 unidades, 76,8 GiB, de 95,8 GiB até 19,0 GiB, em 5 s.
@@ -9210,9 +8766,9 @@ instalação, e depois seria tarde.
 
 #### Duas instalações, e por que é uma OPÇÃO e não um segundo sistema
 
-`ronoctua.profile` vale `full` ou `minimal`, e a diferença é medida: **22,8 GiB contra 6,9**. Sai o
+`ronoctua.profile` vale `full` ou `minimal`, e a diferença é medida: **26,7 GiB contra 6,9**. Sai o
 Android (6,5), saem os compiladores (4,0), saem as variantes da fonte (2,0), saem o navegador, o
-editor e a mídia (2,0).
+editor e a mídia (2,0), e saem o Blender, o OrcaSlicer, o Claude Code e o Codex (3,9).
 
 **É uma opção, e não um `nixosConfigurations` a mais.** O instalador continua mirando `#noctua` nos
 dois casos; o perfil é uma linha no `host.nix`. Isso decide três coisas de uma vez: quem se arrepende
@@ -9366,7 +8922,7 @@ amarra o estado **pós-destrave** ao volume que foi realmente aberto.
 
 ---
 
-### O cérebro — `LEADER b`, e a linha que avisa antes
+### O cérebro — `LEADER b`, um daemon e módulos com contrato
 
 A máquina faz coisas sozinha, e até esta tela nada dizia o quê, quando, nem no que deu. `nix flake
 update` era um ALIAS de shell; o rebuild morava no `rescue.nix`, a coleta de lixo no `memory.nix`, o
@@ -9375,116 +8931,51 @@ convenções, e nada que rodasse os cinco em ordem.
 
 #### O que ele é: a mesma classe do `ronoctua-transfers`, um andar acima
 
-`ronoctua-brain` é um daemon de usuário com relógio, pulso, fila e um registro de tarefas atrás de um
-`Mutex` com `Condvar` e um contador de `version`, publicado INTEIRO num socket de JSON por linha
-(`$XDG_RUNTIME_DIR/ronoctua-brain.sock`, um por USUÁRIO). O argumento é o da fila, um nível acima:
-uma cópia de 40 GiB não pode morrer com o rodapé, e uma decisão sobre quando a máquina se reconstrói
-também não — o rodapé reinicia a cada edição de arquivo no laço aninhado e a cada falha na máquina
-instalada. E são três processos querendo a mesma resposta: a modeline, a tela do cérebro na região
-expandida, e a janela em que essa tela abre.
+`ronoctua-brain` é um daemon de usuário com relógio, pulso, fila e um registro de módulos,
+publicado INTEIRO num socket de JSON por linha (`$XDG_RUNTIME_DIR/ronoctua-brain.sock`, um por
+USUÁRIO). O argumento é o da fila, um nível acima: uma cópia de 40 GiB não pode morrer com o rodapé,
+e uma decisão sobre quando a máquina se reconstrói também não — o rodapé reinicia a cada edição de
+arquivo no laço aninhado e a cada falha na máquina instalada. E são três processos querendo a mesma
+resposta: a modeline, a tela do cérebro na região expandida, e a janela em que essa tela abre.
 
 **Ele não desenha, não segura teclado, não abre `/proc` e não reimplementa Nix.** O que está na tela
 é um componente `wasm32-wasip2` em `buffers/brain/`, desenhado pelo rodapé como qualquer outro. Ele
 não sabe o que uma atualização É: nomeia uma unidade e lê o que a unidade relatou (invariante 5).
 
-#### A porta é o trait `Task`, e ela promete cinco lugares
+#### Uma funcionalidade é uma pasta, e o núcleo não a nomeia
 
-Este é o ponto do crate. O dono pediu um lugar onde *"qualquer coisa nesse espaço"* vire
-funcionalidade em vez de um daemon novo, e um lugar só é um lugar se os passos para usá-lo estiverem
-escritos. Acrescentar uma tarefa toca **cinco**: um tipo em `src/tasks/`, uma linha no `vec![]` que
-os lista, as duas chaves de texto nos dois idiomas, uma linha na página inicial do buffer (se ela
-quiser uma) e um padrão em `prefs` (se ela tiver preferências). A LISTA desenha qualquer tarefa sem
-saber nada dela: `brain-task-<id>` a nomeia, `<id>-does` diz o que faz, e `Task::kind` decide o
-glifo e a cor. O que ela NÃO escreve, porque o
-runner já é dono: a fila — no máximo uma tarefa por vez —, o portão de métrica, o aviso e a contagem
-dele, o diário, o socket e toda tela que olha.
+O dono pediu um lugar onde *"qualquer coisa nesse espaço"* vire funcionalidade em vez de um daemon
+novo, e um lugar só é um lugar se os passos para usá-lo estiverem escritos. Hoje são: uma pasta
+`crates/ronoctua-brain/modules/<id>/` com `manifest.nix`, `module.rs`, `module.nix`, `i18n/`,
+`checks.nix` e `why.md`. O núcleo, o shell e o buffer desenham marcas, avisos, páginas, ações e
+eventos de qualquer módulo sem saber nada dele, e o `brain-modules-are-sealed` recusa um arquivo de
+fora que nomeie um módulo sem estar no `namedBy` dele. O que o módulo NÃO escreve, porque o núcleo já
+é dono: a fila — no máximo uma execução por vez —, o portão de métrica, o aviso e a contagem dele, o
+diário, o socket e toda tela que olha.
 
-#### E o interruptor não alcançava a execução
+O contrato está em três seções do capítulo 8 — *O núcleo do cérebro sobre o contrato dos módulos*,
+*Os módulos do brain: da pasta ao Rust* e *O que o cérebro diz: faixa, marcas, página e fio* —, e o
+porquê de cada módulo está no `why.md` da pasta dele, que viaja com ela: `system-update` (a
+sequência, as duas metades, o interruptor de um passo e a vista da atualização), `cache-sweep`,
+`trash-expire`, `emacs-daemon`, `clock-sync`, `disk-space`, `reminders`, `oom-watch`,
+`journal-errors`, `containers`, `search-index`, `video-metrics`, `belongings-reminder` e
+`security-watch`. Este documento não repete o que mora lá.
 
-Atrás daquele defeito havia um maior, e o dono decidiu consertá-lo: `m t` gravava no `brain.json` e
-**nada na máquina lia esse arquivo**. Quem decide quais passos rodam é `/etc/ronoctua/updates.conf`,
-gerado da opção `ronoctua.update.steps`, que precisa de um rebuild. A página oferecia uma tecla, a
-tecla gravava um arquivo, e a sequência seguia rodando exatamente o que rodava — sem nada, em lugar
-nenhum, dizendo isso.
+#### Um passo é um giro sobre o padrão declarado
 
-O `turned_on` do script gerado passou a ler **três camadas**, da menos específica para a mais: o
-padrão da distro, a tabela da máquina, e por cima delas os GIROS da pessoa, que o brain escreve de
-`brain.json` para `$XDG_STATE_HOME/ronoctua/update-steps.conf` toda vez que as preferências mudam.
-Uma fonte de verdade (`brain.json`) e uma vista derivada dela, na forma de uma linha por passo, que é
-a forma que o script já sabe ler — a alternativa era ensinar um `writeShellApplication` a parsear
-JSON, que é ou uma dependência nova ou um `grep` que um dia responderá com confiança e errado sobre
-a máquina de alguém. É a mesma relação que o fragmento do compositor tem com o `theme.json`.
+`TaskPrefs::steps_off` era um conjunto de "desligados", e um conjunto assim só diz *a pessoa desligou
+um passo que vem ligado* — supõe que todo passo vem ligado. A atualização entrega seis dos doze
+desligados, e a página dizia `você mudou` sobre os seis numa máquina em que ninguém tinha mexido. O
+campo virou `steps_flipped`: `on = on_by_default ^ flipped`, `changed = flipped`, com um
+`serde(alias)` no nome antigo (sob as duas leituras uma entrada quer dizer a mesma coisa, e nada em
+disco migra). O que atravessa o fio é `on_by_default`, o único fato declarado dos dois.
 
-**A camada da pessoa é só da metade dela**, e isso é uma fronteira e não um esquecimento: a metade
-root roda como root, cuja casa é `/root`, e não há jeito honesto de ela descobrir de quem foi a
-sessão que a iniciou. As formas de dar-lhe um acabam todas num diretório de root que um membro de
-`users` pode escrever — numa máquina compartilhada, qualquer conta decidindo o que um update de root
-roda. Os seis passos root ficam com a opção do Nix, e a página os desenha RECUSANDO com a frase que
-diz de onde vem o valor — a mesma resposta que a vista do Syncthing dá para as catorze opções que o
-flake fixa (invariante 6).
+#### Nada que ele faça pode PERGUNTAR
 
-E o que prova isso é um check que **roda a função gerada** em vez de ler o gerador. A primeira forma
-dele lia o código-fonte pelo nome do arquivo, e uma sabotagem passou direto: apontar a guarda para
-`/nonexistent` deixando o redirecionamento embaixo manteve o nome no texto e quebrou a
-funcionalidade. Um check que procura uma palavra mede como a fonte está escrita, que não é a
-propriedade.
-
-#### `você mudou` sobre seis passos que ninguém tocou
-
-O dono abriu a página do update e viu seis linhas dizendo `you changed`, numa máquina onde não tinha
-mudado nada. Perguntou o que aquilo queria dizer. Era um defeito, e a forma dele vale guardar.
-
-`TaskPrefs::steps_off` era *"um conjunto de exceções e não uma lista do que roda"*, e o comentário
-que dizia isso estava certo sobre o que o campo é e errado sobre o que ele supõe: um conjunto de
-"desligados" só consegue expressar uma coisa — *a pessoa DESLIGOU um passo que vem ligado* —, e
-portanto assume que **todo passo vem ligado**. O `assets/updates.nix` entrega **seis dos doze
-desligados**.
-
-A aritmética era `on = !contains(id)` e `changed = contains(id) == on_by_default`. Com o conjunto
-vazio, para cada um daqueles seis: `on` dava LIGADO — o contrário do que a distro entrega, com o
-tique aceso — e `changed` dava verdadeiro. E apertar a tecla piorava ao contrário: o passo entrava no
-conjunto, `on` virava falso e `changed` virava falso, então a linha passava a dizer "não mexido"
-**depois** de a pessoa ter escrito no arquivo dela.
-
-O conserto tem duas metades. A exceção virou um **giro sobre o padrão declarado** —
-`on = on_by_default ^ flipped`, `changed = flipped` —, com o nome do campo mudado para
-`steps_flipped` e um `serde(alias)` no antigo: sob a leitura velha uma entrada só podia ser um passo
-ligado que alguém desligou, e sob esta ela quer dizer exatamente a mesma coisa, então nada em disco
-precisa migrar. E o que **atravessa** deixou de ser `changed` e passou a ser `on_by_default`: o padrão
-é o fato DECLARADO e o único dos dois que não é derivado, "mudou" é uma subtração que qualquer um com
-os dois faz, e a tela ganhou de graça a capacidade de dizer de que um passo foi mudado.
-
-#### Uma tarefa pode ser uma VIGIA, e isso mudou duas coisas
-
-A tarefa que olha o daemon do Emacs não se parece com as outras três em nada. As três fazem e
-relatam; esta só OLHA, e o resultado inteiro dela é uma frase. Duas consequências, e as duas valem
-para a próxima vigia que aparecer.
-
-**A cadência dela é em minutos.** `interval_days` é a unidade certa para um rebuild e inútil aqui: o
-daemon pode cair às dez da manhã, e uma checagem que voltasse amanhã deixaria alguém sem a sessão do
-editor por um dia enquanto a tela dizia que estava tudo em ordem. `TaskPrefs::every_minutes` é
-`Option` e vale para quem a declara — `schedule::next_moment` curto-circuita o calendário inteiro na
-primeira linha quando ela está lá, porque não há janela para achar, dia para caminhar nem fuso para
-consultar, e `local_day` arredondaria cinco minutos para "hoje" e devolveria sempre o mesmo instante.
-Não é um knob: a escada de cadência que a tela percorre é em dias, e uma tarefa que pensa em minutos
-não tem degrau nenhum ali para onde ir.
-
-**E ela levanta um AVISO** (`task::Notice`, por `Report::say`), que a faixa do rodapé desenha. Uma
-frase que só aparecesse numa tela que alguém tem de abrir seria uma vigia que ninguém ouve. Veio pelo
-`Report` e não por um quarto `Outcome` nem por um método a mais no trait: `run` recebe `&self` e
-devolve o que FEZ, um aviso não é isso, um quarto `Outcome` faria todo leitor de um outcome aprender
-sobre avisos, e um método a mais não teria onde a tarefa lembrar o que acabou de achar. O `Report` já
-é o canal de volta de uma execução.
-
-O aviso carrega CHAVES e um id de COMANDO — nem o rodapé nem um componente inventa palavra — e **pode
-não ter botão**. O do "este Emacs não é o cliente" não tem um de propósito: o que está aberto é o
-trabalho de alguém, com buffers que nada aqui sabe se foram salvos.
-
-O trait tem oito métodos e **só o `run` toca a máquina**. Os outros — como se chama, de que tipo é,
-quando vence,
-do que precisa, por quanto tempo avisa, quais são os passos — não recebem relógio, não abrem arquivo
-e não sobem processo. É isso que permite provar um ANO de agendamento em milissegundos, com um
-`Clock` de teste, sem esperar um segundo sequer.
+Não há agente polkit na sessão, e a razão é do dono: o cérebro roda num bom momento, que é quase
+sempre um em que ninguém olha a tela, e ali um pedido de autenticação é uma falha silenciosa com a
+cara de uma recusa. Toda regra que um módulo traz devolve `YES` para uma ação estreita, nunca um
+`AUTH_*`, e o que um módulo chama vai por caminho do store (o `system-update` conta o seu caso).
 
 #### Não há uma segunda fronteira com o `/proc`
 
@@ -9528,70 +9019,6 @@ capacidade depois que a família delas já existia.
 
 Os dois são exaustivos hoje — vinte e um braços num, nove no outro.
 
-#### O cérebro declarava a atualização DUAS VEZES
-
-Este é o defeito mais caro da entrada, e ele já estava desenhado. A tarefa do cérebro carregava três
-passos escritos à mão — `update-inputs`, `build`, `collect-garbage` — enquanto o
-`assets/updates.nix` declara doze, nomeados `flake-update`, `system-rebuild`,
-`store-collect-garbage` e mais nove. Não era um subconjunto: os dois conjuntos são **disjuntos**.
-Todo nome de passo na tela era um nome que a sequência não usa — e a linha do "parou em" tira o id
-do relatório que a UNIDADE escreve, então uma falha em `flake-update` procuraria uma chave que não
-existe e desenharia a chave crua na frente de quem foi olhar por que a atualização não terminou.
-
-Hoje a tarefa lê a tabela gerada: o `build.rs` traz para o `OUT_DIR` o `updates.rs` que o Nix
-produziu (por `RONOCTUA_UPDATES_RS`), e um `include!` o traz para dentro do crate. Uma fonte, e a
-lista na tela é a lista que roda.
-
-#### A sequência: uma fonte, quatro produtos, e o invariante 6 resolvido por construção
-
-De `assets/updates.nix` saem a tabela Rust, as chaves de texto que os dois idiomas têm de carregar,
-os dois roteiros de shell — o do root e o da pessoa — e uma recusa em tempo de build com o id do
-passo na mensagem. Escrita como script, "quais passos existem?" seria um grep por cinco arquivos, e
-a resposta sairia errada.
-
-O dono pediu os gerenciadores de linguagem junto — rust, go, js, npm —, e o `nix/modules/dev.nix`
-abre nomeando esses mesmos gerenciadores como a coisa que esta distro recusa. As duas metades ficam,
-e a costura é estrutural em vez de ser convenção:
-
-1. **Todo passo declara uma PRECONDIÇÃO**, e um passo cuja precondição é falsa é pulado E DITO —
-   nunca pulado em silêncio, que é a única forma de um passo declarado ser honesto sobre uma máquina
-   em que ele não cabe.
-2. **Nenhum passo pode INSTALAR.** Atualizar o que já está lá não é gerência imperativa de pacote; pôr
-   o que não está, é. O gerador recusa o substrato `install`, cada verbo de instalação que ele conhece,
-   todo metacaractere de shell e toda forma de escrever "passe isto por um shell" — não sobra
-   argumento por onde um se esgueire.
-3. **Passo que nomeia um BINÁRIO NU** — um que a flake não põe na máquina — **não pode nascer
-   ligado**, não pode rodar como root, e tem de declarar o próprio pré-requisito em `needs`, para que
-   a máquina que não tem a ferramenta ganhe um passo pulado e não uma falha. Ligá-lo é uma linha no
-   `configuration.nix` da máquina onde o dono pôs a ferramenta à mão — a mesma forma da saída que o
-   `dev.nix` já sanciona para o `~/.shellrc.local`.
-
-E há uma quarta lei, que é de ordem: exatamente um `move-inputs` e exatamente um
-`apply-configuration`, o primeiro antes do segundo, todo `reclaim-space` depois — e root primeiro,
-pessoa depois, nunca intercalados. Intercalar custaria uma ida ao polkit a cada troca, e uma
-sequência cuja ordem muda quando alguém vira um `root =` é uma sequência que ninguém prevê.
-
-São **quarenta e uma** recusas no gerador ao todo, e **duas delas são provadas** por uma fixture
-negativa: um passo que nasce ligado citando binário de fora, e um passo que instala. O check não se
-contenta com "o build caiu" — ele cobra as duas frases, *invariante 6* e *instala*. Sem isso, "o
-gerador recusa" seria uma afirmação não testada sobre o único código deste repositório que decide o
-que roda na máquina de alguém.
-
-#### Nada que ele faça pode PERGUNTAR
-
-Não há agente polkit na sessão gráfica. A regra de que ele depende nomeia duas unidades, um verbo
-(`start`) e um usuário, e devolve `polkit.Result.YES` — nunca um `AUTH_*`. Nenhum dos dois roteiros
-invoca `sudo`, `pkexec`, `pkttyagent` ou `systemd-run`, e o `systemctl` é achado por CAMINHO DO
-STORE, porque o `PATH` de uma unidade é mínimo e um nome falha longe da causa.
-
-**E a razão é do DONO, não do desenho.** Às vezes o leitor de digital pede que ele aprove alguma
-coisa, e ele não vê o pedido, ou está longe do laptop. Não é que ele recuse — é que não teve como
-aprovar. Isso decide a funcionalidade inteira: o cérebro existe para rodar a atualização num BOM
-MOMENTO, e um bom momento é quase sempre um em que ninguém está olhando para a tela. Ali um pedido
-não é uma pergunta, é uma falha silenciosa com o formato exato de uma recusa — e o relatório diria
-"você não quis" sobre uma coisa que ninguém viu. Sem agente, um `AUTH_*` já falharia; mas falharia
-por ACIDENTE, e o `updates-never-ask` transforma a ausência em requisito.
-
 #### O laço esperava passado a versão de ANTES da própria passada
 
 O dono relatou a tela: o buffer do cérebro com **muito** lag, a janela deixando o minibuffer por
@@ -9625,40 +9052,6 @@ quadro. É a regra que o `buffers/memory` já enuncia sobre a amostra dele — c
 tela só se mexe quando MUDOU. O que isso não faz, e não vale prometer: o hospedeiro do buffer é um
 laço `calloop` só, de propósito, então um `render` genuinamente lento ainda segura a janela. O que
 ficou verdadeiro é que nada naquele laço tem permissão de ser lento.
-
-#### E a unidade que o cérebro pedia era de USUÁRIO, sem `--user`
-
-Achado puxando o mesmo fio. `nix/modules/update.nix` declara `ronoctua-update.service` em
-`systemd.user.services`, e o `systemd::argv` do cérebro montava `systemctl --no-block start …` sem
-`--user` — no barramento de SISTEMA, onde ela não existe.
-
-E não falharia só: no barramento de sistema o `systemctl start` é autorizado pelo polkit **antes** de
-o systemd procurar a unidade, e não há agente polkit na sessão. A chamada ficaria pendurada até
-estourar, levantando um pedido de autenticação que ninguém pediu — a mesma forma de defeito que um
-teste de unidade deste repositório já tinha levantado, e que o dono relatou por ter sido perguntado
-cinco vezes. Este dispararia a cada atualização vencida, numa máquina em que ele pode não estar
-sentado.
-
-#### A atualização é uma vista, com as duas portas
-
-`LEADER s u` virou grupo: `s u u` abre a vista no rodapé, `s u w` na janela — a porta que a marca
-animada da modeline abre — e `s u n` começa a atualização agora. As duas portas mostram a mesma
-`update_window::View`: os passos declarados com o veredito de cada um, o que o passo sob o cursor É
-(o segundo registro, com o motivo de um pulo) e as duas saídas, a da metade root e a da pessoa, ao
-vivo por dois `journalctl -f` que a porta mata ao fechar. As teclas são uma tabela só, ensinada nas
-duas e clicável nas duas: as setas andam nos passos, `C-j` e `C-k` andam a saída uma página, `G` vai
-ao fim dela, `u` começa a atualização pela mesma porta do `s u n` (`update_window::begin`, com a frase
-que diz se foi pelo cérebro ou pelo systemd), e `a` e `p` respondem à contagem do cérebro pela mesma
-decisão dos botões da faixa (`brain::answer`: adiar enquanto só está anunciado, abortar quando já
-roda, e dizer que não há nada quando não há). A janela só olhava: não tinha cabeçalho, não começava
-nada e não respondia à contagem.
-
-Cada porta arruma a vista no seu espaço. A janela a divide em duas metades, a dos passos e a da
-saída, cada uma com a sua rolagem. A região do rodapé tem teto de linhas, e nela a vista é UMA lista
-— o segundo registro, os passos, uma linha de ar e a saída —, que a rolagem, a barra e a roda da
-região já leem; ela conta as linhas sem construí-las e constrói só as que desenha, porque a saída
-guarda até duas mil. Uma linha que chega de um diário não move a página, com a exceção que um log
-tem: a página que a pessoa levou ao fim da saída continua no fim enquanto o fim anda.
 
 #### A faixa é a superfície do rodapé crescendo PARA BAIXO
 
@@ -10430,14 +9823,15 @@ nunca o nome de um arquivo só quando tocam vários. O conector é da porta, por
 (`player-set-joiner`); onde o próprio daemon diz o nome — o título no MPRIS, uma lista que o mpv
 expandiu — ele junta com ` + `, um sinal e não uma palavra de língua nenhuma.
 
-**Os arquivos são do player, e a pasta vai inteira ao daemon.** O player lista a própria biblioteca
-(`LEADER p l`, uma página da vista) em vez de mandar a pessoa ao gerenciador: começa na pasta de
-música, gira para vídeos e clipes musicais (a décima primeira pasta do `nix/user-dirs.nix`), e só
-mostra o que toca — o critério é UM (`player_browse::glyph_if_played`). Uma pasta vai ao daemon
-como UM endereço, e é ele que a caminha e a faz uma playlist com o nome dela (a fila é uma árvore:
-uma pasta achatada em arquivos deste lado perdia o nome); a porta só confere, antes de mandar, que
-há algo nela para tocar, e diz se não há. `P` toca AGORA, logo depois do que toca, e a fila fica —
-como um arquivo aberto de fora; recomeçar a fila é só o "abrir fila" do próprio player.
+**Os arquivos se escolhem no seletor do sistema, e a pasta vai inteira ao daemon.** O player não
+lista pasta nenhuma: cada propósito (`Purpose`: fila, tocar junto, abrir, legenda, capa, salvar) é
+uma página com o seletor de arquivos (`PageId::Pick`, veja "O seletor de arquivos"), e o que ele
+mostra de uma pasta é um filtro do player — o critério do que toca é UM
+(`player_kinds::glyph_if_played`). Uma pasta vai ao daemon como UM endereço, e é ele que a caminha e
+a faz uma playlist com o nome dela (a fila é uma árvore: uma pasta achatada em arquivos deste lado
+perdia o nome); a porta só confere, antes de mandar, que há algo nela para tocar, e diz se não há.
+`C-RET` toca AGORA, logo depois do que toca, e a fila fica — como um arquivo aberto de fora;
+recomeçar a fila é só o "abrir fila" do próprio player.
 
 **A fila é uma árvore na porta também** (`player_queue`). Uma playlist com nome guarda entradas, e
 um conjunto guarda faixas; os dois são GRUPOS, a linha encabeçada por um triângulo (`md-menu_right`,
@@ -10523,12 +9917,12 @@ o gerenciador os mostra com o glifo de lista, a prévia os lê pelo mesmo leitor
 (`ronoctua_playlist::own`) e o player é quem os abre. O `playlist-formats-are-total` lê a lista
 `own` como lê as outras.
 
-**Salvar e abrir são perguntas na linha da porta, e só "abrir fila" substitui a fila.** Salvar o
-conjunto pergunta o nome — com o nome do que toca já na linha, que mudar começa do que é — e depois a
-pasta, com a de música; um arquivo que já está lá só é regravado depois de uma pergunta com o
-"não" primeiro, e um nome que não pode ser de arquivo ou uma pasta que não existe são recusados numa
-frase. Salvar a fila é igual, sem nome de partida. Abrir é uma página dos arquivos com outro
-propósito (`Purpose::Open`), que lista só `.rset` e `.rqueue` (`player_browse::Wanted`): um CONJUNTO
+**Salvar e abrir passam pelo seletor, e só "abrir fila" substitui a fila.** Salvar o conjunto abre
+o seletor no modo de salvar (`Mode::Save`), com o nome do que toca na linha do nome — mudar começa
+do que é — e a pasta onde o último foi salvo; um arquivo que já está lá só é regravado depois de uma
+pergunta DENTRO do seletor, com o "não" primeiro, e um nome que não pode ser de arquivo é recusado
+numa frase. Salvar a fila é igual, sem nome de partida. Abrir é outra página do seletor
+(`Purpose::Open`), que mostra os `.rset` e `.rqueue` (`player_kinds::SAVED`): um CONJUNTO
 toca agora, logo depois do que toca, a fila mantida; uma FILA toma o lugar da fila, e com a fila
 cheia pergunta antes, o "não" primeiro — é o único lugar em que o player substitui a fila. Renomear
 pergunta com o nome atual na linha, pela linha "Renomear…" (o que toca) ou por `r` numa entrada; a
@@ -10863,8 +10257,8 @@ preso.
   View`); lido sozinho, `player.rs` não desenhava rótulo nenhum das páginas.
 - **`LEADER p m` abre a página das máquinas** (`player-machines`) e o pareamento é só pelo nome;
   **`LEADER p j`** (`player-together`) é a pergunta do que tocar junto, que era `p f`: uma faixa do
-  tipo que o nome do arquivo diz (`player_browse::lane_kind_of`). Uma página
-  aberta PELO NOME (um comando, `f`) volta, no `Esc`, à linha dela na página de baixo, e não a onde o
+  tipo que o nome do arquivo diz (`player_kinds::lane_kind_of`). Uma página
+  aberta PELO NOME (um comando) volta, no `Esc`, à linha dela na página de baixo, e não a onde o
   cursor calhava estar; e uma página que já está na pilha é revisitada, não empilhada de novo —
   `p m` e `k` alternados empilhavam as mesmas duas sem fim.
 - **Digitar é escolher.** O que tocar junto, digitado na página que o escolhe, fecha a página
@@ -11422,8 +10816,8 @@ fontes tocando, um anel ("Do arquivo") escolhe qual.
   nomeia o arquivo na folha (`Sheet::cover_file`); a porta o decodifica na mesma thread que buscou a
   folha, até `space.player.coverPx` no lado maior, e o desenha sobre `space.player.coverLines`
   linhas próprias (`player_rows::CoverRow`), na proporção dele, a partir da primeira célula das
-  linhas e com `space.files.pictureAir` de ar acima e abaixo — uma imagem não encosta na linha de
-  cima nem na de baixo. Rolada pela metade, a parte que a rolagem tirou sai da imagem também, sob uma
+  linhas e com `files::picture_air` de ar (uma fração da célula) acima e abaixo — uma imagem não
+  encosta na linha de cima nem na de baixo. Rolada pela metade, a parte que a rolagem tirou sai da imagem também, sob uma
   chave própria (`player_metadata::cover_place`, a conta que a janela e o rodapé pintam). A linha da
   capa abre a página dela: outra imagem dos arquivos (abertos na pasta do arquivo,
   `Purpose::Cover`, só imagens), salvar ao lado do arquivo, ou tirar depois de uma pergunta.
@@ -11470,7 +10864,8 @@ a janela encontra.
 
 **Consentimento é um toque numa linha que nomeia o host.** Nada busca sozinho, a não ser as duas
 chaves que já buscavam (letras automáticas e SponsorBlock), nascidas desligadas. Cada serviço tem o
-seu consentimento em `player.json` (`consented`), nascido vazio; a linha que busca nomeia os hosts
+seu consentimento no `consent.json` da distro, por host (antes, em `player.json`, `consented`; ver
+"O consentimento do player é o da distro"), nascido vazio; a linha que busca nomeia os hosts
 do serviço, e apertá-la é o consentimento: a porta grava e só então pede. O daemon lê o arquivo na
 hora de perguntar — nunca uma cópia da partida — e recusa um serviço não permitido com `off{host}`,
 sem mandar nada; o teste `nothing_reaches_the_network_until_somebody_says_so` cobre todo serviço.
@@ -11509,7 +10904,8 @@ filme.
 `.lrc` já lá é recusado com `exists`, na hora, para a porta perguntar ("não" primeiro) e mandar de
 novo com `replace`. A letra também pode ir para a etiqueta.
 
-**Não há tradução de letras.** Decisão do dono (2026-09-28): letras são as originais, buscadas e
+**Não há tradução de letras** — revertida em 2026-09-30 ("Letras traduzidas, quando a pessoa pede",
+na seção do motor do player). Decisão do dono (2026-09-28): letras são as originais, buscadas e
 baixadas em qualquer língua; nem tradução automática, nem por chave. A pesquisa mostrou o que havia:
 o LRCLIB não tem traduções nem campo de língua; o endpoint de traduções do NetEase é não oficial e
 traduz quase sempre para chinês; o Musixmatch só as dá em planos pagos; Genius e LyricsTranslate não
@@ -11702,8 +11098,8 @@ por tema (`LEADER p r`, `p v`, `p g`), e cada uma é uma pilha de páginas (`cra
   de estar perguntando, e a página diz que não há lista ainda, com a linha que pergunta de novo. A
   lives recusada pelo yt-dlp é dita pelo nome do tema na língua da pessoa, nunca pelo id.
 - **Nenhum diretório nasce permitido.** Enquanto não for, a seção diz a quem perguntaria ("Perguntar
-  a radio-browser.info") e que pressionar permite; o pressionar é o `Errand::Let` das buscas (um
-  diretório, mesclado no `player.json`) e depois a pergunta. Nada vai para a rede antes, e a página
+  a radio-browser.info") e que pressionar permite; o pressionar é o `Errand::Let` das buscas (o host
+  do diretório, mesclado no `consent.json`, que é por onde os pedidos dele saem) e depois a pergunta. Nada vai para a rede antes, e a página
   que abre sem permissão não pergunta nada.
 - **Rádios e TVs do mundo.** O globo, a busca pelo nome (`/`, na linha da porta), Favoritos e Tocados
   há pouco com a contagem, na rádio os Gêneros e as Línguas, e um título Países com uma linha por país
@@ -11854,7 +11250,7 @@ o espaço por último, para um nome com espaços sobreviver —, escrito por ras
 processo só o seu. `take` encerra o mesmo inquilino onde ele estiver e quem ocupa o espaço de
 chegada (a decisão pura é `to_end`); `toggle` fecha a coluna se ela está AQUI e, se está em outro
 lugar, a traz. A guarda contra pid reciclado lê a linha de comando pelo mesmo `Opening::parse` que
-abre a coluna. O `column.pid` antigo ainda é lido como o do player.
+abre a coluna.
 
 **Uma pergunta na barra alarga a coluna.** Pergunta é digitada onde é desenhada, e a barra não
 desenha cabeçalho: um `Ui::ask` com a coluna na barra a devolve ao tamanho de antes. O mesmo vale
@@ -12147,9 +11543,9 @@ compositor é. `term` isola todo o `unsafe` e todo o FFI.
 
 As adições ao grafo original, cada uma por um problema real:
 
-- **`ronoctua-glyphgen`** (hoje `nix/glyphgen.nix`). O consumidor da base compila para wasip2 e
-  **não tem filesystem**: não pode ler o TTF em tempo de build. Sem gerador separado, ou ele deixa
-  de ser wasip2, ou a tabela de ícones volta a ser hard-coded.
+- **`ronoctua-glyphgen`** (hoje `nix/glyphgen.nix`). A tabela de ícones é medida contra o TTF de
+  verdade, e isso é trabalho do build, não de quem a lê: o gerador a escreve uma vez, e o
+  `ronoctua-iconset` (abaixo) a lê em tempo de execução.
 - **`ronoctua-cmd`.** Toda funcionalidade tem de ser um comando nomeado. `keymap` resolve a árvore de
   teclas; o **registro de comandos** é outra coisa, e sem crate próprio os ids nascem espalhados
   dentro do `shell`.
@@ -12205,6 +11601,38 @@ As adições ao grafo original, cada uma por um problema real:
   ponte) e a fila (o enquadramento do native messaging, que antes era uma cópia dela). O binário
   `ronoctua-browser` é o host que o Chrome sobe, extraído em `rust.browser`.
 
+A leva de 2026-09-30 trouxe quinze crates, e quase todos são uma fronteira (a tabela do `AGENTS.md`
+diz com quem cada um fala):
+
+- **`ronoctua-consent`.** "Este host pode ser perguntado?" tem uma resposta só, e ela é um VALOR: o
+  `Pass` que só este crate cunha. O `ronoctua-http` o exige em toda requisição, e por isso quase todo
+  crate que fala com a rede depende dele (lookup, broadcast, words, websearch, video-metrics, calc,
+  software, security, containers, ytdlp). Ele mesmo só depende do `ronoctua-store`.
+- **`ronoctua-words`** e **`ronoctua-websearch`.** Tradução, definições e sinônimos de um lado, busca
+  na web do outro: dois serviços, dois crates, e nenhum deles conhece a porta que os mostra (o
+  player e o fast-access).
+- **`ronoctua-index`.** O super-índice do fast-access: um escritor (feature `write`, só a unidade do
+  módulo `search-index`) e leitores sem servidor entre eles. Depende do `ronoctua-inspect` para o
+  texto de um documento e do `ronoctua-video-metrics` para o catálogo, nunca o contrário.
+- **`ronoctua-journal`.** O seguidor único do journal que o brain reparte entre os módulos; só o
+  brain o usa.
+- **`ronoctua-iconset`** e **`ronoctua-calc`.** Bibliotecas de uma vista com dois chamadores dentro
+  do shell (o app e o fast-access): as três tabelas de ícones e uma busca; o motor exato da
+  calculadora, puro, mais as taxas do BCE (`rates.rs`).
+- **`ronoctua-git`**, **`ronoctua-archive`** e **`ronoctua-containers`.** Um programa externo cada um
+  (`git`, `7zz`/`bsdtar`/`unrar`, `podman`), sempre pelo caminho do store e com a linha de comando
+  montada num lugar só. O `ronoctua-belongings` usa o `ronoctua-git`; a fila usa os três para rodar
+  o trabalho longo deles.
+- **`ronoctua-pam`** e **`ronoctua-resolve`.** Duas perguntas de sistema pequenas — a senha da conta,
+  o nome de um endereço da rede local —, cada uma num crate para que nenhum outro fale PAM ou
+  `resolve1`.
+- **`ronoctua-security`.** As fronteiras da central de segurança: a porta do sudo (feature
+  `authority`, que só o shell liga), o firewall da pessoa e as checagens online.
+- **`ronoctua-belongings`.** O repositório cifrado da configuração da pessoa: um binário próprio,
+  chamado pela fila, pelo instalador e pelo módulo do brain que lembra de sincronizar.
+- **`ronoctua-video-metrics`.** O YouTube por HTTP simples e o catálogo SQLite; o único outro crate
+  que linka SQLite é o `ronoctua-broadcast` (`one-sqlite-boundary`).
+
 ---
 
 ### Desempenho medido
@@ -12247,3 +11675,2848 @@ Duas correções que esses números carregam, ambas de ordem de grandeza:
 | R4 | **Xwayland quebrando PID → cgroup.** | Resolvido pelo compositor: o XWayland é embutido e ele reporta o PID do cliente X real (extensão XRes), então não há processo intermediário para confundir a correlação. Era um satellite por scope. |
 | R5 | **Closure de fonte de ~10 GB.** | Cinco derivações; o ISO leva 62 MB; `noto-fonts-extra` isolado e removível por opção de host. |
 | R6 | **Serviços de fora mudam sem aviso** — os formatos do OpenSubtitles, SubDL, TMDB, MusicBrainz e Wikidata foram escritos da documentação; o filtro Live do YouTube é interno dele; o Podnapisi já sumiu. | Cada serviço devolve uma recusa tipada, nunca um pânico; um campo de tipo inesperado perde o campo e não a resposta; os testes rodam sobre respostas gravadas; nada busca sem consentimento, e a tela diz o que falhou. |
+
+### O núcleo do cérebro sobre o contrato dos módulos
+
+O cérebro roda três threads — a que decide (`runner`), a que escuta (`watch`) e uma por cliente do
+soquete — e as três seguram um único `hub::Core`: um registro de módulos, um journal e a mente. O
+registro era construído duas vezes (uma para o `runner`, outra para o soquete); com módulos que
+guardam estado, cada cópia teria o seu, e um lembrete marcado pelo soquete tocaria em ninguém.
+
+**Nenhum lock do núcleo é segurado durante uma chamada a um módulo.** O módulo responde ao núcleo
+(`face`, `due`, `heard`) e fala de volta pelo `Ctx` (`record`, `tell`, `changed`). A saída só
+anota — o registro entra no journal, cujo lock ninguém segura durante uma chamada, e o módulo fica
+marcado — e quem chamou publica depois que o módulo retornou (`Core::refresh`). Assim um módulo que
+segura o próprio estado dentro de `heard` e grava um registro não encontra o `runner` segurando um
+lock e pedindo a `face` dele. O journal fica atrás de um lock próprio para que a thread que escuta
+grave enquanto o `runner` está bloqueado numa atualização de uma hora.
+
+**As preferências são resolvidas sobre o que o módulo declarou** (`Prefs::of_module`). O arquivo da
+pessoa decide os botões que existem em alguma porta — ligado, cadência, janela do dia, passos; a
+contagem regressiva, a paciência e uma cadência em minutos são do manifesto e não são gravadas no
+`brain.json`. Três lugares liam o padrão COMPARTILHADO (semanal, à tarde, um minuto de aviso) sobre
+tarefas que declaravam o seu, e desligar e religar a vigia do Emacs pela página a transformava numa
+rotina semanal com contagem. `Prefs::of` e `Prefs::mine` saíram; toda mudança é um botão só
+(`Ask::Set`), aplicado pelo núcleo, que é quem conhece os padrões do módulo. Os arquivos antigos,
+escritos inteiros pelo `Tune`, se curam na leitura: os campos do módulo vêm do manifesto. `quiet`
+(`{"quiet": true}`) faz nada começar sozinho — as máquinas virtuais dos testes escrevem isso em vez
+de nomear duas tarefas —, e a linha diz "só quando pedida" no lugar de uma hora que não vai chegar.
+
+**Um só `journalctl --follow`** serve todo módulo que pediu um `Match`, na prioridade mais frouxa
+pedida, com o filtro de cada um feito no processo. O passado é um PASSE separado, um `journalctl`
+que termina, e só na primeira partida. O passe nunca leva `--lines`: o `journalctl` conta essas
+linhas ANTES do filtro do módulo (um campo, um pedaço da mensagem), e as últimas vinte linhas de um
+boot têm sete `Started` de cinco mil — um filtro raro não recebia nada. O passe lê a janela inteira,
+e cada módulo guarda um anel com as últimas `most` entradas que aceita (`Shares`). As janelas pedidas
+se juntam: "este boot" e "os últimos N segundos" não se ordenam (uma semana passa do boot de hoje de
+manhã; um boot de dez dias passa da semana), então com os dois o passe começa no que vier antes, e a
+primeira entrada do boot diz quando ele começou e qual é o `_BOOT_ID` dele. Depois do passe vale o
+cursor, gravado no máximo a cada cinco segundos: um reinício ouve de novo no máximo isso, nunca
+menos do que perdeu. Um cursor que o `journalctl` recusa é esquecido, e a tentativa seguinte começa
+de agora, sem aviso. Medido: um cursor de uma entrada já apagada pela rotação não é recusado — o
+`journalctl` vai até a primeira entrada que sobrou, que é mais nova que ele —, e o que se ouve então
+é tudo o que existe desde lá, na prioridade pedida.
+
+**Uma fonte fora do ar é dita, e a volta também.** `Heard::Lost` quando a fonte está fora:
+`journalctl` que desiste antes de meio segundo sem dar uma entrada, filho que não chega a falar ou
+que morre antes de um minuto. Um seguidor que TERMINA depois de ter seguido não está fora: recomeça
+do cursor e nada se perdeu. `Heard::Back` quando a fonte volta a ser seguida — antes da próxima
+linha, que para um filtro raro pode não vir nunca, e a página continuaria recusando. Um caminho é
+vigiado pelo pai (nascimento, remoção e, para um arquivo, cada escrita) e, enquanto for diretório,
+também por dentro, com a identidade do diretório (dispositivo e inode): o `crun` cria
+`$XDG_RUNTIME_DIR/crun` quando o primeiro contêiner sobe, e um módulo que só ouvisse o nascimento
+não ouviria contêiner nenhum. O módulo é avisado depois que a vigia de dentro existe.
+
+**A thread que escuta é tocada de fora.** Ela só arma relógio para o próximo `next_wake` (no máximo
+trinta segundos por vez, porque a espera usa um relógio que para durante a suspensão), para o
+cursor e para as publicações pendentes; sem nada disso, bloqueia até ouvir algo. Uma espera armada
+por uma ação, ou um módulo ligado por uma preferência, não mexe em nada do que ela espera, então o
+núcleo toca um sino (`Core::ring_on`) a cada `changed` e a cada preferência gravada; ela olha de
+novo quem está ligado, dá `started` a quem ligou e diz a ele como estão as fontes.
+
+**Uma rajada é uma publicação.** Tudo o que está no canal é entregue antes de publicar, e a mente sai
+no máximo a cada meio segundo enquanto chegam coisas: a primeira na hora, o resto junto no fim da
+janela. Quinhentas linhas eram quinhentas mentes inteiras para cada tela. As notas de um módulo vão
+para o arquivo no máximo uma vez por segundo, sempre antes do cursor que diz que a linha foi ouvida;
+o registro de uma execução é gravado na hora. E o `runner` só acorda para o que decide (fila, o que
+roda, anúncio, preferências e os dois recados do soquete): antes, cada publicação da thread que
+escuta o acordava, e a volta dele lia o medidor, publicava um pulso novo e escrevia um `tick` na
+página. O piso do journal (as últimas dez de cada módulo) conta registros de todo tipo, então a
+última EXECUÇÃO de um módulo nunca é podada: sem isso, a décima primeira nota de uma vigia semanal
+apagava a execução e o módulo vencia como se nunca tivesse rodado.
+
+**Uma recusa do módulo é uma chave, e vai num caso próprio** (`Say::Declined { key }`): a porta
+sabe o que traduzir. As outras recusas continuam frases (`Say::Refused`). Uma ação não bloqueia a
+thread do soquete, cujo cliente espera meio segundo: o `keep` do relógio põe a execução na fila em
+vez de chamar o barramento ali.
+
+**Dispensar e adiar um aviso é respondido pelo núcleo**, não só pelo módulo: o aviso sai da faixa na
+hora, faça o módulo o que fizer com a notícia. Dispensado, fica fora enquanto disser a mesma coisa
+desde o mesmo instante; uma ocorrência nova volta. Adiado, volta na hora marcada, e a espera do
+`runner` encurta até ela só enquanto houver algo adiado.
+
+**As tarefas de antes são módulos**, cada uma na sua pasta, e o passo 7 do
+`brain-modules-are-sealed` recusa uma pasta de tarefas que volte para dentro do núcleo.
+`compiled.rs` é a costura com o gerador: o `include!` do `modules.rs` que o `build.rs` escreve. A
+língua de antes saiu do fio (2026-10-04): o `Ask::Tune` (as preferências inteiras, que deixavam uma
+tela gravar as de um módulo a partir do padrão comum) e o `Mind.notice` de uma linha; o daemon
+recusa um `tune`, e todo leitor lê `Mind.notices`. O `Mind.relieved`, que carregava o alívio do disco para um rodapé que o
+nomeava, saiu: o módulo conta os dois eventos dele no anel `Mind.events`, como qualquer outro.
+
+### Os módulos do brain: da pasta ao Rust
+
+Um módulo do brain é uma pasta, `crates/ronoctua-brain/modules/<id>/`, e o id é o nome dela, escrito
+em nenhum outro lugar. Quem lê as pastas é um só: `nix/brain-modules.nix`, uma função pura de `lib` e
+da pasta. Ele recusa, na avaliação e dizendo qual pasta, o que está incompleto (os cinco arquivos, um
+`.ftl` por idioma) e todo campo do manifesto que não conhece ou que tem a forma errada — um erro de
+digitação num manifesto é um erro, e não um módulo rodando em padrões. O flake o importa uma vez e
+entrega a cada gerador, pelo nome, a parte dele: os textos (o `gen-i18n.py` escreve um `.ftl`
+mesclado por idioma ao lado do `keys.rs`, e o `face()` embute esse), os glifos (entram na tabela
+medida do `glyphgen`, e o `icon::brain_mark` responde só por eles), as notificações (entradas
+`<id>-<evento>` do catálogo), os checks e o JSON do gerador Rust. Só o `nix/modules/brain.nix` o
+importa de novo, porque o `imports` de um módulo NixOS não pode vir de nenhum outro lugar.
+
+**A metade NixOS é fechada por fora.** O carregador põe o `config` de cada `module.nix` debaixo de
+`ronoctua.brain.modules.<id>.enable`, e o de tudo o que ele importa, descendo a árvore; o módulo
+escreve NixOS comum e não precisa lembrar de se desligar. Ele importa só arquivos da própria pasta
+(ou módulos escritos ali mesmo): um caminho de fora é de outro dono, e um módulo que o sistema já
+importa, importado de novo com outra chave, declara duas vezes cada opção. `disabledModules` é
+recusado, porque é resolvido antes de qualquer `config` e nenhuma porta o desfaz. O brain recebe em
+`RONOCTUA_BRAIN_OFF` quais o flake desligou, para desenhá-los recusando em vez de sumirem da página.
+
+**O namespace de um módulo é dele.** O `gen-i18n.py` recusa chave de módulo fora de
+`(cmd-|notif-|echo-|about-|ask-)?<prefixo>` e de `brain-task-<id>`, chave repetida na base ou noutro
+módulo e prefixos que se sobrepõem. Uma chave da BASE dentro do namespace de um módulo não é recusada
+ali: a página do shell que tem o nome do módulo fala nas palavras dele por projeto, e quem decide se
+um arquivo de fora pode nomear o módulo é o passo 5 do `brain-modules-are-sealed`, onde o `namedBy`
+responde. Recusada no gerador, ela parava todo build por uma decisão que o módulo já escreveu.
+
+**O `build.rs` só compara e escreve caminhos.** O gerador (`gen-brain-modules.py`, formatado pelo
+`rustfmt` fixado) escreve `<id>/manifest.rs`, `all.rs` (`IDS: &[&str]`, `MANIFESTS`, `ACTIONS`,
+`EVENTS`, `manifest(id)`, `all(birth)` e o teste do próprio registro) e `ids.txt`. O `build.rs`
+compara as pastas que vê com o `ids.txt` e, antes de compilar uma lista que não é a da árvore,
+recusa dizendo qual pasta e o que resolve: uma pasta que o Nix não listou é quase sempre uma que o
+git ainda não rastreia (`git add -N`, depois reentrar no `nix develop`), e um id sem pasta é um
+ambiente velho. Depois escreve o `modules.rs`: um shim por módulo, o `#[path]` absoluto para o
+`module.rs`, e o registro — que o `src/compiled.rs` inclui, e por isso `IDS` e `all` têm as
+assinaturas que aquele arquivo promete. O `cargo fmt` não alcança esses arquivos (eles entram por um
+`include!`), então o `nix fmt` e o `brain-modules-fmt` passam o `rustfmt` neles arquivo por arquivo.
+
+**Um horário sem calendário não tem intervalo.** `schedule.intervalDays` é exigido só de um módulo
+com `calendar = true`; sem calendário ele nunca vence por dias, o núcleo recusa uma cadência para
+ele e a página não a desenha, e o carregador preenche o 7 do `TaskPrefs::default`.
+
+**A amostra fica fora de `modules/`.** `crates/ronoctua-brain/tests/modules/pilot-sample/` é uma
+pasta completa que o carregador nunca lê sozinho: o `manifest.rs` dela foi escrito à mão antes do
+gerador e é o que ele tem de escrever (`brain-modules-match-the-golden`), e o teste do crate a
+compila pelo mesmo shim. Com zero módulos reais, é ela que faz cada check desta família rodar sobre
+alguma coisa — `brain-modules-are-sealed` passa limpa sobre ela e recusa onze plantios, ao menos um
+por passo.
+
+
+### O que o cérebro diz: faixa, marcas, página e fio
+
+O shell e o buffer desenham todo módulo do cérebro do mesmo jeito e não nomeiam nenhum: o que cruza
+é dado — chaves, números, momentos — e quem formata é o host (`mind_wire`: tamanho na unidade da
+pessoa, proporção com a vírgula da língua, momento no fuso da máquina, contagem como número para o
+Fluent escolher o plural).
+
+- **A faixa sob o minibuffer** diz o aviso mais alto (`mind_wire::ranked`: alarme, perigo, alerta,
+  informação; entre iguais, o mais novo) com os controles que ele oferece — a primeira ação do
+  módulo (`brain-act`, `, n`), dispensar (`brain-dismiss`, `, x`), adiar pelo primeiro adiamento
+  (`brain-snooze`, `, z`) — e `+N`, que abre a página. **Um alarme vence a contagem regressiva, e
+  com os dois a faixa cresce para uma segunda linha** (decisão do dono): nenhum empurra o outro
+  para fora. Um controle que não cabe cede ao texto, nunca o contrário.
+- **As marcas da modeline** são segmentos `brain:<módulo>/<marca>`, só enquanto um módulo publica
+  uma; a cor é a do tom (`Watching` é a cor dos gestos), a dica é a chave do módulo com a contagem,
+  e o clique roda a ação da marca (`brain-act <módulo> <ação>`) ou abre a página do módulo
+  (`brain-open <módulo>`, que abre a janela já na página dele). Um id de segmento é `&'static str`:
+  cada nome distinto vira estático uma vez, com teto (`brain::NAMES_KEPT`).
+- **`mind_arrived` compara a face** (`brain::Face`: contagem, aviso mais alto, quantos, marcas) e
+  não só o anúncio — um aviso que aparece sozinho redesenha e pede a altura.
+- **A página do cérebro** tem um bloco de avisos (três de cada vez, com barra), o registro de
+  atividade **agrupado** (`journal::grouped`: registros seguidos que dizem a mesma coisa são uma
+  linha, com o triângulo, a contagem e um `Último:` discreto antes da data; `RET` abre os membros)
+  e, numa vigia, "vigiando" no lugar de uma data. A página de uma tarefa só mostra cadência e
+  janela quando ela tem calendário; depois vêm as ações do módulo e a **tela do módulo** — seções
+  de linhas de dados que o host pede (`Ask::Screen`) quando a geração anda e empurra por
+  `input::module-screen`, nunca num relógio.
+- **O fio**: os verbos `watch-screen`, `act-row`, `act-page`, `dismiss-notice`, `snooze-notice` e
+  `act-notice` são um índice na lista que o host acabou de mandar, conferido lá; uma ação que
+  pergunta abre a linha da porta (`Ui::ask`, desenhada sob o componente) e segue com a resposta. A
+  preferência vai botão por botão (`Ask::Set`), resolvida pelo daemon sobre os padrões do módulo.
+- **Tudo o que muda algo é perguntado, não avisado.** Dispensar, adiar, uma ação, uma preferência,
+  rodar: o cérebro pode recusar cada um (o aviso já saiu, o módulo recusou), então o pedido vai
+  numa thread que espera a resposta (`brain::put`) e o que volta é dito na porta que pediu —
+  `mind_wire::Answer`: a chave do módulo traduzida, ou as palavras do daemon dentro de uma frase
+  nossa (`echo-brain-refused`). O rodapé dizia "dispensado" de um aviso que o cérebro manteve.
+- **A página que não veio é uma frase**, no lugar das linhas (`module-screen.refused`): recusa ou
+  silêncio. O host e o componente descartam uma página mais velha que a última entregue pela
+  mesma regra, para que `act-row` nomeie a linha que está desenhada; um pedido sem resposta é
+  esquecido e a mente seguinte pergunta de novo, e uma recusa não.
+- **A pergunta de uma ação usa a chave que o módulo declarou** (`Line::asking`), não `ask-<id>`.
+- **Os cursores da página guardam o item, não a linha**: o host reordena os avisos a cada mente,
+  e um aviso novo acima do cursor punha `, x` em outro aviso. O mesmo vale para tarefas e para o
+  registro (a dobra se identifica pela tarefa e pelo começo do registro mais velho).
+- **A página abre onde está a novidade**: a primeira mente com avisos põe o teclado neles — é para
+  isso que o `+N` da faixa abre a página —, e sem avisos, nas tarefas.
+
+### A prévia e os fatos saíram do gerenciador — `inspection.rs`
+
+Os dois painéis nunca foram da listagem. O que um painel mostra é sobre UM arquivo — como ele é e o
+que ele é —, e a listagem é só o primeiro lugar de onde um arquivo é escolhido: uma busca, um
+seletor e o navegador do player escolhem arquivos também, e cada um teria de segurar uma listagem de
+diretório por causa de dois painéis. Então o estado e a aritmética dos dois moraram para
+`inspection::Panel`, e o `files::View` guarda um e fica com a listagem, a barra lateral e os menus.
+Foi uma mudança pura: as fotos do gerenciador antes e depois (`photograph --door files`, abaixo) são
+iguais pixel a pixel.
+
+**O que ficou no `View` é o ONDE.** Os painéis vão ao lado da listagem, embaixo dela numa faixa ou
+pela região inteira, e isso é `files::Panes` — o layout da vista, não dos painéis. Um painel
+responde por uma caixa de cada vez (`Panel::section`), e a vista escreve a caixa antes de perguntar
+(`Panel::laid_out`), para as duas: as teclas que paginam e a altura em que uma recusa quebra são
+medidas contra ela, desenhada neste quadro ou não. As teclas, os cliques e a roda dos painéis
+continuam passando pela tabela e pelo `match` da vista, que entrega aos painéis só o que é deles
+(`Panel::key`, `Panel::click`, `Panel::wheel`, `Panel::drag_*`) — uma tabela, e os ids dela.
+
+**O assunto é DITO a cada pergunta, e não guardado.** O cursor da listagem é escrito em dezesseis
+lugares, uma vigia relê o diretório por baixo dele, um filtro estreita as linhas — um assunto
+guardado no painel e atualizado em cada um desses seria uma segunda cópia do cursor, velha no dia em
+que um deles fosse esquecido. Por isso toda pergunta da vista aos painéis passa por `View::panel()`,
+que diz o que está sob o cursor e o que o layout diz (se algo modal cobre os painéis, qual seção tem
+o teclado) — `Panel::follow`, EMPRESTADO: um `Subject` só é construído quando a entrada, a linha ou
+a medida mudou, então o preço de uma pergunta é uma comparação. Os campos do painel a vista lê
+direto; um método, nunca.
+
+**Os três fios vêm juntos.** O inspetor, o filme e a forma são `inspection::Threads`, cada um num
+canal próprio no laço da porta — um quadro chega dez vezes por segundo sobre um vídeo e não é
+notícia sobre diretório — e o que dizem chega à porta num lugar só, como `Heard`, que a porta
+entrega ao painel (`Panel::heard`). A resposta do inspetor deixou o canal de relatórios do
+gerenciador (`Report::Inspected` não existe mais). O corpo do fio é `inspection::look`, uma função:
+quem não tem laço para esperar (a câmera) pergunta a ela e desenha a mesma resposta.
+
+**A ficha é um módulo à parte** (`inspection_sheet.rs`): `fs_facts` é o que o sistema de arquivos
+sabe, `content_facts` o que as ferramentas disseram, e `sheet_of` põe o segundo depois do primeiro
+só quando a resposta é sobre o mesmo arquivo. O painel ao lado, a faixa e a ficha modal do menu leem
+o mesmo construtor.
+
+**Quem não tem listagem aponta o painel por um caminho** — `Subject::of_path` faz o `lstat`,
+pergunta o dono ao rol e procura o filme ao lado; `Panel::focus` o recebe, `Panel::around` recebe o
+que o layout diz (algo modal cobre os painéis, qual seção tem o teclado) e `Panel::sections` dispõe
+lado a lado os painéis que estão na tela — `None` para um desligado ou coberto. Assunto e layout são
+duas chamadas porque andam separados: uma pergunta abre sobre o mesmo arquivo. O filme ao lado é
+pedido ao disco PELO NOME — o radical com `MOV`, `mov`, `MP4` e `mp4`, um `lstat` cada —, e nunca
+lendo a pasta: a porta chama `of_path` no próprio laço, e uma pasta de quarenta mil fotos seriam
+quarenta mil entradas lidas para achar uma. Ninguém chama isso ainda: é a porta da busca.
+
+**A câmera do gerenciador.** O `ronoctua-shell photograph` era do player: cada passo é uma resposta
+do daemon, e a porta dele é um player. O gerenciador não tem daemon — o que enche os painéis é o
+inspetor, um fio da própria porta —, então `--door files` tem câmera própria
+(`files_photograph.rs`), com o mesmo princípio: a janela de produção, desligada
+(`files_window::Files::detached`), dirigida por `door::Detached` pelo caminho de uma tecla e de um
+ponteiro, e o quadro composto por `door::compose`. Nada da máquina é lido além da pasta dada: sem
+rol, UTC, sem catálogo, sem lixeira, e a barra lateral é das pastas de `--home`. A resposta do
+inspetor é pedida na hora (`Files::inspect_now`), então nenhuma foto é tirada antes da prévia que
+ela mostra ter chegado. A câmera do player lê as palavras em ordem e, ao chegar em `--door files`,
+passa a vez — tendo lido as de antes. Por isso a do gerenciador lê a linha de comando inteira
+(`files_photograph::taken`): um `--out` ou um `--language` antes da porta vale, em vez de sumir
+calado, e uma palavra só do player (`--size`) é recusada. Uma palavra só desta câmera (`--dir`)
+antes da porta é recusada pela do player; `--door files` primeiro é a grafia que sempre funciona.
+
+### `ronoctua-iconset` — as três tabelas de ícones e uma busca só
+
+As tabelas (`glyphs.json`, `lucide.json`, `unicode.json`) são lidas em tempo de execução de
+`RONOCTUA_ICONSET` (`nix/iconset.nix` junta os três geradores num diretório; `atRunTime`, nunca
+`generated`, pelo motivo do atlas), e `shared()` as guarda atrás de um `Weak`: os ~9 MB existem
+enquanto uma vista os segura. Cobram `iconset-is-at-run-time` e `one-icon-search`.
+
+**Uma escada de notas para as três coleções** (`Rank`): o caractere colado, o nome inteiro, o começo
+do nome, o começo de uma palavra do nome, um apelido, o conjunto (Nerd Fonts, inteiro) ou a
+categoria (Lucide), uma etiqueta da língua de quem lê, uma etiqueta de outra língua. Toda palavra tem
+de casar e vale a pior. O empate vai para o nome MAIS CURTO — toda palavra casou com ele, então mais
+dele foi digitado (`long leftwards arrow` acha LONG LEFTWARDS ARROW antes de DOWNWARDS
+TRIANGLE-HEADED ARROW WITH LONG TIP LEFTWARDS) — e depois para o nome. A identidade vale só para UM
+caractere colado (ou uma sequência de emoji, que é um caractere para o olho) e acha o caractere
+mesmo com filtros; as palavras dele continuam achando o resto, então digitar `a` não esconde
+`arrow`.
+
+**A busca é indexada na carga, porque o acesso rápido busca as três coleções a cada tecla** e o
+orçamento das fontes locais juntas é 2 ms. Nome, apelidos, conjuntos, categorias e etiquetas são
+dobrados (sem caixa e sem acento) e partidos em palavras uma vez; cada palavra vira um id de um
+vocabulário ordenado, e as listas de todos os registros moram num vetor só. Uma palavra digitada
+vira a FAIXA de ids que ela prefixa (contígua na ordem), e cada registro responde com buscas
+binárias, sem alocar nada. Medido: ~0,9 ms as três coleções para `a`, contra ~13 ms da primeira
+versão, que repartia cada etiqueta a cada tecla; o teste `three_strips_fit_a_keystroke` segura o
+teto. A dobra vale dos dois lados: `atenção` acha a etiqueta que a tabela escreveu `atencao`.
+
+**Os prefixos e os valores da busca vêm do `.ftl`** (`icons-prefix-*`, `icons-value-*`): a DSL é
+interface, e `familia:letra`, `family:letter` e `Família:letra` são a mesma consulta. Os prefixos de
+conjunto (`md:`, `fa:`) vêm da própria tabela. Filtro de enumeração toma uma palavra e deixa o resto
+livre; `bloco:`, `nome:`, `etiqueta:` e `subgrupo:` tomam o resto. Filtro que não significa nada
+numa coleção (`token:` no Lucide) não acha nada, em vez de ser ignorado calado. O `symbols:` compara
+com os ids da tabela (`symbol`, `number`); o buffer comparava com `simbolo`/`numero` e achava zero.
+
+Os rótulos dos painéis (`icons-family-*`, `icons-group-*`, `icons-tone-*`, `icons-category-*`,
+`icons-set-*`) são chaves desta biblioteca, e o teste
+`every_panel_label_finds_its_whole_category_in_every_language` exige que o rótulo, digitado, ache a
+categoria inteira nas duas línguas.
+
+### `ronoctua-calc` — o motor da calculadora
+
+**Exato até não poder ser.** `BigRational` em `+ − × ÷` e potência inteira; raiz, logaritmo e
+trigonometria viram `Number::Approx` (desenhado com `≈`), exceto quando a resposta é exata
+(`sqrt(9/4)`, `log(1000)`). Resultado grande demais (`9^9^9`, uma data a um milhão de anos) é recusa
+(`too-large`), nunca memória esgotada nem conta que dá a volta no `i64` — o perfil `release` não
+confere overflow, e o `quick()` roda a cada tecla.
+
+**Ângulo múltiplo de π é reduzido exatamente.** Grau, grado e volta carregam π, então `90°` é
+exatamente π/2: a volta é tirada em racionais, e seno, cosseno e tangente dos múltiplos de π/12 que
+são racionais saem exatos (`cos(90°)` é 0, não 6e-17; `tan(90°)` é recusa de domínio, não 1,6e16).
+O `pi` chega como ponto flutuante, e um valor a um arredondamento de um múltiplo de π/12 (nunca o
+zero: `sin(1e-12)` é 1e-12) é tratado como ele. O resto é calculado do ângulo já reduzido.
+
+**As unidades são uma tabela gerada** (`assets/units.nix` → `nix/unitsgen.nix` →
+`RONOCTUA_UNITS_RS`), fator exato por unidade. Três tipos convertem diferente: a AFIM (°C, °F) soma o
+offset só numa conversão — numa soma o lado direito é uma diferença, então `20 °C + 5 K` é 25 °C —;
+a RECÍPROCA (mpg, km/L) converte por divisão contra L/100 km e fica separada das áreas pela
+categoria, não pela dimensão; e o ângulo carrega a potência de π à parte (`pi`), porque grau contra
+radiano não é racional: grau em grado é exato, grau em radiano é aproximado.
+
+**As palavras de todas as línguas valem ao mesmo tempo** — quem lê em inglês ainda digita `metros`
+—, e por isso o gerador recusa uma palavra com dois sentidos em QUALQUER par de línguas, não só
+dentro de uma. Símbolo casa como está escrito (`MB` não é `mB`); palavra casa sem caixa e sem acento,
+pela mesma tabela um-para-um do `ronoctua_apps::fold` (o gerador recusa palavra cujo fold não é
+ASCII, para as duas dobras nunca discordarem). A frase mais longa vence: `colher de sopa` nunca vira
+`colher` e `de`.
+
+**A justaposição liga mais forte que `/`**: `10 km / 2 h` é 5 km/h. A exceção é a fração de dois
+números nus antes de uma unidade: `1/2 cup` é meia xícara.
+
+**`of`/`de` só toma uma porcentagem** (`20% of 150`): `5 de 10` é "cinco de dez" para quem lê
+português, e um produto responderia 50. **Moeda é só um código que o BCE cota** (`quoted` em
+`units.nix`, em qualquer caixa): três maiúsculas quaisquer (`10 FPS`, `4 CPU`) eram moeda e faziam
+a porta pedir cotação. **O `quick()` não responde numeral romano curto sozinho** (`MIX`, `DIV`,
+`CLI`, `CD`): menos de quatro letras é palavra sendo digitada até ser perguntado (`XIV in dec`) ou
+usado numa conta.
+
+**As definições (`known` em `units.nix`) provam os fatores.** Ida e volta entre duas unidades não
+falha nunca — um fator errado se cancela no caminho de volta —, então `1 mile` é `1.609344 km`,
+`0 °C` é `32 °F` e `180°` é `π rad` estão escritos à parte dos fatores, e o `units-are-total` os
+calcula pelas três regras do motor (offset, recíproca, potência de π); o teste
+`conversions_agree_with_definitions` passa a mesma lista pelo `convert` de verdade.
+
+**O separador decimal é o da língua** e o outro agrupa milhares: com vírgula, `1.234,5`; `1.5` é
+recusado (grupo tem três algarismos, e adivinhar erraria metade das vezes).
+
+**Câmbio**: a taxa de referência diária do BCE, lida pelo `ronoctua-xml`, cacheada em
+`$XDG_CACHE_HOME/ronoctua/rates.xml` e velha depois de `ratesStaleHours`. `rates::fetch` só existe
+com a feature `net`, só com um `Pass` para `www.ecb.europa.eu`, conferido antes de qualquer byte sair
+(cobra `rates-ask-with-a-pass`). `Expr::wants_rates` diz se a conta precisa de cotação: uma moeda só
+(`10 USD + 5 USD`) não precisa.
+
+### Consentimento por host — `ronoctua-consent`, e o `Pass` que só ele cunha
+
+Nada fala com a rede antes de a pessoa deixar o host. A regra era do player (a lista `consented` do
+`player.json`) e virou da distro: `$XDG_CONFIG_HOME/ronoctua[-dev]/consent.json`, no formato
+`{ "hosts": { "<host>": true } }`, escrito pelo `ronoctua-store` e mesclado por host (`let_hosts` lê
+com `parsed`, então um arquivo que não abre é recusado em vez de sobrescrito). O arquivo é lido **na
+hora de perguntar**, nunca guardado: um consentimento dado numa porta vale no daemon na requisição
+seguinte, e um consentimento retirado para a seguinte. Um `false` fica escrito, para que uma porta com
+uma cópia velha não devolva o host.
+
+- **O `Pass` é a prova.** `pass(host)` devolve um `Pass` ou `NotLet { host }`; o campo é privado e só
+  o `mint` o constrói, sobre o `consent.json` da pessoa. Toda função que pergunta a um host em nome
+  da pessoa recebe um `Pass` (`ronoctua_words::translate`, `ronoctua_http::web::request_let`), então
+  "perguntou sem consentimento" é um programa que não compila. O `Pass` cobre o PRIMEIRO host da
+  requisição; os redirecionamentos seguem a regra do `web`.
+- **Os ajudantes sobre outro arquivo são dos testes.** `store_at`, `pass_in`, `let_hosts_in` e
+  `allows_in` cunham um pass a partir de uma pasta qualquer — um produto que os apontasse para uma
+  pasta de rascunho teria um pass que a pessoa nunca deu. Por isso só existem com a feature
+  `test-support`, que só um `[dev-dependencies]` liga: o build de release não os tem. O
+  `network-asks-with-a-pass` recusa a feature em `[dependencies]` e uma chamada a eles fora de um
+  módulo de teste.
+- **`web::request_let(&Pass, ask)`** confere o host do primeiro endereço (depois do `upgraded`) antes
+  de abrir socket. O `web::request` sem pass continua para quem perguntava antes da regra (programas
+  da pessoa, fila, lookups e diretórios do player, a playlist aberta pelo endereço); o check
+  `network-asks-with-a-pass` recusa um chamador novo — com qualquer nome com que tenha sido
+  importado (`web::{self as w}`, `request as get`, `web::*`) — e um chamador novo dos transportes do
+  `tls` por baixo dele, e confere que o `Pass` não ganhou campo público nem segundo construtor.
+- **A chave vai só ao host do pass.** Um redirecionamento é a resposta do host, não o consentimento
+  da pessoa para o próximo: no `request_let`, os cabeçalhos de quem pergunta (a chave do DeepL no
+  `Authorization`) só vão ao host do primeiro endereço, e um 307 ou 308 que levaria o corpo (o texto
+  da pessoa, e a chave do LibreTranslate) a outro host é recusado. O `web::request` dos chamadores
+  antigos continua levando os dois adiante, como sempre.
+- **Abortar fecha o socket** (`web::Abort`, `Ask::abortable`). Uma bandeira só seria olhada entre
+  duas leituras, e a busca que a pessoa já digitou por cima seguraria a thread e o host por dez
+  segundos. O `shutdown` termina a leitura bloqueada na hora. Resolver o nome e o connect não são
+  interrompidos (não há socket ainda): o abort é olhado antes do connect e logo depois dele. E é
+  olhado de novo depois da leitura, antes de se fazer qualquer coisa do que chegou: um socket
+  fechado lê como fim de fluxo, e um corpo `chunked` (ou sem tamanho) cortado ali passaria por
+  inteiro.
+- **As chaves** (`Secret`, `write_private_file`, `Dir`) saíram do `ronoctua-lookup` para
+  `ronoctua_consent::keys`; o lookup as reexporta, e os caminhos do player continuam valendo. O
+  `Secret` zera os bytes ao cair.
+- `Watched` (atrás da feature `watch`) é o `Notice::on_file` do `consent.json`, para a porta que
+  desenha a linha "Perguntar a {host}" trocar na hora; o daemon não precisa dele, porque lê na hora.
+
+### Palavras — `ronoctua-words`
+
+O único crate que fala com tradução e dicionário. A tradução é MyMemory (sem chave, o padrão), DeepL
+(chave no cabeçalho `Authorization: DeepL-Auth-Key`, host grátis para a chave que termina em `:fx`)
+ou um LibreTranslate que a pessoa nomeia (endereço `https`; a chave, quando há, vai no corpo JSON, que
+por isso viaja como `Secret`). Definição e sinônimos: inglês **offline** primeiro, Wiktionary online
+com consentimento para o resto.
+
+- **Puro, sobre um `Net`.** Cada provedor monta a requisição e lê a resposta; o `Net::send` recebe o
+  `Pass` junto com a requisição, e o `Internet` a entrega ao `web::request_let`. Os testes usam uma
+  rede de respostas que grava cada pergunta e o pass com que foi feita; nenhum teste abre socket. O
+  check `words-ask-with-a-pass` confere que todo `send` do crate usa o pass que a função recebeu e que
+  nenhum outro crate nomeia os hosts; e, para as chaves, a regra do
+  `stream-key-is-never-an-argument` (nunca num endereço nem num argv, guardadas só pelo
+  `ronoctua_consent::keys`) e a do `cache-has-one-list` para o teto das traduções.
+- **MyMemory aceita 500 bytes por pergunta**: o texto vai em pedaços cortados na quebra de linha (uma
+  linha longa, no espaço) e volta juntado com a mesma quebra, para as linhas da letra continuarem
+  alinhadas.
+- **Ritmo por host sem reserva.** Diferente do `ronoctua_lookup::pace`, quem espera não reserva o
+  horário: toma o horário só quando ele chega. Uma pergunta abortada na espera (a pessoa digitou a
+  próxima letra) não deixa horário ocupado, e dez teclas não enfileiram dez segundos para a décima
+  primeira. Espera maior que cinco segundos vira a recusa `Paced`.
+- **Cache de traduções em memória**, com teto `wordsCacheEntries` (`assets/cache.nix`, gerado pelo
+  `nix/cache.nix`); a chave é provedor (e endereço do LibreTranslate), as duas línguas e o texto.
+  Recusa não entra no cache.
+- **Dicionário offline**: o `open-english-wordnet` (LMF XML, 2022) convertido pelo `nix/wordsgen.nix`
+  em dois TSV ordenados (`lemmas.tsv`, `synsets.tsv`, 17 MB), lidos por busca binária como o
+  `nix_index.rs`: nada fica residente. O gerador recusa campo com tab ou quebra de linha, lema que
+  aponta para synset ausente e um WordNet menor que o real. O nixpkgs não tem tesauro pt-BR, então só
+  o inglês é offline.
+- **O caminho vem do ambiente, não do binário.** O `RONOCTUA_WORDS` é posto por
+  `nix/modules/words.nix` (sessão, rodapé e player) quando `ronoctua.words.offline` está ligado, e a
+  tabela de perfil o liga no `full`. Não está no `atRunTime`: o `--set-default` do wrapper é uma
+  referência que a closure carregaria em qualquer perfil — a armadilha do superpacote de ícones. O
+  derivado de testes o recebe para o teste que lê o dicionário real, e o laço `.#dev` o exporta ao
+  lado do `atRunTime` (ferramenta de desenvolvimento paga a closure, como paga a do mkvtoolnix).
+- **Sinônimos online** vêm do wikitext da página (`action=parse`): os `{{syn|<código>|…}}` e os
+  `{{l|<código>|…}}` de uma seção `Synonyms`. A API REST de definições não traz sinônimos. Os dois
+  levam o código da língua, então o nome da seção em inglês nunca é necessário.
+
+### Protocolo 3 do player e a base das portas
+
+- **Protocolo 3** (`wire.rs`, `PROTOCOL = 3`): todo campo novo leva `serde(default)`, então o que
+  um daemon de 2 escreve continua sendo lido, e a oferta "o player é mais velho" cobre o resto. O
+  `Ask::Put` ganhou `once` (recusa com `Trouble::AlreadyQueued` quando uma folha já está no mesmo
+  lugar); "mesmo lugar" é um só: `queue::place_of` — arquivo pelo caminho canônico, vídeo do
+  YouTube pelo id (`ronoctua_ytdlp::video_id`), o resto pelo texto. O `Queue::holding` roda sob a
+  trava do engine a cada `Put`, então não pergunta ao disco: recebe o lugar já calculado fora da
+  trava e compara cada folha pelo `written_place` (id do vídeo ou texto), o que vale porque o
+  arquivo entra na fila pelo caminho canônico. `Thing::Named` é um endereço
+  que chega com título. O endereço de uma fonte do catálogo é segredo (`SourceUrl`: o `Debug` e a
+  porta mostram só o host, e só `…` quando o host não se separa da conta — uma senha colada com
+  `/`, `?` ou `#`). Um pedido que o daemon conhece e ainda não faz é recusado com
+  `Trouble::NotYet`, uma frase sem o nome do pedido (o nome vai para o log).
+- **`Ui::say`**: a frase que uma janela DIZ sai sozinha depois de `ECHO_SECONDS`, por um timer de
+  um tiro pendurado pelo `Door::settle` (o único que tem o laço). O timer tira só a frase dele:
+  confere o número e o texto, então uma frase nova, uma pergunta ou um estado escrito direto em
+  `Ui::message` ficam. Estado (o player não roda) continua escrito direto, e fica. Uma frase de
+  outra classe (`crate::echo::Echo`: breve, normal, longa) vai por `Ui::say_for`, e o prazo sai da
+  mesma tabela do rodapé — a recusa da janela "Rodapé" é longa, como a do rodapé.
+- **Controle de título**: `Builder::heading_controls` põe glifos contados da borda direita, com o
+  título quebrado no que sobra; cada um leva o `about` (id de comando) obrigatório, e
+  `player_rows::control_under` é a resposta que a dica lê nas duas portas — a janela pelo mesmo
+  `row_at`/`column_at` do clique, o rodapé pelo que o quadro POSICIONOU
+  (`player_controls_placed`, escrito pela pintura) — lido no movimento e de novo depois de cada
+  quadro, porque as linhas andam sob uma mão parada —, nunca perguntando à região. O glifo é
+  contado da borda da sala, e não da superfície (`Span::edge`): ele fica na mesma coluna das setas
+  de mover das linhas da fila logo abaixo, e a borda da sala é a coluna da barra. O
+  `every-hint-key-explains-itself` lê todo `about`.
+- **`text_area.rs`**: o modelo puro de um texto de várias linhas (quebra suave na largura da porta,
+  caret por cluster, `C-s` pede para guardar, `Esc` pergunta com o "não" primeiro). O caret é uma
+  barra do dobro da espessura de uma régua, na cor do cursor (`Row::caret`, pintada pelas duas
+  portas com `chrome::caret`): o cursor é uma cor, e o de um texto é um lugar entre duas
+  letras. O `C-s` não marca o texto como guardado: quem guarda chama `kept_as` quando a escrita
+  passou, senão uma recusa seguida de `Esc` jogaria o texto fora sem perguntar. Na pergunta, o
+  primeiro clique numa resposta a escolhe e o segundo a dá (inv. 19). A linha desenhada leva no
+  `spot` o pedaço do texto que ela é, então o clique é lido de volta do que foi desenhado.
+- **O `View` do player segura um texto** (`View::edit_text`) para as três portas: enquanto ele
+  está aberto, toda tecla é `Press::Text` (`View::press_of_key`, o leitor que as duas portas
+  chamam), o `C-v` é `Errand::Paste` (a porta lê o clipboard fora do laço e devolve a
+  `View::text_pasted`), o clique passa por `text_area::hit` no `clicked_at` e a linha de dicas é a
+  do texto. Uma tecla que age onde o cursor estiver (tocar, volume) continua agindo; uma que abriria
+  página não faz nada. O `photograph --edit <arquivo>` abre um.
+
+### Atalhos, rodapé e modeline — a leva de 2026-09-30
+
+**A LEADER repetida anda pelos conjuntos.** Com a lista aberta e nada digitado, uma nova LEADER
+leva ao próximo conjunto — padrão, janelas, árvore inteira e de volta ao padrão
+(`leader::Set::next`, `hidden::leader_again`) — e o acorde na tela diz as teclas que levaram até
+lá: `SUPER SUPER s n-` é a janela da rede, `SUPER SUPER SUPER s n a` o modo avião. Com algo
+digitado ela recomeça a sequência, como sempre. O `Set::key` é montado com o rótulo da leader em
+tempo de execução (`crate::leader()`), nunca uma constante; `taught_keys` ensina `LEADER LEADER .`
+e `LEADER LEADER LEADER s b y`, e a linha da raiz ensina o PRÓXIMO conjunto como clique
+(`leader-set-default`, `-window`, `-full`, só por nome). O toque de `Alt` saiu: ele ainda ARMA o
+`leader::Tap` — um `Ctrl` apertado com o `Alt` descido é acorde —, mas soltar o `Alt` não responde
+nada. O teclado na tela idem: só um `Ctrl` travado sozinho é gasto na raiz (`Board::spend_a_lone_tap`).
+
+**`LEADER Ctrl` gira os modos das barras**: normal → empurra → cobre → normal (`hidden::next_mode`,
+comando `footer-bars-cycle`, que também é a linha enxertada na raiz com a tecla `CTRL` —
+`hidden::bars_row`, cujo dado de tecla é `C-ESC`, que nenhuma árvore liga, e não mais `SPC`). Os
+dois `Ctrl` valem: o direito é o modificador das páginas e da gaveta, sempre com uma seta, e a
+seta o desarma; soltá-lo sozinho gira as barras, o que se vê na hora e dois toques desfazem. A
+leader fecha e o minibuffer diz o modo novo por um instante (`Echo::Brief`): em repouso os dois
+modos escondidos são iguais, e um toque que não muda nada visível é um toque que se repete.
+`footer-hide-push` e `-cover` continuam por nome.
+
+**O desenvolvimento foi para `/`** (`LEADER / r`, o redimensionador): `d` e o `SPC` da raiz ficam
+livres para o acesso rápido, que é de todo dia. `Super+/` é o modo `jump` do compositor (acorde) e
+`LEADER /` é sequência: não colidem.
+
+**Os modos persistem.** A causa era o `persist.nix`: três diretórios da casa eram ligados de
+`/persist/home/<usuário>` sobre o lugar deles, e o `tmpfiles` refazia cada um `0755 root root` a
+cada boot — depois do primeiro reboot nenhuma preferência do rodapé era gravada, e a
+`write_the_modeline` só logava. A casa é o `@home`, que o wipe nunca toca: as três entradas saíram,
+uma asserção recusa entrada sob `/home`, o `tmpfiles` passou a `d /persist… - - - -` (cria, nunca
+reajusta dono — o que também devolve ao Tor e ao Tailscale o dono do `StateDirectory=`), e a
+unidade `ronoctua-persist-home-return` devolve uma vez à casa o que ficou em `/persist/home`, com o
+dono certo, e renomeia o diretório para `/persist/home-returned-<data>` sem apagar. Ela age só no
+boot: todo `switch` reinicia os targets ativos e inicia a unidade nova sob uma sessão viva, com o
+rodapé e o Syncthing escrevendo nos mesmos arquivos, então o programa pergunta ao systemd
+(`is-system-running`: `initializing` ou `starting` é o boot) e fora dele sai sem copiar nada. Um
+diretório ainda montado espera o próximo boot. O `persist-skips-the-home` pergunta à máquina
+avaliada; o `persist-home-vm` prova com três boots. E o rodapé DIZ quando uma preferência não pôde
+ser gravada (`echo-preference-not-written`, `Echo::Long`, em `modeline.json`, `osk.json`,
+`gestures.json`, `power.json` e `kiosk.json`): a mudança vale até ele reiniciar, e a pessoa precisa
+saber qual das duas coisas está vendo. A frase de um modo das barras vem só depois de gravado: a
+recusa fica na linha, e a palavra breve por cima dela a apagava.
+
+**Mensagens têm classe** (`crate::echo`): `Brief` (1,2 s), `Normal` (3 s, o número que as duas portas
+já combinavam, `ECHO_SECONDS`) e `Long` (6 s), em décimos no `space.echo.*`. O `Quit` de um `Esc` é
+breve. Cada mensagem arma um temporizador de uma vez no próprio prazo (`Footer::echo_for`) — o tique
+de um segundo não serve a 1,2 s —, e o temporizador que encontra outra mensagem não faz nada.
+
+**A vista "Rodapé"** (`LEADER s r`, duas portas: `footer_settings.rs` e
+`footer_settings_window.rs`) junta o modo das barras, o que o minibuffer livre mostra (horas,
+desligadas por padrão — a proibição de relógio saiu do inv. 14) e o adaptador do quiosque, que
+morava na grade do quiosque (`M`) e é um ajuste do rodapé, não um feito sobre a aba. Tudo em
+`modeline.json`, mesclado por campo, com uma aritmética só (`footer_settings::Setting::change`)
+sobre o arquivo como ele está. Cada porta grava e DIZ na própria linha quando não pôde: o `RET` do
+rodapé roda o comando da linha (que move as barras e diz o modo), e a janela grava pelo mesmo
+`Store` (`change_the_file`) e diz a recusa nela — mandá-la ao rodapé pelo soquete deixava a recusa
+numa porta que a pessoa não estava olhando. O rodapé ouve a gravação da janela pelo arquivo
+(`modeline_changed`) e a janela, a do rodapé. É a primeira vista nova da leva com `section_column`. As horas (`hh:mm`,
+`chrome::clock_text`, 12/24 h da pessoa) ficam à direita do minibuffer só quando ele está livre, e
+o temporizador é armado para o próximo minuto só enquanto a frame as desenhou (`keep_the_clock`).
+
+**A gaveta do minibuffer.** Uma dica que não cabe na linha FICA enquanto o ponteiro vai do glifo à
+linha (`Footer::linger`): ela era explicada só sob a marca, e a mão indo ao chevron a apagava junto
+com o chevron. Qualquer outra fonte de explicação, uma linha da região ou sair do rodapé a solta.
+Enquanto ela está na linha e o rodapé não tem teclado, o compositor liga `Ctrl+↑/↓` a
+`minibuffer-fold-open/close` (feitos `wm-fold-keys-hold`/`-free`; o Scroll pinado aceita `bindsym` e
+`unbindsym` em tempo de execução — `find_core_handler` procura na tabela `handlers` com a config
+ativa — e o binário é nomeado por `$ronoctua_shell`, a primeira linha do `export-binds`). Os dois
+feitos dizem `mode "default" …`: um `bindsym` solto em tempo de execução cai no modo ATIVO e
+substitui o bind das mesmas teclas, e os modos de redimensionar e de encaixe têm `Ctrl+Up`/`Ctrl+Down`
+próprios, que a dica sobrevoada trocava e a soltura apagava até o próximo reload. Nomeado, o modo
+ativo volta a ser o que era (`mode.c`), e dentro de um modo as teclas são do modo. Nada liga
+`Control+↑/↓` solto no modo padrão, então soltar não tira o que havia. Um rodapé que morre segurando
+as teclas as deixa ligadas a um soquete sem ninguém: o primeiro toque que não acha rodapé as devolve
+(`fold::nobody_took`, no `ronoctua-shell command`). E a gaveta mantida aberta CRESCE
+para um conteúdo maior e nunca encolhe (`fold::settle`): uma altura que só cresce, até o teto, não
+pode dar a volta, que era o laço. O rodapé move o ponteiro que lembra pelo que a gaveta o moveu
+(`fold::pointer_after`, pelo `pointer_follows_the_drawer`) no quadro que o moveu — superfície
+ancorada embaixo, ponteiro parado. O Scroll pinado reenvia o ponteiro depois do commit da layer e
+no fim da animação (`cursor_rebase_all`), mas só com o tamanho novo aplicado, e até lá o rodapé
+respondia pela linha que ESTAVA sob a mão; o movimento dele, quando vem, é absoluto e substitui a
+posição compensada, nunca soma. O teste de estabilidade amostra duzentos quadros sob o ponteiro
+parado, conferindo a cada um que a posição lembrada é a da mão.
+
+**Clique direito no play alterna a coluna** (`player-column` sem `RAISE`: aberta aqui, fechada, ou
+trazida de outro espaço). Uma meia chave abria e não fechava.
+
+**`C-v` em todo campo de texto**, por uma resposta só (`line::pastes`, `C-v` e `C-y`): o localizador
+cola na busca; o gerenciador cola no filtro quando já há algo digitado (sem nada, `C-v` continua a
+prévia, e `C-y` cola sempre) e na pergunta aberta — um renomear, sobretudo. O
+`every-text-input-pastes` faz o censo: todo arquivo que digita uma letra (`Gesture::Insert`,
+`Stroke::Letter`) pede a área de transferência e tem onde ela cai, e toda janela que hospeda uma
+dessas vistas responde o `pasted` da porta.
+
+**A barra de alerta máximo** (`alert.rs`) ocupa o lugar da faixa de notificação enquanto existe, e a
+notificação espera, segura — também a que chega DEPOIS dela: o `Queue::hold` não segura nada com a
+faixa vazia, então o relógio é perguntado de novo a cada movimento da fila (`alert::hold_the_band`,
+de `after_the_queue_moved`), senão a que chegava sob a barra vencia sem ser vista. Não fecha sozinha — a exceção escrita à regra de que nada na faixa é
+para sempre —: sai quando a causa acaba ou pelo botão. Fundo e tinta alternam entre dois papéis
+(`alert.ground`/`text`, o vermelho do erro, e `alert.ground-alt`/`text-alt`, o âmbar do aviso, cada
+tinta o `on-solid` da família), iguais em toda página e medidos pelos portões (contraste de cada
+tinta no seu fundo e distância entre os dois fundos e o cromo); o relógio da alternância existe só
+com ela no ar. Título em caixa alta pelo `to_uppercase` da língua; mensagem curta sem título,
+centrada. O primeiro caso é a bateria: abaixo de `space.alert.batteryBelowPct` (10%), na bateria e
+sem carregar; fechada à mão, volta só depois de cair mais `batteryStepPct` (5%), e o que foi fechado
+se esquece quando a causa acaba. `alert-dismiss` é o botão pelo `LEADER :`.
+
+**A medida do which-key fecha a leader entre as aberturas** (`nix/bench-frames.nix`, comando
+`leader-close`, só por nome, o `Esc` dela): a LEADER de novo anda pelos conjuntos e não marca
+abertura, e o p99 sobre as amostras que houvesse passava com uma só. Agora a contagem de aberturas
+medidas tem de ser a pedida.
+
+### O catálogo local do player — o núcleo (`ronoctua-broadcast`: `catalog`, `sources`)
+
+Os canais por tema pediam um diretório por página, uma página por máquina: duas portas se
+sobrescreviam, todo filtro era uma ida e volta, e uma lista IPTV de cinquenta mil canais não se
+filtrava por letra. Agora o daemon **ingere** cada fonte inteira num catálogo SQLite e as portas o
+leem sozinhas, com cada filtro respondido por um índice. Medido numa compilação de teste sobre
+52 000 itens sintéticos (cada um em três categorias e seis listas de tema): 240 formas — todo
+escopo (tudo, uma fonte, categoria grande e pequena, tema grande e pequeno, de todas as fontes e de
+uma), toda ordem, primeira, do meio e última página, com letra, com palavras raras e com uma que
+metade dos itens tem, com país e altura, com língua — têm mediana entre 0,2 e 16 ms (o teto do
+teste é 20 ms; a pior é a página do meio da palavra comum). A ingestão levou 22 s e o arquivo,
+231 MiB; uma lista de provedor de 50 000 canais em 200 grupos, 3 s e 90 MiB.
+
+- **Toda listagem anda num índice que a cobre.** Antes, ordenar por mais novo, mais velho ou
+  popularidade na última página custava 100–160 ms: nenhum índice servia o `ORDER BY` e a
+  listagem inteira era ordenada para devolver cinquenta linhas. Agora cada escopo tem um índice por
+  ordem — sobre os itens (todos, e os de uma fonte), sobre os membros de uma categoria
+  (`item_categories`) e de um tema (`item_themes`, uma lista por fonte e uma de todas) — com as
+  chaves da ordem, o id do item logo depois (o último desempate) e o que um filtro pergunta (letra,
+  país, língua, altura). A página, a contagem e as facetas leem um índice só, e só as linhas da
+  página vão ao item. As datas são um número cada, gravado com o item: `newest` (publicação, senão
+  o começo do ano) e `oldest` (o ano, senão a publicação); o sem data fica por último nas duas. O
+  teste recusa um plano que ordene a listagem inteira, de qualquer ponta.
+- **A página mais perto do fim anda do fim**, na ordem inversa: a última custa o que a primeira
+  custa, e o pior caso é a página do meio. Contagem e página são lidas num instantâneo só (uma
+  transação de leitura), para um commit entre as duas não dar página de outro total.
+- **Palavras**: o `items_fts` guarda, além do texto, uma palavra por lista em que o item está — a
+  da fonte, a de cada categoria, a de cada lista de tema (`scopes`). A busca num escopo é uma
+  pergunta só ao índice de texto (`palavras AND scopes : l…`): contada sem olhar linha nenhuma, e
+  a página anda o índice do escopo conferindo cada linha contra um conjunto não maior que ele. Com
+  um filtro além das palavras, a busca dirige e cada item achado é procurado pela chave — um `CROSS
+  JOIN`, porque, livre para escolher, o SQLite pôs o escopo por fora e rodou a busca uma vez por
+  linha (minutos).
+- **O escritor ingere com 64 MiB de cache de páginas** e os devolve depois: com os 2 MiB padrão, a
+  ingestão do catálogo do teste levava 225 s numa réplica; com 64 MiB, 24 s.
+
+- **SQLite pelo `rusqlite`, ligado à `libsqlite3` do sistema** (FTS5 vem com ela; nenhum C nosso).
+  Só este crate e o `ronoctua-video-metrics` o nomeiam (`one-sqlite-boundary`); dentro deste, só
+  `src/catalog/db.rs`. A feature `catalog` traz o banco; sem ela compilam os tipos, a dobra e
+  todos os leitores de fonte.
+- **Dois arquivos**, `catalog.sqlite` e `catalog-adult.sqlite`, em
+  `$XDG_CACHE_HOME/ronoctua[-dev]/player-catalog/`. Grupo que uma palavra de `adultWords` nomeia —
+  palavra INTEIRA, dobrada: `Essex` não é `sex` — vai sempre para o segundo, e um item num grupo
+  adulto é adulto; fonte marcada adulta vai inteira. A pasta é `0700` e os arquivos nascem `0600`
+  antes de o SQLite abri-los (o `-wal` e o `-shm` herdam o modo): o endereço de stream de um
+  provedor IPTV leva a conta da pessoa.
+- **É cache**: esquema diferente é arquivo refeito, nunca migrado — e também o arquivo que não é
+  deste build: tabelas sem `meta`, bytes que não são um banco, um banco danificado. O escritor
+  pergunta o que o arquivo tem ANTES de escrever qualquer coisa nele (antes, rodava o esquema
+  primeiro, e um `items` de outro formato fazia o `CREATE INDEX` falhar para sempre). Um leitor que
+  segura o arquivo velho sabe que ele foi refeito (`Reader::replaced`, pelo inode). A geração
+  (`meta.generation`) nasce do relógio, para um arquivo refeito nunca repetir um número que uma
+  porta já viu. O número do formato (`SCHEMA`) fica preso ao texto do esquema e às palavras que as
+  colunas guardam por um teste: mudar um sem o outro reprova. Valor que este build não escreve (um
+  `kind` desconhecido, uma letra que não é uma, um número fora do tipo) é `OtherSchema`, nunca um
+  palpite. Um escritor (WAL, `busy_timeout`); cada fonte é trocada numa transação por arquivo, as
+  duas escritas antes de qualquer commit e confirmadas juntas só se couberem no teto — o leitor vê
+  as linhas velhas ou as novas, nos dois arquivos; leitores `SQLITE_OPEN_READ_ONLY` (o `mode=ro`)
+  com `query_only`.
+- **Teto `playerCatalogMib`**, separado do `playerMib` (um banco não é uma pasta de arquivos que o
+  LRU possa cortar pela metade), imposto pelo catálogo: a ingestão que passaria dele é desfeita e a
+  fonte fica com as linhas antigas; um catálogo achado acima dele (teto baixado) é esvaziado.
+- **Ids estáveis**: FNV-1a de 64 bits da fonte e do id do item (ou da chave da categoria), escrito
+  à mão porque o hasher da `std` pode mudar entre versões — e um id que muda move o cursor que a
+  porta guarda. Dois itens com o mesmo id numa fonte são um só, nas categorias dos dois, e o
+  segundo endereço vira alternativo.
+- **Letra**: o primeiro caractere alfanumérico em maiúscula, dígito é `#`; acento latino ou grego
+  sai (`É` é `E`), menos `Ñ` e `Ç`; o cirílico fica como é (`Й`); CJK é o próprio ideograma. A
+  ordem do título é a dobra (NFD sem marcas, minúsculas), então `Ñ` ordena com `N`.
+- **Tema de um grupo da pessoa**: pelos `aliases` de `assets/channels.nix`, palavras inteiras
+  dobradas; ganha o alias MAIS LONGO ("science fiction" antes de "science"), e no empate o tema que
+  a tabela lista primeiro. O gerador recusa um alias que dois temas reclamem.
+- **O endereço da fonte da pessoa nunca entra no banco**: o catálogo guarda `host/…`, e o endereço
+  mora em `player-sources/sources.json` (raiz de configuração), escrito `0600` desde o primeiro byte
+  pelo `ronoctua_consent::keys::write_private_file`. `Address` tem `Debug` mascarado e não tem
+  `Display` nem `Serialize`; o código do catálogo e das fontes não loga nada, e a única linha de
+  log de uma fonte da pessoa diz o TIPO da falha — as palavras do erro da web citam o endereço
+  (`source-addresses-are-secret`). **Os endereços de stream dos itens entram**, e levam a conta: um
+  provedor Xtream a escreve em cada linha (`/movie/<usuário>/<senha>/…`). Por isso os arquivos são
+  `0600`, e `NewItem` e `Item` não derivam `Debug` nem `Serialize` — o `Debug` deles mascara o
+  endereço, os alternativos e o referer (`shown`). O `shown` lê o host pelo mesmo parser da web
+  (WHATWG) e mostra `…` sozinho para um endereço ambíguo — usuário ou senha com `/`, `?`, `#` ou
+  `\` cru, que todo parser lê como host —, e o `sniff` o recusa (`NotAnAddress`). O `host_of`, com
+  que o `Pass` é conferido, usa o mesmo parser: `https://a.example\@b.example/` vai a `a.example`,
+  e um corte no `@` conferia o consentimento de `b.example`.
+- **O `sniff` só decide pelo endereço o que o endereço diz**: canal ou playlist do YouTube, um vídeo
+  (recusado), uma coleção `archive.org/details/<id>`. Qualquer outro endereço desses hosts — o feed
+  de um canal em `youtube.com/feeds/videos.xml`, um RSS ou M3U do archive.org — é decidido pelos
+  bytes, como o de qualquer host.
+- **Fontes padrão novas**: NASA (`images-api.nasa.gov`; o item fica INTEIRO, com o endereço do
+  `collection.json`, e o daemon abre a melhor versão ao tocar — `large`, `medium`, `orig`…),
+  Wikimedia Commons (arquivos DIRETAMENTE nas categorias declaradas, conferidas pelo
+  `categoryinfo` em 2026-09-30) e PeerTube pelo SepiaSearch (`licenceOneOf=1..7`, `nsfw=false`, e
+  a resposta relida por precaução). Cada pedido a um host de fonte padrão leva o `Pass` da pessoa
+  (seam `Web`, ao lado do `Net` dos três diretórios, cujas recusas as portas já dizem); a fonte que
+  a pessoa colou é o próprio consentimento. Pôsteres ligados de início só quando todos os hosts de
+  pôster estão entre os hosts da fonte.
+- **O M3U guarda os atributos**: `group-title`, `tvg-logo`, `tvg-id`, `tvg-country`,
+  `tvg-language`, e as linhas `#EXTVLCOPT` de `User-Agent` e `Referer` (`ronoctua_playlist::
+  Attributes`); a vírgula dentro de aspas não termina os atributos. A leitura com limites próprios
+  (`parse_text_within`) é a do catálogo; o painel continua com 2 000 entradas.
+
+### O super-índice — `ronoctua-index`, um escritor e muitos leitores
+
+O fast-access acha arquivo por nome e por conteúdo, página de manual, pacote a instalar e vídeo do
+catálogo numa caixa só. Isso é um índice invertido, e ele é o **tantivy** (`mmap` + `lz4`, sem as
+features padrão): dicionário de termos em FST (prefixo e Levenshtein sobre ele), segmentos imutáveis
+mapeados em memória, um escritor e leitores em outros processos sem servidor entre eles. O SQLite
+FTS5 não tem fuzzy e degrada em prefixo curto; um FST próprio custaria meses.
+
+**O portão veio antes do resto.** `ronoctua-bench-index` (no `nix run .#bench`) indexa um milhão de
+nomes sintéticos (pastas, datas, camelCase, dígitos), um décimo deles com corpo de texto, e mede a
+consulta tecla a tecla, como alguém digita (`r`, `re`, `rep`… e um erro de digitação). Medido no
+laptop do dono, pelo invólucro das pistas: 1 milhão indexado em 8 s, pasta de 170 MiB; **nomes p99
+4,1 ms** (alvo 8) e **nomes + conteúdo p99 11,2 ms** (alvo 25). O comando falha se um dos dois
+estourar: é o critério que decidia trocar de motor.
+
+- **Duas passadas, dois orçamentos.** Uma pergunta roda sobre os NOMES (nome ×4, as pastas acima
+  ×1) e, quando pede conteúdo, sobre os CORPOS (×1). Arquivo achado pelo nome é `File`; achado só
+  pelo que está escrito nele é `Content`. Manual, pacote e vídeo achados nos dois somam.
+- **Toda palavra precisa casar**; as anteriores como termo (e fuzzy a partir de cinco letras), a
+  última como prefixo no FST, no máximo 64 expansões em ordem de dicionário. Dentro de um campo
+  vale a MELHOR forma de casar (disjunction-max): `reportFinal` guarda `report` e `reportfinal`, e
+  digitar `report` não pode contar duas vezes contra `report.odt`.
+- **A palavra inteira pontua por BM25; a só começada, por uma constante abaixo dela.** Pelo IDF
+  próprio, uma continuação rara passava a resposta: `rg` achava `rgl` (um pacote) antes de
+  `ripgrep`, cujo programa É `rg`. Entre continuações que empatam, o nome mais curto sobe um pouco
+  (a norma do campo, no coletor): `firef` dá `firefox` antes de `faust2firefox`. E um nome que é
+  inteiro o que se digitou (`git commit` para `git-commit`) vale 1,5 vez.
+- **O tokenizador é o da árvore**: `ronoctua_apps::fold` (acento fora, caixa baixa), corte em
+  pontuação, em camelCase e na borda letra–dígito, e o pedaço inteiro guardado junto. A palavra
+  digitada só é cortada na pontuação — quem digita `report2026` acha o pedaço inteiro.
+- **Cada tipo guarda os seus `most`.** O fast-access mostra seções por tipo; um tipo lotado não
+  pode esvaziar os outros. A recência (meia-vida de 30 dias) multiplica no coletor; a frecência vem
+  do histórico do app (`History`), e os ids dele são perguntados numa segunda consulta estreita,
+  para um acerto frecente fora da janela ainda aparecer.
+
+**O leitor não tem relógio.** O tantivy recarrega por padrão com uma thread que consulta o
+`meta.json`; aqui o leitor abre com `ReloadPolicy::Manual` e recarrega quando o `meta.json` muda —
+`on_commit`, que é o `Notice::on_file` dos arquivos de preferência. O commit do escritor É o evento:
+o `meta.json` é escrito por último, por rename, depois de todo segmento que ele nomeia. A porta abre
+o leitor quando a vista abre e o solta quando fecha, porque o rodapé vive meses. O `on_commit` cria a
+pasta quando ela ainda não existe: o watch é na pasta, e um watch pedido a uma pasta inexistente não
+vigia nada — uma porta aberta antes da primeira passada da unidade nunca ouviria o primeiro commit.
+
+**O escritor é uma unidade** (`ronoctua-index.service`, `nix/modules/index.nix`), porque percorrer a
+home e ler documentos é minuto de disco e CPU numa primeira vez: `Nice=19`, IO ocioso, `CPUWeight`
+ocioso, `MemoryMax` do `assets/cache.nix`, só a pasta do índice gravável. Ela reconcilia na partida
+(por caminho, uma busca do id no dicionário e a comparação de data e tamanho; o que o passeio não viu
+sai), depois segue o inotify, um watch por pasta (`fs.inotify.max_user_watches` sobe no módulo). Um
+lote é aplicado depois de 1 s de silêncio, ou 10 s depois da primeira mudança de uma rajada que não
+para, ou com 10 mil caminhos — o relógio só existe enquanto há mudança pendente. Cada caminho do lote
+é resolvido contra o disco no momento de aplicar, então a ordem dos eventos não importa.
+`IN_Q_OVERFLOW` não diz o que se perdeu: todas as raízes andam de novo. Quem a liga é o brain (o
+módulo `search-index`); sem `wantedBy`, a primeira passada não começa na bateria no meio de uma
+chamada.
+
+- **Dois descritores de inotify.** O kernel guarda UMA máscara por pasta por descritor, e o
+  `IN_MASK_ADD` soma as máscaras. A pasta do link do perfil (`~/.nix-profile`) é a home, que também é
+  a primeira pasta percorrida; num descritor só, o `MODIFY` do gatilho virava da home, e um arquivo
+  aberto e escrito direto na home era um lote e um commit a cada segundo (medido: 12 em 24 s). As
+  pastas percorridas ficam num descritor, sem `MODIFY` (o `CLOSE_WRITE` é quando o escritor soltou);
+  os gatilhos — `index.json`, os links do sistema e do perfil, o catálogo de vídeo — ficam noutro, e
+  só a pasta do catálogo pede `MODIFY`, porque o WAL do SQLite é escrito e nunca fechado.
+- **Os gatilhos são armados de novo a cada disparo.** A unidade não cria pasta nenhuma (a home é só
+  leitura para ela): uma pasta de gatilho que ainda não existe é vigiada pelo pai, e quando aparece
+  (a pessoa salva as preferências pela primeira vez) passa a ser vigiada dali em diante.
+- **A raiz é seguida; o que está debaixo dela, não.** `~/Dropbox` apontando para outro disco é
+  percorrida como a pasta que nomeia, com os ids no nome que a pessoa usa. Um link para pasta
+  debaixo de uma raiz continua sendo um arquivo.
+- **A pasta do próprio índice nunca é percorrida**, seja qual for a raiz: pelo caminho, pelo
+  caminho resolvido e pela identidade (dispositivo e inode), que nenhum link escapa. Percorrida,
+  cada commit virava o lote seguinte (medido: seis commits em 4 s, para sempre).
+- **Um valor que não significa nada é recusado.** No `index.json`, uma raiz relativa ou um `skip` que
+  não é nome (sem `/`) nem caminho absoluto (`Videos/raw`) faz o arquivo não ler; a unidade diz o
+  porquê no log e continua pelo que tinha. O `--skip` da linha de comando (`searchSkip`) segue a
+  mesma regra, e a unidade não sobe com um inválido.
+
+**O que a unidade tomou de cada fonte vai no commit.** O payload do tantivy guarda o formato e as
+assinaturas: onde as pastas de manual resolvem, o arquivo do índice Nix (caminho real, tamanho,
+data), a geração do catálogo de vídeo, e se o último passeio leu conteúdo. Salvo junto com os
+documentos, os dois nunca discordam depois de uma queda. Manuais e pacotes são relistados inteiros
+quando a assinatura muda, e ela muda quando `/run/current-system` ou o perfil da pessoa mudam — por
+isso a unidade lê o índice Nix por `/etc/ronoctua/nix-index.tsv`, que a troca de sistema substitui,
+e não por um caminho do store que ficaria o da geração em que ela nasceu. Um índice de outro formato
+é apagado e refeito: é cache.
+
+**O teto é da pasta, e o nome fica.** Passado o `searchIndexMiB`, sai primeiro o CONTEÚDO dos
+arquivos mais velhos; o documento continua com nome, pastas e datas. Quanto texto uma rodada tira é
+medido: a primeira tira o dobro do excesso, as seguintes dividem o excesso pelo que a anterior
+devolveu por byte — o quanto um texto pesa no índice depende do texto —, e o escritor guarda esse
+número para o próximo corte, que então acerta numa rodada. O espaço só volta num merge, e a coleta
+dos arquivos velhos vem DEPOIS de o leitor do próprio processo andar: o tantivy guarda todo segmento
+que um searcher do processo ainda segura, e medir antes contava a pasta com eles.
+
+- **O corte deixa folga: desce a 85 % do teto** (`ROOM_PERCENT`). Um corte REESCREVE os segmentos
+  que funde, e num índice que já viveu um tempo isso é quase a pasta inteira. Cortando só ATÉ o teto,
+  o documento salvo seguinte passava dele de novo, e cada salvamento depois do primeiro reescrevia o
+  índice todo: 9 a 16 MB gravados por um arquivo de 35 KB num teto de 2 MiB, gigabytes por
+  salvamento com o teto de verdade. Com a folga, dezesseis salvamentos no teto custam um corte e
+  cerca de quatro tetos gravados, contando os merges da própria política do tantivy; sem ela, dez
+  cortes e quinze tetos (`index-is-bounded` mede isso pelo `wchar` do kernel).
+- **O teto é medido contra o que o último commit nomeia** (`committed_bytes`: os segmentos e o
+  `meta.json`), não contra a pasta: um merge em andamento grava o segmento novo ao lado dos que ele
+  substitui, a pasta é os dois por um instante, e um corte disparado por isso reescreveria o índice
+  à toa. A pasta pode passar do teto só enquanto um merge dura.
+- **Só se fundem os segmentos que têm documentos apagados.** Um segmento sem nenhum não tem o que
+  devolver, e fundi-lo seria reescrevê-lo à toa.
+
+**O conteúdo é o do preview.** `ronoctua_inspect::plain` pergunta às mesmas leituras que o painel
+(`text::decoded`, `document::said`) e deixa de fora o que é do painel: realce, o corte em duas mil
+linhas e o de 512 bytes por linha. Um arquivo é achado pelas palavras que o preview mostra.
+
+**O vídeo apagado sai.** O catálogo guarda a lápide de um vídeo apagado, e o `all_since` nunca mais
+o responde. A unidade começa com uma tomada inteira; enquanto roda, depois de cada mudança do
+catálogo, compara quantos vídeos o índice tem com quantos o catálogo mostra (`Catalog::count`, um
+`COUNT` por lote). Mais no índice é um vídeo apagado, e os vídeos são tomados inteiros de novo — só
+quando a pessoa apagou algo. Um vídeo novo entre as duas perguntas pode esconder uma exclusão por um
+lote; a adição é ela mesma uma mudança do catálogo, e o lote seguinte vê as duas.
+
+**A planilha `.xls`** é lida pelo `xls2csv`, o mesmo programa que o rodapé recebe em
+`nix/modules/media.nix`; a unidade não herda nada da sessão, então o módulo o passa a ela.
+
+**Os checks** são dois e rodam o binário extraído com os argumentos da unidade
+(`nix/index-args.nix`, a lista que o módulo também usa): `index-is-bounded` planta uma árvore que
+passa muito do teto, confirma que sem teto ela passa, mede a pasta com o teto, pergunta pelos nomes
+e pelo conteúdo mais novo, e depois põe a unidade seguindo esse índice cheio enquanto dezesseis
+documentos são salvos um a um, contando os cortes e os bytes que ela grava;
+`the-reader-sees-the-commit` põe a unidade seguindo uma árvore e um leitor feito como o da porta, e
+planta o arquivo depois de o leitor dizer que esperava.
+
+### Fronteiras de sistema: git, arquivos compactados e containers
+
+Três crates, cada um o único que roda o seu programa, pelo caminho no store e sempre como CLI —
+nunca uma biblioteca que traga outra pilha HTTP (`gix`) nem um socket que exija leitura em pedaços
+(`podman.sock`). Os três bloqueiam: fila ou thread, nunca o laço.
+
+#### `ronoctua-git`: toda chamada nasce endurecida
+
+Uma pasta baixada pode trazer um `.git/config` que roda um comando assim que o git lê o
+repositório. MEDIDO (git 2.52 e o 2.54 pinado): um `filter.<driver>.clean` na config e um
+`.gitattributes` que o nomeia fazem um `git status` puro rodá-lo — e o gerenciador de arquivos lê
+todo repositório que lista. Por isso só existe uma porta, `base()`: `-c` para cada config que roda
+algo (fsmonitor, pager, diff externo, hooks, credential helper, askPass, `ext::`,
+alternateRefsCommand, showSignature), `GIT_SSH_COMMAND` sempre posto (o ambiente vence o
+`core.sshCommand`), `GIT_PROXY_COMMAND` vazio (lido antes da config, vence o `core.gitProxy`),
+pathspec literal, sem prompt e sem lock opcional, `GIT_NO_LAZY_FETCH=1` (num clone parcial, ler um
+blob que falta é um `git fetch` filho que roda o `remote.<nome>.uploadpack` da config — MEDIDO,
+por um `Repo::diff`) e `GIT_ALLOW_PROTOCOL` com os cinco transportes (nem `ext::` nem ajudante
+`remote.<nome>.vcs`). Os drivers de filtro têm nome livre, então `Repo::command` os lê (`git
+config`, que não roda nada) e esvazia um por um, pelo AMBIENTE (`GIT_CONFIG_KEY_<n>`, em bytes) e
+nunca por `-c`: o git corta um `-c` no primeiro `=`, e um driver chamado `x=y` ou com nome que não é
+UTF-8 continuava rodando (MEDIDO). Sem a lista, a chamada não é feita. `--no-ext-diff
+--no-textconv` na família do diff, `--no-textconv` no blame, submódulo nunca.
+
+Dois achados que mudaram o código: `fetch --all` com dois remotos ou mais entrega cada um a um
+`git fetch` filho SEM o `--upload-pack` dado, e o filho roda o `remote.<nome>.uploadpack` da config
+— então o fetch é um remoto por vez, por nome. E `--follow` com `--skip` contou commits que não
+tocavam o arquivo (git 2.52, com renomeação): a página é cortada em Rust.
+
+HTTPS com token: `GIT_ASKPASS=ronoctua-git-askpass` e só o CAMINHO do arquivo `0600` no ambiente; o
+ajudante recusa um arquivo que outros leem. O caminho dele é compilado (`RONOCTUA_GIT_ASKPASS`), e
+por isso ele é construído à parte do workspace, só com `rustc` sobre as fontes do crate
+(`nix/git-askpass.nix`, que não tem dependência nenhuma): procurá-lo ao lado do `current_exe()` só
+acharia no `bin/` do workspace, nunca ao lado de um daemon extraído. O teste
+`git_hands_the_token_through_the_helper` faz o caminho inteiro contra um servidor que pede senha.
+
+Checks: `one-git-driver`, `git-calls-are-hardened`; a prova de comportamento é o teste
+`a_hostile_repository_runs_nothing`, com o git real: um repositório cuja config nomeia um comando em
+cada porta (e um clone parcial ao lado), cada porta mostrada ABERTA pelo comando git comum que passa
+por ela — status, checkout, show, diff, log num terminal (`script`), log de commit assinado, fetch
+por web, ssh, `git://`, `ext::` e local, update-ref, leitura no clone parcial — e fechada por todo
+método do crate. Uma porta que o teste não abre não prova nada: era assim que os dois desvios do
+filtro passavam.
+
+#### `ronoctua-archive`: a senha pelo stdin, sob `setsid`
+
+`7zz` (zip e 7z, AES-256, nomes escondidos, volumes), `bsdtar` (a família tar) e `unrar` (o `7zz`
+livre não tem RAR). A senha nunca vai no argv: o filho roda sob `setsid --wait` (sem terminal de
+controle, não há `/dev/tty` para perguntar) e lê do stdin, que recebe o arquivo `0600` do job.
+MEDIDO antes de construir em cima: sem terminal, `7zz` pergunta uma vez só (sem "verificar"), e
+`-p` sem valor só PERGUNTA ao criar e ao acrescentar — em `x`, `t` e `l` ele é senha VAZIA, então
+ali o switch fica de fora e o `7zz` pergunta sozinho. Senha errada é recusada nos dois programas;
+arquivo cifrado sem senha é `NeedsPassword` (o stdin vazio encerra a pergunta).
+
+Extrair escreve numa pasta escondida dentro do destino e só depois move, com nome livre: o `7zz`
+com senha errada deixaria um arquivo vazio por membro. A listagem do tar é o próprio arquivo
+reescrito como mtree pelo `bsdtar`, porque o mtree escapa cada byte estranho do nome (espaço, `=`,
+quebra de linha).
+
+Nome nunca é argumento onde o programa o lê como outra coisa. O `bsdtar` lê `@x` como um arquivo
+compactado cujos membros ele copia e `-Cx` como pasta, mesmo depois de `--` (MEDIDO, 3.8.8: a
+seleção `@old.tar` ao lado de um `old.tar` empacotou os membros do outro), então os nomes vão pelo
+stdin (`--null -T -`). No `7zz`, depois de `--`, `@x` é nome e não lista. O `unrar` lê o nome de um
+membro como curinga (`n?te` extraía `note`) e não tem como dizer "literal": ele extrai tudo na pasta
+escondida, e só os membros pedidos saem dela. Check: `one-archive-driver` (sem licença nenhuma: o
+empacotar e o desempacotar do gerenciador passaram para a fila, que chama este crate).
+
+#### `ronoctua-containers` e `nix/modules/containers.nix`
+
+Podman sem root, compatível com Docker por decisão do dono: `docker` é o podman, `DOCKER_HOST`
+aponta para o socket da pessoa (shells por `extraInit`, unidades por `environment.d` com
+`${XDG_RUNTIME_DIR}` — no `user.conf` o `%t` não se resolve e o systemd descarta a linha), compose
+é o `podman-compose`. Sem socket root, sem autoprune (um relógio que apaga), crun,
+eventos no journal, `registries.conf` escrito inteiro no formato v2. `~/.local/share/containers` é
+um subvolume próprio, como o `~/.cache` (`ronoctua.filesystem.ownSubvolumes`).
+
+`RONOCTUA_PODMAN` vem do AMBIENTE, nunca de `option_env!`: compilado no shell, o fecho do podman
+iria para todo perfil, o mínimo inclusive. O módulo o põe na sessão, no rodapé e na fila (quando ela
+existe: nomear uma unidade que ninguém definiu cria uma sem `ExecStart`). O log de um container é
+stdout e stderr num pipe só — o podman devolve o stderr do container no dele, e muito serviço só
+escreve lá. Os parsers leem o que o podman pinado IMPRIMIU (fixtures
+capturadas de um store descartável), não a documentação: `Created` em segundos no `ps`, RFC 3339 no
+`pod ps`, chaves minúsculas só no `network ls`, nenhum `Dangling`, `PodName` vazio. O
+`containers-vm` confere cada chave no podman instalado. Check: `one-podman-boundary`.
+
+
+### A atualização mudou para a pasta dela: o módulo `system-update`
+
+Tudo o que a atualização é mora em `crates/ronoctua-brain/modules/system-update/`: a declaração
+(`steps.nix`), o gerador e as duas derivações (`gen-updates.py` e `sequence.nix`), a tabela que o
+módulo lê (`tables.nix`), a metade NixOS (`module.nix`), os textos, os checks e o `why.md`, que conta o porquê
+de cada coisa. O que mudou no caminho:
+
+- **As chaves foram para o espaço do módulo.** `update-<passo>` virou `system-update-step-<passo>` (e
+  `…-does`), e as chaves da vista, os vereditos e os comandos também (`cmd-system-update-open`,
+  `cmd-system-update-watch`). Ter `update` como prefixo faria do check selado um detector de
+  `update-mime-database` e `git update-ref` pelo repositório inteiro. O gerador recebe o id do módulo
+  (`--task`, o nome da pasta) e deriva as chaves dele; o passo leva as duas no fio (`name_key`,
+  `does_key`) e o buffer nunca monta uma.
+- **Os nomes das quatro unidades estão no manifesto**, e o `module.nix`, o Rust (`unit::*`) e a janela
+  os leem de lá.
+- **A janela da atualização é o único arquivo de fora que nomeia o módulo** (`namedBy`). Ela é dona
+  dos três comandos (`update_window::COMMANDS`) e das três teclas (`BINDINGS`); o `leader.rs` os
+  registra junto dos dele e o rodapé os despacha por `update_window::order_of`, sem soletrar um id.
+- **O ensaio da atualização ensaia a aparagem das gerações (D5).** Um passo que inicia uma unidade
+  pode declarar `rehearsal`, a unidade que o ensaio inicia no lugar dela; o `store.nix` ganhou
+  `ronoctua-system-generations-rehearsal.service`, a mesma aparagem sem `--execute`, e o que ela disse
+  entra na saída do ensaio: lido do diário a partir de um cursor tomado antes do início, só as linhas
+  da unidade, depois de um `--sync`. Nunca pelo id de invocação, que some quando a oneshot que terminou
+  bem é descarregada — e o check que devia pegar isso passava, porque o `systemctl` de mentira dele
+  respondia sempre. Por isso há dois: o `system-update-rehearses-the-trim`, contra um `systemctl` que
+  descarrega a unidade como o systemd faz, e o `system-update-rehearsal-vm`, o ensaio da metade root
+  no systemd de verdade, sobre gerações plantadas. A vista da atualização segue, em cada metade, a
+  unidade de verdade e a de ensaio (`update_window::HALVES`), então a lista aparece nas duas portas.
+- **O arquivo das viradas da pessoa** (`update-steps.conf`) é escrito pelo `prefs_saved` do módulo;
+  o núcleo não sabe que ele existe.
+- **A janela se fotografa** (`photograph --door update`), sobre os relatórios e o diário que se dão a
+  ela, nunca os da máquina: na foto, o `u` e as respostas da contagem ficam guardados e são ditos
+  (`would have …`), porque uma câmera cujo `u` começasse uma atualização reconstruiria o sistema.
+  E o segundo registro dela quebra em linhas, como o da região do rodapé: cortado na largura, o fim
+  da frase de um passo — onde está a consequência — existia numa porta e não na outra.
+
+
+### Os módulos que eram tarefas: varredura, lixeira, Emacs e relógio
+
+`cache-sweep`, `trash-expire`, `emacs-daemon` e `clock-sync` moram nas pastas
+deles, cada uma com manifesto, `module.rs`, `module.nix`, textos, checks e `why.md` (o porquê de
+cada um mora lá agora). As unidades da varredura e da lixeira saíram do `nix/modules/cache.nix`, que
+ficou com as opções do catálogo (`ronoctua.cache.*`, que as unidades leem) e o destino dos builds do
+cargo; a cadência e a janela das duas vêm do `assets/cache.nix` pelo manifesto, e o núcleo não traz
+mais a tabela `cache.rs`. O botão do Emacs e o do relógio deixaram de ser comandos do rodapé
+(`brain-start-emacs`, `brain-clock-automatic`): são ações dos módulos (`emacs-daemon-start`,
+`clock-sync-keep`), respondidas pelo cérebro, e toda ação gerada vira um comando do registro, só pelo
+nome (`leader::a_module_action`). O interruptor de `LEADER s l` muda a vigia do relógio com
+`Ask::Set { Knob::Enabled }` e lê o `enabled` da linha dela; o `locale.rs` é o único arquivo de fora
+que a nomeia (`namedBy`).
+
+**Um módulo que o sistema desligou continua na página, recusando.** A unidade do cérebro recebe em
+`RONOCTUA_BRAIN_OFF` os ids que `ronoctua.brain.modules.<id>.enable = false` desligou, e o
+`Registry::switched_off` os marca. O núcleo não os agenda, não os escuta (nem as fontes deles são
+perguntadas), não pede a cara deles e recusa todo pedido — o interruptor da pessoa inclusive — com a
+chave da palavra que a linha dá, `brain-why-system-off`, que a porta traduz. A linha diz a razão no
+lugar da data e no do "roda sozinha", sem tecla: o que a configuração decidiu, a configuração desfaz.
+Um id que este build não conhece é dito no log e ignorado, para não parar os outros módulos.
+
+A página de um módulo que o sistema desligou mostra só a linha que diz por quê e o histórico: o
+cabeçalho não ensina rodar, ensaiar, ligar, cadência, janela nem passos (o `RET` da página inicial
+continua abrindo a página), e a linha da página inicial não diz "esperando". A linha de comando diz a
+chave da recusa dentro de uma frase (o binário não tem textos).
+
+**Um interruptor só para as unidades.** `ronoctua.cache.enable = false` não tira mais as unidades da
+varredura e da lixeira por conta própria: ele é o padrão (`mkDefault false`) do interruptor de cada
+um dos dois módulos, e é esse interruptor que a porta do carregador e o `RONOCTUA_BRAIN_OFF` leem.
+Antes eram dois, e o do cache tirava as unidades sem avisar o cérebro, que continuava iniciando
+unidades que não existiam. O `cache.nix` nomeia os dois ids por isso, e está no `namedBy` deles.
+
+**O botão do relógio é feito na hora.** `clock-sync-keep` não enfileira mais: enfileirado ele passava
+pelo portão (preso na bateria) e esperava atrás do que estivesse rodando, e uma recusa virava uma
+rodada que "funcionou". O `act` roda o trabalho numa thread própria e espera um instante: a tempo, a
+resposta é a do toque (feito, ou `clock-sync-why-refused`); atrasada, o toque foi aceito e a recusa
+chega na linha da faixa e no registro de atividade, pelo `Ctx::detached` — a mesma porta do módulo,
+para trabalho que sobrevive à chamada. Uma rodada agendada recusada é `Failed`, com as palavras da
+máquina.
+
+**Nenhuma porta pergunta ao cérebro no laço.** O interruptor de `LEADER s l` manda o `Ask::Set` fora
+do laço nas duas portas: o rodapé pelo mesmo `brain::put` das outras mudanças, lendo a vigia do
+pensamento que ele já recebe; a janela numa thread que manda o pedido, olha o pensamento e devolve as
+duas respostas por um canal. Enquanto a primeira resposta não chega, a linha diz "não se sabe", e não
+"o cérebro não está rodando". E uma ação de módulo pedida pelo nome (`LEADER :`) antes de o cérebro
+falar é enviada mesmo assim, pela lista gerada, e a porta diz o que voltou.
+
+**O check das unidades lê os manifestos.** `the-brain-reads-what-the-units-write` percorre todo
+módulo que declara `run` ou `rehearse`, lê as unidades como a VM as recebe e exige o relatório
+`%t/<pasta>/<id>.json` (ou o do ensaio) e o `RuntimeDirectory` de quem abre a pasta no sandbox; um
+módulo cuja unidade não nomeia o relatório precisa soletrar a pasta dentro da própria pasta. O que
+só um módulo sabe (qual diretório ele varre, que só a rodada age) é check dele.
+
+#### Lembretes e alarmes: o primeiro módulo de execução única
+
+O `reminders` (`crates/ronoctua-brain/modules/reminders/`) é uma vigia sem agenda: seu único relógio
+é o `next_wake`, armado para o próximo lembrete e para nada quando não há nenhum, sobre o relógio de
+parede (a thread de vigia limita a espera e recalcula, então uma suspensão não atrasa o toque).
+Na hora ele levanta o aviso de nível `alarm`, que passa na frente da contagem regressiva e só sai
+quando alguém dispensa ou adia; o que venceu com a máquina desligada vira o aviso `missed`. As
+palavras com que uma resposta é lida ("amanhã", "todo", "segunda") são chaves dos `.ftl` do módulo,
+e não do Rust, e o texto digitado é dado. O som é o `ronoctua_audio::chime`: o `pw-play` pelo caminho
+no store que a unidade do cérebro recebe no AMBIENTE, nunca compilado. O porquê de cada peça está no
+`why.md` do módulo.
+
+O teste de VM dos módulos (`tests/brain-modules-vm.nix`) não nomeia nenhum: ele liga só os módulos
+que trazem um `vm.nix` na própria pasta e roda o subteste de cada um sobre o mesmo cérebro.
+
+### Vigias do journal: o que morreu por falta de memória, e os erros
+
+Dois módulos do cérebro sobre o seguidor único do journal que o núcleo roda (`feed` do `watch.rs`,
+`ronoctua-journal`); o porquê de cada um mora no `why.md` da pasta.
+
+- **`oom-watch`** ouve a linha do kernel (`Killed process …`), a palavra do systemd sobre a unidade
+  (`MESSAGE_ID` `fe6faa94…` e `d989611b…`) e a decisão do `systemd-oomd`, junta as duas linhas de uma
+  morte (espera três segundos pelo par, com o relógio armado só enquanto espera) e faz de cada morte
+  um registro na atividade e um evento com notificação. A linha do systemd sobre o kernel não é
+  morte sozinha: ele a escreve para toda unidade cuja contagem `oom_kill` subiu, fatias e
+  `user@<uid>.service` inclusive, e de novo depois de um `daemon-reload`; por isso a de uma unidade
+  que contém unidades é descartada, a do kernel casa com a MAIS PRÓXIMA no tempo, e a de unidade sem
+  linha do kernel some — o kernel escreve a dele em toda morte. O evento leva a etiqueta `memory-killed` do
+  catálogo — a da notificação que o rodapé já levanta pelo sinal do oomd no barramento —, o cgroup e
+  o segundo da morte; o rodapé reconhece o evento PELA ETIQUETA (não nomeia módulo) e, com
+  `ronoctua_notify::oom::Kills`, acrescenta os detalhes à notificação do barramento
+  (`Queue::amend`) em vez de levantar outra, casando um a um: uma chegada só se junta a uma morte
+  que só o outro lado contou, a mais próxima no tempo. O que foi dito fica em disco por pid, cgroup ou
+  unidade com o segundo, e a linha relida depois de um reinício não é outra morte. O seguidor lê até
+  `notice`, nunca `info`, e a passada do núcleo sobre o passado (pedida pelo `journal-errors`) lê na
+  prioridade do seguidor: ele segue do fim dela, e nada de antes chega a quem não pediu passado.
+- **`journal-errors`** ouve tudo em `err` ou pior (na primeira partida, os últimos 200 desta
+  inicialização pela passada única do núcleo) e agrupa por quem disse e pelo modelo da mensagem, com
+  números e ids dobrados. A página lista os tipos em quatro seções — não vistos desta inicialização,
+  não vistos de uma anterior, vistos e ignorados —; o aperto de uma linha marca visto, ignora o tipo
+  ou volta a ouvir, e uma linha não vista também ignora o tipo pela segunda ação (`Row::also`, a
+  tecla `, v` da página, ensinada só sobre uma linha que a tem), sem passar pelos vistos. O rodapé
+  do buffer mostra a mensagem inteira, quebrada, que a linha corta. A marca `Watching` conta os
+  tipos não vistos e some quando tudo foi visto. A lista é estado (`errors.json`, com as contagens
+  dos ignorados), o que se ignora é escolha da pessoa (`ignored.json`, no diretório de configuração
+  do módulo, pelo `ronoctua-store`): só muda num gesto dela, é relido com `parsed` antes, e um
+  arquivo que não é lido fica como está, com a recusa dita. Uma rajada vira uma escrita da lista
+  cinco segundos depois, e um gesto é escrito na hora.
+- O teste de VM `brain-modules-vm` não nomeia módulo: cada pasta que precisa de uma máquina traz
+  `vm.nix` (`node` e `script`), e o arquivo roda todos numa VM com o rodapé e o cérebro que ele acorda.
+
+## O seletor de arquivos
+
+**Um seletor só** (`crates/ronoctua-shell/src/file_picker.rs`, `FilePicker`; o `files::Picker` é o
+de dono e grupo do gerenciador). Antes dele, cinco lugares pediam um caminho de cinco jeitos: o
+player tinha uma grade própria de três pastas, e o ícone de um web app, um pacote para instalar, uma
+pasta do Syncthing, o arquivo de um túnel e o fundo da câmera eram uma linha para DIGITAR um
+caminho — uma pergunta que só responde quem já sabe a resposta. O check `one-file-browser` recusa
+uma sexta leitura de pasta para escolher fora do seletor e do gerenciador.
+
+**Um componente, sem porta própria.** O pedido (`Request`) diz o propósito (a chave da pasta
+lembrada), o modo (`Open { many }`, `Folder`, `Save { name, extension }`), o anel de filtros (o
+último é sempre "todo arquivo"), onde começa (`Start`: a lembrada, uma pasta do XDG ou um caminho
+dado), se um endereço da web é resposta, e as respostas a mais da página (`Extra`: tocar ou pôr na
+fila a pasta aberta) e o segundo jeito de responder (`C-RET`, `Alternate`). A porta desenha as
+linhas dele como desenha as suas (`files::Field`), dá a ele toda tecla que ele reivindica
+(`claims`) e faz o que o `Step` pede. O player o hospeda como página (`PageId::Pick`); as vistas
+dos programas, do Syncthing, da rede e da câmera, por cima das próprias linhas
+(`file_picker::Hosted`) — nas duas portas, o que uma escolhe a outra escolhe.
+
+**Lugares, pasta, grade.** Os lugares são a barra lateral do gerenciador (`files::sidebar_of`), com
+a pasta pessoal em cima, e depois dela os dispositivos montados quando o seletor abriu: numa porta
+com laço, uma leitura só do `ronoctua-disks`, numa thread, que volta pela vigia (um pendrive
+espetado com o seletor aberto só aparece na próxima vez). Debaixo deles, a pasta aberta, `..`
+primeiro, lida pela leitura do gerenciador (`listing::read_dir_at`: a mesma ordem, a mesma regra de
+oculto, `C-h`). Onde a porta acende uma célula só debaixo do ponteiro (o player: janela, coluna e
+rodapé) a pasta é uma grade, preenchida DE CIMA PARA BAIXO em cada coluna — a ordem em que uma
+listagem se lê, então `↓` é o nome seguinte e `←`/`→` atravessam —; as outras vistas, que acendem a
+linha inteira, recebem lista (`Context::grid`). **Uma célula de grade acende sozinha**: cada porta
+tem UMA função que diz onde o ponteiro está através das linhas (`chrome::Across`: a janela e a
+coluna, `across`; o rodapé, `player_across`, com a coluna da grade da região), e a faixa pintada
+(`chrome::hover_cells`), a seleção do cursor e a célula que o clique pega (`View::clicked_px`) leem
+a resposta dela; nada entre duas células acende nem é clicável (teste `a_grid_cell_is_lit_alone`,
+que passa o clique pela vista no mesmo pixel de onde a faixa sai). A janela repinta quando o ponteiro
+passa de uma célula a outra da mesma linha.
+
+**Digitar estreita; `/` ou `~` é caminho.** Toda letra é do seletor enquanto ele está na tela —
+por isso, na página do player, `SPC` e as letras do player não tocam nada. O que se digita estreita
+a pasta pelos nomes que o contêm; começando com `/` ou `~`, é um caminho, andado até a pasta mais
+funda que existe e estreitado pelo resto. `C-v` faz o mesmo com o que foi copiado (um `file://`
+vira o caminho). `RET` num arquivo digitado responde; um endereço, onde o pedido aceita.
+Vários: `C-SPC` marca pelo nome, `Ctrl`+clique marca e `Shift`+clique marca um intervalo; "Levar os
+marcados" responde todos (no player, pelo `put_all`, a mesma regra de "já está na fila" de um
+arquivo só). Salvar tem a linha do nome em cima, com a extensão; um nome que já existe pergunta
+dentro do seletor, com o "não" primeiro. Um `/` no nome é recusado (o caminho se digita a partir de
+`/` ou `~`), e um arquivo de outro tipo escolhido ao salvar só dá o nome: a extensão continua a do
+pedido, e a linha mostra o arquivo que será escrito. `PgUp`/`PgDn` andam meia tela: a porta diz ao
+seletor quantas linhas mostra antes de passar a tecla (`page_is`).
+
+**A pasta é lembrada e vigiada.** Por propósito, em `file-picker.json` (`ronoctua-store`, mesclado
+por propósito como todo arquivo que duas portas escrevem; um teste não lembra nada). Enquanto o
+seletor está aberto numa porta com laço, a pasta é vigiada (`ronoctua_files::notice`): um arquivo
+que chega aparece sem tecla nenhuma, e nenhum relógio pergunta. A vigia acorda a porta por uma
+`Wake`: a do player; nas janelas dos outros quatro, `Wiring::wake` (o canal da própria `Door`, que
+responde com `Content::woken`); no rodapé, um canal só para as quatro vistas
+(`Footer::picker_woken`).
+
+**O fundo da câmera** passa entre as imagens escolhidas para ele (`←`/`→`, e "nenhuma"), guardadas
+em `studio.json` (`backdrops`); `RET` as escolhe no seletor, várias de uma vez. A pasta das fotos é
+uma linha que o `RET` abre como `Mode::Folder`, e as setas não fazem nada nela.
+
+
+### Tudo o que se edita, edita — as linhas da ficha que mudam o arquivo (`inspection_edit.rs`)
+
+A ficha só lia. Agora cada linha que o arquivo deixa mudar muda: o nome (a mesma pergunta do `r` do
+menu), a permissão e o dono (as perguntas que já existiam), a data de modificação (digitada, pelo
+`ronoctua_files::act::set_modified` — `utimensat` com o acesso em `UTIME_OMIT`), as etiquetas de uma
+música ou de um filme, os seis detalhes de uma foto ou de um PDF (título, autoria, descrição,
+palavras-chave, direitos, data) e o lugar onde a foto foi tirada. `inspection_sheet::Doable` é o
+inventário; uma linha com `Doable::edits` é desenhada como AJUSTE (`chrome::Kind::Setting`) e as
+outras como FATO, sempre pelo `chrome::field_pair` — antes a ficha pintava tudo igual, à mão, e o
+nome que se aperta e a contagem de inodes que não se aperta tinham a mesma cor. Apertar a linha (o
+rótulo, o valor ou o ar entre eles) ou `RET` com o cursor nela faz a pergunta, no seletor do
+gerenciador, nas duas portas (`Hit::Amend`, `View::amend`). Uma linha de várias linhas (comentário,
+letra) cuja resposta não cabe numa só fica fato, e diz onde se edita.
+
+**O lofty não entra no rodapé.** As etiquetas são lidas e escritas pelo PROGRAMA `ronoctua-tags`
+(`[[bin]]` do crate, `sheet <arquivo>` e `apply <arquivo> --stamp <json>` com as edições no stdin,
+uma `ronoctua_tags::Answer` em JSON na saída), rodado como filho com prazo. O lofty lê bytes de
+qualquer origem, e um pânico ou um laço dele dentro do processo que é a área de trabalho derrubaria
+a área de trabalho; num filho, derruba o filho, e a ficha diz. O shell depende do crate sem
+`engine`. O programa é achado em `RONOCTUA_TAGS` ou AO LADO do binário (os dois saem do mesmo
+build; uma variável com o caminho do workspace seria o workspace citando a si mesmo — o motivo da
+fila) — por isso o `.#dev` também o compila (`dev-rebuilds-what-sits-beside`). O
+`the-footer-never-links-lofty` mede no BINÁRIO do shell os caminhos de fonte que um crate linkado
+deixa (`lofty-0.25.4/src/…`), com o próprio `ronoctua-tags` de controle: `nix why-depends` não
+serve, porque o lofty é compilado para dentro e não é um caminho do store.
+
+**Um escritor do exiftool.** `ronoctua_inspect::amend` é o único: `set` numa lista branca de seis
+etiquetas por tipo de arquivo (EXIF onde o EXIF tem campo, o Dublin Core do XMP onde não tem — PNG
+não tem IPTC —, o dicionário do próprio PDF) e `remove_location` (o bloco GPS, os `GPS*` do XMP e as
+três grafias do QuickTime). Escreve com `-overwrite_original_in_place`, que mantém inode, links e
+atributos; a data de modificação ANDA, e é isso que faz a ficha ler o arquivo de novo (a chave
+`SheetFor` leva o mtime). O desenho do sistema previa um `Work::StripLocation` na fila e o dos
+componentes um escritor na ficha; ficou um só, rodado numa thread do próprio rodapé: o exiftool já é
+um filho, e a fila poria um soquete e outro processo na frente de uma escrita curta.
+
+A cópia sem o lugar NÃO usa o `-o` do exiftool: ele expande `%f`, `%d`, `%e` e `%c` no nome, e
+`sol%fpor.jpg` virava uma cópia com outro nome, num caminho que ninguém disse (`%%` também não
+escapa: o exiftool fixado fez `sun%%fset` virar `sun%sun%fsetset`). A cópia é escrita pelo nome, com
+`create_new` — que também é a prova de que o nome está livre, sem intervalo entre a prova e a
+escrita — e depois tratada como no lugar; uma escrita recusada leva a meia cópia junto. E a data de
+um PDF vem com fuso (`2023:05:01 10:00:00+02:00`): a pergunta a oferece assim e a escreve de volta
+assim, porque tirar o fuso moveria o momento em horas; numa foto o `DateTimeOriginal` não tem lugar
+para fuso e o exiftool o descarta calado, então ali um fuso digitado é recusado.
+
+**A ficha responde em dois tempos.** O programa de etiquetas roda ffprobe e exiftool de novo, e o
+lofty; os detalhes de uma foto são um segundo exiftool. Com um compartilhamento lento ou um filme
+grande, isso segurava o tamanho, as dimensões e a prévia. O fio do inspetor manda primeiro o que
+leu (`look_inside`, `Heard::Looked`) e depois o que se pode mudar (`Heard::Changeable`, com a
+mesma chave), e pula a segunda leitura se o cursor já foi para outro arquivo; a chave da ficha
+lembrada (`SheetFor::changeable`) diz se a segunda resposta já chegou. O filho é esperado por
+EVENTO — o fim do stdout dele, num canal com o prazo como tempo limite —, e não por um relógio de
+20 ms que acordava 50 vezes por segundo durante um remux de dez minutos.
+
+**O filho herda as ferramentas do Matroska.** A unidade do rodapé recebe `RONOCTUA_MKVEXTRACT`,
+`MKVMERGE` e `MKVPROPEDIT` com o perfil de mídia (a mesma tabela e a mesma chave da unidade do
+player, `nix/modules/media.nix`); sem elas, as etiquetas de um `.mkv` que o player edita eram "não
+pode ser mudado aqui: mkvpropedit" na ficha.
+
+**O lugar só sai depois de uma pergunta.** A linha do lugar (e a do endereço) e o `L` do menu fazem
+a mesma pergunta — `não` primeiro, com o cursor nele; `escrever uma cópia sem o lugar, ao lado`
+(`<nome> (no location).<ext>`); `tirar do próprio arquivo — não se desfaz`. Num conjunto, para na
+primeira recusa. Checks: `one-inspector`, `editable-rows-are-settings`,
+`a-location-leaves-only-after-a-question`, `the-footer-never-links-lofty`.
+
+### A linha inteira é a linha, e os ocultos não se escondem mais
+
+Um clique em qualquer ponto de uma linha da listagem — tamanho, data, dono, o vão entre colunas — é
+o clique no nome: seleciona, e o segundo abre (`View::hit` cai em `Hit::Name` onde nenhum campo
+tem alvo). O `C-h` que escondia os dotfiles saiu, com a chave e o campo: um gerenciador que PODE
+esconder metade do `$HOME` é um que alguém acaba usando sem saber que metade sumiu. Os dispositivos
+discretos do udisks (`HintIgnore`: a ESP, o ajudante EFI de um pendrive) aparecem sempre, por último
+no bloco e no registro discreto — eram o gêmeo do `C-h` e saíram com ele.
+
+### A lixeira de um pendrive é do pendrive
+
+Apagar num volume montado vai para a lixeira DELE (`trash::Bin::of_volume`): `$topdir/.Trash/$uid`
+quando o volume tem uma `.Trash` confiável (diretório de verdade, com sticky bit), senão
+`$topdir/.Trash-$uid`, criado `0700`. A nota diz o caminho RELATIVO ao volume, como a especificação
+pede — o mesmo pendrive monta com outro nome amanhã, e um caminho absoluto devolveria o arquivo a
+uma pasta que não existe. Quem escolhe o volume é o gerenciador, entre os pontos de montagem que a
+barra lateral já conhece (`trash::topdir_of`, o mais fundo que contém o caminho); a fila recebe só a
+raiz, e a raiz diz de que volume é (`Bin::top`). A lixeira do gerenciador junta a de casa e a de
+cada volume montado: a entrada de um volume tem como nome o caminho inteiro (`join` com um caminho
+absoluto É esse caminho) e o que se desenha e ordena é o nome (`Entry::shown`); restaurar agrupa por
+lixeira. O custo do removível é dito: apagar ali deixa o espaço ocupado no próprio pendrive até a
+lixeira dele ser esvaziada, e o minibuffer diz isso ao apagar e de novo ao desmontar com algo nela.
+O `trash-volume-vm` prova num vfat de verdade que a lixeira fica no pendrive e que o arquivo volta
+para onde ele está montado depois.
+
+Quatro bordas, cada uma paga por um defeito:
+
+- **Só um volume de que o sistema não precisa tem lixeira própria** (`Row::needed` vazio). A raiz é
+  uma linha da barra montada em `/`, e com ela na conta todo caminho fora do sistema de arquivos de
+  casa — `/tmp`, `/persist`, um subvolume como `~/.cache` — caía em `/.Trash-<uid>`, que ninguém
+  escreve, e o minibuffer dizia que tinha ido. Esses vão para a lixeira de casa, que os recusa pelo
+  nome.
+- **A frase ao apagar diz para ONDE VAI, não que foi**: ela sai quando o pedido entra na fila, e se
+  a cópia deu certo é a lista da fila que diz. A de desmontar sai DEPOIS da resposta do udisks
+  (`files::unmounted`, `Report::Said`): "saiu com arquivos na lixeira" antes de "o dispositivo está
+  ocupado" seria uma frase sobre um pendrive que ficou.
+- **A lixeira de um volume também expira**: o `ronoctua-empty-trash` recebe `--media /run/media/%u`
+  e esvazia, pelo mesmo número de dias, a lixeira de cada volume montado ali (um diretório que é
+  RAIZ de montagem, perguntado ao kernel por `STATX_ATTR_MOUNT_ROOT`). É o que torna verdadeira a
+  frase "o espaço fica ocupado até a lixeira liberar": sem isso, nada esvaziava um pendrive.
+- **Uma nota de pendrive não sobe**: o `Path=` vem de uma mídia escrita em qualquer lugar, e
+  `../../home/ana/.config` somado ao ponto de montagem é uma pasta na casa de alguém — criada pelo
+  `create_dir_all` antes de o `EXDEV` do `rename` parar qualquer coisa. `restore` recusa um `..` e,
+  numa lixeira de volume, um caminho absoluto fora do volume.
+
+A lista junta da lixeira muda quando um volume monta ou desmonta por QUALQUER caminho — a barra, um
+terminal, o pendrive puxado: `View::devices_are` compara os pontos de montagem antes e depois e,
+com a lixeira na tela, lê de novo.
+
+
+#### A linha do git e o navegador do histórico — `C-h` no gerenciador de arquivos
+
+**A linha** (`git_line.rs`) fica sob o caminho quando a pasta está dentro de um repositório: o ramo
+(ou `solto em <id>`, ou `sem commits`), `↑a ↓b` quando há upstream, quantos caminhos mudaram, estão
+preparados, não rastreados e em conflito, e o assunto e a idade do último commit. É uma linha da
+chrome da listagem (`View::chrome_lines` a conta), um alvo só: o clique é o `C-h`. As peças cedem do
+fim — o assunto some inteiro antes de virar três letras, o ponto separador só existe antes do que
+ele separa; só o ramo é cortado.
+
+**Quem lê é a porta, numa thread**: a `Door` do gerenciador (as duas) tem um `git_line::Keeper`, que
+acha o repositório EM RUST (`Repo::discover`, subindo por `.git`) — o git só é iniciado dentro de um
+repositório — e lê status e último commit fora do laço, devolvendo um `files::Report::Git`. Evento,
+não relógio: o `Keeper` vigia com inotify o git dir e a ÁRVORE `refs` inteira, as pastas criadas
+depois inclusive (`git_line::watch`, `Notice::on_dirs` com árvores, e o diretório comum de uma
+worktree): um ramo `feature/x` é uma pasta `feature` que não existia antes do push, e uma vigia das
+pastas que existiam na partida ouvia a pasta nascer e nada do que se escrevia nela. A árvore tem
+teto (`notice::TREE_MOST`), porque cada pasta é uma vigia do `max_user_watches`. A vigia da pasta na
+tela (`Stirred`) também pede leitura. Uma rajada é UMA leitura a mais: a leitura em andamento
+marca-se devida e roda de novo ao terminar, nunca duas ao mesmo tempo — e a devida lê o repositório
+seguido NAQUELE momento, guardado junto do ritmo (`Pace::repo`), e não o que a thread recebeu ao
+nascer: entrar noutro repositório durante a leitura do primeiro deixava o segundo sem linha. A
+leitura não se ouve: o `ronoctua-git` roda com `GIT_OPTIONAL_LOCKS=0` e nunca pelo `git diff` de
+porcelana — MEDIDO (2.54): ele reescreve o índice quando encontra stat velho com conteúdo igual
+(`refresh_index_quietly`), e o travamento opcional não o impede. As diferenças da árvore de trabalho
+saem de `diff-files` e `diff-index`, e o teste `a_repository_is_read_as_git_wrote_it` confere o
+índice byte a byte.
+
+**O navegador** (`git_browser.rs`) é UMA `View` com duas portas, e não um modal dentro do
+gerenciador como o desenho previa (`files::View.git`): a porta do rodapé abre na região — o
+gerenciador fica guardado atrás (`Footer::git_behind`) e volta com o `Esc`, para que nenhum ramo do
+rodapé que pergunta pelo gerenciador desenhe uma listagem sob o navegador —, e a da janela abre uma
+janela própria (`ronoctua-shell git-browser <pasta>`, `git_browser_window.rs`), com o cabeçalho, a
+gaveta e a linha de atalhos de toda porta. Três colunas: os ITENS (Mudanças · Histórico em páginas
+de 200, pedidas antes de o cursor chegar ao fim · Ramos e etiquetas · Stashes · Remotos, os tipos
+como peças clicáveis na primeira linha; ou o histórico de um arquivo, `C-f`, atravessando
+renomeações), o DETALHE (fatos numa seção só, `chrome::section_column`, e um valor longo quebra sob
+si mesmo; a mensagem inteira, que quebra; os arquivos) e o DIFF — os papéis do diff como faixas
+(`surface.diff.added`/`.removed`, o passo `ground` da família a duas vezes o croma, medido: no passo
+simples as duas faixas ficavam a 0,020–0,029 uma da outra, e o `element` derrubava o texto a Lc 68
+nos temas claros) e a tinta na linguagem do arquivo, com os estados do lado velho e do novo
+separados e zerados a cada hunk. Um merge — e um stash, que é um — mostra o diff contra o primeiro
+pai, como a lista de arquivos (`--diff-merges=first-parent`). O blame é sob demanda (`C-a`).
+
+Três colunas a partir de `space.git.threeColumnsFrom` numa porta que as permite (a janela); duas — a
+focada e a vizinha, e o par anda quando o teclado entra — mais estreitas e sempre no rodapé; uma
+quando duas ficariam menores que um nome. Cada coluna rola, tem a própria barra (desenhada e pega da
+mesma caixa, `git_browser::bars`) e o hover da própria coluna; o diff rola de lado com `C-[`/`C-]` e
+tem a barra horizontal. O cursor é cor: acento na coluna com o teclado, `text.here.read` na outra. É
+uma tabela e tem o ar de uma (`Layout::of`, a aritmética do `theme_chooser`): o texto de uma coluna
+começa `files.gutter` depois da régua da esquerda e para `files.edgeRight` antes da da direita, e,
+com a barra desenhada, `files.edgeRight` antes da barra (`BAR_CELLS`) — um id de quarenta dígitos
+encostado na barra parecia cortado. O detalhe é contado e desenhado na mesma largura
+(`View::detail_drawn`): contado na largura cheia e desenhado uma célula mais estreita, a última
+linha de uma mensagem que quebrava uma vez mais ficava onde nenhuma rolagem chegava.
+
+No rodapé a vista mede a largura da tela MENOS AS DUAS MARGENS (`git_browser::footer_columns`, como
+o `Ui::columns` da janela) e as linhas que a região tem depois da explicação (`Footer::git_shape`) —
+uma resposta só para linhas, pintura, hover, clique e teclas; com a largura inteira, a última coluna
+e a barra dela ficavam uma célula além da borda da superfície. O `grid_full` dá ao navegador uma
+página só, e o realce de campo sob o ponteiro não acende nele: o acento é o cursor dele, e a marca
+do ponteiro é a faixa da coluna (`git_hover`), como na janela. A troca de idioma chega à vista
+aberta (`View::speak` no `adopt_the_language`), e fechar o navegador pede outra leitura da linha,
+porque o que chegou enquanto o gerenciador esperava atrás foi descartado.
+
+**Só leitura**, e as ações seguras: buscar (`C-r`; nunca pergunta — um remoto que quer credencial é
+uma recusa que diz isso), copiar o id (`C-y`), abrir esta versão (`C-o`: `cat-file blob`, sem filtro
+nem textconv, copiada somente leitura para `~/.cache/ronoctua/git-versions`, no máximo
+`cache.gitVersionsMost` cópias; um arquivo apagado abre como o pai o tinha, uma mudança da árvore
+como o HEAD o tem; UMA pasta por cópia, nomeada pelo commit e pelo caminho inteiro — dois `mod.rs`
+de um commit são duas cópias, e o teto conta cópias —, escrita ao lado e renomeada para dentro,
+porque as duas portas são dois processos, e a cópia reaberta nunca sai na poda; a recusa é uma
+frase, do git ou do disco, `KeepWhy`) e terminal aqui (`C-t`). Um arquivo não rastreado que é um
+link mostra para onde aponta, como o git o guarda, e nunca o que está do outro lado; o que não é
+arquivo (pipe, socket, dispositivo) é dito e não lido — abrir um pipe espera um escritor que pode
+nunca vir. A vista nunca roda git: ela diz o que quer (`View::wanted`, uma vez por geração para o
+que muda, uma vez até ser respondido para um commit e o diff dele), e a porta lê cada `Need` numa
+thread e devolve (`View::heard`); uma resposta de uma geração anterior é descartada, e o cursor
+guarda o item pela identidade — o que a PESSOA escolheu (`View::on`) antes do que ele calhou de
+estar. Quando o repositório se move (inclusive pelo `C-r` do próprio navegador), a primeira página
+pedida de novo é tão longa quanto a lista na tela, e nenhuma página seguinte é pedida até ela chegar
+(`Pages::fresh`): reler só a primeira cortava a lista em 200 e jogava o cursor do 380º commit para o
+200º. O histórico de um arquivo guarda o nome que o caminho tinha em cada commit
+(`Repo::file_history_named`, `log --follow --name-status`), e é por ele que o arquivo seguido vai
+para o topo da lista do detalhe — antes de uma renomeação, pelo nome velho. Check:
+`git-browser-reads-and-never-polls`.
+
+
+#### Arquivos compactados: entrar como numa pasta, e o trabalho pela fila
+
+O gerenciador não empacota nem desempacota mais sozinho: `act.rs` perdeu o `packing`, o
+`unpacking` e o `RONOCTUA_BSDTAR`. Todo trabalho num arquivo compactado — comprimir, extrair (tudo,
+ou só os membros escolhidos), testar, pôr e tirar membros, converter — é um `Work` da fila
+(`Compress`, `Extract`, `ArchiveEdit`, `ArchiveTest`, `ArchiveConvert`), e a fila o executa pelo
+`ronoctua-archive`. O que a fila ganha com isso é o que ela já dava à cópia: a mesma lista nas duas
+portas, o trabalho que sobrevive ao rodapé e o botão de parar. Segurar e parar chegam ao programa:
+o `ronoctua-archive` recebe um `Switch` que lê o `Control` do job e manda `SIGSTOP`, `SIGCONT` ou
+`SIGKILL` ao grupo de processos que o `setsid` criou; um job parado termina `Cancelled`, não
+`Failed`, e o crate apaga o que escreveu. A recusa volta como palavra (`Job::archive`, um
+`ronoctua_archive::Why`), com o `trouble` vazio, e a tela a diz com a frase
+`files-archive-why-<id>` — nas duas portas da fila: a janela (`LEADER t w`) a recebe já escrita na
+língua do hospedeiro, porque uma palavra no `trouble` é desenhada como está. Cada trabalho tem a
+própria palavra (`archive-add`, `-remove`, `-test`, `-convert`) também no WIT: um teste não é
+"extrair" numa porta e "testar" na outra.
+
+PÔR MEMBROS NUM ARQUIVO CIFRADO PEDE A SENHA DELE. O `7zz a` sem senha põe o membro novo legível ao
+lado dos cifrados e sai com 0; com uma senha errada, ele a usa sem conferir, e o membro novo fica
+sob uma senha que nada mais no arquivo abre. Por isso o `ronoctua-archive` recusa (`NeedsPassword`)
+pôr qualquer coisa num arquivo com um membro cifrado sem senha e prova a senha dada no menor membro
+cifrado antes de escrever (`WrongPassword`); a porta responde as duas perguntando.
+
+A SENHA DE UM JOB É UM ARQUIVO, NUNCA TEXTO NO SOCKET. A porta que perguntou grava a senha em
+`$XDG_RUNTIME_DIR/<nome>-transfers/secrets/job-…`, `create_new` com o modo `0600` na criação (um
+`chmod` depois deixaria o arquivo legível entre as duas chamadas), e o `Work` leva só o caminho. O
+fim do job — qualquer fim — apaga os arquivos que o trabalho nomeia, e só dentro dessa pasta: um
+caminho que a fila não entregou não é dela para apagar. O daemon varre a pasta ao subir. Uma recusa
+por falta de senha (`NeedsPassword`, `WrongPassword`) é pergunta, e só na porta que mandou o job
+(`View::sent`): outra porta aberta na mesma pasta ouve o mesmo fim e não diz nada. A senha guardada
+para perguntar de novo sai com qualquer fim do job. E "este job acabou" (`transfers::ended`) conta
+também o job que nasceu e acabou entre duas listas — a fila manda a lista como ela está quando o
+leitor acorda, e uma recusa no primeiro instante nunca aparece andando —; uma lista VAZIA é uma
+resposta como outra, porque a fila numera os jobs a partir de um a cada vez que sobe: só a primeira
+lista que uma porta ouve é história.
+
+ENTRAR NUM ARQUIVO é o `RET` num `.zip`, `.7z`, tar, RAR ou ISO. A listagem roda numa thread (ou já
+está no cache do processo, até `archiveListings` listagens, com a chave caminho + tamanho + mtime),
+e o lugar da vista vira o caminho do arquivo com a pasta de dentro depois
+(`/home/a/fotos.zip/2026`): as migalhas, o `..` e o subir funcionam sem saber que é um arquivo, e
+`Place::of` (`ronoctua_files::archive`) desmonta o caminho de volta. As linhas vêm da árvore da
+listagem (pastas implícitas incluídas, `..` e caminho absoluto recusados) com a mesma ordenação de
+uma pasta. Lá dentro o menu só oferece o que um membro aceita (abrir, extrair aqui, tirar) e o
+ponteiro não arrasta um membro para fora — um membro não é um arquivo no disco. Pelo mesmo motivo
+os painéis não leem nada do disco: o de fatos diz o que a listagem sabe do membro (tamanho,
+comprimido, cifrado, data), e a prévia diz numa frase que um membro se mostra quando é aberto, em
+vez de ficar em branco. Abrir um membro o extrai em `~/.cache/ronoctua/archive/<hash do arquivo>/`,
+aparado a `archiveOpenedMib` depois de cada extração (o mais velho primeiro, nunca o recém-escrito).
+Cada membro sai numa pasta só dele e é movido para o seu caminho: o crate nunca substitui o que já
+está onde extrai, e o segundo membro da mesma pasta de topo saía com nome de cópia (`2026 (copy 1)`),
+longe de onde a porta o procurava. Um 7z de nomes cifrados pede a senha nas duas portas, e ela fica
+na vista, como `Secret`, para os membros que forem abertos depois; a listagem dele nunca entra no
+cache do processo — os nomes são tão secretos quanto o conteúdo, e o cache levaria qualquer um para
+dentro sem a senha.
+
+A FICHA "COMPRIMIR…" é a lista de perguntas do próprio gerenciador (`Picker`) com linhas que giram
+no lugar: formato, nível, senha (só zip e 7z), esconder os nomes (só 7z com senha), volumes (só zip
+e 7z) e a linha que vai. É por isso que ela é percorrida, apontada e fechada como toda pergunta do
+gerenciador, nas duas portas. Cada linha que gira é um ajuste, rótulo e valor, desenhada por
+`chrome::field_pair` nos tons de um ajuste: colados numa frase só, os dois eram uma cor, e cada valor
+começava onde o rótulo terminava. A senha é pedida duas vezes na linha secreta da porta (o
+minibuffer, ou `Ui::ask` na janela), nunca na lista. Extrair vai para uma pasta com o nome do
+arquivo que nada ali usa (`fotos`, `fotos (2)`): um ARQUIVO com esse nome não vira pasta, e uma
+pasta com esse nome é de alguém.
+
+#### LUKS em disco externo
+
+Um contêiner LUKS que o udisks não marca `HintSystem` é uma linha própria enquanto está TRANCADO
+(`Encrypted::Locked`, cadeado fechado) e cede o lugar ao que saiu dele enquanto está aberto (cadeado
+aberto, `Skipped::Unlocked` para o contêiner): uma pessoa vê um disco, não dois. O do sistema (a
+raiz cifrada) continua um contêiner que ninguém abre daqui. O que saiu de um contêiner que este
+sistema abre não é do sistema, qualquer que seja a dica que o udisks copiou: o próprio udisks deixa
+montar quem destrancou.
+
+Montar uma linha trancada pergunta a frase-senha na linha secreta da porta e então destranca
+(`Encrypted.Unlock`) e monta o que saiu. A frase-senha vai na chamada ao udisksd e em nenhum outro
+lugar. Uma frase errada volta como `Refusal::WrongPassphrase`, lida das palavras do udisks — ele
+responde `Error.Failed` para ela como para qualquer outra falha — e só depois de um `Unlock`. Ejetar
+é `Manager::put_away`: desmonta, tranca o contêiner e só então corta a energia, achando o DRIVE pelo
+volume (o caminho do volume é um bloco, não um drive); `trancar` para antes da energia.
+
+Formatar ganhou "Cifrar? Não / Sim", com o não primeiro. O buffer manda um `bool` (`plan.encrypt`) e
+nada mais; o HOSPEDEIRO pergunta a frase-senha duas vezes na linha da janela, compara, e a põe em
+`encrypt.passphrase` com `encrypt.type = luks2` na chamada de formatar. Check:
+`luks-passphrase-stays-on-the-host`; o `disks-vm` escreve, recusa a frase errada, abre, monta e
+ejeta um LUKS2 de verdade.
+
+### A calculadora — `calc.rs`, uma vista e duas portas (`LEADER =`)
+
+`LEADER = =` abre a calculadora no rodapé e `LEADER = w` numa janela própria (`calc_window.rs`,
+`br.ronoctua.calc`); o grupo dobra em `LEADER =`. As duas portas seguram a MESMA `calc::View`: os
+três modos (Básica, Científica, Conversão), as teclas (`calc::press_of_key`, o leitor único), as
+linhas (`top_lines`, `history_lines`, `convert_lines`, `unit_lines`) e o que um clique em cada
+coisa faz (`View::clicked`, sobre um `Target`). O que muda é o feitio do teclado: na janela cada
+tecla é um CARTÃO que o dedo aperta (`calc_keypad.rs`, medido pelos tokens `space.calc.*`), no
+rodapé — que é feito de linhas — cada tecla é um campo de uma linha, com o histórico ao lado. Toda
+tecla do teclado de tela também é tecla do teclado, então uma porta sem ponteiro não perde nada.
+
+- **O cartão é pego onde é desenhado.** `Card::rect` é o chão pintado e é o retângulo que o
+  toque e o clique testam (`Keypad::at`); o ar de `keyAir` entre dois cartões não é de ninguém.
+  O tamanho segue a regra das duas fases: cada tecla prefere `keyCells` × `keyLines`, cresce com
+  a janela até `keyMaxCells` × `keyMaxLines` (janela comum não é teclado pequeno num vazio) e
+  encolhe junto com as outras, mas nunca abaixo da LEGENDA mais larga em qualquer idioma
+  declarado mais uma célula de ar de cada lado (`calc_keypad::least_cells`): a largura escolhida
+  pelo inglês cortava `arcsen`, e três teclas `ar…` não se distinguem. O teclado científico, que
+  por isso não encolhe, muda de FORMA (`calc_keypad::arrange`): os dois blocos lado a lado, um
+  sobre o outro e, mais estreito que isso, só a aritmética com uma frase (`calc-keys-narrow`) —
+  as funções continuam digitáveis pelo nome. A legenda é desenhada dentro do chão
+  (`legend_of`), e um teste confere, nos dois idiomas e em toda largura, que ela cabe e que as
+  legendas desenhadas se distinguem. O histórico só fica ao lado quando o teclado cabe no tamanho
+  que prefere; senão desce para baixo dele — tecla estreita demais para a legenda é troca ruim.
+- **O que o ponteiro acende é o que o clique pega.** Cada `calc::Line` diz, por `band_at`, as
+  células que uma pressão ali alcança: a linha inteira de uma lista (a resposta guardada, a
+  unidade, a linha que nomeia o host das cotações), vão entre a conta e a resposta incluído, ou o
+  campo sozinho numa linha de campos (um modo, uma tecla do rodapé). As duas portas pintam a faixa
+  do ponteiro com essa resposta e tomam o clique dela (`target_at`); nenhum texto muda de cor sob o
+  ponteiro, porque o acento ali é o modo em uso e a categoria do anel — o cursor. O rodapé isenta
+  a calculadora do acento de campo, como isenta o seletor de temas.
+- **A legenda é chave; o que se digita é a notação do motor.** `calc-key-<id>` dá a legenda (o
+  seno é `sen` em português), e a tecla de função digita a legenda e o parêntese — o motor entende
+  as palavras de todas as línguas ao mesmo tempo (`assets/units.nix`). Um teste digita cada tecla
+  numa conta, nas duas línguas, e exige resposta.
+- **Resposta exata, e `≈` quando não é.** A linha da resposta diz `= 4` ou `≈ 1,4142…`
+  (`calc-equals-*`); a recusa (`calc-why-<id>`) só aparece depois do `RET` — meia conta ainda não
+  é conta — e quebra em linhas como toda nota. Depois do `RET` a resposta é o começo da próxima
+  conta: um sinal continua dela, um dígito começa outra.
+- **O histórico é o `calc.json`.** Cada resposta guardada é um `Entry` (o momento em ms é a
+  identidade, o número com `.`, a unidade por id), com teto `calcHistoryEntries`
+  (`assets/cache.nix` → `ronoctua_calc::HISTORY_ENTRIES`). As duas portas escrevem: cada uma
+  MESCLA pelo momento e lê com `parsed` — arquivo que não abre não é sobrescrito, e a porta diz
+  isso. As duas vigiam o arquivo — o rodapé só enquanto a vista está aberta. A lista é o que o
+  arquivo diz: o `RET` não põe a resposta nela, e a que o arquivo recusou não aparece como
+  guardada. O número volta na marca decimal da língua do dia e a unidade no nome da língua do dia.
+  No rodapé o histórico fica ao lado das teclas e segue abaixo da última linha delas, resposta por
+  linha, para que a rolagem, a roda e a barra da própria região alcancem a mais antiga.
+- **O conversor** (`calc_convert.rs`): um anel de categorias (as quinze da tabela e a moeda), De e
+  Para, a troca, e a busca — as letras digitadas em Conversão vão para a busca, que acha a unidade
+  pelas palavras da língua da pessoa ou pelo símbolo (os mesmos aliases que o motor lê); dígitos e
+  sinais vão para a quantia, que é a própria linha da conta. `RET` escolhe a unidade sob o cursor
+  para o lado escolhido, e o lado passa para o outro. A recusa da QUANTIA (`12+`) espera o `RET`,
+  como a da conta; a da conversão (unidades que não convertem) aparece logo. A lista tem
+  deslocamento próprio: a roda e a barra (arrastável) rolam a lista, não o cursor, e a tecla que
+  leva o cursor para fora dela a traz junto.
+- **Moeda pede licença.** Duas moedas pedem as cotações do BCE: a porta lê o cache e o
+  consentimento na hora (`calc::probe`), usa o cache fresco, e sem licença desenha a linha que
+  nomeia o host — apertá-la, ou `C-a` (ensinado no cabeçalho só enquanto ela está desenhada), É o
+  consentimento (`ronoctua-consent`); depois de uma falha, a mesma linha e a mesma tecla pedem de
+  novo. A busca roda numa thread
+  (`calc::fetch_then`) com o `Pass`; a janela recebe por um canal pendurado no laço dela, o rodapé
+  por um canal de uma vez pendurado no `LoopHandle` que ele já guarda. Cotação velha continua
+  convertendo enquanto a nova não chega, e a linha diz a data dela, na ordem de data da pessoa
+  (`chrome::date_text`).
+
+#### Janela compacta flutuante ↔ janela comum
+
+A janela nasce flutuando por uma regra GERADA: `terminal::floating_rules` virou a tabela
+`floating.rs` (`FLOATING`, `app_id` e a porção da sala em centésimos), que a exportação de regras
+lê e que o controle da janela lê também — o tamanho que a regra abre e o que o controle refaz são
+a mesma linha. `C-f` (no cabeçalho, clicável) acha ESTA janela na árvore do compositor pelo pid e
+pelo `app_id` e, conforme ela flutua ou não, pede `back_in_the_layout` ou o verbo novo do contrato
+`float_centred(id, Portion)` (`ronoctua-compositor`; no `ronoctua-scroll`, `floating enable`,
+`resize set … ppt` e `move position center` — as MESMAS palavras da regra, porque `ppt` e o centro
+são os do espaço de trabalho, a saída menos o rodapé e a coluna, e duas unidades seriam dois
+tamanhos para a mesma linha; o `one-floating-table` recusa o comando em pixels). No rodapé, que
+não tem lugar próprio, `C-f` abre a janela. O `terminal-vm` confere as duas voltas num compositor
+de verdade e compara o retângulo que a regra abre com o que o controle refaz.
+
+### O motor do player na leva de 2026-09-30 — fila salva, tocar junto com som, YouTube, etiquetas, letra traduzida
+
+**A fila sabe se é o arquivo dela.** Uma fila aberta de um `.rqueue` para recomeçar — ou salva como
+um — guarda a origem (`engine/queue.rs`, `Origin`): o caminho, o nome, a impressão do que a fila era
+então (SHA-256 do `kept` com caminhos absolutos) e o arquivo como estava (tamanho, hora, inode),
+lembrada no `player.json` do estado como a fila. O "não salvo" é a impressão de agora contra a
+guardada, e não a `revision`, que não anda com o volume de uma faixa; ela é recalculada só quando a
+`revision` ou o contador de faixas mudadas no lugar (`lanes_moved`, o `set_mut`) andou desde a última
+vez. `SaveQueueAgain` grava por cima do arquivo de origem e recusa `ChangedOnDisk` quando o arquivo
+mudou no disco desde a leitura ou a escrita — o `force` é a resposta da pessoa —, e `NoOrigin` quando
+a fila nunca foi de arquivo. Esvaziar a fila (ou recomeçar com outra coisa) solta a origem. O que
+ninguém mudou não conta como mudança (`Engine::learned`): um título aprendido depois (abaixo) e a
+lista que o mpv abriu dentro de uma folha (`adopt_expansion`) deixam a fila que era do arquivo como
+dele. A impressão sobrevive a um reinício porque a fila relida é a mesma até o último bit: o
+`ronoctua-playlist` lê com o `float_roundtrip` do `serde_json` (sem ele, cerca de um número em dez
+voltava uma unidade na última casa — o início de uma faixa arrastada, `113.36993149664731` lido como
+`…733` — e a fila salva acordava "não salva"), e a cópia com que o player acorda
+(`queue.rqueue` do estado) é gravada também quando só uma faixa mudou (`queue::keep_due`: a árvore na
+hora; uma faixa, no máximo uma vez por segundo, porque um medidor arrastado manda dezenas por
+segundo) e no salvar. A última mudança de uma faixa é gravada quando o segundo dela acaba, mesmo que
+o player não diga mais nada (um conjunto pausado): `Engine::keep_after` arma uma thread que dorme uma
+vez, só enquanto há o que gravar.
+
+**"Já está na fila?" é respondido sob a trava, comparando texto.** O arquivo entra na fila pelo
+caminho canônico (`resolve.rs`: o caminho dado, o link de uma pasta e a entrada de uma lista local são
+resolvidos fora da trava), e o lugar do que se põe (`places_of`, `queue::place_of`: o caminho
+canônico, o id do vídeo do YouTube) também é calculado fora dela; sob a trava, o `Queue::holding`
+compara texto. O `AlreadyQueued` vai só para quem pediu (é a pergunta dele), nunca para os problemas
+de todas as portas (`answer_of`). O conteúdo de um `.rqueue` aberto não é canonizado — salvar de novo
+escreveria outro texto no arquivo da pessoa —, então o motor guarda AO LADO onde cada arquivo dele
+está (`aliases`, escrito → canônico, de `resolve::aliases_of`, calculado fora da trava; para a fila
+com que o player acorda, numa thread na partida), e o `queue::not_queued_in` procura pelos dois.
+
+**Tocar junto traz o som de cada imagem.** Uma faixa de imagem adicionada sem faixa escolhida traz a
+faixa de som do mesmo arquivo, com o mesmo início e o mesmo trecho (`session::lanes_added`), e as
+duas são uma voz só (`session::voices`, `aid=auto`): antes, a imagem ia com `aid=no` e o segundo
+filme tocava mudo. Com uma faixa escolhida, é aquela faixa e nada mais. `LaneChange::Start` e `Trim`
+ganharam `voice`: com ele, a companheira de voz (`voice_mate`: a outra de imagem e som do mesmo
+arquivo, mesmo início e trecho, ligada ou não) anda junto — é o que o arrasto de uma IMAGEM na linha
+do tempo manda; sem ele a faixa anda sozinha, que é o que o som arrastado e o início digitado mandam:
+é assim que o som volta à sincronia labial. Uma faixa de som cujo arquivo, carregado, não tem som é
+recusada com `NoSound`, em frase.
+
+**O YouTube diz por que não tocou.** Cada voz pede o log do mpv a partir de `error` — o que ela
+guarda, e não os avisos que um fluxo quebrado diz muitas vezes por segundo —
+(`mpv_request_log_messages`, `MPV_EVENT_LOG_MESSAGE`, medidos pelo `mpv-layout-matches-c`), a thread
+de eventos descarta sem pegar a trava a linha que ninguém guarda (o erro de um decodificador), e a voz
+guarda as últimas oito linhas de erro do `ytdl_hook` e do `cplayer` desde o `START_FILE`; no
+`END_FILE` com erro, o `Unplayable.said` leva a última linha `ERROR:`. O hook diz o stderr inteiro do
+yt-dlp num `msg.error` só, e o mpv entrega uma linha por evento (API 1.6 do `client.h`): a linha
+`ERROR:` chega sozinha, e uma mensagem de várias linhas ainda é lida linha a linha. A causa de o
+YouTube não tocar não era o Deno (o yt-dlp pinado o embute): o `--plugin-dirs` do gerador de PO token
+nunca era passado, e nenhum token era cunhado. O `--plugin-dirs` recebe a RAIZ do gerador, não o `plugin/` dele: o yt-dlp lista os filhos da
+pasta e procura `yt_dlp_plugins` dentro de cada um (medido com `-v`: com `…/plugin` ele diz "Plugin
+directories: none"). Agora são três variáveis, todas ou nenhuma (`RONOCTUA_POT_HOME`, `RONOCTUA_DENO`,
+`RONOCTUA_POT_PLUGINS`, `ronoctua_ytdlp::pot_flags_of`), no player, na fila e no `.#dev`; o
+`poToken` nasce `on-demand` onde há `ronoctua.media` (e onde o flake entregou o gerador aos módulos).
+Um endereço de página (um vídeo do YouTube pelo id, um endereço cujo último pedaço não nomeia mídia)
+entra tocável na hora e é nomeado numa thread (`yt-dlp --print title`, o prazo e o executor das
+listagens) — só enquanto ninguém o nomeou. Uma página que é lista (um álbum, um canal) é nomeada pela
+lista: `--playlist-items 0` não lê nenhuma entrada e `--print playlist:title` diz o nome dela uma vez
+(sem isso o yt-dlp lia cada entrada até o prazo e dava à folha o título da primeira faixa); e o
+`--ignore-no-formats-error`, porque nome não é formato (medido com o yt-dlp pinado numa página com
+dois `<video>`: sai o `<title>` da página); e no `FILE_LOADED` o `media-title` do mpv nomeia a folha
+sem nome quando foi o hook que abriu o endereço (o `stream-open-filename` é outro), nunca a música que
+um rádio toca agora.
+
+**O yt-dlp é nosso, não o do nixpkgs pinado** (`nix/yt-dlp.nix`, um overlay só, posto no `pkgs` do
+flake e no do sistema, `nix/modules/nixpkgs-config.nix`). O YouTube muda o que serve mais depressa
+que o nixpkgs anda: com o 2026.07.04 do nixpkgs pinado, o plugin carregava, o token GVS era cunhado
+e o título vinha, mas todo formato saía do cliente `ANDROID_VR` e o `googlevideo.com` respondia 403 a
+um GET sem `Range` e a qualquer faixa além dos primeiros ~2 MiB — o próprio yt-dlp falhava igual, e
+avisava que tinha mais de 90 dias. Com o 2026.08.19 (medido em 2026-10-04, `aqz-KE-bpKQ`, as opções
+do `engine::options`, mpv 0.41 sem tela e sem som) os formatos vêm do cliente `VISIONOS`, o mpv
+abre o fluxo inteiro sem pedir faixas e tocou 77 s de AV1 4K e Opus lendo 183 MB, sem um 403. O
+overlay troca só `version` e `src` (o tag do GitHub, com hash, raiz em `nix/kept-sources.nix`); o
+resto é a receita do nixpkgs, inclusive o `yt-dlp-ejs`, que tem de bater com o que o `pyproject.toml`
+do yt-dlp pina. Por ser overlay, o player, a fila, o video-metrics, o acesso rápido, o `.#dev` e o
+embrulho do mpv usam o mesmo binário. **Ele tem de subir quando o YouTube recusar de novo** (403 no
+meio do arquivo, "Sign in to confirm", formato sem URL): o último tag estável, `hash = ""`, e o hash
+que a falha imprimir — o passo a passo está no cabeçalho do arquivo.
+
+**Etiquetas: cada recusa é uma frase exata.** O `Why::NoPlace` virou `NoFieldIn { field, format }`
+("Uma etiqueta ID3v1 não tem lugar para Compositor."), `NoPicturesIn`, `StreamsOnlyInMatroska`,
+`AttachmentIsNotAStream`, `TagReadOnly` e `OnlyTheFrontCover`; o que era um nome mal escrito é
+`BadName`, e o endereço do `WXXX` é `NotText`. O `Why::every` (a lista que o teste das frases das
+portas percorre) sai do macro `every_reason!`, que escreve ao lado um `match` sem curinga sobre a
+mesma lista: um motivo novo fora dela não compila. A Descrição de um MP3 é o quadro de texto do usuário
+`TXXX:DESCRIPTION` — o ID3v2 não tem quadro próprio (o `TDES` é a descrição de podcast do iTunes) e o
+lofty não tem chave para ele —, lido e escrito na etiqueta concreta, com as outras grafias do quadro
+tiradas; a leitura de volta do rascunho (`native::verify`) procura primeiro o nome como foi escrito.
+
+**Letras traduzidas, quando a pessoa pede** (reverte a decisão de 2026-09-28 acima). Com a tradução
+ligada (`player.json`, `lyrics_translation { on, to }`, gravada pelo daemon ao receber o
+`LyricsTranslation`), a letra nova é perguntada uma vez, inteira, ao MyMemory pelo `ronoctua-words`,
+com o `Pass` do host; o que volta com uma linha por linha fica sob cada verso, e o que volta com outra
+contagem vai à parte (`Translation::unsynced`). A língua é a escolhida, senão a das portas
+(`language.json`, senão o `LANG`). Fica no cache do player (`translation-<hash>-<língua>`, sob o
+`playerMib`), e a recusa é `Trouble::Off` (host não permitido) ou `Trouble::Translation` com o
+`ronoctua_words::Why`. A resposta fica guardada com a pergunta (`Translating::answer`): a mesma letra
+posta de novo — um candidato escolhido que é a letra já mostrada — chega em linhas novas, sem
+tradução, e recebe a guardada de volta (`translate::relaid`), em vez de ficar sem ela com o estado
+dizendo "traduzida".
+
+**O consentimento do player é o da distro.** `Preferences::allows` vale quando todo host do serviço
+(`Service::hosts`) está permitido no `consent.json`, e `allows_directory` quando o host do diretório
+está (`Directory::host`): os pedidos de um e de outro saem com o `Pass` desse host, então o arquivo
+que permite é o arquivo que deixa passar. A porta grava ali (`prefs::let_merged`) e lê junto
+(`prefs::read`, vigiando os dois arquivos); o interruptor que pergunta sozinho (letras pelo LRCLIB,
+SponsorBlock) permite o host dele ao ser ligado, senão a primeira busca voltaria pedindo a permissão
+que ele acabou de dar. As listas antigas do `player.json` — `consented` e `directories` — são
+mescladas no `consent.json` uma vez (`prefs::merge_consent`, na partida e em todo `Reload`) e saem do
+arquivo; até lá elas ainda valem. A lista de um rádio num endereço (`resolve.rs`, `fetch_list`) vai com
+o `Pass` do host que a pessoa pôs, antes de qualquer pedido, `http` ou não: pôr o endereço é o
+consentimento, registrado UMA vez, quando o arquivo não tem resposta para o host (`pass_put`); um host
+recusado continua recusado (`Trouble::Off`), e um já permitido não é regravado. Para onde o host manda
+a pergunta é resposta dele, não um host que a pessoa permitiu: os saltos em `http` seguem como os do
+`ronoctua_http::web`, e um salto em `https` para OUTRO host vai com o `Pass` dele se a pessoa o
+permitiu, senão é recusado com o nome dele (`hop_pass`, que nunca grava o arquivo).
+
+**Uma legenda não faz parte do nome de um conjunto** (decisão A3): o nome junta as fontes de imagem e
+de som; um filme com a legenda dele é o filme.
+
+### Player: o que as portas ganharam em 2026-09-30
+
+**A fila diz se o arquivo dela a guarda.** O título da Fila leva o nome do `.rqueue` de onde ela veio
+ou em que foi salva (`State::queue_file`) e, quando a fila deixou de ser o que o arquivo diz — ou
+nunca foi salva —, `nome · não salva` / `nova, não salva` no tom de perigo, depois do título
+(`Builder::title_mark`, `player_queue::kept_mark`). O glifo de salvar de novo aparece só com a
+fila mudada, ao lado do de limpar, e `C-s` é ensinado só aí; numa fila nunca salva o `C-s` faz a
+pergunta de "Salvar a fila…".
+
+**Recusa que a pessoa pode vencer é pergunta, nunca frase.** "Já está na fila" (um `Put` com
+`once`, que toda adição manda — decisão A5) e "o arquivo mudou no disco" (salvar de novo sem
+`force`) voltam da thread como `Told::Asks { again, trouble }`: o `carry_out` reconhece a ordem que
+venceria a recusa (`player::overruled`) e a view pergunta na página, com o "não" primeiro e o número
+da entrada (`3.2`, `player_queue::number_of`). Uma porta sem view diz a recusa como frase. Tocar
+agora nunca pergunta: toca. Quando a pergunta chega, a frase que a ordem pôs na linha ("Adicionado…",
+"salva de novo") sai — não aconteceu —, e onde as linhas não estão desenhadas (o palco da janela, a
+imagem sozinha do rodapé) elas voltam: a decisão é uma só, `player::heard`, lida pelas três portas.
+Por isso o `C-s` é `Unseen::OpensThere`, como "Salvar a fila…": pode perguntar.
+
+**Os saltos moram ao lado do relógio, não entre os onze botões.** `◀◀ 1:23 / 4:56 ▶▶` junto à borda
+direita (`player_media::clock_group`), uma célula de ar entre as peças e depois do último glifo; o
+`player_media::transport` devolve os botões com os dois saltos entre eles e a coluna do relógio, e a
+pintura, o clique e a dica sob o ponteiro leem essa resposta nas três portas. Onde os três não
+cabem, fica só o relógio, como sempre (a coluna média com o glifo das mídias); onde nem ele cabe,
+nenhum — `j` e `l` continuam. Um clique duplo na imagem: no terço do meio maximiza, como antes;
+num lado salta dez segundos, e cada clique a mais no mesmo lado salta de novo sem pausar
+(`player_media::PictureClicks`, a mesma leitura na janela, na coluna e no rodapé).
+
+**Recolher a imagem é da porta.** O glifo no título "Agora" (e `z`) aparece só na porta que mostra
+uma imagem que dá para recolher (`View::picture_foldable`, dito pela porta): a janela e a coluna
+guardam o próprio `picture_folded` e o layout fica sem faixa; o rodapé guarda `player_folded`, que o
+`metric` lê (duas linhas, transporte e barra — `player_media::FOLDED_LINES`), e nenhuma imagem é
+pedida enquanto está recolhida. Numa página do mundo o globo ocupa o lugar da imagem no painel do
+rodapé: ali nada se recolhe (o rodapé guarda `player_globe` e lê `player_folded_now`), e o globo
+fica, como na janela e na coluna. Nada disso é gravado: cada porta nasce com a imagem.
+
+**Vídeo de um site é página, não linha dos arquivos.** Endereço não é arquivo: a página
+(`player_website.rs`, `LEADER p h`, linha em "Ouvir e assistir") tem "Tocar agora…" e "Pôr na
+fila…" — perguntas da linha da porta, onde o `C-v` cola nas duas — e os endereços tocados daqui,
+guardados em `player-websites.json` (mesclado com o disco, no máximo doze; o arquivo é o broadcast).
+O que não é endereço é dito entre aspas; um endereço sem esquema ganha `https://`. A lista se
+reordena a cada toque, e o cursor guarda o endereço, nunca a linha (`player_website::spot_of`). A
+linha dos arquivos passou a pedir só caminho.
+
+**Editar aqui um campo de várias linhas.** A página do campo tem "Editar aqui" antes de "Editar no
+editor": abre o `text_area` sobre a página, e o `C-s` manda o `Retag` do campo contra a folha de
+agora. O texto só é marcado como guardado quando a folha relida diz as palavras
+(`player_metadata::kept_back`): uma gravação recusada deixa o texto mudado, e sair ainda pergunta.
+
+**Os países de A a Z.** No título "Países" (e `O`), a ordem gira entre "mais estações primeiro" e o
+nome na língua da pessoa, dobrado (`ronoctua_apps::fold::fold`: `Á` com `A`), em cada um dos dois
+grupos; o cursor fica no país, não na linha, e a ordem é da página, nunca gravada. Uma tecla que
+duas entradas do `OF_THE_VIEW` dividem é lida pela página (`Where::on_the_page`,
+`View::press_of_key`): o `O` ordena os países numa página do mundo e outra coisa onde outra página o
+tomar.
+
+**A letra traduzida (revoga "Não há tradução de letras", acima).** O glifo no título "Letra" (e `T`)
+liga ou desliga; cada verso ganha a tradução embaixo, no tom da prosa das dicas
+(`text.subtle.default`: o contraste do degrau apagado, numa matiz que não é a dos versos — o
+`text.subtle.faint` é o do separador, que só precisa ser distinguido, e uma linha de palavras nele
+mal se lia), e as linhas "Traduzir para" (um anel pelas línguas de `tongues.nix`) e "Traduzida por".
+Desligada e ligada de novo, a língua escolhida volta (`View::lyrics_tongue`, a última que o estado
+disse). A tradução que não voltou verso a verso (`Translation::unsynced`) não vai sob verso nenhum —
+seria o verso errado —: vai inteira depois dessas linhas, no mesmo tom, sob uma frase que diz o que
+ela é (`player-lyrics-unsynced`). Uma recusa por host não permitido é dita, com a linha que permite o host e pede de novo; a
+página Internet ganhou a chave do tradutor (`api.mymemory.translated.net`), escrita no arquivo de
+consentimento da distro, host por host (`ronoctua-consent`), entre os que perguntam sozinhos: com a
+tradução ligada, a letra de cada música vai a ele sem ninguém pressionar.
+
+### O catálogo local do player — o motor e as portas (`engine/catalog.rs`, `player_catalog.rs`)
+
+As três mesas de um tema (a TV, os filmes do archive, as lives) saíram: `DeskKind::Channels`,
+`Archive` e `Lives` não existem mais, e as consultas delas não são pergunta nenhuma (`not-understood`).
+Rádio e TV do mundo continuam mesas. Os canais por tema são o catálogo local, que o daemon ingere e
+as portas leem sozinhas.
+
+**Ingerir é um evento, nunca um relógio.** Uma porta que MOSTRA uma fonte vencida — lida há mais
+que o `fresh` dela em `assets/channels.nix`, ou nunca lida — pede `Ask::Ingest`, uma vez por leitura
+daquela fonte. O daemon lê cada fonte numa thread dela (nasce no primeiro pedido e dorme na caixa
+de entrada depois): a lista de cinquenta mil canais não segura a NASA atrás dela, e um pedido
+chegado durante uma ingestão da mesma fonte é aquela ingestão. O que a fonte deu vai ao escritor
+único, que troca as linhas dela numa transação por arquivo (`Writer::replace`, o teto
+`playerCatalogMib` passado ao `Writer::open`); fonte que não deu nada fica com as linhas velhas e o
+porquê gravado (`Writer::failed`). **Fonte removida durante a leitura continua removida:** a remoção
+ergue a bandeira da thread da fonte antes de pegar o escritor, e a ingestão olha a bandeira com o
+escritor na mão — ou escreveu antes, e a remoção apaga, ou não escreve nada (`Catalog::withdraw`).
+Sem isso, a lista de cinquenta mil canais removida no meio da leitura voltava inteira, sem entrada no
+livro que um dia a limpasse. A thread de uma fonte lê o pedido mais novo quando vários esperam. Uma
+fonte cuja última ingestão falhou não é pedida de novo
+sozinha: a página diz por quê, e a linha "Ler de novo" relê. Fonte padrão cujos hosts a pessoa não
+deixou é recusada na hora, sem ler nada, e a linha que nomeia os hosts é o consentimento (escreve o
+`consent.json` e então pede a ingestão). As lives do YouTube são a ingestão da fonte `lives`,
+fresca por 30 min.
+
+**A busca no archive inteiro** — além do que o catálogo guarda de cada coleção — é uma ingestão
+também: a categoria `search:<palavras>` da fonte `archive-search`, que o anel não mostra, trocada
+pela busca seguinte e apagada quando o escritor abre (um daemon novo não tem busca). Ela tem status
+próprio no estado: a listagem dela diz "buscando" enquanto anda e por que falhou, com a linha que
+busca de novo, e nunca desenha uma busca falha ou lenta como "nada encontrado" (recusa é frase, não
+ausência). Uma busca de outras palavras pedida no meio é lida depois, e só o fim da mais nova é dito.
+A listagem da busca não é filtrada de novo pelas palavras (o archive já as casou, e o título de um
+item não precisa contê-las); os pôsteres dela seguem o interruptor do archive, na porta e no daemon.
+
+**As fontes da pessoa** moram em `player-sources/sources.json`, escrito SÓ pelo daemon, `0600`
+desde o primeiro byte (`sources::Book`): um endereço IPTV leva a conta. `AddSource`, `RemoveSource`
+e `SetSource` rodam na thread da conexão, e o lock do motor não fica preso durante o fetch que
+reconhece um link colado. O mesmo arquivo guarda o interruptor de pôsteres que a pessoa virou numa
+fonte PADRÃO (o endereço dela é da tabela, nunca dali). Arquivo que não lê não é sobrescrito: nada
+se acrescenta, e o estado diz por quê (`CatalogSummary.trouble`).
+
+**Lista `http` da pessoa: aceita, e dita** (decisão do dono, 2026-09-30). A lista de um provedor IPTV
+é `http` quase sempre. Só uma fonte que a pessoa colou é pedida em claro, por TCP
+(`web::request_unencrypted`, cujo único chamador é `Internet::get_own`, escolhido pelo esquema do
+próprio endereço); um redirecionamento nunca desce de `https` para `http`; toda fonte padrão continua
+`https`, e o "qualquer site" dos pôsteres de uma fonte padrão (logos da iptv-org, instâncias do
+PeerTube) é qualquer site `https`. A página das fontes diz, ao lado dela, que o endereço não é
+cifrado e que a conta atravessa a rede em claro (`only-a-pasted-list-is-asked-in-the-clear`).
+Os pôsteres de uma fonte da pessoa vêm de qualquer site `https`, e em claro **só do host da lista
+colada** — o que ela nomeou e foi avisada de que não é cifrado: uma lista nomeia qualquer endereço,
+inclusive o roteador e os serviços da rede da pessoa. E um redirecionamento em claro para OUTRO host
+só alcança a internet pública, julgada pelo endereço em que o nome resolveu (`web::fence_of`,
+`tls::is_public`): o servidor de uma lista não faz o daemon perguntar aos vizinhos da máquina. O
+host colado em si pode estar na rede da pessoa (uma caixa que serve a lista dela). O check também
+recenseia quem chama `get_own`/`fetched_own`: só o reconhecimento do link colado, a leitura da fonte
+da pessoa e os pôsteres dela.
+
+**Pôsteres só do que está na tela.** A porta nomeia os itens que mostra e cujo arquivo não tem
+(`Ask::Posters`); o daemon busca numa thread só — o pedido mais novo vence o que ainda espera —,
+nunca mais depressa que um a cada 250 ms por host, na pasta `posters/` do catálogo sob o teto
+`playerPostersMib` (separado do `playerMib`: rolar por pôsteres expulsaria as capas). O nome do
+arquivo é o resumo do endereço (o endereço leva a conta; nome de arquivo é visto por todos). Só de
+fonte com o interruptor ligado; fonte padrão com hosts de pôster nomeados pede com o `Pass` deles, e
+ligar o interruptor deixa esses hosts. Arquivo que não começa como imagem (uma página de erro com
+200) não é guardado. A porta só conta como pedido o pôster de fonte com o interruptor ligado: virá-lo
+depois pede na olhada seguinte. E desenha o pôster sem estado do player (`View::picture` toma o
+estado como opcional): "Canais por tema" existe sem player rodando, e os pôsteres dele também.
+
+**As portas leem, o daemon ingere.** A porta abre os dois arquivos só-leitura e pergunta numa thread
+dela: a pergunta mais nova vence, e a página fica na tela enquanto a próxima é lida. Pergunta de
+novo quando a geração do estado anda, e abre o leitor de novo quando o arquivo foi refeito
+(`Reader::replaced`); `OtherSchema` esquece os leitores. A página "Canais por tema" é uma fonte por
+vez (anel `S`), os temas e as categorias com a contagem de cada um; a listagem tem a letra, a página
+`n de N` (`PgUp`/`PgDn`/`Home`/`End`, `RET` digita; um número além da última é a última, e a página
+anterior parte da que está na tela), a busca `/` com os dois escopos (esta lista ↔
+toda a fonte; esta fonte ↔ todas), os anéis de ordem (`O`), por página, país, língua e altura
+mínima, e cinco disposições (`L`): lista, duas linhas, colunas compactas, grade de pôsteres e grade
+grande. O item vai à fila lido do arquivo pelo id: o stream (com a conta) nunca vai numa página.
+"Canais por tema" lê a linha da fonte do anel; a página das fontes lê a de TODAS (`Want::Sources`):
+cada uma diz quando foi lida — na zona da máquina, ou em UTC dito como UTC quando a zona não foi
+lida —, e cada fonte vencida mostrada ali é pedida. Antes da resposta, a página não diz "ainda não
+lida" de fonte nenhuma.
+
+- **A letra** são as que os títulos da listagem têm (`Ç`, `Ñ`, cirílico e CJK inclusive), `Todas`
+  primeiro. Onde cabem com uma célula de ar entre elas, são células que o clique toma; onde só
+  cabem lado a lado, ficam lado a lado (uma faixa de índice); onde nem assim, a linha é um anel das
+  setas — uma lista chinesa tem centenas de "letras" —, e `C-l` digita uma em qualquer caso.
+- **A grade de pôsteres** é a `Grid` do `ronoctua-design` (`Grid::fitted`, `Grid::at`), e o clique
+  lê as células que ela pôs; a primeira linha de cada prateleira é a linha do cursor e as outras a
+  continuam. A textura vai à GPU com a chave (arquivo, pixels — o tamanho vezes a escala —,
+  paleta). A página de uma disposição de pôsteres nunca passa de `space.catalog.postersMost`, e o
+  teto de imagens do quadro (`ronoctua_render::image`) conta o maior entre esse e o
+  `space.files.thumbMost` (`the-listing-never-drops-a-poster`).
+- **A listagem em tela cheia** (`F`, e o glifo do título) é o palco `Listing` da janela: só as
+  linhas, na tela inteira. O rodapé e a coluna não viram tela cheia: entregam a listagem (arquivo
+  de runtime `player-listing.json`) e abrem a janela já nesse palco, como no `Maximized`, com a
+  fonte do anel como ela está (a da pessoa também). Só elas escrevem o arquivo: a janela toma o
+  palco ela mesma, e uma foto não escreve nada da máquina; a janela que entra no palco por conta
+  própria apaga um arquivo que tenha sobrado. A listagem ADULTA também é entregue — o que ela lista,
+  nunca uma linha dela —, e a janela nova, trancada, abre em "Canais por tema" e pede a senha
+  mascarada antes de abrir a listagem; senha errada pede de novo, e soltar a pergunta solta a
+  listagem e fecha a janela. `Esc` sai do palco antes de qualquer outra coisa, e uma página que não
+  é a listagem o encerra (menos a espera da senha); a janela aberta para o palco fecha com ele.
+
+**A categoria adulta fica atrás da senha do sistema.** As linhas dela estão no
+`catalog-adult.sqlite`, que a porta só lê depois que a pessoa digitou a senha da própria conta numa
+linha mascarada e o PAM a aceitou (`ronoctua_pam::verify`, serviço `ronoctua-unlock`, numa thread:
+uma senha errada espera 3 s). Fechada, a página diz só quantos itens há. A porta fica aberta até
+fechar ou até 15 minutos sem tecla nem clique; uma thread acorda a porta quando o tempo acaba, e só
+existe enquanto ela está aberta. A página diz o que isto é: uma tranca nas portas, não cifra — o
+arquivo está no disco como qualquer outro. Sem o serviço (o `.#dev` num host que não o declara), a
+frase diz que não há tranca e a categoria fica fechada — e fica DITO NA PÁGINA, sob "Só para adultos",
+enquanto a porta estiver aberta: a linha que pediria a senha vira um fato inerte ("Trancado"), e
+nenhuma janela pede senha a uma tranca que não existe (o eco no cabeçalho passa; a página não).
+**Fonte direto no catálogo adulto:** a página das fontes tem a seção do catálogo adulto sempre —
+fechada, quantas fontes ele guarda e a linha da senha; aberta, as fontes dele e a linha que adiciona
+uma direto nele (`AddSource` com `adult`) —, e o link é recusado se a tranca fechou enquanto era
+digitado. Uma lista adulta colada nunca passa pelo catálogo principal, onde títulos, letras e
+pôsteres ficariam fora da tranca até alguém achar o interruptor. `ronoctua-shell unlock-check` faz a mesma
+pergunta com a senha pela entrada padrão (nunca por argumento) e imprime `open` ou o nome da
+recusa: é com ele que o `player-vm` prova o serviço declarado (certa, errada, sem serviço).
+
+### Video metrics — a vista, as duas portas e a varredura
+
+`LEADER v v` abre a vista no rodapé, `LEADER v w` numa janela, `LEADER v s` pede uma varredura. É
+uma `video_metrics::View` só (`video_metrics.rs`); as portas guardam o que o catálogo disse
+(`Readings`) e cada uma tem o seu FEED (`video_metrics_feed.rs`): uma thread que lê e escreve o
+catálogo e leva os recados que saem da vista (varrer, o player, a fila). O laço nunca espera: a
+thread vigia o `catalog.sqlite-wal` (`Notice::on_file`) e só relê quando o `PRAGMA data_version`
+diz que OUTRA conexão gravou — um checkpoint ou a própria escrita não acordam nada.
+
+- **Quem escreve são dois**: o scanner (a unidade) e a porta (`Person`). Todo outro leitor abre
+  `mode=ro` (`Catalog::open_ro`, com `query_only`), e as duas exceções de leitor, `hide` e
+  `delete`, passam pelo escritor curto do crate. Check: `video-metrics-readers-are-read-only`.
+- **O cursor é uma identidade** (um `spot`), nunca um índice: a varredura que reordena a lista não
+  tira o cursor do vídeo. Numa página recém-aberta ele é desenhado onde uma tecla agiria.
+- **A lista tem duas linhas por vídeo**: o título na largura toda, quebrado, e embaixo pontuação,
+  canal e idade. Como rótulo e valor, a coluna do rótulo dobrava o título em três pedaços curtos.
+  A grade de miniaturas é a `ronoctua_design::Grid`; o realce do ponteiro na grade é a CÉLULA, nunca
+  uma faixa na prateleira (nas duas portas). A célula é a miniatura com um `GAP` de ar dos DOIS lados
+  (`video_metrics::TILE`), e o clique pega a mesma caixa: o ar entre duas células não é de ninguém.
+  A pontuação e a idade de um vídeo da grade são uma linha cada: juntas não cabem na largura.
+- **Pergunta é linha da página, embaixo da linha de onde foi pedida**, com o "não" primeiro e o
+  cursor nele: apagar, ocultar, remover canal ou regra, e "já está na fila" (o player recusa um
+  `Put{once}` com `AlreadyQueued`; o "sim" manda de novo sem `once`). Essa última chega de um
+  recado, não de uma tecla, e a porta a SEGUE como seguiria a tecla que ela responde
+  (`View::follow_owed`): no topo da página ela ficava fora da tela e o `a` parecia não fazer nada.
+  Respondida, o cursor volta à linha que perguntou. Mostrar de novo um vídeo oculto não pergunta:
+  nada se perde. Apagar o vídeo (ou remover o canal, a regra) da própria página volta à anterior e,
+  feito, pede a página que está na tela — senão a lista mostrava o apagado.
+- **Valor digitado vai na linha da porta** (o minibuffer no rodapé, o cabeçalho na janela; `C-v`
+  cola), sob o id do comando da pergunta, e a resposta chega à mesma `View::typed`. Uma pergunta
+  rodada PELO NOME (`LEADER :`) pergunta sobre a linha do cursor quando cabe nela, como o `RET`
+  ali, e diz que não há linha quando não cabe; resposta sem linha é dita, nunca descartada. A
+  segunda descrição é editada nas próprias linhas (`text_area`), `C-s` guarda.
+- **Nada não lido é desenhado nem escrito**: "Bloquear Shorts do YouTube" e os pesos só aparecem
+  (e só giram) a partir do que foi lido — girar sobre um padrão gravava os limites da primeira
+  varredura de volta como padrão.
+- **"Publicado" é um momento fixado quando é escolhido** (`agora − janela`), não refeito a cada
+  quadro: refeito, ele deixava de casar com a leitura que o feed tem assim que o relógio passava
+  de uma fronteira, e a página dizia "lendo" para sempre.
+- **Regra única de um canal** (recência, Short, faixa preferida, ao vivo): a versão do canal vale no
+  lugar da global LIGADA OU DESLIGADA (`score::in_force`, `edit::rules_for`). Desligar "Em vigor"
+  na página do canal desliga aquele tipo NAQUELE canal, que é o que a pessoa desligou; a global
+  volta quando a versão do canal é removida. Antes, a versão desligada sumia atrás da global e não
+  havia como alcançá-la.
+- **Chrome quiosque** é do rodapé (`kiosk-open`, que tem a ponte): a janela pede por
+  `Ui::tell_the_footer`. O player recebe `Put{once, Named{url, title}}`; o download é a fila de
+  transferências com `where_to::work_for` — a resposta dela sobre onde mídia de uma página vai — e,
+  entregue, a fila abre (`LEADER t t`, do rodapé): no rodapé a vista fecha antes, como antes do
+  Chrome; a janela pede ao rodapé.
+- **Varrer agora** pede ao brain (fila, portão, diário, marca) e lê a resposta: sem brain, ou com
+  um que não tem o módulo (desligado pela pessoa), pede ao systemd — o brain agenda, não barra. Com a
+  economia de energia ligada diz que não varre (o módulo pularia a rodada), e numa segunda instância
+  (`.#dev`) diz que não pede nada: o cérebro dela só ensaia e a unidade do systemd é a da sessão
+  instalada, que varreria o catálogo de verdade.
+- **Acrescentar um canal é o consentimento** para os dois hosts da varredura
+  (`ronoctua_video_metrics::HOSTS`); a página inicial mostra e alterna "Perguntar ao YouTube".
+- **A câmera** (`photograph --door video-metrics --catalog <arquivo>`) abre uma CÓPIA do catálogo,
+  lê o consentimento desta instância e guarda a mudança dele em memória; varrer, tocar, baixar,
+  acrescentar canal e o Chrome são impressos, nunca feitos.
+
+A varredura é uma unidade de usuário do app (`nix/modules/video-metrics.nix`, `oneshot`, `Nice`,
+I/O ocioso, yt-dlp e o trio do PO por caminho no store — o trio é do próprio minter,
+`potProvider.environment` em `nix/pot-provider.nix`, porque onde fica o plugin é fato do layout
+dele: `--plugin-dirs` quer a RAIZ, e `…/plugin` não carrega nada), e o módulo `video-metrics` do
+brain decide QUANDO: cadência de seis horas, espera a rede, pula com a economia de energia, marca a
+modeline enquanto varre e em perigo quando a última falhou em todos os canais — o porquê de cada
+regra está no `why.md` do módulo. A unidade escreve o relatório onde o brain lê
+(`%t/ronoctua-brain/<id>.json`) seja quem for que a iniciou, e o nome dela e o do relatório saem do
+manifesto e da pasta.
+
+**Uma varredura rodando é a TRAVA dela, não o registro.** O registro da última varredura fica sem fim
+tanto enquanto ela roda quanto quando o processo foi morto (o `systemctl stop`, o OOM). Quem lê
+distingue as duas pela trava que a varredura segura no catálogo e que morre com o processo
+(`scan::running`, `Catalog::scanning`, só leitura): a página inicial diz "parou antes de terminar", e
+o módulo só acredita num relatório "começado" enquanto a trava está presa — por isso o relatório
+"começado" é escrito DEPOIS de a trava ser tomada (`scan::run_announcing`). E o `ExecStopPost` da
+unidade (`scan-stopped`) escreve o fim que uma varredura morta não escreveu, com o `$SERVICE_RESULT`
+do systemd, para o brain não esperar a paciência inteira com a marca acesa.
+
+Uma origem de feeds de loopback (`RONOCTUA_VIDEO_METRICS_FEEDS`, a fixture do `video-metrics-vm`)
+não busca miniaturas: são figuras do YouTube, e uma máquina de teste sem saída pararia toda
+varredura nelas. O `ronoctua-video-metrics list` é o leitor da linha de comando (`open_ro`): o do
+teste durante a varredura, e o de quem está num terminal.
+
+### Segurança — a porta do sudo, a janela sem senha, a tabela da pessoa e as digitais
+
+A fundação da central de segurança é um crate (`ronoctua-security`), um binário root
+(`ronoctua-security-root`, extraído como `rust.securityRoot`) e um módulo (`nix/modules/security.nix`).
+A página, as checagens online e o módulo do brain vêm por cima e não mudam o que está aqui.
+
+**A porta do sudo.** Não há agente polkit na sessão, e não haverá. Quando um gesto da pessoa precisa
+de root, ela digita a senha numa pergunta nossa e `ronoctua_security::authority` — o ÚNICO código
+que roda `sudo` (feature `authority`, só o shell liga) — tenta primeiro `sudo -n` (a janela aberta, o
+carimbo do próprio sudo) e, se falhar por falta de senha, `sudo -S -k -p "" -- <helper> <verbo>` com
+`LC_ALL=C`, a senha e uma quebra de linha no stdin e o stdin fechado. A senha nunca vai no argv nem no
+ambiente (que é esvaziado). O sudo roda sob `setsid`, sem terminal controlador: o PAM não recebe tty e
+a digital, que só responde em terminal, nunca faz a porta esperar um dedo. Por que sudo e não outra
+coisa: reaproveita a autoridade que a pessoa já tem (wheel + senha), não cria privilégio, e o sudo
+registra cada uso; `unix_chkpwd` numa unidade root precisaria de um `YES` do polkit e qualquer processo
+da pessoa pularia a senha; um agente polkit no shell quebra a regra "nenhum agente na sessão".
+`sudo-door-is-one` cobra tudo isso.
+
+**O helper diz o que aconteceu numa linha.** A saída dele são linhas `step <palavra>` (o progresso do
+cadastro de digital) e, por último, o veredito: `done` ou `refused <motivo>`. Uma execução sem linha
+de veredito terminou no sudo, antes do helper — é assim que a porta distingue senha errada, senha
+faltando e conta sem permissão (lidos do que o sudo diz em `C`) de uma recusa do próprio helper. Na
+tela, uma recusa é uma frase; o detalhe (as palavras do `visudo`, do `nft`, do fprintd) o helper diz no
+stderr, e a porta o repassa ao próprio stderr, uma linha por vez com o prefixo de prioridade do journal
+e o nome do helper. O rodapé é unidade de usuário e as janelas herdam os descritores do compositor:
+vai para o journal, que é para onde `security-refusal-failed` aponta.
+
+**Dois conjuntos fechados de verbos.** `RootVerb` é o que a porta pede pela pessoa que o sudo nomeia
+em `SUDO_UID` (uid 0 é recusado; o nome sai do `/etc/passwd` e só é usado se for "simples" — letras
+minúsculas, dígitos, `_` e `-` —, porque vai para uma linha do sudoers, uma lista do PAM e um `Claim`
+do fprintd). `UnitVerb` é o que unidades e o dispatcher do NetworkManager pedem, sem `SUDO_UID`
+(`shields-up`, `firewall-apply --link …`); pedido pelo sudo, é recusado. `relax-end` e
+`firewall-apply` servem aos dois: sem pessoa, o segundo aplica o arquivo guardado. E o helper imprime
+a linha da janela sem tocar em nada (`print relax-line`), para o `relax-line-parses` passá-la pelo
+`visudo` no build.
+
+**A janela sem senha (exceção do inv. 6).** `@includedir /run/ronoctua-sudo`, escrito depois da regra
+do wheel (vence a última que casa). O helper escreve `<pessoa> ALL=(ALL:ALL) NOTAFTER=<UTC>
+NOPASSWD:SETENV: ALL` num rascunho com ponto (`.relax` — o sudo ignora nome com ponto), passa pelo
+`visudo -cf` pelo caminho no store, e só então renomeia para `relax` (0440, root): um erro de sintaxe
+num include trava TODO sudo, o resgate inclusive. O `SETENV` é o da regra do wheel que o NixOS escreve
+(`security.sudo.defaultOptions`): como a última regra que casa é a que vale, uma linha sem ele recusaria
+`sudo -E` enquanto a janela estivesse aberta — a janela tira a senha e mais nada. Quatro travas fecham: um timer transitório por janela
+(`ronoctua-sudo-expire-<fim>`, nome próprio para nunca colidir com o anterior), o `NOTAFTER` na própria
+linha, `/run` ser tmpfs, e `ronoctua-sudo-close.service` antes de `sleep.target` (autologin sem tela de
+bloqueio). Se o timer não arma, a janela é fechada de novo: três travas não são as quatro prometidas.
+Os timers da janela anterior só param depois que a linha nova está no lugar: uma reabertura que o
+`visudo` recusa deixa a janela aberta como estava, com o timer dela; e, uma vez a linha nova no lugar,
+qualquer falha fecha a janela inteira. O `sleep.target` recusa ser iniciado à mão
+(`RefuseManualStart`), então o `security-vm` lê a ligação dele com a unidade no systemd e roda a
+unidade como o alvo rodaria.
+A modeline mostra a HORA do fim, lida de `/run/ronoctua-security/sudo-until`.
+
+**O firewall: duas tabelas e marcas entre elas.** A distro passou para nftables. No nftables um `drop`
+em qualquer tabela é final e um `accept` não é — ele só encerra a vez daquela tabela. Então a tabela
+da pessoa (`inet ronoctua`, prioridade `filter - 10`, antes da declarada) decide e MARCA, e a
+`nixos-fw` obedece: o primeiro `extraInputRules` aceita o pacote com `0x10000000` (permitido pela
+pessoa) e o último loga, com limite, o que está para ser recusado (`0x20000000` desliga esse log,
+`0x40000000` o deixa falante; o `logRefusedConnections` do upstream não tem limite e fica desligado).
+Os bits 28–30 não tocam a máscara do Tailscale (`0xff0000`) nem a marca do netavark (`0x2000`), e
+colisão de marca é silenciosa: `firewall-marks-are-free`. A tabela é gerada por uma função pura
+(`firewall::script`), conferida por `nft -c` e aplicada por `nft -f` numa transação só; um `reload` do
+nftables apaga só as tabelas declaradas, e a nossa fica. A tabela diz, em ordem: loopback e conexões
+estabelecidas não são com ela; o essencial (respostas de DHCP, vizinhança IPv6, os erros ICMP de que
+uma conexão precisa) passa sempre, com escudos inclusive; escudos derrubam toda conexão nova;
+desligado marca tudo como permitido; numa interface de rede PÚBLICA só passam as regras feitas para
+redes públicas, e o resto é logado e derrubado — inclusive as portas que o sistema declara abertas;
+numa rede de CASA as regras da pessoa permitem ou recusam, e o que elas não nomeiam fica com a tabela
+declarada, que é o comportamento de antes. `tailscale0` nunca é pública. Tudo isso depende de um
+`reload` do nftables não esvaziar o ruleset inteiro: o `flushRuleset` fica desligado enquanto ninguém
+declara `networking.nftables.ruleset`, e o módulo recusa (assertion) um sistema em que ele liga — o
+`PartOf=` passa `stop` e `restart` adiante, nunca `reload`, e a tabela da pessoa sumiria até o boot.
+
+**Casa ou pública, por rede, por evento.** O dispatcher do NetworkManager (`pre-up`, para a tabela
+estar no lugar antes do tráfego, e `up`/`down`) chama `firewall-apply --link <interface> <uuid>
+up|down`; o perfil vem de `firewall.json` pelo UUID da conexão, e uma conexão que a pessoa nunca
+classificou fica com o padrão, "pública" (o status a lista em `unplaced`, para a página oferecer
+"tratar como casa"). O que o helper precisa saber do NetworkManager ele PERGUNTA a ele, pelo
+`ronoctua-network` (o único crate que fala com o NetworkManager; `Manager::stored`), e nunca lê dos
+arquivos dele — uma conexão que o daemon só tem na memória não está em arquivo nenhum. Na primeira vez
+que o NetworkManager responde (num evento de link, ou num desejo aplicado pela porta), toda conexão que
+ele guarda vira "casa" e `/var/lib/ronoctua-security/networks-migrated` marca isso feito, para sempre:
+as redes de antes mantêm o comportamento de antes, e as feitas depois nascem públicas. O boot não
+pergunta — o NetworkManager pode ainda não estar de pé, e o primeiro evento dele chega logo depois.
+Conexão que o NetworkManager não ativou (`CONNECTION_EXTERNAL`: loopback, pontes de container e de VM, a
+do Android, o tailnet) nunca vira pública: nascida pública, uma ponte perderia DHCP e DNS. E uma rede
+que esta máquina SERVE (`method=shared`: o hotspot, um cabo compartilhado) também não: a máquina é o
+roteador dela, e cada hotspot é uma conexão nova, de UUID novo, que nasceria pública e derrubaria o
+DHCP e o DNS dos clientes. Ela fica fora de casa e de pública (`served.json`, e `served` no status); a
+tabela marca como permitidos, nela, só o que os clientes precisam da máquina (DHCP, DNS e a solicitação
+de roteador do IPv6) — com escudos inclusive, como o essencial —, e o resto é o que uma rede de casa
+recebe. Sem isso o hotspot não entrega endereço mesmo sem a tabela da pessoa: a tabela declarada não
+abre a 67 nem a 53, e o `accept` que o NetworkManager põe na tabela dele não desfaz o `drop` dela.
+
+**Apertar é livre, afrouxar pede senha.** A única regra polkit nova deixa a pessoa dar `start` numa
+unidade só, `ronoctua-firewall-shields.service`, que roda `shields-up` e nada mais
+(`security-polkit-is-narrow` lê a regra E o corpo de `shields_up`). Baixar escudos, desligar, permitir,
+marcar uma rede como casa: a pessoa grava o desejo em `/run/ronoctua-security/staged/wish.json` (pasta
+dela, 0700) e pede `FirewallApply` pela porta; o helper abre com `O_NOFOLLOW`, limita a 64 KiB, exige
+dono e modo, consome o arquivo, valida tudo (nomes de interface, UUIDs, CIDR sem bits de host, ids de
+regra, portas, notas sem controle) e recusa campo desconhecido. Nada do que a pessoa escreveu entra na
+tabela fora de um campo conferido; a nota nunca entra.
+
+**Digitais só no sudo, só em terminal, só para quem está na lista.** Ligar o fprintd faz o nixpkgs pôr
+`pam_fprintd` em todo serviço PAM; o módulo estende a opção para cada serviço nascer com
+`fprintAuth = false`, e só o `sudo` liga, com duas portas logo antes do `pam_fprintd`: `pam_listfile`
+com `/var/lib/ronoctua-security/fingerprint-sudo` (liga e desliga sem rebuild; arquivo ausente é "não")
+e `pam_succeed_if tty =~ /dev/*` (o `sudo -S` da porta não tem tty). Cadastrar e apagar passam pela
+porta — acrescentar uma credencial exige a que já existe —, e o helper, como root, fala com o fprintd
+(`Claim`, `EnrollStart`, cada `EnrollStatus` virando uma linha `step`, `Release`), desistindo depois de
+60 s sem toque. Listar leitores e dedos roda como a pessoa. `pam-fingerprint-is-gated` lê o texto de
+TODOS os serviços PAM do sistema avaliado.
+
+**Firmware só lido.** O fwupd entra para dizer o nível HSI e as atualizações conhecidas; instalar
+firmware seria uma categoria nova de ato imperativo e fica de fora, e o `fwupd-refresh.timer` é
+desligado à força (a máquina não vai à rede por relógio para algo em que não age). A regra polkit que o
+fwupd do upstream traz é assinada no censo como "upstream".
+
+**O que está provado onde.** Os testes do crate rodam contra substitutos (um `sudo` falso que grava
+argv, ambiente e stdin; um `nft` e um `visudo` falsos) e, quando o build tem `nft` e `unshare`, passam
+cada tabela de exemplo pelo `nft -c` real num namespace próprio. O `security-vm` (três nós) prova o
+resto com o kernel, o sudo, o PAM, o polkit, o fprintd e o NetworkManager de verdade. Nele a pessoa é
+um processo sem terminal (`systemd-run --uid`, stdin de `/dev/null` ou do pipe da senha), como o rodapé:
+sob `su -`, o console do backdoor do teste é um terminal, o systemctl subiria um agente polkit
+esperando nele e o sudo daria tty ao PAM, que pediria um dedo.
+
+### Segurança — a página, as checagens online e o vigia
+
+**Uma `View`, duas portas.** `security.rs` decide as linhas e o que cada tecla e cada clique fazem
+(`View::press`, `View::answered`, `View::came`) e devolve um `Errand`; o rodapé (`LEADER s e e`,
+`surface.rs`) e a janela (`LEADER s e w`, `security_window.rs`) só o executam — uma thread, uma
+pergunta na PRÓPRIA linha, a fila. Por isso as duas perguntam a mesma coisa, digitam a senha do mesmo
+jeito e dizem as mesmas frases, cada uma na sua linha. As seções, nessa ordem: Agora (só o que está
+fora, na cor de perigo, ou uma linha quieta), Firewall, Administrador, Digital (só com leitor),
+Esta máquina, Privacidade de rede, Checagens online e, no fim, Sugestões. O que a página desenha vem
+de `Scene::read`, numa thread de cada porta, quando ela abre; depois só o que se mexe é relido
+(`Scene::refreshed`: os arquivos do helper, as digitais, as conexões, os sockets, a página do vigia, a
+chave e as checagens), quando uma das pastas muda (os dois diretórios do helper, o `scans.json`, as
+chaves), quando a porta termina um trabalho e quando a geração da página do vigia anda no fluxo do
+brain — nunca por relógio. O leitor, o Secure Boot, o TPM, o disco, o fwupd e o podman são perguntados
+uma vez: são lentos (ativação por D-Bus, um processo do podman) e não mudam com a página aberta.
+
+**O lugar pedido aparece, e só ele move a página.** Uma palavra de seção (`security-open admin`, o
+clique no escudo), a resposta de uma checagem e a pergunta da própria página são um alvo
+(`Target`) que a `View` guarda até a primeira cena LIDA — sobre a cena vazia as seções não estão onde
+vão ficar quando o "Agora" encher —, e então o `settle_on` diz qual linha a porta desenha primeiro: o
+título da seção (a de Privacidade, que só tem fatos, inclusive: o cursor vai para a próxima linha que
+age), a linha da checagem com a resposta logo abaixo, ou o topo. As duas portas rolam até lá — o
+rodapé, cuja região tem no máximo 15 linhas, e a janela. Uma cena que chega sozinha nunca move nada.
+
+**Toda mudança do firewall é um `Settings` INTEIRO**, montado a partir do que a página leu e
+encenado logo antes de a porta rodar (`run_work`): o helper valida o todo e o grava inteiro, e dois
+cliques seguidos nunca viram dois remendos. Por isso a base da mudança é sempre o que está em vigor
+(`settings_now`): a cena, enquanto a página mostra uma cena lida e vigiada; o arquivo AGORA, para um
+comando da leader com a página fechada (fechar a página joga a cena fora — a janela pode ter mudado o
+arquivo depois); os padrões só quando o helper nunca escreveu arquivo (`Ok(None)`). Um arquivo que
+existe e não se lê é uma recusa dita, e nada é encenado: um desejo montado sobre os padrões apagaria
+toda regra e toda rede classificada da pessoa. A página mostra esses valores como desconhecidos e não
+oferece nada que grave; os escudos ainda sobem, porque o helper os ergue sobre o arquivo dele.
+Afrouxar passa pela porta; os escudos sobem de graça (`shields_errand`).
+
+**O veredito de uma porta é por perfil.** Uma regra vale nos perfis que ela lista, e uma interface
+pública só vê as regras de redes públicas. O veredito de cada porta que responde é lido como o
+nftables lê, cadeia por cadeia, nos perfis das redes em que a máquina está (`verdict_of`): a primeira
+regra que pega todo pacote decide, uma regra com origem ou interface deixa passar (ou recusa) só uma
+parte, e o que difere entre perfis ou origens é "permitida só em algumas redes, ou de alguns
+endereços". O "permitir" de uma conexão recusada vale no perfil da interface por onde ela chegou
+(`Scene::profile_of_interface`), e o de uma porta, no primeiro perfil que ainda a recusa, casa
+primeiro; a frase sob o ponteiro diz qual.
+
+**"Tratar como casa" também chega pelo minibuffer.** Quando uma rede nova sobe e fica pública por
+padrão, o vigia diz isso no minibuffer (o evento `security-watch-network-public`, só para uma
+conexão que ele ainda não tinha visto, e nunca na primeira leitura), com a ação `security-home`: com
+uma rede pública esperando, ela vira casa pela porta; com várias, a página abre no Firewall, onde
+cada uma tem a própria linha; com nenhuma, isso é dito. Uma porta que precisa de senha pergunta na linha dela (`Why::NeedsPassword` →
+pergunta secreta `security-password`), e o trabalho espera a resposta na `View`. A rede que esta
+máquina serve aparece como tal (`Status.served`), nem casa nem pública.
+
+**A regra em palavras.** Uma regra é uma linha só, na língua da pessoa ou em inglês (`allow tcp
+8080 from 192.168.1.0/24 via wlan0 home`): `rule_text` a escreve e `rule_of` a lê de volta, e o
+teste prova as duas direções nas duas línguas. A mesma linha é o rótulo da regra na página e o
+texto inicial da pergunta que a edita; a nota da regra, que a gramática não tem como dizer, passa
+intacta pela edição.
+
+**As checagens online moram no `ronoctua-lookup`**, dono das chaves da pessoa: `Key::scope` e
+`Service::scope` separam as do player das da segurança (a pasta continua `player-keys`: renomear
+perderia as chaves guardadas). Cada host é deixado pela pessoa (`ronoctua-consent`) no gesto que
+pede a checagem, e o `internet::Internet` (por onde vai todo pedido do `ronoctua-lookup`) só manda
+a quem foi deixado. VirusTotal: o SHA-256 é calculado aqui e só ele sai; um arquivo nunca visto vira uma pergunta com o "não" primeiro e o aviso de que o
+arquivo enviado é compartilhado com parceiros e baixável por assinantes; o "sim" põe um
+`Work::Scan` na fila, que roda `ronoctua-scan` (multipart em fluxo pelo `ronoctua-http::web`,
+direto até 32 MB e pelo `upload_url` até 650 MB, e a análise consultada só enquanto pendente, a cada
+15 s — o limite da chave grátis). Os resultados vão para `~/.local/state/ronoctua/security/scans.json`.
+XposedOrNot recebe o endereço (a linha diz isso), sem chave, um por segundo; o Have I Been Pwned é
+só uma sugestão que abre o site, sem o endereço na URL. Pwned Passwords recebe cinco dígitos do SHA-1
+(`Add-Padding`), o resto é comparado aqui e a senha é zerada depois do hash. O gerenciador de
+arquivos oferece "checar no VirusTotal" no `C-m`, e as duas portas dele abrem a janela da central
+já checando o arquivo (`security online --check <arquivo>`): a pergunta do envio precisa de uma
+região, e a do rodapé é do gerenciador.
+
+**O vigia se chama `security-watch`, não `security`.** O id de um módulo do brain é o prefixo das
+chaves dele, e o `brain-modules-are-sealed` recusa qualquer arquivo de fora que diga uma chave do
+prefixo: com o id `security`, cada chave `security-*` da página seria do módulo. O vigia só ouve (o
+kernel com o prefixo `ronoctua-refused: `, o sudo, as unidades do firewall em `err`, e as duas pastas
+do helper) e publica UM escudo, o mais alto do que está fora, com a frase de cada caso; o clique
+nele abre a central na seção certa (`security::section_of_mark`, chamado de `brain::click_of`). A
+página dele guarda as recusadas agrupadas e uma semana de sudo, e a central as lê pelo id das linhas
+(`lists_of`). O porquê de cada peça está no `why.md` da pasta.
+
+**O ajudante root do gerenciador passou pela porta do sudo.** A regra polkit `AUTH_SELF_KEEP` do
+`files` nunca pôde perguntar nada numa sessão sem agente: toda troca de dono era recusada na hora.
+Agora `ronoctua-files-root.service` é iniciado pelo verbo `files-root` do helper, depois do `sudo -n`
+ou da senha digitada na porta que pediu (o conjunto restante espera a senha, e o que já mudou fica),
+e nenhuma regra polkit o nomeia — `files-root-is-narrow` segura isso, e o censo
+`polkit-rules-are-the-ones-we-know` não assina mais o `files`. A troca de grupo e a de permissões
+vão primeiro como a pessoa, uma syscall por caminho; a partir do primeiro caminho que o kernel recusa
+por falta de privilégio (`EPERM`, `EACCES`), o resto segue pela mesma porta, com os verbos `chgrp` e
+`chmod` da unidade. O `trim` da unidade não tem gesto no gerenciador (a exclusão por sobrescrita não
+o oferece), e só um gesto novo o traria.
+
+**O envio ao VirusTotal fala pela linha da página.** O `ronoctua-scan` grava o estado "enviando" no
+`scans.json` a cada décimo do arquivo (não a cada batida, que vai só para a fila), e um cancelamento é
+escrito pela fila, que mata o grupo do filho: o que ainda estava sendo enviado volta a "nunca visto,
+não enviado" (`virustotal::cancelled`), e o que já foi enviado fica pendente.
+
+### Containers: a vista (`LEADER s o`) e o módulo do brain
+
+**Uma `View`, duas portas.** `containers.rs` decide tudo o que a tela mostra e o que uma tecla ou um
+clique faz; o rodapé (`surface.rs`) e a janela (`containers_window.rs`) só entregam teclas, cliques e
+leituras. Numa janela a partir de `space.containers.panesFrom` células são três colunas lado a lado —
+os tipos com a contagem, a lista do tipo e o detalhe da linha escolhida —, cada uma com a própria
+seleção e a própria barra (inv. 15); abaixo disso, e sempre na região do rodapé, é uma lista só, com
+os tipos numa faixa em cima (que quebra linha em vez de esconder um tipo) e o detalhe por cima da
+lista (`RET` abre, `Esc` volta). A faixa de abas do detalhe também quebra linha, nas duas formas: na
+largura mínima das três colunas o detalhe tem umas 40 células e as sete abas não cabem numa linha, e
+o que `S-→` alcança tem de ser desenhado e clicável (inv. 19). Uma pergunta guarda onde o teclado
+estava e se o detalhe estava aberto, e a resposta devolve as duas coisas. As duas formas são `Line`s com ZONAS: o que cada trecho de uma linha
+é (um tipo, uma linha da lista, uma aba, uma resposta). A pintura, o realce do ponteiro e o clique
+leem as mesmas zonas, então o realce nunca atravessa duas colunas e um controle é pego onde é
+desenhado.
+
+**A vista não guarda leitura.** A listagem, um inspect, o log, a rodada de stats, o firewall e os
+trabalhos da fila chegam em `Readings`, que a porta tem. A vista guarda onde está — o tipo, a coluna,
+a linha escolhida em cada tipo pela identidade, a aba, o cursor do detalhe, a pergunta —, e dado que
+chega nunca move o cursor. `View::wants` diz o que tem de viver para o que está na tela, e o
+`containers_feed::Feed` obedece: o log (`logs -f`) e o stats são filhos só enquanto a aba deles
+aparece, e largar a metade `Held` do `Lines` mata o filho (o leitor, bloqueado na thread, vê o fim).
+`podman events` vive enquanto a vista está aberta, e cada evento pede uma listagem — uma rajada vira
+duas, nunca uma por evento. Nada consulta por relógio.
+
+**O que vai para onde.** Iniciar, parar, reiniciar e remover rodam numa thread do feed (segundos);
+puxar, construir e compose vão para a fila como `Work::Container` (minutos, sobrevivem à porta, e a
+linha da fila diz o passo `STEP 3/7` do build ou as camadas do pull, sem inventar porcentagem; sem
+pausa, porque um `SIGSTOP` seguraria o lock do armazenamento do podman). O shell dentro de um
+container abre no terminal (`exec -it … bash || sh`), e a porta do rodapé se fecha antes, como o
+lançador. Remover, podar e o `down` do compose perguntam com o "não" primeiro, e qualquer outra tecla é
+"não". Os valores do ambiente ficam escondidos até pedidos (`C-e`), porque um token no ambiente é um
+segredo na tela — e também na aba Inspeção, que traz os mesmos valores no `Config.Env` e no `-e` do
+`CreateCommand`: a mesma chave os mostra lá, e o que é copiado é o que está na tela.
+
+**Os arquivos de um projeto compose.** O `podman-compose` grava `config_files` como recebeu (em geral o
+`compose.yaml` relativo à pasta onde rodou) e `working_dir` como a pasta do primeiro arquivo, real. O
+`ronoctua-containers` resolve um contra o outro na leitura (a pasta onde rodou é `working_dir` menos as
+pastas que o primeiro arquivo nomeou) e, se não dá para saber, não responde arquivo nenhum: rodar o
+projeto com parte dos arquivos seria outro projeto. O trabalho da fila leva todos os arquivos e o nome
+do projeto (`--project-name`), porque um projeto feito com override ou com `-p` é outro sem eles. Uma
+recusa do podman tem frase fechada na tela, e as palavras dele vão para o log (`failed`).
+
+**Portas e firewall.** Uma porta publicada diz o que o firewall da pessoa faz com ela, lido dos dois
+arquivos que ela lê (`ronoctua_security::firewall`): a primeira regra que casa decide, como na tabela,
+e uma regra restrita a uma origem ou interface não decide por "todos" — liberada por ela, a porta é
+"liberada só para alguns endereços". Cada veredito que precisa explicar diz a sua frase uma vez (com
+escudos nenhuma regra libera nada, e a frase é outra), o valor quebra linha em vez de ser cortado, e a
+linha "As regras do firewall" leva ao `security-firewall`. Os dois arquivos são vigiados enquanto a
+vista está aberta (`Notice::on_file`): uma regra acrescentada lá muda o veredito aqui.
+
+**O módulo `containers` do brain** conta as pastas que o crun mantém por container rodando em
+`$XDG_RUNTIME_DIR/crun` (o caminho vem do `ronoctua_containers::runtime_dir`), por inotify: nenhum
+processo, um `readdir` por evento, exato porque o crun apaga a pasta na limpeza. Os descartados
+estão no `why.md` dele. A marca (`Watching`, com a contagem) só existe enquanto algo roda, e o clique
+nela roda um comando do shell pelo nome (`MarkId::opens`, `containers-open`) em vez de abrir a página
+do módulo: o módulo tem um app próprio e não nomeia nada do shell além do id do comando. O layout do
+crun é privado; o `containers-vm` o fixa.
+
+### Os pertences — a configuração da pessoa num repositório dela, cifrada (`LEADER s v`)
+
+**O que é.** Um repositório git privado que a pessoa indica guarda, cifrada, a configuração dela
+(`~/.config/ronoctua` e o que ela acrescentar), e a primeira sincronização de uma máquina nova a
+devolve. Três peças: o crate `ronoctua-belongings` (as formas e o motor), a vista (`belongings.rs`,
+duas portas) e o lembrete do cérebro (`modules/belongings-reminder`).
+
+**O formato é `age` por arquivo, e só o `key.age` paga o scrypt.** O repositório tem `FORMAT` em
+claro, `key.age` (uma identidade X25519 cifrada pela SENHA com scrypt), `index.age` (caminhos, modos,
+hashes, máquinas — cifrado para a identidade) e `blobs/<id aleatório>.age`, um por arquivo. Uma
+sincronização paga um KDF; trocar a senha recifra um arquivo pequeno e vale para todas as máquinas; e
+a recuperação sem a distro é o CLI do `age` (`age -d key.age`, depois `-i`). Os ids aleatórios
+escondem nomes e caminhos; o que vaza (quantos arquivos, tamanhos, horas dos commits) a tela diz. Os
+commits são de `ronoctua-belongings <noreply@localhost>`, e o nome da máquina só existe dentro do
+índice cifrado. Um teste lê o repositório remoto inteiro atrás de qualquer byte de caminho, nome ou
+conteúdo em claro.
+
+**Caminhos lógicos.** O índice guarda `config/…`, `state/…`, `home/…`, resolvidos em cada máquina
+contra as raízes DELA (`places::Places`): o laço `.#dev`, com raízes `ronoctua-dev`, restaura nas
+dele, e nenhum caminho absoluto de ninguém entra no repositório.
+
+**O git é transporte; a mescla é nossa, em três vias por caminho.** Base = `last.json` (o que a
+última sincronização desta máquina deixou), nosso = os arquivos, deles = o índice. Mudou de um lado
+só: leva. Dos dois, diferente: conflito — e apagado de um lado com mudança do outro também. Sem base
+(primeira vez), nada é apagado, e o que difere já vem marcado "levar o do repositório": é a
+restauração. Sempre um commit por cima do `origin`, push fast-forward; outra máquina que empurrou
+antes manda tudo de volta ao fetch, até três vezes (`Why::Raced`). Nada é escrito aqui antes de o push
+entrar, então uma corrida perdida deixa a máquina como estava. O que um pull sobrescreve ou apaga vai
+antes para `replaced/<carimbo>/` (os três últimos): o gesto se desfaz. Arquivo privado volta `0600`
+desde o nascimento (`create_new` + modo); link volta link. Arquivo ou pasta que esta máquina não
+consegue ler — ou que está numa pasta que ela não lê — não está nem presente nem ausente: fica como
+está dos dois lados (senão a pasta ilegível de uma máquina apagaria os arquivos de todas).
+
+**O que a pessoa acrescentou viaja como RAIZ, não como os arquivos que tinha.** O índice guarda as
+raízes (`roots`) e toda máquina as percorre, então um arquivo novo dentro de uma pasta acrescentada em
+outra máquina também vai. "Deixar de guardar" é sempre um "tirado por você" (`stop_keeping` nunca só
+esvazia `extra`, senão a raiz continuaria no índice e a sincronização seguinte mandaria tudo de novo
+com a página dizendo que não guarda). Uma máquina que SEGUIA a raiz (o `last.json` guarda as que ela
+seguiu) e a tira a remove do repositório para todas; as outras ESQUECEM o que tinham dela — "deixar
+de guardar" não é "apagar" — e uma que a acrescentou ela mesma a devolve. Uma raiz acrescentada de
+novo em outra máquina, debaixo de um "tirado" antigo desta, não é tirada outra vez: esta não a seguia,
+e por isso o vai e volta para. Entre as escolhas da pessoa vale a MAIS ESPECÍFICA (`excluded_here`):
+uma pasta guardada dentro de uma tirada é guardada. "Guardar" um caminho que a tabela já guarda só
+desfaz a exclusão, nunca vira "acrescentado por você" — senão viajaria como acréscimo e deixaria um
+conflito manter os dois lados de `~/.config/ronoctua`, o que `Decision::allowed` também recusa.
+
+**Uma execução por vez** (`running.rs`). Toda execução usa o mesmo clone, e a primeira coisa que faz
+nele é deixá-lo igual ao remoto (`checkout -f`, `clean -fdx`): duas ao mesmo tempo jogam fora os
+blobs novos uma da outra antes do `git add`, e o índice empurrado cita blobs que não existem, com as
+duas dizendo que sincronizaram. Por isso `prepare`, `apply`, `abandon` e `rekey` seguram um `flock`
+em `state/belongings/run.lock` do começo ao fim (o kernel o solta quando o processo morre, de qualquer
+jeito), e a que o encontra preso é recusada (`Why::Busy`) sem tocar em nada: nem na senha que a outra
+usa, nem no status que ela vai escrever. A porta pergunta sem esperar (`running::busy`) e recusa a
+segunda sincronização, aplicar, desistir e trocar a senha com a mesma frase; uma sincronização
+preparada também recusa uma nova, que jogaria fora as decisões já tomadas.
+
+**Pela fila, e o `age` fora do rodapé.** O CLI (`rust.belongings`, extraído) roda como filho da fila
+(`Work::Belongings { op }`: `prepare`, `apply`, `abandon`, `keygen`, `rekey`), no molde do software.
+A porta pede a senha na sua própria linha, escreve-a num arquivo `0600` no runtime e manda a ordem; o
+CLI lê e apaga — também em toda recusa antes de começar (sem repositório, sem acesso, nada para
+aplicar), menos a senha de uma sincronização que espera decisões; e a porta apaga o que escreveu
+quando a fila não aceita a ordem. Na primeira sincronização de uma máquina a senha é pedida duas
+vezes: num repositório vazio ela vira a do `key.age` para sempre. Nada secreto cruza o soquete da
+fila: a ordem é um verbo, o plano e as decisões são arquivos ao lado da senha. A vista, o instalador e a fila linkam só as formas (`prefs`); o `age` fica
+no binário extraído.
+
+**O arquivo é o broadcast.** As duas portas leem os mesmos arquivos (`Readings::read`) e vigiam três
+lugares: o `belongings.json`, a pasta de estado (`status.json`, `last.json`) e o runtime (senha,
+decisões, sessão). As decisões ficam AO LADO da sessão e não dentro dela porque o inotify não é
+recursivo: uma pasta que as duas portas vigiam desde o nascimento é o que faz uma decisão tomada no
+rodapé aparecer na janela.
+
+**Conflitos: todos listados, cada um decidido.** Caminho, tamanho e hora dos dois lados, a máquina que
+mudou o do repositório; por item "manter o desta máquina", "levar o do repositório" ou — só no que a
+pessoa acrescentou, porque os arquivos da distro não sabem ter dois — "manter os dois" (o do
+repositório fica ao lado, com o nome da outra máquina). `RET` num texto mostra o diff do próprio git
+(`diff --no-index` pelo `base()` endurecido) a partir do primeiro `@@` — o cabeçalho do git nomeia os
+arquivos da sessão, não o caminho decidido —, com os papéis de diff e a linguagem do arquivo; as
+decisões valem também numa linha do diff; em lote, "todos: …". Uma sincronização preparada espera: nada é escrito até "aplicar".
+
+**O que vai é uma tabela com motivos** (`assets/belongings.nix` → `nix/belongings.nix` → Rust): a
+pasta de configuração inteira menos rascunhos, pids, fragmentos gerados, o acesso (chave, token,
+endereço — uma chave no repositório que ela abre seria uma chave que qualquer um com a senha usaria)
+e o próprio estado; a identidade do Syncthing fora por padrão (duas máquinas com o mesmo id colidem).
+O censo `stores` lista todo arquivo que um `Store` escreve, com veredito e motivo: o check
+`belongings-manifest-covers-the-stores` recusa um store fora do censo, e o teste do crate recusa um
+veredito que as regras não produzem — um arquivo novo de preferência é uma decisão, não o que um glob
+deixou cair.
+
+**Acesso.** Uma chave ed25519 de implantação por máquina (`ssh-keygen -N ""`, `0600`, pela fila; a
+metade pública na tela para copiar) ou um token `0600`, que chega ao git só pelo caminho
+(`GIT_ASKPASS`, `ronoctua-git`). O endereço nunca leva credencial (`repository_is_plain`: recusa
+`user:pass@`, `http://`, `file://`).
+
+**O instalador pergunta o repositório** (a 15ª pergunta, opcional) e o escreve na HOME da pessoa,
+dona dele (uid lido do `/mnt/etc/passwd` depois do `nixos-install`), nunca no `host.nix`, que
+descreve a máquina e vai para backup. O `write_out` passou a nascer com o modo (`create_new` + modo,
+por um rascunho renomeado).
+
+**O cérebro só lembra** (`belongings-reminder`, ver o `why.md`): uma sincronização pede a senha, e
+nada que a máquina faz sozinha pode pedir. Um relógio só para `última + período`; marcas para
+decisões esperando, falha, primeira vez e vencido; o clique é um COMANDO do rodapé, que o id da
+marca nomeia (`MarkId::opens`, o mesmo caminho das marcas dos containers), não uma ação do módulo.
+
+
+### Apps padrão e o `mimeapps.list`
+
+- **O padrão vem antes de toda declaração.** O `apps::opens` lê primeiro os `[Default Applications]`
+  (`ronoctua_apps::defaults`), na ordem da especificação: `$XDG_CONFIG_HOME`, cada
+  `$XDG_CONFIG_DIRS` (o `/etc/xdg` da distro), `$XDG_DATA_HOME/applications` e cada
+  `$XDG_DATA_DIRS/applications` (o do player), com o `<desktop>-mimeapps.list` antes do comum em
+  cada pasta. Ganha o primeiro id que está no catálogo; um que não está instalado é pulado. Só o tipo
+  exato (ou um apelido dele) conta: o padrão do pai não responde pelo filho, porque foi pela herança
+  que o `.step` (`model/step`, filho de `text/plain` no banco) ia para o editor. Lido a cada
+  abertura, sem cache: um padrão que a pessoa muda vale na próxima.
+- **O id do OrcaSlicer é lido do pacote na avaliação** — a decisão e o custo estão na seção da
+  varredura do sistema, mais abaixo. O `system.checks` confere que a entrada é aplicação e declara
+  `model/stl`; o `models-open-in-orca` prova o caminho inteiro com o `ronoctua-shell opener`, e prova
+  também que sem a lista o `.step` chega ao editor.
+- **Os lookups e os diretórios do player pedem com pass**, cunhado do `consent.json` na hora do
+  pedido: `request_let` para o host do pedido, ou `request_under(pass, domínio, …)` para um host que
+  a parte consentida nomeia sob o próprio domínio — os servidores do radio-browser sob
+  `radio-browser.info` (o nome que a linha do diretório permite), a sessão e o link de download do
+  OpenSubtitles sob `opensubtitles.com`, com o pass do host que a linha do serviço permite
+  (`api.opensubtitles.com`). O `request_under` exige que o host do pass E o do pedido estejam sob o
+  domínio, e recusa domínio de um rótulo só. Quem grava o consentimento é o player (a migração dele
+  para o `consent.json`); este lado só o lê. Um pedido sem pass não sai, e o motor diz isso como a
+  linha de consentimento (`Trouble::Off`, "Permitir {host} e perguntar de novo"), cujo aperto
+  permite e pergunta de novo — nunca como uma falha sem saída.
+- **Sem pass, e por quê, função por função** (`network-asks-with-a-pass`, `FUNCTIONS`): só a fonte
+  da pessoa no player (`get_own`: colar é o consentimento, a lista IPTV costuma ser `http`, e os
+  pôsteres vêm de qualquer host que ela nomeia).
+- **Os catálogos dos programas da pessoa pedem com pass** (2026-10-04). Todo pedido do
+  `ronoctua-software` cunha o pass do primeiro host na hora (`net::pass_for`) e recusa com
+  `NotLet` antes de qualquer soquete; ligar uma fonte no `software.json` não é consentimento. Cada
+  catálogo declara os hosts dele (`flathub::HOSTS`, `fdroid::HOSTS`, `appimagehub::HOSTS`,
+  `dashboard::HOSTS`), e a central desenha, sob a chave da fonte ligada e não permitida, a linha
+  "Perguntar a {hosts}" (`consent_rows`), nas duas portas. A página de um web app que a pessoa
+  DIGITA vai com pass: digitar é o consentimento, gravado no `consent.json` antes de perguntar
+  (`icons::typed_pass`); um manifesto ou um ícone que a página põe em outro host vai NU (sem
+  cabeçalho e sem corpo nossos) no pass da página (`web::request_named`), como um redirecionamento
+  — ninguém poderia permitir um host antes de a página nomeá-lo. Uma figura que um catálogo põe num
+  host fora da lista dele não vem (a linha fica com o glifo).
+
+### fast-access — a busca de tudo, em três portas
+
+Uma caixa (`LEADER d`, `Super+d`) acha aplicativo, comando, arquivo pelo nome e pelo que está escrito
+nele, página de manual, programa a instalar, ícone, conta, moeda, fuso, vídeo do catálogo e do
+YouTube, e a web. A vista é uma (`fast_access::View`), e as três portas a desenham: a região do
+rodapé (`LEADER d d`), a janela (`LEADER d w`, e `LEADER SPC` flutuando sobre a sala inteira) e a
+coluna (`LEADER d c`). O que cada porta segura em volta da vista é o `fast_access_window::Search`:
+a alimentação (`fast_access_search::Feed`), o chão das fontes do processo (o catálogo de apps, os
+comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transforma o que a vista pede
+(`Errand`) no que a porta faz (`Out`).
+
+- **As fontes têm três tempos.** O que mora no processo responde na tecla, antes de qualquer thread:
+  conta (`2+2` sem prefixo), apps, comandos, ícones, recentes. O índice responde numa thread de
+  "o último vence" (a pergunta numa vaga; um commit do escritor recarrega e pergunta de novo). A
+  rede espera 250 ms parada, uma thread por fonte, cada uma com o seu `Stop` (`web::Abort` fecha o
+  soquete; o yt-dlp é morto): a tecla seguinte puxa todos, e a vista que fecha também. Os `Stops` de
+  uma geração viajam COM a pergunta dela até a thread da rede (tirados juntos, sob uma trava só), e
+  são um conjunto só entre clones: um pedido feito depois de puxados nasce puxado — a tecla que chega
+  enquanto a thread começava a pergunta velha a encerra assim mesmo. As cotações do `/$` saem pelo
+  mesmo caminho (`rates::fetch_stoppable`); se não vêm, a seção diz por quê, ou usa as cotações
+  velhas do disco, datadas no detalhe (`calc-rates-of`).
+- **A geração.** Cada mudança do que está digitado anda a geração; resposta de outra geração é
+  descartada. Uma seção que ainda espera diz "procurando"; uma que não pôde responder diz por quê;
+  nada achado em lugar nenhum diz isso com as palavras digitadas.
+- **O cursor guarda o `HitId`**, nunca o lugar: uma resposta que chega acima dele não o move, e
+  dado nenhum move a página — só a tecla de alguém a segue. Antes de alguém mover o cursor, o que a
+  vista mostra como dele é guardado a cada dado que chega (`View::hold`): a seção de ícones que lê as
+  tabelas depois do índice não toma o realce, o detalhe nem o `RET`. Uma tecla nova começa do topo.
+  A varredura de aplicativos responde só a seção deles, no lugar (`apps_are`) — sem geração nova.
+- **"Tudo" pede um pedaço, o escopo pede a subsequência.** Seis letras soltas casam metade do
+  registro; em "tudo", app e comando só entram com o que foi digitado inteiro num nome, e cada seção
+  tem a sua cota (`most_of`). Com `/:` ou um app procurado de propósito, vale a ordem do `M-x`.
+- **Prefixos**: uma barra e uma letra estreitam (`/y` YouTube, `/g` ícones, `/t pt` tradução…); a
+  barra sozinha lista todos, e uma linha deles estreita a caixa. `/arquivo` é uma palavra com barra,
+  não `/a`.
+- **O layout**: resultados e detalhe lado a lado, separados pelo `chrome::divider`, cujo clique troca
+  a largura do detalhe entre dois tokens; numa porta estreita o detalhe desce para um bloco fixo
+  embaixo, com barra própria, e o clique na régua troca a ALTURA dele entre dois tokens (`belowLines`,
+  `belowWideLines`). Ao lado ou embaixo se decide pela largura normal, então o clique só muda a
+  medida; onde ele não mudaria nada, o divisor não é controle (não acende, não pega o clique). O grid
+  do YouTube, o cartão de palavras e a lista da barra tomam a área inteira, e `C-w` dá a área ao
+  detalhe. O grid anda por fileiras inteiras (a roda, as teclas e a barra pousam no começo de uma —
+  `Lay::snap`), espalha a sobra de células pelas colunas, e uma figura nunca passa da última linha
+  dos resultados. Os ícones são exatamente três faixas, uma por coleção (Nerd Fonts, Lucide,
+  Unicode), sempre nessa ordem — a de uma coleção sem nada diz isso na própria linha —, uma página
+  cada; `‹`/`›` só aparecem quando há ícone escondido, com uma célula de ar; sob o ponteiro, um ícone
+  diz a coleção e o nome dele. Virar a página pelo clique leva o cursor junto quando o ícone dele
+  some. Rótulos e valores do detalhe quebram em linhas e nunca são cortados.
+- **O detalhe de um arquivo é o painel do gerenciador** (`inspection::Panel`): a prévia (filme toca,
+  forma gira) e a folha editável embaixo — renomear, a data, uma etiqueta, um detalhe, a permissão,
+  a localização (com a pergunta, `não` primeiro) —, pelas mesmas funções que o gerenciador chama.
+  As barras do painel são as do gerenciador (`Section::bar_box`, `wide_bar_box`, `time_track_box`),
+  desenhadas, pegas e arrastadas pelo mesmo retângulo (`fast_access_detail::bars_of`); a roda rola o
+  painel sob o ponteiro; o transporte do filme aparece sobre a figura com o ponteiro, como no
+  gerenciador. Um fato que a coluna corta é dito inteiro na linha sob o ponteiro.
+  Um ícone abre a página do app de ícones; um comando mostra as teclas; um manual, as primeiras
+  linhas; uma conta, as outras unidades.
+- **O que abre sai pelo rodapé.** Uma janela que abre um programa e fecha no instante seguinte
+  levaria o programa junto; então toda abertura é uma ordem para o rodapé (`Ui::hand_over`), e a
+  janela só fecha quando o rodapé a recebeu. No rodapé a ordem roda na volta seguinte do laço,
+  depois de a vista fechar (`fast_access_order`). `RET` fecha a janela e a vista do rodapé; a coluna
+  fica.
+- **Vídeo da web pergunta onde toca** (player ou quiosque do Chrome, com "lembrar").
+- **Um programa a instalar** mostra o que o motor da central lê dele (`ronoctua_software::details`:
+  resumo, versão, licença, site, comando, tamanho, selos) e se instala PELA FILA
+  (`Work::Software`), depois das perguntas da central, nas palavras dela: licença não livre que a
+  pessoa ainda não deixou, download acima do limite dela — cada uma no detalhe, `não` primeiro. Um
+  selo que recusa (quebrado, inseguro) diz por quê e não instala. `C-RET` abre a central nele.
+- **A janela pronta** (`park` no `fast-access.json`): fechar entrega o papel da janela
+  (`Shell::Parked`), fecha o leitor do índice com a alimentação e escuta um soquete
+  (`ronoctua-fast-access.sock`) — só enquanto está guardada. O próximo `ronoctua-shell fast-access`
+  manda as palavras numa linha e termina; a mesma janela volta com elas.
+- **O consentimento é uma linha só** (`consent_rows`): "Perguntar a {hosts}", o porquê de quem pede
+  e `C-a`; a calculadora usa a mesma. Sem pass, nenhuma fonte sai para a rede.
+- **"Tudo" também vai à rede, só aos hosts já deixados** (2026-10-04). Depois da mesma pausa, a busca
+  sem prefixo pergunta à web e ao YouTube cujo host a pessoa já deixou num `/w` ou num `/y`, e nunca
+  oferece a linha de consentimento: quem digitou sem prefixo pediu tudo, não a web, e uma pergunta de
+  consentimento a cada palavra seria a rede pedindo por si. A web entra na seção dela depois da linha
+  do quiosque; o YouTube entra nos vídeos, depois dos do catálogo (os Shorts ficam fora, salvo pela
+  chave do `/y`), sem figuras; uma fonte que recusa fica calada, e a seção fica com o que as outras
+  acharam. O SearXNG da pessoa
+  (um endereço `https`) e a chave do Brave (num arquivo `0600`, nunca no `fast-access.json`) se
+  digitam nas linhas de ajuste da caixa vazia, nas duas portas.
+- **As figuras do YouTube** ficam numa pasta própria (`fast-access/thumbs`, sob `webThumbsMiB`), pelo
+  mesmo escritor com teto do catálogo, nunca na pasta dele.
+- **O brain liga o índice** pelo módulo `search-index` (e não `index`: o selo procura o id como
+  palavra, e `index` está em mil arquivos que não são dele). A marca só existe enquanto a unidade
+  constrói o índice do zero; a página diz o estado, quantos documentos, o peso e o último commit, e
+  muda o que ele lê (pastas, conteúdo, ocultos, exclusões) no `index.json`. A unidade escreve o
+  próprio estado (`status.json`), e o brain o lê pelo inotify da pasta.
+
+### O ranking no player (`player_ranking.rs`, `LEADER p k`)
+
+- **A porta lê o catálogo de vídeos sozinha**, como lê o de canais por tema: `Catalog::open_ro`
+  numa thread dela, que vigia o `-wal` e pergunta o `data_version` antes de reler — o daemon do
+  player nunca vê o banco, e a página existe sem player rodando. Sem banco, a página é uma frase que
+  ensina onde se adicionam canais (a sequência que a leader ensina); banco ilegível diz por quê.
+- **Uma recusa é uma resposta, e fica.** A página guarda a que página a resposta é (`answered`),
+  lida ou recusada, e só pergunta de novo quando a página muda ou o catálogo se move — a vigia do
+  `-wal` relê o que foi pedido. Perguntada a cada `settle`, uma máquina sem catálogo lia, acordava e
+  repintava o rodapé sem fim. Uma escrita desta porta (ocultar, apagar) marca a página como velha, e
+  ela é relida sem piscar para "lendo"; um commit que chega junto com um pedido do outro tipo relê
+  os dois.
+- **Um vídeo entra na fila titulado e uma vez**: `Put { Named, once: true }`, e o "já está na fila"
+  é a recusa do daemon virando a pergunta da vista com o "não" primeiro (`player::overruled`,
+  `Told::Asks`) — o mesmo caminho do resto das portas, nada reimplementado aqui.
+- **O `⋯` de cada vídeo** (e `e`) abre a página do vídeo: tocar agora, pôr na fila, Chrome
+  quiosque, baixar, ocultar e apagar. O quiosque é do rodapé (`kiosk-open`, pela ordem no socket
+  quando a porta é janela ou coluna); baixar é a fila de transferências; ocultar e apagar são as duas
+  escritas que um leitor do catálogo pode fazer (`Catalog::hide`/`delete`), numa thread, e o
+  resultado volta como `Told::Ranking` — apagar pergunta antes, ocultar não (a porta do catálogo de
+  vídeos desfaz).
+- **Lista ou miniaturas** (`L`, o glifo do título): a lista é uma linha por vídeo com a miniatura à
+  cabeça (`player_posters::strip`), a grade são as caixas do catálogo de canais
+  (`player_posters::tiled`, as medidas `space.videoMetrics.*`, as mesmas miniaturas). Na grade, a
+  pontuação e o `⋯` ficam numa linha INERTE sob o título: um controle na linha que é a do vídeo
+  valeria para a coluna dele em toda a altura da caixa, e o clique na figura abriria a página. Essa
+  linha acende só o `⋯` sob o ponteiro (`Lit::Controls`), porque o clique só pega ele.
+- **Um controle é pego na linha em que é desenhado.** Uma linha de vídeo da lista tem seis ou sete
+  linhas, e o `⋯` está na primeira: `player_rows::controls_under`, `control_under` e
+  `View::clicked_at` só tomam um controle na linha dele — no resto da linha o clique é da linha.
+  Vale para toda vista: todo construtor põe os controles na primeira linha.
+- **A linha da lista acende as palavras, nunca a figura** (`Lit::From`, lido pelas duas portas em
+  `player_rows::lighting`): da coluna do texto até a borda, em todas as linhas do vídeo, onde quer
+  que o ponteiro esteja na linha — com miniatura ou sem, igual. Antes, a linha com miniatura era
+  "figura" e não acendia nunca, e a sem miniatura acendia por cima da caixa vazia.
+- **O que se diz sob o título vai em partes** (canal e pontuação; idade e duração): juntas numa linha
+  quando cabem, uma por linha quando não — um número nunca se separa da unidade (`7000` / `points`).
+- Na grade, o cursor guarda o vídeo da CÉLULA (`ranking_here`), não o da prateleira: o ranking que
+  se reordena põe outro vídeo naquela célula, e o `RET` punha na fila um vídeo que ninguém escolheu.
+- As miniaturas são arquivos que o catálogo já guardou; a porta só as decodifica fora do laço
+  (`Posters::look_files`), com a chave levando arquivo, pixels e paleta.
+- Foto: `photograph --ranking <catalog.sqlite>` (lido `mode=ro`; o que esconderia, apagaria ou
+  baixaria fica no `Outbox`).
+
+
+### A varredura do shell (leva de 2026-09-30, X1) — o que mudou e por quê
+
+**O redimensionador diz, sob a mão, o que a alça faz.** Uma porta responde `Content::cursor_at` com
+uma forma nossa (`cursor_shape::Look`: seta, dois sentidos, canto), e a porta pede a forma ao
+compositor só quando ela MUDA, com o serial do último `enter` — o único que o protocolo aceita. As
+alças são os mesmos retângulos em que as bordas são desenhadas e pegas (`resizer::grips`), e durante
+um arrasto a seta é a da alça arrastada, onde quer que a mão esteja. `p` e `P` andam pelos
+**tamanhos prontos** (`space.resizerPresets`, as salas das telas mais comuns), pulando o que não cabe
+inteiro na tela cortada — espremer um tamanho pronto seria um tamanho que ninguém pediu. O último
+tamanho fica num arquivo de estado (`resizer-last.json`, escrito a cada escrita do corte), e o
+redimensionador ligado de novo começa nele. A captura (`capture.rs`) toma a SALA por "a tela
+inteira" enquanto o corte vale para aquela saída, e um retângulo perde o que cai sob as cortinas: as
+cortinas são a ferramenta, não a tela testada. Um retângulo inteiro sob elas não é uma captura
+desistida: a sobreposição imprime a recusa pelo nome (`capture::OUTSIDE_THE_ROOM`) e o rodapé a diz.
+Do mesmo jeito, `p` numa tela em que nenhum tamanho pronto cabe diz isso na linha da cortina.
+
+**As telas se empilham e encostam.** `S-↑`/`S-↓` movem a tela da linha de posição na vertical — `↑`/`↓`
+são o cursor, e a família "mesma tecla, outro sentido" já é a do gerenciador. As setas não andam 10 px:
+param nas bordas dos vizinhos (ao lado, alinhada pelo começo ou pelo fim, acima, abaixo —
+`display::stops`), e passam um `NUDGE` além da última borda, para que haja sempre para onde ir. Uma
+tecla SEGURADA anda pelas bordas e não escreve: cada escrita é uma releitura da configuração inteira
+do compositor, e a repetição seria vinte e cinco por segundo; a porta diz que a tecla é repetição
+(`Ui::repeating`), a vista guarda a tela devida e a escreve uma vez, quando a tecla sobe
+(`View::let_go`). O rodapé não repete teclas, então lá cada toque é um gesto.
+
+**Uma tela apagada mostra o que está gravado nela.** As linhas de "A imagem" trocavam o valor pela
+frase de que a tela está apagada, e um modo, uma escala, um giro e um lugar gravados para uma tampa
+fechada só se liam no `display.json`. Agora cada linha mostra o valor GRAVADO, e uma frase acima diz
+que é isso; as setas continuam recusadas (não há imagem para prever), e o `a` devolve o ajuste ao
+compositor gravando na hora — sem prévia, porque não há o que cegar.
+
+**A profundidade de cor é uma linha da ficha, gravada.** `render_bit_depth 6|8|10` vai no fragmento
+(`Wanted::depth`, só um valor que o compositor aceita — outro derrubaria o parse do arquivo inteiro).
+É escrita na hora, como a taxa variável: uma profundidade que o monitor não aceita é desenhada numa
+que ele aceita (`scroll-output.5`). A LEITURA DE VOLTA é a do arquivo: o `get_outputs` da fonte fixada
+não tem campo de profundidade (`sway/ipc-json.c`), e a gramática da linha é provada no build
+(`display-fragment-validates`). Por isso, numa tela acesa, o rótulo diz "profundidade PEDIDA": as
+outras linhas dizem o que a imagem é, e esta só pode dizer o que foi pedido.
+
+**Uma recusa tem nome nas quatro vistas.** Telas, energia, rede e rádio diziam a recusa sem nome com
+as palavras do daemon ao lado (`$words`) — inglês numa linha em pt-BR. Cada erro que chega à linha de
+mensagem virou variante com chave (`ronoctua_display::Refusal`, `ronoctua_power::Refusal`,
+`ronoctua_bluetooth::Refusal`, `ronoctua_network::refusal::Refusal`, `ronoctua_tunnel::Refusal`), e as
+palavras vão para o journal. A única exceção é a linha que o Tor recusou, citada da resposta dele: é o
+texto que a PESSOA colou, devolvido, e a única coisa que diz qual ponte estava errada.
+
+**Os tamanhos de janela são tokens** (`space.window`), e o terminal declara o dele em CÉLULAS
+(`space.terminal`, 80 × 24): a janela é o que cabe nessa grade no tamanho do texto de agora.
+
+**O ar de uma figura é fração de célula** (`files::picture_air`, `space.files.pictureAirPct`), em
+pixels inteiros: o argumento do número sempre foi em células.
+
+**Um teclado ligado com a janela aberta aparece.** O buffer do teclado vigia `/dev/input` (inotify):
+o `devtmpfs` cria cada `eventN` por `vfs_mknod`, que avisa o inotify como qualquer arquivo, e uma
+rajada (um teclado são vários nós) é um aviso só (`Pace::Coalesced`). Nenhum socket udev e nenhuma
+dependência nova: é o vigia que a árvore já tem.
+
+**O país da coordenada acende pelos anéis**, nunca pela caixa (`globe::home_rings`): a caixa da
+Holanda (as ilhas do Caribe) e a da Rússia (toda longitude) contêm Londres.
+
+**Toda textura nasce no pixel físico** e é desenhada na caixa lógica: o ícone do localizador e a
+figura de um programa (`Footer::icon_side_px`, a escala maior do rodapé), o `Command::Svg` de um
+buffer (`svg_side_px`), e o filme, a peça que gira e o globo do gerenciador (`Panel::preview_scale`,
+`files::globe_texture_at`). A prévia do clipboard não precisava: é a imagem copiada no tamanho dela.
+
+**A janela do clipboard segue o rodapé** (`LEADER LEADER c`; `c w` na árvore inteira). O histórico é
+um `VecDeque` do rodapé, e uma janela com vigia próprio teria um segundo histórico. Ela pede
+`clipboard-follow` pelo socket de controle e mantém a conexão: o rodapé manda o histórico inteiro
+(um JSON por linha, imagens em base64) na hora e a cada mudança, montado na thread de quem segue —
+o base64 de uma imagem nunca sai no laço do rodapé, e sem janela aberta isso custa uma soma. O que
+as teclas da janela fazem volta como `clipboard-act <geração> <json>` e o rodapé executa pelos mesmos
+recados da vista dele; um ato para uma geração que já passou é recusado, porque o índice seria de
+outra entrada. A geração anda quando as ENTRADAS mudam, não numa leitura do ClipCascade, que não move
+índice nenhum. O `Debug` de um ato nunca imprime a senha de um login.
+
+**O que o rodapé responde a um ato da janela é dito na janela.** Enquanto executa um ato que veio de
+uma janela, o rodapé desvia para ela o que diria na própria linha (`clip_answering`): cópia feita,
+recusa, ClipCascade fora — e o ato recusado por geração velha volta com a frase que diz isso. A
+resposta vai no próximo espelho inteiro (`Mirror::said`), não numa mensagem à parte: a regra de um
+JSON inteiro por linha continua valendo. O cursor do rodapé, que os recados usam para endereçar a
+entrada, é devolvido depois.
+
+**A prévia do clipboard é linhas da vista, nas duas portas.** O rodapé pintava o texto, a imagem e o
+QR no topo da metade direita, por cima do título "Item" e dos fatos dele; a janela pintava embaixo da
+última linha, e com um histórico de verdade (até cinquenta entradas) o `q` não desenhava nada nem
+dizia nada. Agora a metade direita descreve a entrada do cursor (ou a mais nova, com o cursor na
+sincronização) e, sob os fatos, traz o texto dela como linhas, ou deixa linhas vazias
+(`space.clipboard.previewLines`) para a imagem ou o QR. As duas portas pedem à vista o mesmo
+`picture` e o põem com o mesmo `picture_area`; com a lista rolada para além dessas linhas, a caixa
+vai para as primeiras linhas visíveis da cauda da metade direita, que é vazia por construção. Sem
+espaço nenhum na tela, o `q` diz isso.
+
+**Um rodapé que trava é um rodapé que morre.** A unidade tem `WatchdogSec=30` e `NotifyAccess=main`,
+e o rodapé diz `WATCHDOG=1` no tique de um segundo que o laço já tinha (`crate::watchdog`) — do laço,
+porque uma thread de fora pingaria sobre um laço morto. Um processo parado (`SIGSTOP`) não recebe o
+`SIGABRT`; `TimeoutAbortSec=5` deixa o `SIGKILL` do systemd terminá-lo, e a falha
+(`Result=watchdog`) levanta a linha de vida como um crash. O que o rodapé lança (programas, portas,
+colunas, a captura) nasce sem `NOTIFY_SOCKET`, `WATCHDOG_USEC` e `WATCHDOG_PID`
+(`watchdog::unshared`): a variável é do rodapé, e o `remove_var` é `unsafe`.
+
+**A linha de vida pergunta ao Claude Code, e nada sai antes de ser visto.** `a` junta a unidade, o
+`Result=`, as últimas linhas do journal e o resumo do core dump numa thread, escreve o relatório num
+arquivo do diretório de runtime criado `0600`, o abre no console de resgate, e só então pergunta,
+com "não" primeiro (e `Esc`/`RET` respondem não). "Sim" abre o Claude Code no console, com um pedido
+na língua da pessoa que aponta o arquivo; "não" apaga o relatório. O Claude Code chega por caminho no
+store (`RONOCTUA_CLAUDE`, só onde os agentes estão instalados), nunca pelo nome: a unidade tem o
+`PATH` mínimo, e um `claude` sem caminho falharia dentro do console enquanto a linha diria que ele
+abriu. Sem o caminho, o `a` diz que o Claude Code não está na máquina antes de juntar qualquer coisa.
+
+**A faixa de notificação fica fora do teto da expansão**, por decisão: ela é transitória, e
+descontá-la faria a lista encolher e crescer sozinha enquanto uma notificação passa. O teto continua
+`FOOTER_LINES + brain_line()`.
+
+**Um estado diz a cor dele.** O tom de um estado (`accent`, `success`, `warning`, `error`) atravessa
+o socket de controle (`state <pid> <id> <tom>`) e o de cada buffer (`states`), e a modeline o pinta
+por `state_colour`; `standard` é a regra de sempre (quieto na base, verde fora dela). Uma janela
+nativa diz o estado dela por `Content::state`, e a porta o conta ao rodapé quando muda. O primeiro com
+tom próprio é a pergunta de permissão do gerenciador de arquivos, em `warning`
+(`a-state-wears-its-tone`).
+
+**Uma marca do cérebro abre um comando por um caminho só**: o id da marca o nomeia
+(`MarkId::opens`), tipado. O `command:<id>` escrito no `act` (os pertences) saiu.
+
+**O prefixo do minibuffer soma os submenus montados em runtime**: `LEADER w s-` com a lista de
+estados aberta, `LEADER ,-` no grupo do buffer (`pending_line`).
+
+**As configurações do rodapé cedem a toda vista que guarda trabalho** em `Footer::view()`: estavam
+acima do navegador git, dos ícones, da calculadora e do catálogo de vídeos.
+
+**O painel de fatos segue a troca de idioma ao vivo** (`files::View::speak`): a ficha é lembrada pelo
+assunto, e as palavras iam junto.
+
+**Quatro portas a mais no `photograph`**: a janela das telas (sobre cenas da câmera), a do clipboard
+(sobre entradas dadas), a cortina do redimensionador e a linha de vida (`scene_photograph.rs`) —
+a porta de produção, desligada, nada lido desta máquina.
+
+**O rodapé se fotografa** (`photograph --door footer`, `footer_photograph.rs`). Ele não é porta: é
+uma layer-shell por tela, montada só sobre uma conexão viva. Por isso a câmera monta o rodapé de
+produção pela mesma função do `run` (`assemble`) sobre um par de soquetes cujo outro lado é um
+compositor substituto, que anuncia `wl_compositor`, `zwlr_layer_shell_v1` e um `wl_output`, responde
+todo `sync` e devolve cada altura pedida (`set_size`) no `configure` que um compositor mandaria. A
+tela da foto guarda o quadro em vez de apresentá-lo (`Screen::photographing`), composto pelo mesmo
+laço de pintura, e não ganha GPU. O que o rodapé leria da máquina chega pelo caminho de verdade: a
+janela em foco como o evento do compositor, o estado e o grupo `,` dela por um soquete de buffer
+que a câmera serve, as telas como a leitura da thread, o histórico como a fila. A câmera roda de novo
+a si mesma com toda pasta XDG numa sala nova, porque mudar o ambiente do próprio processo é
+`unsafe`. Uma vista alimentada por thread (as telas) diz na foto que não tem leitor: nenhuma thread
+do `run` existe ali.
+
+### A varredura do sistema — rede, Bluetooth, região, câmera, sintaxe, fila
+
+- **Nomes na LAN vêm do `systemd-resolved`, por um crate só** (`ronoctua-resolve`, cobra
+  `one-resolve-boundary`). `ResolveAddress` com interface 0 e flags 0 pergunta DNS, LLMNR e mDNS de
+  uma vez: o DNS do roteador conhece as concessões, o LLMNR as máquinas Windows, o mDNS o resto.
+  "Sem nome" chega como ERRO (`NXDOMAIN`, `NoSuchResourceRecord`) e é lido como `Ok(None)`, nunca
+  como falha — senão todo celular quieto da rede apareceria como defeito. A vista pede só os nomes
+  das linhas que mostra, numa thread (`network::spawn`, `Lan::Name`), e guarda as respostas; uma
+  recusa (`lan-resolve-why-*`) é dita uma vez, embaixo da lista.
+- **Vizinhos IPv6 vêm do netlink** (`ronoctua_lan::neigh`, `RTM_GETNEIGH` por um socket
+  `NETLINK_ROUTE` do `rustix`): o kernel não tem arquivo como o `/proc/net/arp` para v6. Lidos no
+  mesmo ritmo das portas; um vizinho sem endereço de hardware (incompleto, falho) não conta como
+  presente.
+- **A latência é do roteador, sob pedido** (`Target::Latency`, `Errand::Measure`). A varredura
+  continua sem número, pela razão medida (o primeiro pacote espera o ARP, três segundos). Um aperto
+  manda três ecos ICMP e diz o mais rápido, o mais lento e quantos voltaram ("de 1,4 a 3,9 ms (3 de
+  3)").
+- **A senha do hotspot mora num arquivo `0600` no diretório de runtime** (`network::sharing`),
+  escrito por quem liga (`create_new` + modo, rascunho e `rename`) e apagado quando o hotspot cai.
+  Era isso ou `GetSecrets` no perfil ativo, que num perfil de sistema pode pedir autorização — e
+  nada que o sistema faz sozinho pode perguntar. O arquivo é o broadcast: as duas portas leem o
+  mesmo, e reabrir a vista não perde a senha. É uma senha em tmpfs, apagada com a sessão. Quem
+  apaga é a PORTA, não a vista: cada porta guarda um sinal "havia hotspot", atualizado a cada
+  leitura do daemon com a vista aberta ou fechada (`sharing::follow`), e a vista só lê o arquivo
+  (`View::show_sharing`). Um sinal na vista ficava velho com ela fechada, e a senha sobrevivia ao
+  hotspot.
+- **A senha de uma VPN importada é guardada no perfil** (`Manager::store_vpn_secret`: `GetSecrets`,
+  e `Update` com `password-flags=0`). Depois de trazer o `.ovpn`, a porta pergunta usuário e senha
+  (`network-vpn-user`, `network-vpn-password`, a segunda escondida) e o perfil sobe sem o `nmcli`.
+- **O NetworkManager manda no `bnep0`.** A internet de um celular por Bluetooth (PAN) é um perfil
+  `bluetooth` tipo `panu` do NetworkManager (`Manager::tether`; reusa o guardado, senão
+  `AddAndActivate` com `autoconnect` desligado). A vista do Bluetooth liga e desliga e lê o
+  `Network1` para dizer "sim, por bnep0"; a da rede mostra o enlace como `Medium::Phone`, com o
+  resto dos enlaces. Nenhuma das duas sobe a interface sozinha: era a pergunta do pendente, e a
+  resposta é que quem já sobe toda interface continua subindo esta. Decisão que se afasta do plano,
+  que falava num `Ask` do BlueZ: o `Network1.Connect` sozinho cria o `bnep0` e para ali, sem DHCP
+  nem rota. Na vista da rede só aparece o celular EM USO (com `IpInterface`); os outros pareados são
+  linhas da vista do Bluetooth, e um "desconectado" com o endereço de hardware como nome não dizia
+  nada. O nome é do celular (`network-fact-phone`), nunca "rede Wi-Fi", e `RET` derruba aquele
+  enlace pela interface (`Manager::disconnect_link`), não o primeiro dispositivo Bluetooth do
+  NetworkManager. As recusas próprias do crate (celular que o NetworkManager não tem, VPN que sumiu)
+  são `ronoctua_network::Refusal`, ditas por chave (`network_words::reason`, a única resposta, que
+  diz primeiro as três recusas do crate e nunca põe as palavras do daemon na linha), nunca em inglês.
+- **O check `errands-are-handled-alike`** lê, de cada vista com duas portas, o `match` do `Errand`
+  no rodapé e na janela e compara o que cada braço chama, seguindo ajudantes até três níveis; braço
+  `_ =>` no topo é recusado. As exceções têm nome no check (`ECHO_VIEW_BUSY` só existe na região; a
+  janela do manual não tem rodapé). Ele achou duas diferenças de verdade (a recusa de gravar uma
+  preferência, em energia e notificações), consertadas.
+- **A moeda de um lugar se escolhe na tela** (`locale-currency`): duas siglas do BCE, a dele e a em
+  que vale, conferidas contra `ronoctua_calc::units::CURRENCY_CODES`; ligar o câmbio de um lugar sem
+  par pergunta o par antes. **O fuso se completa** na linha da pergunta, nas duas portas
+  (`line::Completer::Zones`, do `zone1970.tab`): o trecho digitado casa cada parte entre `/` e cada
+  palavra entre `_`, três ofertas aparecem, `TAB` toma a primeira e o clique também.
+- **A câmera virtual tem cadeia própria** (`VirtualEffect`: a da prévia, nenhuma, ou uma só dela). O
+  efeito era da FONTE, então a prévia e a chamada mostravam o mesmo; agora a fonte guarda dois
+  quadros (`Shared::own_frame`), e a câmera virtual lê o seu.
+- **Texto é fonte de cena** (`Source::Text`, `words.rs`): conteúdo, como uma imagem — a cor é a que
+  a pessoa escolheu (`RRGGBBAA`), não token —, desenhado pelo `cosmic-text` com a face da distro
+  numa linha de um oitavo da altura do programa, sobre fundo transparente da largura das palavras.
+  Texto mais longo é figura mais larga, nunca letra menor.
+- **Captura de tela recua para `zwlr_screencopy_v1`** quando o compositor não anuncia o
+  `ext-image-copy-capture-v1`. É um protocolo novo no estúdio e precisa da linha dele na tabela do
+  inv. 3 (`screen.rs`, o mesmo arquivo da captura).
+- **O `.#dev` ensaia a câmera, como ensaia o brain.** Gravar e transmitir fazem o relógio andar no
+  estado sem abrir codificador nem arquivo, a câmera virtual é recusada com a frase
+  (`studio-trouble-rehearsal`) e a foto não é tirada: um laço aninhado não escreve em `Videos`.
+- **Formatos multiplanares são lidos, e não gravados.** A varredura lê `VIDEO_CAPTURE_MPLANE` com o
+  tipo de buffer dele, então uma câmera dessas mostra tamanhos e taxas em vez de nada; a entrada
+  V4L2 do ffmpeg 8.1 só abre plano único, e a frase `camera-about-cannot-stream` continua valendo.
+- **O HTML delega `<script>` e `<style>`** ao JavaScript e ao CSS (`Open::Embedded`, nos mesmos oito
+  bytes do `State`: o elemento e a linguagem de dentro). A segunda leva de linguagens é só dado em
+  `assets/syntax.nix`. O buffer `example` é o primeiro que liga a feature `syntax`, e depende do
+  `ronoctua-syntax` pelo nome do crate: um reexporte pelo `ronoctua-design` esconderia o arquivo do
+  `syntax-colours-are-tokens`.
+- **As opções do Syncthing usam o `ronoctua-options`**, como Tor, ClipCascade e Atuin. Duas coisas
+  mudaram com isso: o passo de uma seta é a escada 1-2-5 compartilhada, e uma palavra de anel que a
+  tabela não conhece cai na primeira, como nas outras tabelas.
+- **A fila desenrola a cópia quando a unidade para.** Um tratador de `SIGTERM`/`SIGINT` pelo
+  `signal-hook` (sem `unsafe` no crate) pede ao livro o mesmo desenrolar do "desistir" e espera até
+  quatro segundos (`UNWINDING`, abaixo do `TimeoutStopSec=5`) antes de sair: nenhum pedaço fica no
+  destino.
+- **Cada motor da fila tem palavra própria no buffer**: `atlas`, `software`, `scan`, `container` e
+  `belongings` entraram no `enum engine` do WIT, com glifo e chave; antes caíam numa palavra
+  genérica.
+- **O tamanho do texto dos apps fica no dconf, como decisão.** `toolkits.rs` escreve
+  `text-scaling-factor` porque os dois `settings.ini` do `foreign.nix` são caminhos do store e o
+  dconf é a única camada VIVA que GTK e Qt leem; reimplementar essa camada seria pior que a chave
+  que sobra quando `ronoctua.display.enable` é desligado.
+- **`/var/lib/ronoctua-browser` está no `persist.nix`**, e a unidade `ronoctua-persist-seed` semeia
+  a cópia em `/persist` antes da montagem por bind: ausente OU VAZIA, ela recebe o que a raiz já
+  tinha (por um rascunho renomeado), e uma que guarda algo nunca é tocada. O vazio é o caso do
+  `nixos-rebuild switch`: ele reativa o `sysinit` antes de subir qualquer unidade nova, e o
+  `systemd-tmpfiles-resetup` cria a cópia vazia pela regra `d`. Por isso todo bind EXIGE a semente
+  (`x-systemd.requires=`), venha a montagem do boot, da fase de start do switch ou de uma unidade
+  que reinicia sozinha com `RequiresMountsFor=` (a da extensão, numa transação que não tinha a
+  semente). A semente não fica ativa (sem `RemainAfterExit`), para rodar a cada montagem que a pede,
+  e o switch nunca a reinicia (`restartIfChanged = false`): reiniciar uma unidade exigida reinicia
+  quem a exige — todo bind. O `extension-vm` prova o boot e a troca (passos 6 e 7). O contador de versão da extensão virou um programa
+  (`nix/extension-counter.nix`), testável sem VM (`extension-version-moves`).
+- **O id do OrcaSlicer é lido do pacote na avaliação** (`workshop.nix`, `builtins.readDir`), com
+  exatamente uma entrada `.desktop` exigida: escrito à mão sem nada que o conferisse, era um segundo
+  lugar decidindo o nome, certo até o dia em que o upstream renomeia o arquivo. O preço é
+  import-from-derivation: avaliar um sistema com a oficina ligada — o do gate inclusive — espera o
+  fechamento do OrcaSlicer (~2 GiB) estar no store. Decisão do dono (2026-10-04): o id PODE ser
+  escrito à mão, desde que um check o compare com o pacote — e o `models-open-in-orca` já lê a
+  entrada do pacote por conta própria e exige que ela seja o padrão dos três tipos, então trocar a
+  leitura por uma constante não tira a guarda. A troca não é obrigatória; o que não pode é um nome à
+  mão sem esse check.
+- **A página de data e hora tem foto**: `photograph --door locale --scene watch-on|watch-asking|
+  watch-system` desenha a vigia do brain nos três estados, e a mesma câmera (`system_photograph.rs`)
+  fotografa a rede (`lan`, `hotspot`, `vpn`), o Bluetooth (`phone`), a moeda e o fuso, e a câmera
+  virtual, sobre leituras plantadas.
+
+### O player depois da varredura (X3)
+
+- **A home mostra uma janela da fila.** Todo nível longo da fila (mais de
+  `2 × space.player.queueAround + 1` entradas) — o de cima e o de uma playlist aberta, que abre
+  sozinha quando toca — é mostrado em volta do que toca, três de cada lado, empurrado para dentro
+  numa ponta (`player_queue::home_window`), e uma linha, "A fila inteira · N itens", abre a página
+  `PageId::Queue`, com o título e os controles da fila, aberta no que toca. Cada entrada guarda o
+  número que tem na fila inteira. É o que deixa "Ouvir e assistir" perto do topo com duzentos
+  arquivos. A janela também mantém à vista a entrada que a pessoa moveu (`View::home_held`), senão
+  um `C-↓` na borda a tirava das linhas e o cursor caía, pelo lugar, em outra entrada; quando o que
+  toca muda e a entrada do cursor sai da janela, o cursor vai para o que toca
+  (`View::follow_entry`), nunca para outra entrada pelo lugar.
+- **Uma faixa diz o nome da língua.** `player::track_name` e o nome de uma faixa de legenda passam o
+  código pela tabela de línguas das buscas (`player_find::tongue_name`): `por` é "Português". Um
+  código que a tabela não tem fica como o arquivo o diz.
+- **Uma faixa desligada diz o comprimento.** Uma faixa desligada não tem voz; o daemon diz o
+  comprimento dela em `State::lengths_off` — o de uma voz que ainda segura o arquivo, ou o da ficha
+  (`TechKey::DurationMs`), lida fora da trava quando ninguém sabe. A porta lê um só
+  `player::lane_length`: a banda termina onde o arquivo termina, e a linha diz "desligada · 2:05".
+- **Um conjunto sem nada ligado termina** (`session::plays_nothing`, lido por `over_at` no
+  daemon): sem imagem nem som ligado, o relógio andaria para sempre. Repetido (repetir um), ele fica
+  pausado em vez de recomeçar (`after_the_end` → `AfterEnd::Hold`): recomeçar acabaria de novo a
+  cada tique. Desligar a última faixa antes de ligar outra termina o conjunto — o que o item pedia;
+  perguntar antes é decisão do dono.
+- **O comprimento de uma faixa desligada não pergunta ao disco.** O `lengths_off` roda a cada
+  transmissão, sob a trava que toda pergunta espera; ele acha a ficha pelo nome que a fila dá ao
+  arquivo (`Tags::named`, anotado quando a ficha é pedida), sem `canonicalize` nem `stat`: um disco
+  dormindo ou de rede travaria tudo.
+- **A porta pede o contorno.** A vigia (`client::hear_lines`) guarda a revisão do último contorno e,
+  quando um estado passa dela — uma linha perdida —, pede `Ask::Queue` numa outra conexão, uma vez
+  por revisão, e entrega o contorno antes do estado. As três portas ganham isso de graça.
+- **Um SAMI de várias línguas escolhe a classe.** A língua que a faixa guarda (`Lane::lang`) escolhe
+  a classe (`sami::chosen`: pela língua declarada no `<STYLE>`, pelo nome da classe, pela subtag
+  primária); sem ela, a primeira que diz algo. O daemon diz as línguas do arquivo em
+  `LaneState::languages`, e a página da faixa tem o anel "Língua mostrada" (`LaneChange::Language`).
+  O cache das legendas guarda cada língua à parte.
+- **A régua desloca o último rótulo** para terminar no fim do trilho quando ele não cabe a partir da
+  própria marca e sobra uma célula de ar depois do anterior: o trilho curto da coluna média ganha a
+  segunda marca.
+- **Um clique abaixo da última linha não escolhe nada** (`Row::owner` não prende mais a linha de
+  fora à última).
+- **A lista velha some quando a permissão sai.** `View::allowed_listing` só devolve a lista de um
+  diretório permitido: a página e o globo de um diretório sem permissão mostram a linha que pergunta
+  e nada da mesa.
+- **O host que a fila recusou tem linha.** Um `Trouble::Off` nos problemas do estado ganha, embaixo
+  da frase, "Perguntar a {host}": a tecla é o consentimento, e a linha some quando ele está dado.
+- **Uma pergunta não espera escondida na barra.** Uma coluna na barra volta ao tamanho que tinha
+  enquanto o inquilino tem uma pergunta própria nas linhas (`Tenant::waits_for_an_answer`), como já
+  fazia com a pergunta da linha da porta.
+- **O tradutor das letras é escolhido** na página Internet: um anel MyMemory → DeepL →
+  LibreTranslate (`LyricsTranslation::by`, escrito no `player.json` mesclado, como todo interruptor;
+  o player relê no `reload` e pergunta de novo). O consentimento nomeia os hosts do escolhido — os
+  dois do DeepL, o do servidor LibreTranslate —; o endereço do servidor é guardado e só é perguntado
+  quando nenhum está guardado; as chaves (DeepL, LibreTranslate) são as de `ronoctua_words::keys`,
+  `0600`, e digitar uma permite os hosts que a linha nomeia. Do DeepL são os dois: a linha de
+  consentimento diz "permitido" só quando todos estão, e permitir só o da chave a deixava dizendo
+  "não permitido" com o DeepL sendo perguntado (`player_translator::to_let`, também na linha da letra
+  que permite o host recusado). O daemon pergunta ao host do escolhido (`translate::host_for`: o host
+  do DeepL sai da chave) e guarda a tradução no cache pelo texto, pela língua e pelo tradutor. Uma
+  chave guardada manda o player reler (`Ask::Reload`), e reler pergunta de novo a tradução que foi
+  recusada (`retry_a_refused_translation`). Um endereço guardado que não é `https://` é o
+  `Trouble::NotAnAddress`, dito pela frase da porta.
+- **O que era só leitura agora age.** A página dos fluxos tem, para cada fluxo que o arquivo deixa
+  mudar, a língua (um código, conferido por `ronoctua_tags::language`), o nome e as duas marcas
+  (`Edit::Stream`); a dos capítulos, o título de cada um (`Edit::Chapter`, pelo início do capítulo,
+  que toda edição guarda — a ordem do ffprobe não é a do arquivo). O título de capítulo é gravado só
+  em Matroska: `mkvextract chapters`, a troca do texto no XML (`matroska::retitle_chapters`, o resto
+  byte a byte) e `mkvpropedit --chapters`; nos outros formatos a página diz por quê
+  (`Why::ChaptersOnlyInMatroska`).
+- **As etiquetas de uma faixa do Matroska são gravadas pelo `TrackUID`.** Uma etiqueta de um bloco
+  que mira só uma faixa (`Origin::Matroska { track: Some(uid) }`) é gravada com `--tags
+  track:<n>:`, `n` achado pelo UID no `mkvmerge -J`, com todos os blocos daquela faixa — o
+  `mkvpropedit` substitui as etiquetas dela. Um bloco que mira a faixa e outra coisa junto continua só
+  de leitura: devolvido como da faixa, perderia o resto. Na página de todas as etiquetas, o grupo de
+  uma faixa diz de que fluxo é ("fluxo 1 · trilha de som · Português"): a folha dá a cada fluxo o UID
+  da faixa (`Stream::uid`, `matroska::name_tracks`, pela ordem em que o mkvmerge e o ffprobe contam
+  as faixas, e nenhum quando os dois não contam as mesmas), e um UID que nenhum fluxo tem é dito
+  como UID.
+- **Tirar o último campo de um FLAC** é gravado bloco a bloco (`write::flac_by_blocks`,
+  `native::flac_emptied`), porque o lofty 0.25.4 não grava um comentário Vorbis vazio. O remux do
+  ffmpeg foi descartado: o muxer FLAC dele perde cue sheet, seek table e bloco de aplicação, e
+  responderia "gravado". O comentário fica com o vendor e nenhum item, as figuras saem (o plano não
+  tem nenhuma), todo outro bloco e todo quadro são copiados byte a byte, e o rascunho é relido pelo
+  lofty contra o planejado, os quadros contados. Não precisa de programa nenhum.
+- **Um MP4 acima de 512 MiB** é gravado pelo remux `-c copy` (`write::big_mp4_by_remux`): só os
+  campos que o muxer do MP4 guarda (`MP4_REMUX_FIELDS`; os outros são recusados antes), e o rascunho
+  relido pelo lofty — que LÊ um arquivo de qualquer tamanho — com todo item de toda etiqueta igual ao
+  planejado (`native::verify_remuxed`): um muxer que deixasse um item da etiqueta para trás é
+  recusado, o arquivo como estava. Um `ilst` com item que o muxer não regrava (um `----`, `gnre`, os
+  ids de uma loja) é recusado ANTES da cópia, já na folha (`Why::RemuxWouldDrop`,
+  `native::mp4_remux_drops`); o `©too` volta pelo nome `encoding_tool`, porque o `+bitexact` o
+  descarta. O que o lofty não lista (uma caixa `uuid` ao lado do `moov`) não é visto. Capa e
+  etiquetas pelo próprio nome continuam do lofty, e o teto ainda vale para elas.
+- **A cidade de um canal de TV vai ao mapa** (`ronoctua_atlas::place_named`): os lugares do atlas
+  não guardam o país, então cada lugar com o nome (comparado sem caixa nem acento, `folded`: Latin-1,
+  Latin Extended-A, a vírgula de baixo do romeno, `ß`/`æ`/`œ` como duas letras e marcas combinantes;
+  o vietnamita, em Latin Extended Additional, ainda não) é
+  perguntado em que país está, com uma tolerância de costa (`in_country`, 0,15°: Lisboa fica no mar
+  nas bordas quantizadas). O mapa do daemon indexa os lugares por nome uma vez.
+
+### Os checks oferecidos, e o que eles mudaram no código
+
+Os checks que o dono aceitou da lista de oferecidos (`tests/checks.nix`, sob a âncora dele) prendem
+regras que antes eram só palavra. Seis mudanças de código vieram com eles:
+
+- **O XML da prévia passa pela guarda de profundidade.** O `ronoctua-inspect` lia documentos, AMF,
+  3MF e COLLADA pelo `roxmltree` direto; agora tudo passa pelo `ronoctua_xml::parse_within`, com o
+  teto de cada formato escrito ao lado do leitor. Documentos, AMF e 3MF ficam no teto comum (48):
+  medido em dezessete arquivos de verdade (ODF, Word, Excel, EPUB), o mais fundo aninha dezoito
+  níveis; um 3MF aninha cinco. O COLLADA é o caso do `parse_within`: a árvore de nós é o
+  aninhamento dele, então o teto é o do passeio (`NESTING_CEILING`, 64) mais o que segura o primeiro
+  nó e o que o nó mais fundo segura — 80 —, medido contra a pilha: uma cena nesse fundo é lida
+  inteira numa thread de 2 MiB em debug. O `one-xml-reader` recusa um leitor novo direto.
+- **O caminho do yt-dlp tem um leitor só.** O motor do player lia `RONOCTUA_YT_DLP` para decidir
+  se passava o caminho ao `ytdl_hook` do mpv; agora pergunta ao `ronoctua_ytdlp::named`, e um valor
+  vazio deixou de contar como "posto".
+- **Uma linha de JSON é uma escrita, em todo daemon.** O daemon da câmera serializava direto no
+  soquete (um token por escrita); agora monta a linha e escreve uma vez, como o player. O diário da
+  central de programas, que anexa linhas num arquivo, também: duas escritas de dois processos se
+  intercalam entre escritas, nunca dentro de uma.
+- **O `photograph --open <página>`** abre uma página do player pela chave dela, que é o atalho de
+  uma caminhada que o `every_page_is_reached_by_a_row` já prova existir, e o
+  `photograph --list-pages` lista as chaves (`PageId::PAGES`). É o que o
+  `player-pages-fit-every-size` usa para fotografar as quarenta páginas e a casa em quatro portas e
+  duas línguas, sobre as cenas de `tests/fixtures/player-pages` (inventadas pelos testes, nada de
+  ninguém): página nova entra sem ninguém avisar o check. Corte é toda run que termina em
+  reticência, de qualquer cor — rótulo, valor, o acento da linha do cursor —, menos três: a
+  reticência que é do próprio texto ("Parear com uma máquina…"), o nome de uma faixa no deck
+  (coluna fixa de `space.player.deckNames`) e a linha de dicas do cabeçalho, nos registros
+  `text.subtle.*` da linha dele, que é cortada no fim de propósito (o resto está na gaveta).
+- **Um valor de seção não é cortado: quebra.** O `chrome::aligned_pair` quebrava o rótulo e cortava
+  o valor no fim da linha; no tamanho pequeno da coluna, o piso do `value_column` deixa meia linha
+  para o valor, e o nome de uma faixa saía `film.mkv · sub…` — qual faixa, a página já não dizia.
+  Agora o valor quebra na própria coluna, como o rótulo na dele, e a linha tem a altura do mais
+  alto dos dois. O seletor de arquivos faz o mesmo com o valor escolhido do filtro ("O que o player
+  toca"): a linha que continua é `continues` (o cursor não para nela). O que é digitado e um
+  caminho continuam cortados no começo, porque o fim é o que se procura.
+- **Nenhuma bateria começa sobre um build dentro da árvore** (`nix/tree-guard.nix`): o `.#gate`, o
+  `.#most` e o `.#quick` procuram um `CACHEDIR.TAG` na árvore antes de qualquer coisa e recusam
+  dizendo o que mover. E as fases 3 e 4 do gate seguram o que construíram (`--out-link` em
+  `$work`), como a 1 e a 2: uma coleta no meio não faz o `nix flake check` da fase 5 bootar uma VM
+  de novo.
+- **Arquivos publicados por outros para teste** ficam em `nix/test-vectors.nix`, por captura, e o
+  `nix/kept-sources.nix` os segura; o primeiro é o `breakdance.avi` do moviehash. Um teste que só
+  roda com eles é `#[ignore]` no `cargo test` comum e roda num check que estreita o `rust-tests`
+  àquele teste (`moviehash-published-vectors`; o `subtitles-stack-in-libass` faz o mesmo com o
+  ffmpeg e a fonte).
+
+Três nomes mudaram por causa do selo dos módulos do brain: o que prende a unidade da folga e o teste
+de VM dela moram na pasta do `disk-space` (`disk-space-relief-unit-is-narrow`, `disk-space-vm`), e
+não em `tests/`.
+

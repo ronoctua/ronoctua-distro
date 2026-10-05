@@ -63,12 +63,30 @@ pub fn host_it() -> Result<()> {
                 },
             )
             .map_err(|e| anyhow::anyhow!("could not hang the places channel: {e}"))?;
+        // THE BRAIN'S CLOCK WATCH, heard off the loop: what it is as the
+        // window opens, and what each switch came to.
+        let (heard_sender, heard) = channel::channel::<crate::locale::Heard>();
+        w.handle
+            .insert_source(heard, |event, (), door: &mut Door<LocaleWindow>| {
+                if let channel::Event::Msg(heard) = event {
+                    door.content.heard(&mut door.ui, heard);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the brain's channel: {e}"))?;
+        let first = heard_sender.clone();
+        let mut view = crate::locale::View::fresh();
+        if !crate::locale::ask_the_brain(None, move |h| {
+            let _ = first.send(h);
+        }) {
+            view.set_watched(None);
+        }
         Ok(LocaleWindow {
-            view: crate::locale::View::fresh(),
+            view,
             zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
             asking: None,
             drawn: 0,
             _places: places,
+            brain: heard_sender,
         })
     })
 }
@@ -95,6 +113,69 @@ fn watch_the_places(
 }
 
 /// The window.
+/// The window over a PLANTED machine, for the photograph
+/// (`system_photograph`):
+///
+/// - `currency`: Lisbon's currencies chosen, a place with none — its rate's
+///   switch asks for the pair;
+/// - `zone`: the zone question open with `Lis` typed, and what it offers.
+///
+/// # Errors
+///
+/// A scene this door does not know.
+pub fn photographed(scene: &str) -> anyhow::Result<(impl Content, Option<crate::line::Line>)> {
+    let place =
+        |zone: &str, currency: &str, rate_in: &str, rate: bool| ronoctua_world::prefs::Wanted {
+            zone: zone.to_owned(),
+            currency: currency.to_owned(),
+            rate_in: rate_in.to_owned(),
+            rate,
+            ..ronoctua_world::prefs::Wanted::default()
+        };
+    let (view, asking) = match scene {
+        "currency" => (
+            crate::locale::View::planted_with(vec![
+                place("Europe/Lisbon", "EUR", "BRL", true),
+                place("Asia/Tokyo", "", "", false),
+            ]),
+            None,
+        ),
+        "zone" => (
+            crate::locale::View::planted(false),
+            Some(crate::line::Line::new("locale-zone", false, Some("Lis"))),
+        ),
+        // THE BRAIN'S CLOCK WATCH in each of its three readings: on, not
+        // known while the door asks, and turned off by the system with the
+        // sentence that says so.
+        "watch-on" | "watch-asking" | "watch-system" => {
+            let mut view = crate::locale::View::planted(false);
+            view.set_watched(Some(match scene {
+                "watch-on" => crate::locale::Watched::Set(true),
+                "watch-asking" => crate::locale::Watched::Asking,
+                _ => crate::locale::Watched::BySystem,
+            }));
+            (view, None)
+        }
+        other => anyhow::bail!(
+            "`{other}` is not a scene of the locale window; the scenes are currency, zone, \
+             watch-on, watch-asking and watch-system"
+        ),
+    };
+    Ok((
+        LocaleWindow {
+            view,
+            zone: ronoctua_files::when::Zone::utc(),
+            asking: asking
+                .as_ref()
+                .and_then(|l| crate::locale::Asking::named(l.id)),
+            drawn: 0,
+            _places: None,
+            brain: channel::channel().0,
+        },
+        asking,
+    ))
+}
+
 struct LocaleWindow {
     view: crate::locale::View,
     /// The machine's zone, read once — a TZif file is a table of
@@ -113,6 +194,8 @@ struct LocaleWindow {
     /// does this.
     drawn: usize,
     _places: Option<ronoctua_files::notice::Notice>,
+    /// Where what the brain says about the clock's watch comes back to.
+    brain: channel::Sender<crate::locale::Heard>,
 }
 
 impl LocaleWindow {
@@ -132,7 +215,10 @@ impl LocaleWindow {
             Errand::Speak(id) => {
                 if let Err(e) = crate::language::persist(id) {
                     tracing::warn!(error = %e, language = id, "the language could not be written");
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN));
+                    ui.say_for(
+                        ui.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN),
+                        crate::echo::Echo::Long,
+                    );
                 } else {
                     // ADOPTED HERE TOO, so the frame after this keystroke is
                     // already in the new language rather than waiting for the
@@ -146,7 +232,10 @@ impl LocaleWindow {
                 let choice = crate::locale::prefs::with(setting);
                 if let Err(e) = crate::locale::prefs::keep(&choice) {
                     tracing::warn!(error = %e, "the date preferences could not be written");
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN));
+                    ui.say_for(
+                        ui.texts.t(ronoctua_i18n::key::LOCALE_NOT_WRITTEN),
+                        crate::echo::Echo::Long,
+                    );
                 }
                 crate::locale::prefs::set(choice);
                 self.view.reread_files();
@@ -158,10 +247,10 @@ impl LocaleWindow {
                 ui.ask(crate::line::Line::new(asking.command(), false, None));
                 self.asking = Some(asking);
             }
-            Errand::Say(key) => ui.message = Some(ui.texts.t(key)),
+            Errand::Say(key) => ui.say(ui.texts.t(key)),
             Errand::Glance(change) => {
                 if let Err(key) = crate::locale::glance_change(&change) {
-                    ui.message = Some(ui.texts.t(key));
+                    ui.say(ui.texts.t(key));
                 }
                 self.view.reread_files();
             }
@@ -171,17 +260,45 @@ impl LocaleWindow {
             Errand::Automatic(on) => {
                 if let Err(e) = ronoctua_clock::set_automatic(on) {
                     tracing::warn!(error = %e, "the machine's clock-keeping could not be changed");
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::LOCALE_CLOCK_REFUSED));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::LOCALE_CLOCK_REFUSED));
                 }
                 self.view.reread();
             }
+            // THE BRAIN'S ANSWER, said here: nothing when it took it, its own
+            // refusal otherwise — a system that switched the watch off is a
+            // sentence, and a brain that is not there is this page's.
+            //
+            // OFF THE LOOP: the switch and the look after it are two asks on
+            // the brain's socket, and the answer comes back to `heard`.
             Errand::Watch(on) => {
-                if !crate::locale::watch_the_clock(on) {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN));
+                let back = self.brain.clone();
+                if !crate::locale::ask_the_brain(Some(on), move |h| {
+                    let _ = back.send(h);
+                }) {
+                    ui.say(ui.texts.t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN));
                 }
-                self.view.reread();
             }
         }
+        ui.ask_paint();
+    }
+
+    /// What the brain said about the clock's watch: its answer to a switch,
+    /// said on this window's line — nothing when it took it, its refusal in
+    /// its own sentence, this page's sentence when it is not there — and the
+    /// watch as it now stands.
+    fn heard(&mut self, ui: &mut Ui, heard: crate::locale::Heard) {
+        match heard.answer {
+            Some(crate::mind_wire::Answer::Unreachable) => {
+                ui.say(ui.texts.t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN));
+            }
+            Some(answer) => {
+                if let Some(said) = answer.sentence(&ui.texts) {
+                    ui.say(said);
+                }
+            }
+            None => {}
+        }
+        self.view.set_watched(heard.watched);
         ui.ask_paint();
     }
 
@@ -248,7 +365,7 @@ impl Content for LocaleWindow {
                 self.view.reread();
             }
             Ok(false) => {}
-            Err(key) => ui.message = Some(ui.texts.t(key)),
+            Err(key) => ui.say(ui.texts.t(key)),
         }
         self.took_the_cursor(ui);
         ui.ask_paint();
@@ -330,8 +447,70 @@ mod tests {
             asking: None,
             drawn: 0,
             _places: None,
+            brain: channel::channel().0,
         };
         (me, Ui::for_tests(texts))
+    }
+
+    /// What the brain said about the clock's watch is said HERE, and the row
+    /// follows it.
+    ///
+    /// THE DEFECT THIS CATCHES: the switch asked the brain on this window's
+    /// loop, twice; off the loop, an answer that arrives and is not said
+    /// would be a switch that silently did nothing.
+    #[test]
+    fn what_the_brain_said_about_the_watch_is_said_here() {
+        let (mut w, mut ui) = a_window();
+        w.heard(
+            &mut ui,
+            crate::locale::Heard {
+                answer: Some(crate::mind_wire::Answer::Refused(
+                    ronoctua_i18n::key::BRAIN_WHY_SYSTEM_OFF.to_owned(),
+                )),
+                watched: Some(crate::locale::Watched::BySystem),
+            },
+        );
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::BRAIN_WHY_SYSTEM_OFF)
+                    .as_str()
+            )
+        );
+        assert!(
+            !w.view.set_watched(Some(crate::locale::Watched::BySystem)),
+            "the row did not follow what the brain said"
+        );
+
+        let (mut w, mut ui) = a_window();
+        w.heard(
+            &mut ui,
+            crate::locale::Heard {
+                answer: Some(crate::mind_wire::Answer::Unreachable),
+                watched: None,
+            },
+        );
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(
+                ui.texts
+                    .t(ronoctua_i18n::key::LOCALE_WATCHED_UNKNOWN)
+                    .as_str()
+            )
+        );
+
+        // TAKEN, nothing is said: the row says it.
+        let (mut w, mut ui) = a_window();
+        w.heard(
+            &mut ui,
+            crate::locale::Heard {
+                answer: Some(crate::mind_wire::Answer::Taken(None)),
+                watched: Some(crate::locale::Watched::Set(false)),
+            },
+        );
+        assert_eq!(ui.message, None);
+        assert!(!w.view.set_watched(Some(crate::locale::Watched::Set(false))));
     }
 
     /// One key, as the keyboard — or a click on the hint — sends it.

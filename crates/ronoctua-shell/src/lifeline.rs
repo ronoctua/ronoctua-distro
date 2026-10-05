@@ -100,7 +100,7 @@ const AIR: u16 = 3;
 /// both, `display.rs` already writes `ESC` in a hint table exactly this way,
 /// and the key is now written in ONE place again — which is the rule
 /// `keys-are-never-text` exists for.
-const OFFERED: [(&str, &str, Doing); 4] = [
+pub(crate) const OFFERED: [(&str, &str, Doing); 4] = [
     ("l", ronoctua_i18n::key::LIFELINE_LOGS, Doing::Logs),
     ("r", ronoctua_i18n::key::LIFELINE_RESTART, Doing::Restart),
     ("a", ronoctua_i18n::key::LIFELINE_AI, Doing::Ai),
@@ -134,27 +134,156 @@ fn written(notation: &str) -> String {
 
 /// What one of them does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Doing {
+pub(crate) enum Doing {
     /// Open the journal in the rescue console — a terminal, which is what the
     /// `Ctrl+Alt+Del` door already is.
     Logs,
     /// Ask systemd to start the unit again. It is the person's OWN user unit,
     /// so nothing here asks polkit anything.
     Restart,
-    /// DRAWN AND REFUSING. The owner asked for the option to exist and for its
-    /// implementation to wait: *"deixar a implementação dessa funcionalidade de
-    /// no pending, pois será implementada mais tarde"*. A row that is there and
-    /// says why it cannot act is the shape the format buffer's XFS row already
-    /// has; a row that is missing is a feature nobody knows was planned.
+    /// Ask Claude Code what happened. NOTHING LEAVES BEFORE IT IS SEEN: this
+    /// gathers what would go — the unit, its `Result=`, the last lines of its
+    /// journal and its core dump's summary — into a file only this person can
+    /// read, opens it in a terminal, and asks, with "no" first.
     Ai,
+    /// No: nothing leaves, and the file goes.
+    AiNo,
+    /// Yes: Claude Code, in a terminal, told where the file is.
+    AiYes,
     /// Take the line away.
     Close,
+}
+
+/// The question the line asks once the report is on screen — "no" FIRST,
+/// the answer `RET` gives (`Lifeline::asked`): a question about something
+/// leaving this machine answers NO to a stray key.
+pub(crate) const ASKED: [(&str, &str, Doing); 2] = [
+    ("n", ronoctua_i18n::key::LIFELINE_AI_NO, Doing::AiNo),
+    ("y", ronoctua_i18n::key::LIFELINE_AI_YES, Doing::AiYes),
+];
+
+/// The report's file, in the runtime directory (`0600`, `create_new`).
+const REPORT_FILE: &str = "lifeline-report.md";
+
+/// How many lines of the unit's journal go into the report.
+const JOURNAL_LINES: &str = "40";
+
+/// Claude Code, by the store path the unit hands over (`RONOCTUA_CLAUDE`,
+/// set only where the agents are installed) — and NOTHING where it did not.
+///
+/// # Never by name
+///
+/// This line runs as a unit, whose `PATH` is minimal: a bare `claude` would
+/// be spawned inside the rescue console, fail THERE, and the line — which only
+/// sees that the console started — would say Claude Code had opened. So no
+/// path is no Claude, and the option says so before anything is gathered.
+fn claude() -> Option<std::path::PathBuf> {
+    program_at(std::env::var_os("RONOCTUA_CLAUDE"))
+}
+
+/// The pager the report is shown in, by the store path the unit hands over
+/// (`RONOCTUA_LESS`); no path, no pager — and then no report leaves either.
+fn pager() -> Option<std::path::PathBuf> {
+    program_at(std::env::var_os("RONOCTUA_LESS"))
+}
+
+/// A program at a path that is there — or none.
+fn program_at(path: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    path.filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_file())
+}
+
+/// The `coredumpctl` beside the `systemctl` this line already names: one
+/// `${systemd}`, so one store path and no second variable.
+fn coredumpctl() -> std::path::PathBuf {
+    std::path::Path::new(SYSTEMCTL).with_file_name("coredumpctl")
+}
+
+/// What the report says, whole — the sections in the person's language, and
+/// what the machine said under each as it said it (DATA: a journal line is
+/// what the machine wrote, the way the brain's log line is).
+#[must_use]
+fn report(
+    unit: &str,
+    result: &str,
+    journal: &str,
+    core: &str,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    use ronoctua_i18n::key;
+    let none = texts.t(key::LIFELINE_REPORT_NOTHING);
+    let or_none = |s: &str| {
+        if s.trim().is_empty() {
+            none.clone()
+        } else {
+            s.trim_end().to_owned()
+        }
+    };
+    format!(
+        "# {}\n\n{}: {unit}\n{}: {}\n\n## {}\n\n```\n{}\n```\n\n## {}\n\n```\n{}\n```\n",
+        texts.t(key::LIFELINE_REPORT_TITLE),
+        texts.t(key::LIFELINE_REPORT_UNIT),
+        texts.t(key::LIFELINE_REPORT_RESULT),
+        or_none(result),
+        texts.t(key::LIFELINE_REPORT_JOURNAL),
+        or_none(journal),
+        texts.t(key::LIFELINE_REPORT_CORE),
+        or_none(core),
+    )
+}
+
+/// Writes the report where only this person can read it: created `0600`
+/// in one call (`create_new` + mode), never made readable first and narrowed
+/// after. A report left by an earlier line is taken away first.
+fn write_report(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let _ = std::fs::remove_file(path);
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(text.as_bytes())
+}
+
+/// Gathers what the report says the machine said — the journal's last
+/// lines and the core dump's summary — on a thread: two short processes,
+/// neither on the line's loop. Either one that answers nothing is empty, and
+/// the report says so in its place.
+fn gather(unit: &str) -> (String, String) {
+    let journal = std::process::Command::new(JOURNALCTL)
+        .args([
+            "--user",
+            "-u",
+            unit,
+            "-n",
+            JOURNAL_LINES,
+            "--no-pager",
+            "-o",
+            "short-iso",
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let core = std::process::Command::new(coredumpctl())
+        .args([
+            "--no-pager",
+            "info",
+            "-1",
+            &format!("COREDUMP_USER_UNIT={unit}"),
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    (journal, core)
 }
 
 /// One option, as it was DRAWN — so the pointer asks the same table the
 /// keyboard does.
 #[derive(Debug, Clone)]
-struct Placed {
+pub(crate) struct Placed {
     at: u16,
     cells: u16,
     doing: Doing,
@@ -304,6 +433,16 @@ pub fn host_it(unit: &str) -> Result<()> {
 
     let mut cycle: EventLoop<Lifeline> = EventLoop::try_new().context("calloop")?;
     let texts = std::rc::Rc::new(crate::language::texts());
+    // WHAT THE AI OPTION GATHERS, back from its thread.
+    let (gathered_sender, gathered) = channel::channel::<(String, String)>();
+    cycle
+        .handle()
+        .insert_source(gathered, |event, (), state: &mut Lifeline| {
+            if let channel::Event::Msg((journal, core)) = event {
+                state.gathered_back(&journal, &core);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the report's channel: {e}"))?;
     let mut state = Lifeline {
         conn: conn.clone(),
         registry: RegistryState::new(&globals),
@@ -332,6 +471,8 @@ pub fn host_it(unit: &str) -> Result<()> {
         texts,
         quit: false,
         owed: false,
+        gathered: gathered_sender,
+        asking: None,
     };
 
     WaylandSource::new(conn, queue)
@@ -415,6 +556,10 @@ struct Lifeline {
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
     quit: bool,
     owed: bool,
+    /// Where the gathered journal and core dump come back to the loop.
+    gathered: channel::Sender<(String, String)>,
+    /// The report on screen, while the line asks whether it may leave.
+    asking: Option<std::path::PathBuf>,
 }
 
 /// What this window keeps for ONE pointer — see `crate::seats`.
@@ -484,8 +629,67 @@ impl Lifeline {
     fn act(&mut self, doing: Doing) {
         match doing {
             Doing::Close => self.quit = true,
+            // GATHERED OFF THE LOOP, shown before anything leaves.
+            // NO CLAUDE, NO ERRAND: said before anything is gathered, so the
+            // option never walks the person to a "yes" that cannot happen.
+            Doing::Ai if claude().is_none() || pager().is_none() => {
+                self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_NO_CLAUDE));
+                self.ask_paint();
+            }
             Doing::Ai => {
-                self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_NOT_YET));
+                let (told, unit) = (self.gathered.clone(), self.unit.clone());
+                let born = std::thread::Builder::new()
+                    .name("lifeline-report".to_owned())
+                    .spawn(move || {
+                        let _ = told.send(gather(&unit));
+                    });
+                self.said = Some(self.texts.t(if born.is_ok() {
+                    ronoctua_i18n::key::LIFELINE_AI_GATHERING
+                } else {
+                    ronoctua_i18n::key::LIFELINE_AI_NO_REPORT
+                }));
+                self.ask_paint();
+            }
+            // NO: nothing left, and the file goes with the question.
+            Doing::AiNo => {
+                if let Some(path) = self.asking.take() {
+                    let _ = std::fs::remove_file(path);
+                }
+                self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_KEPT));
+                self.ask_paint();
+            }
+            // YES: Claude Code in a terminal, told where the report is — the
+            // prompt in the person's language, the report in their file.
+            Doing::AiYes => {
+                let Some(path) = self.asking.take() else {
+                    return;
+                };
+                let Some(claude) = claude() else {
+                    let _ = std::fs::remove_file(path);
+                    self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_NO_CLAUDE));
+                    self.ask_paint();
+                    return;
+                };
+                let prompt = self.texts.t_with(
+                    ronoctua_i18n::key::LIFELINE_AI_PROMPT,
+                    &[
+                        ("unit", self.unit.as_str()),
+                        ("path", &path.to_string_lossy()),
+                    ],
+                );
+                let me = std::env::current_exe().unwrap_or_else(|_| "ronoctua-shell".into());
+                let started = std::process::Command::new(me)
+                    .arg("rescue")
+                    .arg(claude)
+                    .arg(prompt)
+                    .spawn();
+                self.said = Some(self.texts.t(match started {
+                    Ok(_) => ronoctua_i18n::key::LIFELINE_AI_OPENED,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "could not open Claude Code");
+                        ronoctua_i18n::key::LIFELINE_AI_NO_CLAUDE
+                    }
+                }));
                 self.ask_paint();
             }
             Doing::Restart if !self.fallen.loaded => {
@@ -529,6 +733,55 @@ impl Lifeline {
                 self.said = Some(self.texts.t(said));
                 self.ask_paint();
             }
+        }
+    }
+
+    /// The journal and the core dump came back: the report is written where
+    /// only this person reads it, opened in a terminal, and the line asks.
+    fn gathered_back(&mut self, journal: &str, core: &str) {
+        let text = report(&self.unit, &self.fallen.why, journal, core, &self.texts);
+        let Some(path) = ronoctua_xdg::runtime_file(REPORT_FILE) else {
+            self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_NO_REPORT));
+            self.ask_paint();
+            return;
+        };
+        if let Err(e) = write_report(&path, &text) {
+            tracing::warn!(error = %e, "could not write the report");
+            self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_NO_REPORT));
+            self.ask_paint();
+            return;
+        }
+        // WHAT WOULD LEAVE, ON SCREEN FIRST, in the rescue console — a
+        // terminal, which pages and searches.
+        let me = std::env::current_exe().unwrap_or_else(|_| "ronoctua-shell".into());
+        let shown = match pager() {
+            Some(pager) => std::process::Command::new(me)
+                .arg("rescue")
+                .arg(pager)
+                .arg(&path)
+                .spawn()
+                .map(drop),
+            None => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        };
+        if let Err(e) = shown {
+            tracing::warn!(error = %e, "could not show the report");
+            let _ = std::fs::remove_file(&path);
+            self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_NO_REPORT));
+            self.ask_paint();
+            return;
+        }
+        self.asking = Some(path);
+        self.said = Some(self.texts.t(ronoctua_i18n::key::LIFELINE_AI_SHOWN));
+        self.ask_paint();
+    }
+
+    /// The options on the second line now: the four, or — while the report
+    /// is on screen — the question, "no" first.
+    fn offered(&self) -> &'static [(&'static str, &'static str, Doing)] {
+        if self.asking.is_some() {
+            &ASKED
+        } else {
+            &OFFERED
         }
     }
 
@@ -637,112 +890,25 @@ impl Lifeline {
         self.gpu = Some(g);
     }
 
-    /// Lays the two lines out, and writes down where each option landed.
+    /// Lays the two lines out, and writes down where each option landed —
+    /// by [`line_of`], which the photograph draws too.
     fn frame(&mut self) -> Vec<ronoctua_render::Span> {
-        let size = tokens::text::size();
-        let room = self.columns;
-        let mut spans: Vec<ronoctua_render::Span> = Vec::new();
-        let px = ronoctua_render::Size::Px(size);
-
-        // LINE 0: the mark, the sentence, and what the unit said about itself.
-        spans.push(ronoctua_render::Span {
-            size: px,
-            text: tokens::icon::WARNING.to_string(),
-            column: MARGIN,
-            line: 0,
-            color: tokens::color::STATE_ERROR,
-            edge: false,
-            foot: false,
-        });
-        // THE EVIDENCE IS MEASURED FIRST, because the sentence yields to it: a
-        // cut `Result=core-dump` says nothing, and a cut sentence still reads.
-        let evidence = self.evidence();
-        let wide = ronoctua_render::layout::width(&evidence);
+        let lit: Vec<Doing> = self
+            .pointers
+            .lit(&self.here)
+            .filter_map(|(_, s)| s.under_pointer)
+            .collect();
         let said = self.said.clone().unwrap_or_else(|| self.sentence());
-        let left = MARGIN + 2;
-        let for_the_sentence = room.saturating_sub(wide + AIR);
-        spans.push(ronoctua_render::Span {
-            size: px,
-            text: ronoctua_render::layout::elide_end(&said, for_the_sentence),
-            column: left,
-            line: 0,
-            color: tokens::color::TEXT_PRIMARY,
-            edge: false,
-            foot: false,
+        let (spans, placed) = line_of(&Line {
+            said: &said,
+            evidence: &self.evidence(),
+            offered: self.offered(),
+            asking: self.asking.is_some(),
+            lit: &lit,
+            columns: self.columns,
+            texts: &self.texts,
         });
-        if wide > 0 && wide < room {
-            spans.push(ronoctua_render::Span {
-                size: px,
-                text: evidence,
-                column: MARGIN + room.saturating_sub(wide),
-                line: 0,
-                color: tokens::color::TEXT_SUBTLE_DEFAULT,
-                edge: false,
-                foot: false,
-            });
-        }
-
-        // LINE 1: the options, each with its letter in front of it.
-        self.placed.clear();
-        let mut at = left;
-        for (notation, id, doing) in OFFERED {
-            let key = written(notation);
-            let label = self.texts.t(id);
-            let wide = ronoctua_render::layout::width(&key);
-            let cells = wide + 1 + ronoctua_render::layout::width(&label);
-            if at + cells > MARGIN + room {
-                // WHAT DOES NOT FIT IS NOT DRAWN, and it is not silently
-                // dropped either: it keeps its key, so the keyboard still
-                // reaches it on a narrow screen while the mouse does not. That
-                // asymmetry is the right way round — the keyboard is the one
-                // that cannot run out of room.
-                break;
-            }
-            // THE KEY IN THE KEY'S OWN REGISTER, and the words in the words'.
-            //
-            // The two used to be `TEXT_SUBTLE_STRONG` BOTH, and the owner read
-            // the photograph and said so: *"não está bem distinto"*. The hint
-            // line has always drawn them in two registers — `Register::color`
-            // is the one place that decides which — and this line simply was
-            // not asking it for the second half.
-            spans.push(ronoctua_render::Span {
-                size: px,
-                text: key,
-                column: at,
-                line: 1,
-                color: crate::chrome::Register::Key.color(),
-                edge: false,
-                foot: false,
-            });
-            spans.push(ronoctua_render::Span {
-                size: px,
-                text: label,
-                column: at + wide + 1,
-                line: 1,
-                // AND THE ONE THAT CANNOT ACT READS AS SUCH. It is drawn, it
-                // has a key, and pressing it says why — what it does not do is
-                // look like the three that work.
-                color: if doing == Doing::Ai {
-                    tokens::color::TEXT_DIM
-                } else if self
-                    .pointers
-                    .lit(&self.here)
-                    .any(|(_, s)| s.under_pointer == Some(doing))
-                {
-                    // AND THE POINTER LIGHTS THE ONE IT IS ON, which is the
-                    // only thing on this line that says the mouse is being
-                    // listened to at all — ANY cursor's, since every one of
-                    // them can press it.
-                    tokens::color::TEXT_HERE_ACTS
-                } else {
-                    crate::chrome::Register::Prose.color()
-                },
-                edge: false,
-                foot: false,
-            });
-            self.placed.push(Placed { at, cells, doing });
-            at += cells + AIR;
-        }
+        self.placed = placed;
         spans
     }
 
@@ -805,6 +971,132 @@ impl Lifeline {
             tracing::warn!(error = %e, "the flush failed");
         }
     }
+}
+
+/// What the line says, and with what — everything [`line_of`] reads.
+pub(crate) struct Line<'a> {
+    /// The sentence: what happened, or what the last gesture had to say.
+    pub said: &'a str,
+    /// The unit's own words, for the right-hand end.
+    pub evidence: &'a str,
+    /// The options on the second line.
+    pub offered: &'static [(&'static str, &'static str, Doing)],
+    /// Whether the question about the report is up.
+    pub asking: bool,
+    /// The options a pointer rests on.
+    pub lit: &'a [Doing],
+    /// How many cells the line has.
+    pub columns: u16,
+    /// The words.
+    pub texts: &'a ronoctua_i18n::Texts,
+}
+
+/// The two lines, laid out, and where each option landed — the line's own
+/// frame and the photograph's (`crate::scene_photograph`).
+pub(crate) fn line_of(l: &Line<'_>) -> (Vec<ronoctua_render::Span>, Vec<Placed>) {
+    let size = tokens::text::size();
+    let room = l.columns;
+    let mut spans: Vec<ronoctua_render::Span> = Vec::new();
+    let px = ronoctua_render::Size::Px(size);
+
+    // LINE 0: the mark, the sentence, and what the unit said about itself.
+    spans.push(ronoctua_render::Span {
+        size: px,
+        text: tokens::icon::WARNING.to_string(),
+        column: MARGIN,
+        line: 0,
+        color: tokens::color::STATE_ERROR,
+        edge: false,
+        foot: false,
+    });
+    // THE EVIDENCE IS MEASURED FIRST, because the sentence yields to it: a
+    // cut `Result=core-dump` says nothing, and a cut sentence still reads.
+    let evidence = l.evidence.to_owned();
+    let wide = ronoctua_render::layout::width(&evidence);
+    let said = l.said;
+    let left = MARGIN + 2;
+    let for_the_sentence = room.saturating_sub(wide + AIR);
+    spans.push(ronoctua_render::Span {
+        size: px,
+        text: ronoctua_render::layout::elide_end(said, for_the_sentence),
+        column: left,
+        line: 0,
+        color: tokens::color::TEXT_PRIMARY,
+        edge: false,
+        foot: false,
+    });
+    if wide > 0 && wide < room {
+        spans.push(ronoctua_render::Span {
+            size: px,
+            text: evidence,
+            column: MARGIN + room.saturating_sub(wide),
+            line: 0,
+            color: tokens::color::TEXT_SUBTLE_DEFAULT,
+            edge: false,
+            foot: false,
+        });
+    }
+
+    // LINE 1: the options, each with its letter in front of it.
+    let mut placed: Vec<Placed> = Vec::new();
+    let mut at = left;
+    for &(notation, id, doing) in l.offered {
+        let key = written(notation);
+        let label = l.texts.t(id);
+        let wide = ronoctua_render::layout::width(&key);
+        let cells = wide + 1 + ronoctua_render::layout::width(&label);
+        if at + cells > MARGIN + room {
+            // WHAT DOES NOT FIT IS NOT DRAWN, and it is not silently
+            // dropped either: it keeps its key, so the keyboard still
+            // reaches it on a narrow screen while the mouse does not. That
+            // asymmetry is the right way round — the keyboard is the one
+            // that cannot run out of room.
+            break;
+        }
+        // THE KEY IN THE KEY'S OWN REGISTER, and the words in the words'.
+        //
+        // The two used to be `TEXT_SUBTLE_STRONG` BOTH, and the owner read
+        // the photograph and said so: *"não está bem distinto"*. The hint
+        // line has always drawn them in two registers — `Register::color`
+        // is the one place that decides which — and this line simply was
+        // not asking it for the second half.
+        spans.push(ronoctua_render::Span {
+            size: px,
+            text: key,
+            column: at,
+            line: 1,
+            color: crate::chrome::Register::Key.color(),
+            edge: false,
+            foot: false,
+        });
+        spans.push(ronoctua_render::Span {
+            size: px,
+            text: label,
+            column: at + wide + 1,
+            line: 1,
+            // AND THE ONE THAT CANNOT ACT READS AS SUCH. It is drawn, it
+            // has a key, and pressing it says why — what it does not do is
+            // look like the three that work.
+            color: if l.lit.contains(&doing)
+                // AND THE QUESTION'S "NO" IS WHERE THE CURSOR IS BORN —
+                // the answer `RET` gives.
+                || (l.asking && doing == Doing::AiNo)
+            {
+                // AND THE POINTER LIGHTS THE ONE IT IS ON, which is the
+                // only thing on this line that says the mouse is being
+                // listened to at all — ANY cursor's, since every one of
+                // them can press it.
+                tokens::color::TEXT_HERE_ACTS
+            } else {
+                crate::chrome::Register::Prose.color()
+            },
+            edge: false,
+            foot: false,
+        });
+        placed.push(Placed { at, cells, doing });
+        at += cells + AIR;
+    }
+    (spans, placed)
 }
 
 impl LayerShellHandler for Lifeline {
@@ -986,6 +1278,17 @@ impl KeyboardHandler for Lifeline {
         // `Esc` used to be handled off to the side, which is how the line came
         // to draw `x` for a gesture that two keys performed and the table knew
         // one of. Now it is a row like the others.
+        // A QUESTION ON SCREEN ANSWERS NO to `Esc` and to `RET`: the one
+        // answer that sends nothing anywhere.
+        if self.asking.is_some()
+            && matches!(
+                event.keysym,
+                Keysym::Escape | Keysym::Return | Keysym::KP_Enter
+            )
+        {
+            self.act(Doing::AiNo);
+            return;
+        }
         let typed = match event.keysym {
             Keysym::Escape => "ESC".to_owned(),
             _ => match event.keysym.key_char() {
@@ -993,7 +1296,11 @@ impl KeyboardHandler for Lifeline {
                 None => return,
             },
         };
-        if let Some((_, _, doing)) = OFFERED.iter().find(|(notation, _, _)| *notation == typed) {
+        if let Some((_, _, doing)) = self
+            .offered()
+            .iter()
+            .find(|(notation, _, _)| *notation == typed)
+        {
             self.act(*doing);
         }
     }
@@ -1128,7 +1435,7 @@ smithay_client_toolkit::delegate_dispatch2!(Lifeline);
 
 #[cfg(test)]
 mod tests {
-    use super::{Doing, OFFERED};
+    use super::{Doing, OFFERED, program_at};
 
     /// EVERY OPTION HAS A LETTER, and no two share one.
     ///
@@ -1189,5 +1496,74 @@ mod tests {
             vec![Doing::Logs, Doing::Restart, Doing::Ai, Doing::Close],
             "the line stopped offering one of the four"
         );
+    }
+
+    /// FAILS IF: the question about sending the report does not put "no"
+    /// first — the answer a stray key gives — or its keys collide.
+    #[test]
+    fn the_question_puts_no_first() {
+        use super::ASKED;
+        assert_eq!(ASKED[0].2, Doing::AiNo, "the question does not start on no");
+        assert_eq!(ASKED[1].2, Doing::AiYes);
+        assert_ne!(ASKED[0].0, ASKED[1].0);
+        for (notation, _, _) in ASKED {
+            assert!(ronoctua_keymap::Key::parse(notation).is_ok(), "{notation}");
+        }
+    }
+
+    /// FAILS IF: the report leaves out what it promises — the unit, how it
+    /// ended, the journal, the core dump — or says nothing where a part came
+    /// back empty instead of saying so.
+    #[test]
+    fn the_report_carries_the_four_things_and_says_what_is_missing() {
+        let t = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
+        let r = super::report(
+            "ronoctua-footer.service",
+            "watchdog",
+            "out 04 12:00 shell: drawing\n",
+            "",
+            &t,
+        );
+        assert!(
+            r.contains("ronoctua-footer.service") && r.contains("watchdog"),
+            "{r}"
+        );
+        assert!(r.contains("shell: drawing"), "{r}");
+        assert!(
+            r.contains(&t.t(ronoctua_i18n::key::LIFELINE_REPORT_NOTHING)),
+            "an empty core dump said nothing: {r}"
+        );
+        assert!(r.contains(&t.t(ronoctua_i18n::key::LIFELINE_REPORT_JOURNAL)));
+    }
+
+    /// FAILS IF: a missing or empty variable falls back to a bare name,
+    /// which a unit's minimal `PATH` would never find.
+    #[test]
+    fn no_path_is_no_program() {
+        assert_eq!(program_at(None), None);
+        assert_eq!(program_at(Some("".into())), None);
+        assert_eq!(program_at(Some("claude".into())), None);
+        assert_eq!(program_at(Some("/nonexistent/bin/claude".into())), None);
+        let here = std::env::current_exe().expect("this test");
+        assert_eq!(program_at(Some(here.clone().into())), Some(here));
+    }
+
+    /// FAILS IF: the report is ever readable by anybody but its owner — it
+    /// carries paths and a backtrace.
+    #[test]
+    fn the_report_is_born_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("ronoctua-lifeline-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let path = dir.join("report.md");
+        std::fs::write(&path, "an old one").expect("an old report");
+        super::write_report(&path, "the new one").expect("written");
+        let mode = std::fs::metadata(&path)
+            .expect("there")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "the new one");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

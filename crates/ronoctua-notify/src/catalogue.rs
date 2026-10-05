@@ -162,14 +162,35 @@ impl Book {
     }
 
     /// What is decided about this notification.
+    ///
+    /// # A filter tests the tags of the entry that recognised it
+    ///
+    /// [`Entry::tags`] are "for a filter to test", and a filter is tried here,
+    /// before anybody else could add them to the notification — so they are
+    /// added for the test. It is also what lets an entry keep an OLD tag: a
+    /// notification renamed (a brain module's event, `<module>-<event>`, that
+    /// was a tag of the footer's before) carries its old name among its tags,
+    /// and a filter somebody saved under it still catches it.
     #[must_use]
     pub fn decide(&self, n: &Notification) -> Presentation {
         let mut p = Presentation::for_arrival(n);
 
-        if let Some(e) = self.entries.iter().find(|e| e.recognises(n, &p)) {
+        let recognised = self.entries.iter().find(|e| e.recognises(n, &p));
+        if let Some(e) = recognised {
             e.apply.over(&mut p);
             p.catalogue = Some(e.id.clone());
         }
+        let tagged;
+        let n = match recognised {
+            Some(e) if e.tags.iter().any(|t| !n.tags.contains(t)) => {
+                let mut with = n.clone();
+                with.tags
+                    .extend(e.tags.iter().filter(|t| !n.tags.contains(t)).cloned());
+                tagged = with;
+                &tagged
+            }
+            _ => n,
+        };
 
         // THE PERSON'S FILTERS FIRST. One of one's own that could not overrule
         // the distro's would not be a filter, it would be a suggestion.
@@ -269,6 +290,56 @@ mod tests {
         // And its glyph came from the font by NAME — nothing in the design
         // system says "screen capture".
         assert!(p.glyph.is_some());
+    }
+
+    #[test]
+    fn a_filter_saved_under_an_entrys_old_tag_still_catches_it() {
+        // THE ALIAS: an entry renamed keeps its old name among its tags, and a
+        // filter somebody saved under the old name — tried BEFORE the tags
+        // reach the notification — still catches what the entry recognises.
+        let mut book = Book::distro();
+        book.entries.push(Entry {
+            id: "made-up-renamed".into(),
+            when: vec![Term {
+                field: Field::Tag,
+                test: Test::Is("made-up-renamed".into()),
+            }],
+            apply: Verdict::default(),
+            tags: vec!["made-up-renamed".into(), "made-up-old".into()],
+            actions: Vec::new(),
+            rewrite: false,
+        });
+        book.mine.push(Rule {
+            id: "mine-quiet".into(),
+            when: vec![Term {
+                field: Field::Tag,
+                test: Test::Is("made-up-old".into()),
+            }],
+            apply: Verdict {
+                show: Some(Show::Hidden),
+                ..Verdict::default()
+            },
+        });
+        let mut n = Notification::fresh_one(
+            1,
+            "an app".into(),
+            None,
+            "said".into(),
+            String::new(),
+            Urgency::Normal,
+        );
+        n.tags = vec!["made-up-renamed".to_owned()];
+        let p = book.decide(&n);
+        assert_eq!(p.catalogue.as_deref(), Some("made-up-renamed"));
+        assert_eq!(
+            p.by.as_deref(),
+            Some("mine-quiet"),
+            "the filter saved under the old tag no longer catches it"
+        );
+        assert_eq!(p.show, Show::Hidden);
+        // AND A NOTIFICATION NO ENTRY RECOGNISES gains no tag.
+        n.tags = vec!["nobody-knows".to_owned()];
+        assert_ne!(book.decide(&n).by.as_deref(), Some("mine-quiet"));
     }
 
     #[test]

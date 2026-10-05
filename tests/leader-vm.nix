@@ -163,17 +163,16 @@ pkgs.testers.runNixOSTest {
 
 
 
-    def a_dotfile_is_drawn(text):
-        """Does the listing draw an entry whose name begins with a dot?
+    def the_facts_are_drawn(text):
+        """Does the region draw the facts panel?
 
-        OCR, so the question has to survive a mangled glyph in the type
-        column: what is looked for is a dot followed by a letter, with space
-        in front of it. `..` does not match — the second character is a dot —
-        and neither does an extension, which has no space before it.
+        OCR, so the question is two of its labels and not one: `caminho` and
+        `permissão` (read with or without the tilde) are the panel's rows for
+        whatever the cursor is on — `..` included — and nothing else in the
+        manager's region says either word.
         """
-        import re
-
-        return bool(re.search(r"\s\.[a-zA-Z]", text))
+        lowered = text.lower()
+        return "caminho" in lowered and "permiss" in lowered
 
 
     def press_key(item_name):
@@ -392,12 +391,21 @@ pkgs.testers.runNixOSTest {
         # the list became the PREFIX's, and `n` — the notifications — has a
         # handful of items.
         #
-        # AFTER A TAP OF `Ctrl`, because `n` is a group only in the FULL set:
-        # the leader alone runs the manager on `n` now (the three sets,
-        # `leader::Set`), and a tap of `Ctrl` right after the leader is what
-        # puts the whole tree back. `xdotool key` presses and releases, which
-        # is exactly a tap.
-        press_key("Control_L")
+        # AFTER THE LEADER TWICE MORE, because `n` is a group only in the FULL
+        # set: the leader alone runs the manager on `n` now (the three sets,
+        # `leader::Set`), and the leader pressed again with the list open walks
+        # to the windows' set and then to the whole tree of before
+        # (2026-09-30; it was a tap of `Ctrl`, which now cycles the bars).
+        for _ in range(2):
+            switched = machine.succeed("journalctl -u footer --no-pager").count("set switched")
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${ronoctua-shell}/bin/ronoctua-shell leader"
+            )
+            machine.wait_until_succeeds(
+                f"test $(journalctl -u footer --no-pager | grep -c 'set switched') -gt {switched}",
+                timeout=30,
+            )
         press_key("n")
         journal = machine.succeed("journalctl -u footer --no-pager")
         # What is asserted is that it NARROWED, not a number: how many commands
@@ -413,10 +421,10 @@ pkgs.testers.runNixOSTest {
         # the line below, and there was nothing there: pressing the leader and seeing
         # the same screen is indistinguishable from "it did not register the key".
         journal = machine.succeed("journalctl -u footer --no-pager")
-        # `LEADER CTRL n-`: the label from the environment, the set's key the
-        # tap chose, and Doom's notation (`-`, and not ` …`). `SPC` here would
-        # be the fallback, and would prove the opposite.
-        assert "LEADER CTRL n-" in journal, journal
+        # `LEADER LEADER LEADER n-`: the label from the environment, the
+        # leader again once per set walked, and Doom's notation (`-`, and not
+        # ` …`). `SPC` here would be the fallback, and would prove the opposite.
+        assert "LEADER LEADER LEADER n-" in journal, journal
 
         w, h, x, y = compositor_geometry()
         # POLLED, like every other read of a height that has just changed:
@@ -455,11 +463,11 @@ pkgs.testers.runNixOSTest {
         echo_line = [l for l in journal.splitlines() if "echo area" in l][-1]
         print(f"echo: {echo_line}")
         # THE MESSAGE cites the whole sequence, not only the last key:
-        # `LEADER CTRL n z` is what the user typed, set included, and `z` on
-        # its own would not help. The prefix is `n` because the subtest above
+        # `LEADER LEADER LEADER n z` is what the user typed, set included, and
+        # `z` on its own would not help. The prefix is `n` because the subtest above
         # pressed it — it used to be `i`, and then `h`, and each stopped being
         # a prefix.
-        assert "LEADER CTRL n z" in echo_line, echo_line
+        assert "LEADER LEADER LEADER n z" in echo_line, echo_line
         # And in pt-BR, translated — not the raw key.
         assert "echo-" not in echo_line, echo_line
 
@@ -691,8 +699,8 @@ pkgs.testers.runNixOSTest {
         assert widened == opened, widened
 
     with subtest("and a command of the view still exists, one modifier along"):
-        # `C-h` and not `h`, because `h` is now a letter of the query — and not
-        # `M-h` either, which is the whole of the second lesson: in the nested
+        # `C-i` and not `i`, because `i` is now a letter of the query — and not
+        # `M-i` either, which is the whole of the second lesson: in the nested
         # loop the leader's chord family IS `Alt`, so the compositor eats every
         # `M-…` before the footer sees it. Reported from the screen as "M-RET
         # opens the terminal".
@@ -702,41 +710,42 @@ pkgs.testers.runNixOSTest {
         # fixed the discount lasted the whole session — every `C-…` arrived as
         # the bare letter and was typed into the query instead.
         #
-        # READ OFF THE SCREEN and not off the height, for the reason the
-        # subtest above gives: the panels hold the region at its ceiling, so
-        # showing ten more files no longer moves it. What is being asked here
-        # is whether `C-h` arrived as a COMMAND — and the answer is a hidden
-        # file appearing, which is the thing itself rather than a proxy for it.
+        # `C-i` IS THE FACTS PANEL (`files-facts`). It was `C-h` and the hidden
+        # files, until the dotfiles became always shown and `C-h` became the
+        # repository's history — which opens ANOTHER view, so the question
+        # would move off this region. The panel stays in the region, and it
+        # answers both ways a broken Ctrl fails: discounted, `i` is a letter of
+        # the query, the cursor lands on a match and the facts stay drawn;
+        # dropped, nothing changes. Only the command takes them off.
+        #
+        # READ OFF THE SCREEN and not off the height: the panels hold the
+        # region at its ceiling, so the height does not answer.
         before = expansion_text()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+h")
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+i")
         machine.sleep(2)
         after = expansion_text()
-        print(f"OCR before the C-h: {before!r}\nOCR after: {after!r}")
-        # THE FLIP, and not a direction: which way `C-h` goes depends on what
-        # the dotfiles were doing when the manager opened, and the question is
-        # whether the key ARRIVED. Naming the direction here would make this
-        # test a second declaration of the default.
-        #
-        # AND THE SENTINEL IS "any name that starts with a dot", not one name.
-        # It used to be `.hidden-test`, which is a FILE: the listing draws the
-        # directories first, so with the panels holding the region at its
-        # ceiling it sorts below the fold and is never on screen. A probe that
-        # names something never drawn answers the same whatever the key did —
-        # it read `C-h` working as `C-h` doing nothing.
-        was_there = a_dotfile_is_drawn(before)
-        is_there = a_dotfile_is_drawn(after)
-        if was_there == is_there:
-            print("ls -a:", machine.execute("ls -a /root | tr '\n' ' '")[1])
+        print(f"OCR before the C-i: {before!r}\nOCR after: {after!r}")
+        # THE FLIP, and not a direction: whether the facts start on is the
+        # view's default, and naming it here would make this test a second
+        # declaration of it.
+        was_there = the_facts_are_drawn(before)
+        is_there = the_facts_are_drawn(after)
         assert was_there != is_there, (
-            f"`C-h` did nothing: the dotfiles {'stayed' if was_there else 'stayed out'} "
+            f"`C-i` did nothing: the facts {'stayed' if was_there else 'stayed out'} "
             f"on screen. Either the Ctrl was discounted, or the key became a filter letter: {after!r}"
+        )
+        # AND THE PANEL COMES BACK, so what follows sees the view it opened.
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+i")
+        machine.sleep(2)
+        assert the_facts_are_drawn(expansion_text()) == was_there, (
+            "a second `C-i` did not turn the facts back"
         )
         # AND WITH NOTHING TYPED, `Esc` closes — a query on screen it would
         # clear first, and there is none here.
         press_key("Escape")
         wait_for_height(FOOTER)
 
-    with subtest("a complete sequence fires the COMMAND"):
+    with subtest("a complete sequence fires the COMMAND, and LEADER m i opens the icons"):
         # Section 13 wants the key to reach a named command, not an anonymous
         # function. The id in the log is the proof that the whole path — key, tree,
         # registry — closed.
@@ -747,41 +756,79 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
         )
-        # `m i n`, and not `i n`: the three browsers moved under MISCELLANEOUS
-        # and `i` stopped being a top-level prefix. The old sequence reached
-        # nothing, silently.
+        # `m i`: the icons app's group has its two doors (`m i i`, `m i w`), so
+        # in the set a leader starts in it FOLDS into one key — the footer's
+        # door (`leader::folds`).
         press_key("m")
         press_key("i")
-        press_key("n")
         # The QUOTES are part of it: `tracing` formats a `Debug` value between
-        # quotes, and `command=glyphs-nerd-fonts` matches nothing.
+        # quotes, and `command=icons-open` matches nothing.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'command=\"glyphs-nerd-fonts\"' > /dev/null",
+            "journalctl -u footer --no-pager | grep 'command=\"icons-open\"' > /dev/null",
             timeout=30,
         )
-        # And the keyboard goes back to the buffers on its own after running.
-        #
-        # Through the COMPOSITOR, and not through `wait_for_height`: that helper
-        # measures by counting pixels that differ from the background, and from here
-        # on there is a WINDOW covering the screen — the "background" it samples
-        # becomes the buffer, and the arithmetic gives zero. The question that
-        # matters is another one: did the keyboard come back? Only the compositor answers that.
-        asked = last_keyboard_ask()
-        print(f"the footer asked for: {asked}")
-        assert asked == "None", asked
+        # THE VIEW HOLDS THE KEYBOARD — it types a search — and its `Esc`, with
+        # nothing typed, closes it and gives the keyboard back to the buffers.
+        # WAITED FOR, not read once: the command's line is logged before the
+        # geometry it asks for, and one read right after it can land between.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager "
+            "| grep 'the footer asked for a geometry' | tail -1 | grep -q 'keyboard=Exclusive'",
+            timeout=30,
+        )
+        press_key("Escape")
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager "
+            "| grep 'the footer asked for a geometry' | tail -1 | grep -q 'keyboard=None'",
+            timeout=30,
+        )
 
-    with subtest("the command really OPENS the glyph browser"):
+    with subtest("the command really OPENS the icons app's window"):
         # THE DEFECT THIS CATCHES: five commands showed up in which-key, "ran", and
         # fell into a log `warn`. On screen, nothing. Firing the command proves
-        # nothing — what proves it is the WINDOW existing.
+        # nothing — what proves it is the WINDOW existing, under the app's id.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+            "${ronoctua-shell}/bin/ronoctua-shell command icons-window"
+        )
         try:
             await_windows(sock, 1, timeout=90)
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
-            print(machine.execute("systemctl list-units 'ronoctua-buffer-*' --no-pager")[1])
             raise
+        assert "br.ronoctua.icons" in windows_by_app_id(sock), windows_by_app_id(sock)
         # And the `warn` for a command with no action must NOT have shown up: it is
         # the exact symptom of the defect.
+        journal = machine.succeed("journalctl -u footer --no-pager")
+        assert "a command with no registered action" not in journal, journal
+
+    with subtest("a buffer opens too, and it is another window"):
+        # THE BUFFER THE STATE SUBTEST BELOW READS. The icon browsers were the
+        # buffers this test opened; they are the native icons app now, which
+        # publishes no buffer state — the memory panel is a buffer and does.
+        #
+        # The assertion is about the COUNT: the icons window is open already,
+        # so after this there have to be TWO. Waiting for "a window exists"
+        # would pass with the command doing nothing.
+        #
+        # BY NAME AND NOT BY KEY: `ronoctua_protocol::LOCAL_PREFIX` is `"m"`, so
+        # at the ROOT of a sequence `LEADER m` belongs to the FOCUSED BUFFER's
+        # own keymap whenever that buffer published one. The WITHOUT-QUOTES
+        # grep is the control socket's, which logs a `&str`.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+            "${ronoctua-shell}/bin/ronoctua-shell command memory-open"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager "
+            "| grep 'command through the control socket command=memory-open' > /dev/null",
+            timeout=30,
+        )
+        try:
+            await_windows(sock, 2, timeout=90)
+        except Exception:
+            print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
+            raise
         journal = machine.succeed("journalctl -u footer --no-pager")
         assert "a command with no registered action" not in journal, journal
 
@@ -812,58 +859,16 @@ pkgs.testers.runNixOSTest {
         # arrangement exists to prevent.
         assert "text=normal" in state[-1], state[-1]
 
-    with subtest("the SYMBOL browser opens too, and it is another window"):
-        # THE DEFECT THIS CATCHES is the same as the subtest above, and that is why
-        # it exists again for the second buffer: a command can show up in which-key,
-        # "run", and fall into a log `warn`. On screen, nothing.
-        #
-        # The assertion is about the COUNT: the glyph browser has already opened a
-        # window, so after this there have to be TWO. Waiting for "a window exists"
-        # would pass with the second command doing nothing.
-        #
-        # BY NAME AND NOT BY `m i u`, and the reason is a collision this test found:
-        # `ronoctua_protocol::LOCAL_PREFIX` is `"m"`, so at the ROOT of a sequence
-        # `LEADER m` belongs to the FOCUSED BUFFER's own keymap whenever that buffer
-        # published one — and the tree's MISCELLANEOUS group, which is where the
-        # three browsers live, is unreachable from any of our buffer windows.
-        # Measured here: the footer received the `m` (`the key after the discount
-        # … Char('m')`), handed it to the buffer, which redrew, and the leader
-        # never narrowed.
-        #
-        # The subtest above still proves the KEY path, because it runs before any
-        # buffer window exists. This one proves the second WINDOW, which is what it
-        # says it is about, and it reaches the command the way `LEADER :` does.
-        machine.succeed(
-            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
-            "${ronoctua-shell}/bin/ronoctua-shell command unicode-symbols"
-        )
-        # WITHOUT THE QUOTES, and that is not a detail. The subtest above waits
-        # for `command="glyphs-nerd-fonts"` because the LEADER logs a `Debug`
-        # value, which `tracing` puts between quotes. The control socket logs a
-        # `&str`, which it does not. Grepping for the quoted form here waited
-        # thirty seconds for a line that had already gone past.
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager "
-            "| grep 'command through the control socket command=unicode-symbols' > /dev/null",
-            timeout=30,
-        )
-        try:
-            await_windows(sock, 2, timeout=90)
-        except Exception:
-            print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])
-            raise
-        journal = machine.succeed("journalctl -u footer --no-pager")
-        assert "a command with no registered action" not in journal, journal
-
-    with subtest("the key after the leader chooses one of THREE sets"):
+    with subtest("the leader again walks THREE sets"):
         # THE OWNER'S THREE SETS (2026-09-28), end to end: the same `s n` is
         # the network IN THE FOOTER after the leader alone, the network's
-        # WINDOW after a tap of `Alt`, and the network's GROUP — the whole
-        # tree of before — after a tap of `Ctrl`. The unit tests prove the
-        # trees and the tap apart (`leader::tests`); what only this VM reaches
-        # is the tap ARRIVING — a bare modifier through Xvfb, the compositor
-        # and the layer surface, pressed and released with nothing between —
-        # and each door actually opening.
+        # WINDOW after the leader pressed again, and the network's GROUP — the
+        # whole tree of before — after it pressed twice more (2026-09-30: the
+        # taps of `Alt` and `Ctrl` that chose them are gone; a tap of `Ctrl`
+        # cycles the bars). The unit tests prove the trees and the walk apart
+        # (`leader::tests`); what only this VM reaches is the leader ARRIVING
+        # again through the control socket with the list open, and each door
+        # actually opening.
         #
         # READ OFF THE JOURNAL AND THE COMPOSITOR'S TREE, never the heights:
         # two buffer windows cover the screen by now, and `footer_height`
@@ -884,6 +889,18 @@ pkgs.testers.runNixOSTest {
                 machine.sleep(1)
             raise AssertionError("the leader did not open:\n" + journal_now()[-2000:])
 
+        def leader_again():
+            before = journal_now().count("set switched")
+            machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${ronoctua-shell}/bin/ronoctua-shell leader"
+            )
+            for _ in range(30):
+                if journal_now().count("set switched") > before:
+                    return
+                machine.sleep(1)
+            raise AssertionError("the leader again switched no set:\n" + journal_now()[-2000:])
+
         focus_compositor()
 
         # 1) THE LEADER ALONE: `s n` is the network, in the footer.
@@ -901,13 +918,21 @@ pkgs.testers.runNixOSTest {
         )
         press_key("Escape")
 
-        # 2) A TAP OF `Alt`: the same `s n` is the network's window.
+        # 2) THE LEADER AGAIN: the same `s n` is the network's window.
         windows = windows_now(sock)
         open_leader()
-        press_key("Alt_L")
+        leader_again()
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'set switched.*LEADER ALT-' > /dev/null",
+            "journalctl -u footer --no-pager | grep 'set switched.*LEADER LEADER-' > /dev/null",
             timeout=30,
+        )
+        # AND `Alt` TAPPED THERE CHOOSES NOTHING ANY MORE: the chord stays the
+        # window set's, and no set switch is logged for it.
+        switched = journal_now().count("set switched")
+        press_key("Alt_L")
+        machine.sleep(1)
+        assert journal_now().count("set switched") == switched, (
+            "a tap of Alt switched the leader's set"
         )
         press_key("s")
         press_key("n")
@@ -923,7 +948,7 @@ pkgs.testers.runNixOSTest {
         # BY ITS `app_id`, from the compositor: a window that is not the
         # network's would answer the count above just as well.
         assert "br.ronoctua.network" in windows_by_app_id(sock), (
-            f"`LEADER Alt s n` opened no network window: {sorted(windows_by_app_id(sock))}"
+            f"`LEADER LEADER s n` opened no network window: {sorted(windows_by_app_id(sock))}"
         )
         # AND IT IS CLOSED AGAIN, so the subtests after this one find the
         # screen they found before it. It has the focus, being new.
@@ -933,15 +958,16 @@ pkgs.testers.runNixOSTest {
         )
         await_windows(sock, windows, timeout=60)
 
-        # 3) A TAP OF `Ctrl`: `s n` is the network's GROUP again, and the chord
-        # on the minibuffer's line says which set the next key walks.
+        # 3) THE LEADER TWICE MORE: `s n` is the network's GROUP again, and the
+        # chord on the minibuffer's line says which set the next key walks.
         focus_compositor()
         open_leader()
-        press_key("Control_L")
+        leader_again()
+        leader_again()
         press_key("s")
         press_key("n")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'LEADER CTRL s n-' > /dev/null",
+            "journalctl -u footer --no-pager | grep 'LEADER LEADER LEADER s n-' > /dev/null",
             timeout=30,
         )
         # A NEW `leader closed`, COUNTED: steps 1 and 2 and every subtest
@@ -1074,9 +1100,11 @@ pkgs.testers.runNixOSTest {
         # at rest is one transparent pixel, which is the backdrop's colour.
         #
         # SELF-CONTAINED, and by NAME where a key's meaning belongs to the
-        # leader's sets: `ronoctua-shell command footer-hide-cover` is the same
-        # toggle as `LEADER ALT LEADER`, and opening a footer app is a command
-        # rather than a sequence whose letters another subtest may move.
+        # leader's sets: `ronoctua-shell command footer-hide-cover` is the
+        # toggle of one mode, `footer-bars-cycle` the same walk a tap of
+        # `Ctrl` at the leader's root makes (normal, push, cover — the owner,
+        # 2026-09-30), and opening a footer app is a command rather than a
+        # sequence whose letters another subtest may move.
         import json
         import re as _re
 
@@ -1163,17 +1191,26 @@ pkgs.testers.runNixOSTest {
                 break
             visible = again
 
-        # 1. `LEADER LEADER`: the leader, and the leader again AT THE ROOT.
+        # 1. `LEADER Ctrl`: the leader, and a TAP of `Ctrl` AT THE ROOT — the
+        #    first step of the cycle, push. `xdotool key` presses and lets go
+        #    with nothing between, which is exactly a tap; the footer has the
+        #    keyboard while the leader is open.
         before = leaders()
         shell("leader")
         machine.wait_until_succeeds(
             f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {before}",
             timeout=30,
         )
-        shell("leader")
+        cycled = machine.succeed("journalctl -u footer --no-pager").count("the bars cycled")
+        press_key("Control_L")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'the bars toggled' > /dev/null", timeout=30
+            f"test $(journalctl -u footer --no-pager | grep -c 'the bars cycled') -gt {cycled}",
+            timeout=30,
         )
+        assert "mode=Some(Push)" in [
+            l for l in machine.succeed("journalctl -u footer --no-pager").splitlines()
+            if "the bars cycled" in l
+        ][-1], "the first tap of Ctrl is not push"
         # THE ZONE IS GONE: the workspace grew by the footer's two lines.
         bare = wait_for_rect(visible + FOOTER)
         print(f"visible: {visible} px, hidden: {bare} px")
@@ -1250,9 +1287,9 @@ pkgs.testers.runNixOSTest {
         steady(bare)
         xdo("mousemove", str(x0 + w0 - 5), str(y0 + 5))
 
-        # 7. AND BACK: the same toggle again is the bars visible, with their
-        #    zone.
-        shell("command", "footer-hide-cover")
+        # 7. AND BACK: the cycle's next step after cover is the bars visible,
+        #    with their zone — the walk a third tap of `Ctrl` makes.
+        shell("command", "footer-bars-cycle")
         wait_for_rect(visible)
   '';
 }

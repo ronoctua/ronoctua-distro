@@ -1,0 +1,37 @@
+[package]
+name = "ronoctua-consent"
+description = "The person's consent, host by host: nothing talks to the network before the person let that host — and the private files keys live in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE FEATURE, FOR THE DOORS. `watch` adds `Watched`, which rides the file
+# manager's inotify thread (`ronoctua_files::notice::Notice::on_file`). A
+# daemon that reads `consent.json` at the moment of asking needs no watch, and
+# the crates that only hold a `Pass` (words, calc, websearch) do not link the
+# file manager for it.
+[features]
+default = [ ]
+watch = [ "dep:ronoctua-files" ]
+# THE HELPERS OVER A TEST'S OWN STORE (`store_at`, `pass_in`, `let_hosts_in`,
+# `allows_in`), for `[dev-dependencies]` ONLY: pointed at a scratch folder,
+# they mint a pass the person never gave, so a product must not have them.
+# `network-asks-with-a-pass` refuses this feature in a `[dependencies]` table.
+test-support = [ ]
+
+[dependencies]
+serde.workspace = true
+# `consent.json` is a `Store`: written whole and atomically, read at the
+# moment of asking, merged by host through `parsed()`.
+ronoctua-store = { path = "../ronoctua-store" }
+# A `Secret` is wiped when it is dropped.
+zeroize.workspace = true
+ronoctua-files = { path = "../ronoctua-files", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

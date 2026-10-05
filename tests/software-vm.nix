@@ -229,10 +229,10 @@ let
     print(data.decode().strip())
   '';
 
-  # NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF, NOR MAKES ROOM ON ITS
-  # DISK: the reasons are in `tests/compositor-xvfb.nix` — and here the
+  # NOTHING THE BRAIN DOES STARTS BY ITSELF — no rebuild, no relief of the
+  # disk: the reasons are in `tests/compositor-xvfb.nix` — and here the
   # relief's collection would take `secondProbe`, registered and never rooted.
-  brainPrefs = pkgs.writeText "brain.json" ''{"tasks":{"system-update":{"enabled":false},"disk-space":{"enabled":false}}}'';
+  brainPrefs = pkgs.writeText "brain.json" ''{"quiet":true}'';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-software";
@@ -250,7 +250,11 @@ pkgs.testers.runNixOSTest {
     {
       imports = [
         ../nix/modules/base.nix
-        ../nix/modules/update.nix
+        # THE BRAIN'S MODULES' NIXOS HALVES, for the options they declare —
+        # `ronoctua.update.steps` is answered by modules imported here — and
+        # nothing else: the brain is off below, and every module's `config`
+        # with it.
+        ../nix/modules/brain.nix
         ../nix/modules/transfers.nix
         ../nix/modules/media.nix
         ../nix/modules/scroll.nix
@@ -282,6 +286,7 @@ pkgs.testers.runNixOSTest {
       # The update sequence is not under test, and a machine under test does
       # not rebuild itself.
       ronoctua.update.enable = false;
+      ronoctua.brain.enable = false;
 
       # CHROME AT ITS STABLE PATH, and the variable the software tools give
       # the two units when the browser is on — see the header.

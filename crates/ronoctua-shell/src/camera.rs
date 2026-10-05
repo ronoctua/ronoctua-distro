@@ -33,7 +33,7 @@ use ronoctua_tokens as tokens;
 /// How long the controls stay after the last sign of a person.
 pub const SHOWN_FOR: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// The window's `app_id` — the compositor floats it by this (`terminal::floating_rules`).
+/// The window's `app_id` — the compositor floats it by this (`floating::FLOATING`).
 pub const APP_ID: &str = "br.ronoctua.camera";
 
 /// The keys of the app: notation, command id, and the glyph its button wears
@@ -796,6 +796,8 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
         }
         Trouble::CameraSilent => texts.t(key::STUDIO_TROUBLE_CAMERA_SILENT),
         Trouble::NoModel => texts.t(key::STUDIO_TROUBLE_NO_MODEL),
+        Trouble::NoFace => texts.t(key::STUDIO_TROUBLE_NO_FACE),
+        Trouble::Rehearsal => texts.t(key::STUDIO_TROUBLE_REHEARSAL),
         Trouble::NoHandModel => texts.t(key::STUDIO_TROUBLE_NO_HAND_MODEL),
         Trouble::NoBackdrop => texts.t(key::STUDIO_TROUBLE_NO_BACKDROP),
         Trouble::NoFfmpeg => texts.t(key::STUDIO_TROUBLE_NO_FFMPEG),
@@ -1059,6 +1061,8 @@ mod tests {
             Trouble::CameraBusy { by: "x".into() },
             Trouble::CameraSilent,
             Trouble::NoModel,
+            Trouble::NoFace,
+            Trouble::Rehearsal,
             Trouble::NoHandModel,
             Trouble::NoBackdrop,
             Trouble::NoFfmpeg,

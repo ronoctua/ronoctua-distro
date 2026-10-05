@@ -46,6 +46,15 @@ pkgs.testers.runNixOSTest {
 
     hardware.graphics.enable = true;
     services.dbus.enable = true;
+
+    # WHAT `OnFailure=` RAISES, standing in for the lifeline: the watchdog
+    # subtest proves a hung footer FAILS, and that its failure starts the unit
+    # named there — the arrangement `nix/modules/scroll.nix` gives the real
+    # footer and the real lifeline.
+    systemd.services.lifeline-probe = {
+      serviceConfig.Type = "oneshot";
+      script = "touch /run/lifeline-raised";
+    };
   };
 
   testScript = ''
@@ -118,5 +127,35 @@ pkgs.testers.runNixOSTest {
         # A crash right after the first frame would go unnoticed by the asserts
         # above, which only look at the log.
         machine.succeed("systemctl is-active footer")
+
+    with subtest("a footer that hangs is one that dies: the watchdog"):
+        # THE UNIT'S OWN THREE SETTINGS (`nix/modules/scroll.nix`), on a
+        # transient unit: the footer pets the watchdog from its loop's
+        # one-second tick, so it lives while the loop turns — and a `SIGSTOP`,
+        # which leaves a process `active` and `OnFailure=` blind, fails it
+        # with `Result=watchdog`, the failure that raises the lifeline.
+        machine.succeed("systemctl stop footer")
+        machine.succeed(
+            "systemd-run --unit=hung ${xvfb.env} "
+            "-p WatchdogSec=6 -p NotifyAccess=main -p TimeoutAbortSec=2 "
+            "-p OnFailure=lifeline-probe.service "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=RUST_LOG=ronoctua_shell=info "
+            "${ronoctua-shell}/bin/ronoctua-shell"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u hung --no-pager | grep 'pets systemd' > /dev/null", timeout=60
+        )
+        # ALIVE PAST TWO INTERVALS while the loop turns: the pings arrive.
+        machine.sleep(14)
+        machine.succeed("systemctl is-active hung")
+        machine.fail("test -e /run/lifeline-raised")
+        machine.succeed("systemctl kill -s STOP hung")
+        machine.wait_until_succeeds(
+            "systemctl show -p Result --value hung | grep -x watchdog", timeout=60
+        )
+        # AND THE FAILURE RAISES WHAT `OnFailure=` NAMES — the lifeline, on
+        # the real footer unit.
+        machine.wait_until_succeeds("test -e /run/lifeline-raised", timeout=30)
   '';
 }

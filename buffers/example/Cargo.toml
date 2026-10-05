@@ -22,9 +22,18 @@ crate-type = [ "cdylib" ]
 # `generate!` and re-exports the `export!` macro, so there is ONE generated
 # binding set for the seven buffers instead of seven. That is what makes "one
 # heading" enforceable rather than agreed.
+#
+# AND `syntax`: the reference shows a piece of code coloured by what it is —
+# the one buffer that asks for the highlighter, which costs the table's
+# fifty-odd kilobytes and nothing in any buffer that does not ask.
 ronoctua-design = { path = "../../crates/ronoctua-design", default-features = false, features = [
   "guest",
+  "syntax",
 ] }
+# The `Language` and the `State` that `Screen::code` takes, BY THE CRATE'S OWN
+# NAME: `syntax-colours-are-tokens` follows every role by `ronoctua_syntax`,
+# and a re-export under another path would hide a file from it.
+ronoctua-syntax = { path = "../../crates/ronoctua-syntax" }
 
 [lints.rust]
 # The same ones as the host's workspace, repeated because this is another

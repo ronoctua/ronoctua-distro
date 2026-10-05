@@ -188,6 +188,190 @@ pub fn clock_at(panel: Panel, placed: &[Placed], cells: u16) -> Option<u16> {
     (from >= after).then_some(from)
 }
 
+/// The cells a seek beside the clock takes: its glyph and the cell of air
+/// after it, both answering the click — a transport button's own box
+/// ([`buttons`]).
+const SEEK_CELLS: u16 = 2;
+
+/// THE CLOCK BETWEEN ITS TWO SEEKS — `◀◀ 1:23 / 4:56 ▶▶` — at the right end
+/// of the transport's line: ten seconds back, the clock, ten seconds ahead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockGroup {
+    /// The seek back, where it was placed: its glyph on its first cell and
+    /// a cell of air before the clock.
+    pub back: Placed,
+    /// The clock's first cell.
+    pub clock_from: u16,
+    /// The seek ahead: a cell of air after the clock, then its glyph and
+    /// the cell of air that keeps it off the panel's edge.
+    pub ahead: Placed,
+}
+
+/// The clock and its two seeks on `line`, flush with the panel's right end
+/// — a cell of air between each piece, and one after the last glyph, which
+/// never stands against the edge — after the buttons already `placed`, a
+/// cell apart from the last. `None` WHOLE when the three do not fit: a seek
+/// without its clock is a glyph nobody can read, and a clock cut reads as a
+/// wrong time.
+#[must_use]
+pub fn clock_group(
+    panel: Panel,
+    line: u16,
+    placed: &[Placed],
+    clock_cells: u16,
+) -> Option<ClockGroup> {
+    let after = placed.last().map_or(panel.from, |(_, _, b, _)| b + 1);
+    let end = panel.from + panel.cells;
+    let ahead = end.checked_sub(SEEK_CELLS)?;
+    let clock_from = ahead.checked_sub(clock_cells.checked_add(1)?)?;
+    let back = clock_from.checked_sub(SEEK_CELLS)?;
+    (back >= after).then_some(ClockGroup {
+        back: (line, back, back + SEEK_CELLS, "player-rewind"),
+        clock_from,
+        ahead: (line, ahead, ahead + SEEK_CELLS, "player-forward"),
+    })
+}
+
+/// What the transport's clock says of `s`: where it is, and of how long when
+/// it has a length — `None` with nothing loaded.
+#[must_use]
+pub fn clock_text(s: &State) -> Option<String> {
+    s.current?;
+    Some(s.duration.map_or_else(
+        || crate::player::clock(s.position),
+        |d| {
+            format!(
+                "{} / {}",
+                crate::player::clock(s.position),
+                crate::player::clock(d)
+            )
+        },
+    ))
+}
+
+/// THE TRANSPORT'S LINE, whole — the ONE answer every door paints from and
+/// takes a press, a click and a hover by: the buttons ([`buttons`]), then
+/// the seeks around the clock ([`clock_group`]) placed among them, and the
+/// clock's first cell. Where the group does not fit, the clock alone where
+/// it fits ([`clock_at`]), as it always was — and neither where that does
+/// not: the seeks are `j` and `l` still.
+#[must_use]
+pub fn transport(
+    panel: Panel,
+    line: u16,
+    state: Option<&State>,
+) -> (Vec<Placed>, Option<(u16, u16)>) {
+    let mut placed = buttons(panel, line, state);
+    let Some(cells) = state
+        .and_then(clock_text)
+        .map(|c| ronoctua_protocol::cells(&c))
+    else {
+        return (placed, None);
+    };
+    if let Some(group) = clock_group(panel, line, &placed, cells) {
+        placed.push(group.back);
+        placed.push(group.ahead);
+        return (placed, Some((line, group.clock_from)));
+    }
+    let alone = clock_at(panel, &placed, cells).map(|from| (line, from));
+    (placed, alone)
+}
+
+/// A third of the picture, across: where a click lands decides what a
+/// double click does there ([`PictureClicks`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zone {
+    /// The left third: ten seconds back.
+    Back,
+    /// The middle: the whole screen, as a double click always did.
+    Middle,
+    /// The right third: ten seconds ahead.
+    Ahead,
+}
+
+/// Which third of a picture `width` wide the point `x` (from its left
+/// edge) is in.
+#[must_use]
+pub fn picture_zone(width: f64, x: f64) -> Zone {
+    let third = width / 3.0;
+    if x < third {
+        Zone::Back
+    } else if x >= width - third {
+        Zone::Ahead
+    } else {
+        Zone::Middle
+    }
+}
+
+/// What a click on the picture does, as [`PictureClicks`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PictureClick {
+    /// Play or pause — the first click, as on every player.
+    Toggle,
+    /// The second, in the middle: play again what the first paused, and the
+    /// whole screen — or back from it.
+    ToggleAndMaximize,
+    /// The second, on a side: play again what the first paused, and seek by
+    /// these seconds — back is negative.
+    ToggleAndSeek(f64),
+    /// A third and on, on the same side while it seeks: seek again, and no
+    /// more pausing.
+    Seek(f64),
+}
+
+/// THE CLICKS ON A PICTURE, one after the other: the first plays or pauses,
+/// a second quick enough in the middle maximizes, on a side it seeks ten
+/// seconds — and each further one on the same side seeks again. The ONE
+/// reading the window, the column and the footer take (`the doors do the
+/// same`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PictureClicks {
+    /// The last click that counts: when, where, and whether it sought.
+    last: Option<(std::time::Instant, Zone, bool)>,
+}
+
+impl PictureClicks {
+    /// A click at `now` in `zone`; `double` is how quick a second one is.
+    pub fn clicked(
+        &mut self,
+        now: std::time::Instant,
+        zone: Zone,
+        double: std::time::Duration,
+    ) -> PictureClick {
+        let step = |zone: Zone| match zone {
+            Zone::Back => -crate::player::SEEK_STEP,
+            Zone::Middle | Zone::Ahead => crate::player::SEEK_STEP,
+        };
+        let recent = self
+            .last
+            .filter(|(then, _, _)| now.saturating_duration_since(*then) <= double);
+        match recent {
+            // ANOTHER ON THE SAME SIDE while it seeks: again, and only that.
+            Some((_, side, true)) if side == zone => {
+                self.last = Some((now, zone, true));
+                PictureClick::Seek(step(zone))
+            }
+            // THE SECOND: the middle maximizes, a side seeks.
+            Some((_, _, false)) => match zone {
+                Zone::Middle => {
+                    self.last = None;
+                    PictureClick::ToggleAndMaximize
+                }
+                Zone::Back | Zone::Ahead => {
+                    self.last = Some((now, zone, true));
+                    PictureClick::ToggleAndSeek(step(zone))
+                }
+            },
+            // A FIRST — nothing before it, too long ago, or the other side
+            // after a seek.
+            _ => {
+                self.last = Some((now, zone, false));
+                PictureClick::Toggle
+            }
+        }
+    }
+}
+
 /// The time bar: a line of the panel across its whole width, what has
 /// played in the accent — pressed, it seeks there, and held it drags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,8 +425,11 @@ pub struct Drawn {
     pub panel: Option<Panel>,
     /// The picture's lines — or the title card's.
     pub picture: Option<(u16, u16)>,
-    /// The transport's buttons, where they were placed.
+    /// The transport's buttons, where they were placed — the seeks around
+    /// the clock among them ([`transport`]).
     pub buttons: Vec<Placed>,
+    /// The clock's line and first cell, where it fits ([`transport`]).
+    pub clock: Option<(u16, u16)>,
     /// The time bar.
     pub track: Option<Track>,
 }
@@ -269,16 +456,31 @@ pub fn drawn(panel: Panel, first: u16, lines: u16, state: Option<&State>) -> Dra
     } else {
         panel
     };
+    let (buttons, clock) = s
+        .transport
+        .map(|line| self::transport(transport, line, state))
+        .unwrap_or_default();
     Drawn {
         panel: Some(panel),
         picture: s.picture,
-        buttons: s
-            .transport
-            .map(|line| buttons(transport, line, state))
-            .unwrap_or_default(),
+        buttons,
+        clock,
         track: s.bar.map(|line| Track::of(panel, line)),
     }
 }
+
+/// [`drawn`] with the picture FOLDED away (`player-picture-fold`): the
+/// transport and the time bar on the region's last two lines, and no
+/// picture — the panel keeps its width, and the rows beside it their room.
+#[must_use]
+pub fn drawn_folded(panel: Panel, first: u16, lines: u16, state: Option<&State>) -> Drawn {
+    let foot = lines.min(FOLDED_LINES);
+    drawn(panel, first + lines - foot, foot, state)
+}
+
+/// The lines the panel keeps with the picture folded away: the transport
+/// and the time bar ([`panel_lines`] without the picture).
+pub const FOLDED_LINES: u16 = 2;
 
 /// Where each picture routed to the screen `connector` goes in the panel's
 /// `room` — logical pixels of that screen's footer: the ONE placement every
@@ -527,6 +729,143 @@ mod tests {
         assert!(at > placed.last().map_or(0, |p| p.2));
         assert_eq!(at + 11, medium.cells);
         assert_eq!(clock_at(small, &buttons(small, 0, Some(&s)), 5), None);
+    }
+
+    /// FAILS IF: the seeks stop standing around the clock at the transport's
+    /// right end — a cell of air between the pieces and after the last glyph
+    /// — or come to overlap the buttons, or one is placed without the other
+    /// or without the clock; or the clock alone stops being kept where the
+    /// three do not fit and it does. At the column's three widths.
+    #[test]
+    fn the_clock_stands_between_its_seeks() {
+        let s = playing(vec![audio(1), audio(2)]);
+        let clock = clock_text(&s).expect("something plays");
+        assert_eq!(clock, "0:30 / 2:00");
+        let cells = ronoctua_protocol::cells(&clock);
+        let panel = |cells| Panel { from: 0, cells };
+        // 32, the small step: eleven buttons fill it, and neither fits.
+        let small = panel(tokens::space::COLUMN_SMALL);
+        let placed = buttons(small, 3, Some(&s));
+        assert_eq!(clock_group(small, 3, &placed, cells), None);
+        let (all, at) = transport(small, 3, Some(&s));
+        assert_eq!(all, placed, "no seek in the small step");
+        assert_eq!(at, None, "no clock in the small step");
+        // 72, the large: the three, flush right, and nothing overlaps.
+        let large = panel(tokens::space::COLUMN_LARGE);
+        let placed = buttons(large, 3, Some(&s));
+        let g = clock_group(large, 3, &placed, cells).expect("room for the three");
+        assert_eq!(g.back.3, "player-rewind");
+        assert_eq!(g.ahead.3, "player-forward");
+        assert_eq!(g.ahead.2, large.cells, "the ahead's air is the last cell");
+        assert_eq!(
+            g.clock_from + cells + 1,
+            g.ahead.1,
+            "a cell of air after the clock"
+        );
+        assert_eq!(g.back.2, g.clock_from, "the back's air is before the clock");
+        let last = placed.last().expect("buttons").2;
+        assert!(g.back.1 > last, "the back seek overlaps the buttons");
+        let (all, at) = transport(large, 3, Some(&s));
+        assert_eq!(at, Some((3, g.clock_from)));
+        assert_eq!(all.len(), placed.len() + 2);
+        // PAINT, CLICK AND HOVER READ THE SAME BOXES: every cell of a seek
+        // answers it, the gap before the clock answers nothing.
+        for column in g.back.1..g.back.2 {
+            assert_eq!(button_at(&all, 3, column), Some("player-rewind"));
+        }
+        for column in g.ahead.1..g.ahead.2 {
+            assert_eq!(button_at(&all, 3, column), Some("player-forward"));
+        }
+        assert_eq!(
+            button_at(&all, 3, g.clock_from),
+            None,
+            "the clock is no button"
+        );
+        // 48, the medium: with the media's glyph the three do not fit, and
+        // the clock alone does — as it always did; without it, the three.
+        let medium = panel(tokens::space::COLUMN_MEDIUM);
+        let placed = buttons(medium, 3, Some(&s));
+        assert_eq!(clock_group(medium, 3, &placed, cells), None);
+        let (all, at) = transport(medium, 3, Some(&s));
+        assert_eq!(all, placed);
+        assert_eq!(at, clock_at(medium, &placed, cells).map(|c| (3, c)));
+        assert!(at.is_some(), "the clock alone fits the medium step");
+        let plain = playing(vec![audio(1)]);
+        let (all, at) = transport(medium, 3, Some(&plain));
+        assert!(all.iter().any(|p| p.3 == "player-forward"));
+        assert!(at.is_some());
+        // NOTHING LOADED: no clock, no seek.
+        let (all, at) = transport(large, 3, Some(&crate::player::fixture::idle()));
+        assert!(at.is_none() && !all.iter().any(|p| p.3 == "player-rewind"));
+    }
+
+    /// FAILS IF: a picture's thirds stop being where a double click seeks
+    /// back, maximizes and seeks ahead — or a double click on a side stops
+    /// playing again what its first click paused, or maximizes; or a third
+    /// on the same side pauses again instead of seeking again; or a click
+    /// after the window of a double click is anything but a first.
+    #[test]
+    fn a_double_click_on_a_side_of_the_picture_seeks() {
+        assert_eq!(picture_zone(300.0, 0.0), Zone::Back);
+        assert_eq!(picture_zone(300.0, 99.0), Zone::Back);
+        assert_eq!(picture_zone(300.0, 100.0), Zone::Middle);
+        assert_eq!(picture_zone(300.0, 199.0), Zone::Middle);
+        assert_eq!(picture_zone(300.0, 200.0), Zone::Ahead);
+        assert_eq!(picture_zone(300.0, 299.0), Zone::Ahead);
+        let quick = std::time::Duration::from_millis(400);
+        let step = std::time::Duration::from_millis(100);
+        let t0 = std::time::Instant::now();
+        let mut c = PictureClicks::default();
+        let step10 = crate::player::SEEK_STEP;
+        assert_eq!(c.clicked(t0, Zone::Back, quick), PictureClick::Toggle);
+        assert_eq!(
+            c.clicked(t0 + step, Zone::Back, quick),
+            PictureClick::ToggleAndSeek(-step10)
+        );
+        assert_eq!(
+            c.clicked(t0 + step * 2, Zone::Back, quick),
+            PictureClick::Seek(-step10)
+        );
+        assert_eq!(
+            c.clicked(t0 + step * 3, Zone::Back, quick),
+            PictureClick::Seek(-step10)
+        );
+        // THE OTHER SIDE after a seek is a first click.
+        assert_eq!(
+            c.clicked(t0 + step * 4, Zone::Ahead, quick),
+            PictureClick::Toggle
+        );
+        assert_eq!(
+            c.clicked(t0 + step * 5, Zone::Ahead, quick),
+            PictureClick::ToggleAndSeek(step10)
+        );
+        // TOO LATE: a first again.
+        let late = t0 + step * 5 + quick + step;
+        assert_eq!(c.clicked(late, Zone::Ahead, quick), PictureClick::Toggle);
+        // THE MIDDLE maximizes, as a double click always did, and the next
+        // is a first.
+        assert_eq!(
+            c.clicked(late + step, Zone::Middle, quick),
+            PictureClick::ToggleAndMaximize
+        );
+        assert_eq!(
+            c.clicked(late + step * 2, Zone::Middle, quick),
+            PictureClick::Toggle
+        );
+    }
+
+    /// FAILS IF: the picture folded away stops leaving the panel the
+    /// transport and the time bar on the region's last two lines, or keeps
+    /// a picture.
+    #[test]
+    fn a_folded_picture_leaves_the_transport_and_the_bar() {
+        let panel = footer_panel(200, false).expect("beside the rows");
+        let s = playing(vec![audio(1)]);
+        let d = drawn_folded(panel, 4, 15, Some(&s));
+        assert_eq!(d.picture, None);
+        assert_eq!(d.buttons.first().map(|b| b.0), Some(4 + 15 - 2));
+        assert_eq!(d.track.map(|t| t.line), Some(4 + 15 - 1));
+        assert!(d.clock.is_some_and(|(line, _)| line == 4 + 15 - 2));
     }
 
     /// FAILS IF: the time bar is taken anywhere but where it is drawn, or a

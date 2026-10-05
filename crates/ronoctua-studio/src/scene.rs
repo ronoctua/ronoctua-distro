@@ -56,6 +56,14 @@ pub enum Source {
         /// The colour.
         rgba: String,
     },
+    /// Words — a title, a name under a face — in the colour the person
+    /// picked, `RRGGBBAA`: CONTENT, like a colour (`crate::words`).
+    Text {
+        /// What it says.
+        text: String,
+        /// Its colour.
+        rgba: String,
+    },
 }
 
 impl Source {

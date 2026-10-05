@@ -112,6 +112,46 @@ pub fn listing_address(url: &str) -> String {
     }
 }
 
+/// A video id as YouTube writes it: eleven letters, digits, `-` and `_`.
+fn is_video_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The id of the ONE YouTube video `url` names, whichever of its addresses
+/// it is written as — `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`,
+/// `/live/`, on any of YouTube's hosts; `None` for anything else, a list's
+/// own page included. Pure.
+///
+/// # Why
+///
+/// The same video pasted twice is rarely the same TEXT: one copy carries a
+/// `&t=42s`, another is the short `youtu.be` form, a third came from the
+/// mobile site. "Is it already in the queue?" is asked of the video, and
+/// this is the one answer to which video an address is.
+#[must_use]
+pub fn video_id(url: &str) -> Option<&str> {
+    let p = parts(url)?;
+    let host = p.host.to_ascii_lowercase();
+    let id = if host == "youtu.be" {
+        p.path.strip_prefix('/')?.split('/').next()?
+    } else if YOUTUBE.contains(&host.as_str()) {
+        if p.path == "/watch" {
+            query_value(p.query, "v")?
+        } else {
+            let rest = ["/shorts/", "/embed/", "/live/", "/v/"]
+                .iter()
+                .find_map(|head| p.path.strip_prefix(head))?;
+            rest.split('/').next()?
+        }
+    } else {
+        return None;
+    };
+    is_video_id(id).then_some(id)
+}
+
 /// Percent-escapes `text` for a query value: everything but the unreserved
 /// characters of RFC 3986, byte by byte of its UTF-8. Pure.
 #[must_use]
@@ -173,6 +213,35 @@ mod tests {
         assert!(!is_address("https://x/\nnext"));
         assert!(!is_address("https:///nohost"));
         assert!(!is_address(""));
+    }
+
+    /// FAILS IF: one video written two ways is two videos — the short form,
+    /// a time, the mobile site, a short — or an address that is not one
+    /// video is taken for one.
+    #[test]
+    fn every_spelling_of_a_video_is_its_id() {
+        for same in [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=42s",
+            "HTTPS://m.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx",
+            "https://youtu.be/dQw4w9WgXcQ?t=3",
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+            "https://www.youtube.com/embed/dQw4w9WgXcQ?start=1",
+            "https://www.youtube.com/live/dQw4w9WgXcQ",
+        ] {
+            assert_eq!(video_id(same), Some("dQw4w9WgXcQ"), "{same}");
+        }
+        for other in [
+            "https://www.youtube.com/playlist?list=PLq",
+            "https://www.youtube.com/watch?v=short",
+            "https://www.youtube.com@example.com/watch?v=dQw4w9WgXcQ",
+            "https://example.com/watch?v=dQw4w9WgXcQ",
+            "/music/dQw4w9WgXcQ.webm",
+            "https://youtu.be/",
+        ] {
+            assert_eq!(video_id(other), None, "{other}");
+        }
     }
 
     #[test]

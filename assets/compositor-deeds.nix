@@ -8,7 +8,7 @@
 #
 # So the vocabulary is OURS. That is not a concession: it is the shape the rest
 # of this repository already has (`assets/notifications.nix`,
-# `assets/syntax.nix`, `assets/updates.nix`), and it means the list is chosen
+# `assets/syntax.nix`, the update's `steps.nix`), and it means the list is chosen
 # rather than mirrored. What was mirrored before was a hundred and forty-one
 # rows of somebody else's `--help`, most of which nobody could find and nobody
 # had written a sentence about.
@@ -838,5 +838,31 @@
   };
   mode-default = {
     text = "mode \"default\"";
+  };
+
+  # --- the minibuffer's drawer, while a hint too long for its line is on it -
+  # The footer at rest has no keyboard, so the right `Ctrl` and the arrows that
+  # walk its drawer reach it only while it has one. For as long as a cut hint
+  # is on the line — the hand on the footer, reading — the footer asks for
+  # `Ctrl+↑/↓` here and gives them back when the hint goes
+  # (`Footer::keep_the_fold_keys`). `$ronoctua_shell` is the binary the config
+  # names in its first line (`actions::shell_variable`), quotes and all;
+  # `Control` is either `Ctrl`, which is all a bind can say.
+  #
+  # ALWAYS IN THE DEFAULT MODE, NAMED. A bare `bindsym` at run time lands in
+  # the mode that is ACTIVE (`sway/commands/bind.c`) and replaces a binding of
+  # the same keys: hovering a cut hint in the resize or the fit mode rebound
+  # their own `Ctrl+Up`/`Ctrl+Down`, and the release took them away until the
+  # next reload. `mode "default" …` binds in that mode whatever mode is on and
+  # puts the active one back (`sway/commands/mode.c`), so the hold and the
+  # release always name the same list, and no mode's own keys are touched.
+  # Nothing in the default mode binds these keys bare
+  # (`the_drawers_keys_take_nothing_of_the_default_mode`), so the release
+  # takes nothing that was there.
+  fold-keys-hold = {
+    text = "mode \"default\" bindsym --no-warn Control+Down exec $ronoctua_shell command minibuffer-fold-open; mode \"default\" bindsym --no-warn Control+Up exec $ronoctua_shell command minibuffer-fold-close";
+  };
+  fold-keys-free = {
+    text = "mode \"default\" unbindsym Control+Down; mode \"default\" unbindsym Control+Up";
   };
 }

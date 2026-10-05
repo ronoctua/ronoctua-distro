@@ -393,6 +393,16 @@ impl<C: Content> PointerHandler for Door<C> {
         }
         self.pointers.switch_to(pointer, &mut self.here);
         self.pointer_frame_here(events);
+        // THE LOOK UNDER THE HAND, asked after the window has seen the frame:
+        // a grip that started a drag in it already answers for the drag.
+        let at = events.iter().rev().find_map(|e| match e.kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => Some(e.position),
+            _ => None,
+        });
+        if let Some(at) = at {
+            let look = self.content.cursor_at(&self.ui, at);
+            self.shapes.wear(self.pointers.seat_of(pointer), look);
+        }
     }
 }
 

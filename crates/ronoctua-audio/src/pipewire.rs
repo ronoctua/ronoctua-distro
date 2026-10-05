@@ -523,9 +523,196 @@ fn capture_args(what: Capture) -> Vec<String> {
     )
 }
 
+/// The variable naming `pw-play`, read when a chime is asked for.
+///
+/// # Why the ENVIRONMENT and not the build, as the three above are
+///
+/// Because the process that chimes is the brain, a daemon whose unit is kept
+/// narrow on purpose (`brain-unit-is-narrow`): a path compiled in is a closure
+/// reference whether the feature is on or not, and the flake decides where the
+/// sound and the player are. The brain's unit is given both, by STORE PATH,
+/// by the module that rings.
+pub const PW_PLAY_VARIABLE: &str = "RONOCTUA_PW_PLAY";
+
+/// The variable naming the sound a chime plays — a file in the store.
+pub const CHIME_VARIABLE: &str = "RONOCTUA_CHIME";
+
+/// Plays the chime once, and returns at once: `pw-play` is started and left
+/// to finish on its own, reaped by a thread of its own — a caller on a thread
+/// that must never block (the brain's watch) is not held for a second and a
+/// half of bell.
+///
+/// # Errors
+///
+/// When this process was not given `pw-play` or the sound, or the program
+/// cannot be run. A caller says so in its log and goes on: a chime is never
+/// the only way anything is told.
+pub fn chime() -> Result<()> {
+    play(
+        std::env::var_os(PW_PLAY_VARIABLE),
+        std::env::var_os(CHIME_VARIABLE),
+    )
+}
+
+/// [`chime`], with the two paths handed in.
+fn play(program: Option<std::ffi::OsString>, sound: Option<std::ffi::OsString>) -> Result<()> {
+    let program = program.filter(|p| !p.is_empty()).with_context(|| {
+        format!("{PW_PLAY_VARIABLE} is not set: nothing to play the chime with")
+    })?;
+    let sound = sound
+        .filter(|s| !s.is_empty())
+        .with_context(|| format!("{CHIME_VARIABLE} is not set: no chime to play"))?;
+    let mut child = std::process::Command::new(&program)
+        .args(chime_args(&sound))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // ITS OWN GROUP, like every child here: a signal meant for the
+        // parent's terminal is not the bell's.
+        .process_group(0)
+        .spawn()
+        .with_context(|| format!("could not run {}", program.to_string_lossy()))?;
+    let reaped = std::thread::Builder::new()
+        .name("chime".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    reaped.context("could not start the thread that waits for the chime")?;
+    Ok(())
+}
+
+/// What `pw-play` is told: a notification, not music — the role a session's
+/// policy may route or duck differently — named as ours, and the file.
+fn chime_args(sound: &std::ffi::OsStr) -> Vec<std::ffi::OsString> {
+    vec![
+        "--media-role".into(),
+        "Notification".into(),
+        "-P".into(),
+        own_properties("").into(),
+        sound.to_owned(),
+    ]
+}
+
+/// Whether a PipeWire server may be listening for this process: the socket a
+/// client of it would connect to is on the disk.
+///
+/// A client asked to connect where there is no socket fails at once, and
+/// what fails at once can still hang: mpv's sound output opens a thread loop,
+/// fails to connect and stops it in the same instant, and libpipewire 1.6's
+/// stop, called before the loop's thread has entered the loop, sets the flag
+/// in the CALLER and wakes nobody — the thread sleeps in `epoll_wait` for
+/// ever and mpv's core joins it for ever. mpv tries that output again for
+/// every file, so on a machine with no server each file is one more throw.
+/// Absent is a fact; present is only "may": a socket left by a server that
+/// died is still on the disk.
+#[must_use]
+pub fn server_may_listen() -> bool {
+    sockets(|name| std::env::var_os(name)).is_none_or(|paths| paths.iter().any(|p| p.exists()))
+}
+
+/// Where libpipewire's client looks for its server
+/// (`module-protocol-native/local-socket.c`): `PIPEWIRE_REMOTE`, or
+/// `pipewire-0`, in `PIPEWIRE_RUNTIME_DIR`, else `XDG_RUNTIME_DIR`, else
+/// `USERPROFILE`, and then in `/run/pipewire`; an absolute name is itself.
+/// `None` for an abstract socket (`@…`), which no path can be asked about.
+/// Pure but for `var`.
+fn sockets(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<Vec<std::path::PathBuf>> {
+    use std::path::{Path, PathBuf};
+    let remote = var("PIPEWIRE_REMOTE").filter(|r| !r.is_empty());
+    let name = remote.unwrap_or_else(|| "pipewire-0".into());
+    if name.to_string_lossy().starts_with('@') {
+        return None;
+    }
+    if Path::new(&name).is_absolute() {
+        return Some(vec![PathBuf::from(name)]);
+    }
+    let runtime = var("PIPEWIRE_RUNTIME_DIR")
+        .or_else(|| var("XDG_RUNTIME_DIR"))
+        .or_else(|| var("USERPROFILE"));
+    Some(
+        runtime
+            .into_iter()
+            .map(PathBuf::from)
+            .chain([PathBuf::from("/run/pipewire")])
+            .map(|dir| dir.join(&name))
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: the search drifts from libpipewire's own — the runtime
+    /// directories in another order, `/run/pipewire` forgotten, a remote's
+    /// own name or an absolute one ignored — or an abstract socket, which no
+    /// path answers for, is taken for "no server".
+    #[test]
+    fn the_server_is_looked_for_where_libpipewire_looks() {
+        use std::path::PathBuf;
+        let with = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            }
+        };
+        let paths = |v: &[&str]| Some(v.iter().map(PathBuf::from).collect::<Vec<_>>());
+        assert_eq!(
+            sockets(with(&[("XDG_RUNTIME_DIR", "/run/user/1000")])),
+            paths(&["/run/user/1000/pipewire-0", "/run/pipewire/pipewire-0"])
+        );
+        assert_eq!(
+            sockets(with(&[
+                ("XDG_RUNTIME_DIR", "/run/user/1000"),
+                ("PIPEWIRE_RUNTIME_DIR", "/run/pw"),
+                ("PIPEWIRE_REMOTE", "other"),
+            ])),
+            paths(&["/run/pw/other", "/run/pipewire/other"])
+        );
+        assert_eq!(sockets(with(&[])), paths(&["/run/pipewire/pipewire-0"]));
+        assert_eq!(
+            sockets(with(&[("PIPEWIRE_REMOTE", "/tmp/a.sock")])),
+            paths(&["/tmp/a.sock"])
+        );
+        assert_eq!(sockets(with(&[("PIPEWIRE_REMOTE", "@hidden")])), None);
+    }
+
+    #[test]
+    fn a_chime_is_a_notification_of_ours_playing_the_file() {
+        let args = chime_args(std::ffi::OsStr::new("/nix/store/x-chime/chime.wav"));
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--media-role",
+                "Notification",
+                "-P",
+                &own_properties(""),
+                "/nix/store/x-chime/chime.wav"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chime_with_nothing_to_play_says_which_is_missing() {
+        let player = Some(std::ffi::OsString::from(
+            "/nix/store/x-pipewire/bin/pw-play",
+        ));
+        let sound = Some(std::ffi::OsString::from("/nix/store/x-chime/chime.wav"));
+        let said = |p, s| {
+            play(p, s)
+                .map_err(|e| e.to_string())
+                .expect_err("it played")
+        };
+        assert!(said(None, sound.clone()).contains(PW_PLAY_VARIABLE));
+        assert!(said(Some(std::ffi::OsString::new()), sound).contains(PW_PLAY_VARIABLE));
+        assert!(said(player, None).contains(CHIME_VARIABLE));
+    }
 
     /// The one `-P` object in a recording's arguments.
     fn properties_of(args: &[String]) -> &str {

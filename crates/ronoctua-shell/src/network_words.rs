@@ -56,6 +56,165 @@ pub fn press_of(id: &str) -> Option<crate::network::Press> {
     })
 }
 
+/// What the message line says when NetworkManager — or this machine — refused.
+///
+/// BY NAME (`ronoctua_network::refusal`): the error's words are English, and
+/// they go to the log; the line says the refusal in the person's language.
+#[must_use]
+pub fn refused(e: &anyhow::Error, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::key;
+    texts.t_with(key::ECHO_NETWORK_REFUSED, &[("why", &reason(e, texts))])
+}
+
+/// The REASON alone, by name — what an errand's own sentence ("could not
+/// connect to X: …", "could not share: …") puts after its colon.
+///
+/// The errand's sentence says WHAT was not done; this says WHY, in the
+/// person's language. The error's words go to the log, never to the line.
+///
+/// A refusal the network crate names itself ([`ronoctua_network::Refusal`]:
+/// no phone, no VPN, not a VPN) is said by its own sentence
+/// (`network::network_why_key`); every other is classified by
+/// `ronoctua_network::refusal`.
+#[must_use]
+pub fn reason(e: &anyhow::Error, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::key;
+    use ronoctua_network::refusal::Refusal;
+    if let Some(why) = e
+        .chain()
+        .find_map(|c| c.downcast_ref::<ronoctua_network::Refusal>())
+    {
+        tracing::info!(?why, words = %format!("{e:#}"), "the network refused");
+        return texts.t(crate::network::network_why_key(*why));
+    }
+    let why = ronoctua_network::refusal::refusal(e);
+    tracing::info!(?why, words = %format!("{e:#}"), "the network refused");
+    texts.t(match why {
+        Refusal::NotAuthorized => key::NETWORK_REFUSED_AUTHORITY,
+        Refusal::NotAvailable => key::NETWORK_REFUSED_ABSENT,
+        Refusal::Invalid => key::NETWORK_REFUSED_INVALID,
+        Refusal::NoSecrets => key::NETWORK_REFUSED_SECRETS,
+        Refusal::Failed => key::NETWORK_REFUSED_FAILED,
+        Refusal::TimedOut => key::NETWORK_REFUSED_TIMED_OUT,
+        Refusal::NoBus => key::NETWORK_REFUSED_NO_BUS,
+        Refusal::NoRadio => key::NETWORK_REFUSED_NO_RADIO,
+        Refusal::OutOfRange => key::NETWORK_REFUSED_OUT_OF_RANGE,
+        Refusal::NoDevice => key::NETWORK_REFUSED_NO_DEVICE,
+        Refusal::NoProfile => key::NETWORK_REFUSED_NO_PROFILE,
+        Refusal::ImportRefused => key::NETWORK_REFUSED_IMPORT,
+        Refusal::Vault => key::NETWORK_REFUSED_VAULT,
+        Refusal::Other => key::NETWORK_REFUSED_OTHER,
+    })
+}
+
+/// What the message line says when a tunnel's daemon refused an order —
+/// by name, and with the line Tor quoted when it quoted one: that is the
+/// person's own text given back, and the one thing that says which bridge was
+/// pasted wrong.
+#[must_use]
+pub fn tunnel_refused(r: &ronoctua_tunnel::Refused, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::key;
+    use ronoctua_tunnel::Refusal;
+    tracing::info!(why = ?r.why, words = %r.words, "a tunnel refused");
+    if let (Refusal::ConfigRefused, Some(line)) = (r.why, r.line.as_deref()) {
+        return texts.t_with(key::ECHO_TUNNEL_REFUSED_LINE, &[("line", line)]);
+    }
+    let reason = texts.t(match r.why {
+        Refusal::NoDaemon => key::TUNNEL_REFUSED_NO_DAEMON,
+        Refusal::NotAuthorized => key::TUNNEL_REFUSED_AUTHORITY,
+        Refusal::UnitFailed => key::TUNNEL_REFUSED_UNIT,
+        Refusal::NotWritten => key::TUNNEL_REFUSED_NOT_WRITTEN,
+        Refusal::ConfigRefused => key::TUNNEL_REFUSED_CONFIG,
+        Refusal::DaemonRefused => key::TUNNEL_REFUSED_DAEMON,
+        Refusal::Other => key::TUNNEL_REFUSED_OTHER,
+    });
+    texts.t_with(key::ECHO_NETWORK_REFUSED, &[("why", &reason)])
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    /// FAILS IF: an English word of a daemon reaches the line, or two
+    /// refusals say the same thing.
+    #[test]
+    fn every_network_refusal_is_said_by_its_name() {
+        use ronoctua_network::refusal::{Named, Refusal};
+        let t = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
+        let all = [
+            Refusal::NoRadio,
+            Refusal::OutOfRange,
+            Refusal::NoDevice,
+            Refusal::NoProfile,
+            Refusal::ImportRefused,
+            Refusal::Vault,
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for r in all {
+            let said = refused(
+                &anyhow::Error::from(Named(r)).context("the English context"),
+                &t,
+            );
+            assert!(!said.contains("English"), "{said}");
+            assert!(seen.insert(said), "{r:?} says what another says");
+        }
+        let other = refused(&anyhow::anyhow!("the socket went away"), &t);
+        assert!(!other.contains("socket"), "{other}");
+        // AND A TUNNEL: the line Tor quoted is given back, nothing else.
+        let line = tunnel_refused(
+            &ronoctua_tunnel::Refused {
+                why: ronoctua_tunnel::Refusal::ConfigRefused,
+                line: Some("Brige obfs4".to_owned()),
+                words: "553 Unrecognized option".to_owned(),
+            },
+            &t,
+        );
+        assert!(
+            line.contains("Brige obfs4") && !line.contains("Unrecognized"),
+            "{line}"
+        );
+        let unit = tunnel_refused(
+            &ronoctua_tunnel::Refused {
+                why: ronoctua_tunnel::Refusal::UnitFailed,
+                line: None,
+                words: "Job failed".to_owned(),
+            },
+            &t,
+        );
+        assert!(!unit.contains("Job"), "{unit}");
+    }
+
+    /// FAILS IF: an errand's own sentence — connect, share, import, keep
+    /// the password — carries the error's English after its colon.
+    #[test]
+    fn an_errands_sentence_carries_the_reason_by_name() {
+        use ronoctua_i18n::key;
+        use ronoctua_network::refusal::{Named, Refusal};
+        let t = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
+        let e = anyhow::Error::from(Named(Refusal::NoRadio)).context("asking NetworkManager");
+        let why = reason(&e, &t);
+        assert_eq!(why, t.t(key::NETWORK_REFUSED_NO_RADIO));
+        for said in [
+            t.t_with(
+                key::ECHO_NETWORK_FAILED,
+                &[("network", "casa"), ("reason", &why)],
+            ),
+            t.t_with(key::ECHO_NETWORK_HOTSPOT_FAILED, &[("reason", &why)]),
+            t.t_with(
+                key::ECHO_NETWORK_IMPORT_FAILED,
+                &[("file", "vpn.ovpn"), ("reason", &why)],
+            ),
+            t.t_with(key::ECHO_NETWORK_STORE_FAILED, &[("reason", &why)]),
+        ] {
+            assert!(
+                !said.contains("Wi-Fi radio") && !said.contains("asking"),
+                "{said}"
+            );
+            assert!(said.contains(&why), "{said}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

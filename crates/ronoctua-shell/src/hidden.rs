@@ -3,12 +3,16 @@
 //!
 //! # What the owner asked for
 //!
-//! `LEADER LEADER` hides the modeline and the minibuffer and makes whatever
-//! opens PUSH the windows; `LEADER ALT LEADER` hides them and makes everything
-//! lie OVER the windows. The same keys again bring the bars back. In both, the
-//! bottom edge of a screen reveals the bars under the pointer, the minibuffer
-//! shows itself whenever it has something to say, and the leader's list waits
-//! for the hand to stop (`crate::leader::Patience`).
+//! Two modes besides the bars as they always were: one hides the modeline
+//! and the minibuffer and makes whatever opens PUSH the windows; the other
+//! hides them and makes everything lie OVER the windows. A TAP of `Ctrl` at
+//! the leader's root walks the three in turn — normal, push, cover, normal —
+//! ([`next_mode`], the owner's scheme of 2026-09-30; before it the leader
+//! pressed again toggled one mode per set, and the leader again now walks the
+//! SETS, `crate::leader::Set::next`). In both modes, the bottom edge of a
+//! screen reveals the bars under the pointer, the minibuffer shows itself
+//! whenever it has something to say, and the leader's list waits for the hand
+//! to stop (`crate::leader::Patience`).
 //!
 //! | | push | cover |
 //! |---|---|---|
@@ -62,36 +66,41 @@ use crate::adapt::Hidden;
 use crate::leader::Set;
 use ronoctua_tokens as tokens;
 
-/// The command that toggles the PUSH mode.
-pub const PUSH_COMMAND: &str = "footer-hide-push";
-/// The command that toggles the COVER mode.
-pub const COVER_COMMAND: &str = "footer-hide-cover";
+/// The command that walks the three modes in turn — the tap of `Ctrl`. The
+/// two that toggle one mode each by name are `footer-hide-push` and
+/// `footer-hide-cover` (`toggled`).
+pub const CYCLE_COMMAND: &str = "footer-bars-cycle";
 
-/// The mode the leader pressed again at the root toggles, in each set.
+/// The mode after `now` in the cycle a tap of `Ctrl` walks: the bars as they
+/// always were, then pushing, then covering, then back.
 ///
-/// `None` in the full set, where the leader again restarts the sequence as it
-/// always did — the whole tree is where a person goes to type, and a
-/// sequence restarted by accident is cheaper than bars hidden by accident.
+/// # Why this order
+///
+/// Push first because it is the gentler of the two: what opens still moves
+/// the windows out of its way, exactly as with the bars up, and only the
+/// resting bars are gone. Cover is the further step — everything over the
+/// windows — and one more tap is the way home.
 #[must_use]
-pub const fn toggle_of(set: Set) -> Option<Hidden> {
-    match set {
-        Set::Footer => Some(Hidden::Push),
-        Set::Window => Some(Hidden::Cover),
-        Set::Full => None,
+pub const fn next_mode(now: Option<Hidden>) -> Option<Hidden> {
+    match now {
+        None => Some(Hidden::Push),
+        Some(Hidden::Push) => Some(Hidden::Cover),
+        Some(Hidden::Cover) => None,
     }
 }
 
-/// What the leader ARRIVING does: `Some(mode)` toggles the bars that way,
-/// `None` opens the leader — fresh, or starting the sequence over.
+/// What the leader ARRIVING does: `Some(set)` switches the open list to that
+/// set — the one after `set` ([`Set::next`]) — and `None` opens the leader,
+/// fresh or starting the sequence over.
 ///
-/// A toggle only on a leader already open with NOTHING typed — no key of the
+/// A switch only on a leader already open with NOTHING typed — no key of the
 /// tree, and not inside the buffer's `,` or the `w s` states, whose keys the
 /// tree does not count — so a person who mistyped and presses the leader to
-/// start over still starts over. And only in a set that has a toggle.
+/// start over still starts over.
 #[must_use]
-pub const fn leader_again(open: bool, typed_nothing: bool, set: Set) -> Option<Hidden> {
+pub const fn leader_again(open: bool, typed_nothing: bool, set: Set) -> Option<Set> {
     if open && typed_nothing {
-        toggle_of(set)
+        Some(set.next())
     } else {
         None
     }
@@ -99,50 +108,43 @@ pub const fn leader_again(open: bool, typed_nothing: bool, set: Set) -> Option<H
 
 /// The mode that follows `now` when `wanted` is toggled: the mode, or back to
 /// visible when it is already the mode. From the other mode, the one asked.
+///
+/// What `footer-hide-push` and `footer-hide-cover` do by name; the tap walks
+/// [`next_mode`] instead.
 #[must_use]
 pub fn toggled(now: Option<Hidden>, wanted: Hidden) -> Option<Hidden> {
     (now != Some(wanted)).then_some(wanted)
 }
 
-/// The command a toggle of `mode` is.
-#[must_use]
-pub const fn command_of(mode: Hidden) -> &'static str {
-    match mode {
-        Hidden::Push => PUSH_COMMAND,
-        Hidden::Cover => COVER_COMMAND,
-    }
-}
-
-/// The mode a command toggles, when it is one of the two.
-#[must_use]
-pub fn mode_of(command: &str) -> Option<Hidden> {
-    match command {
-        PUSH_COMMAND => Some(Hidden::Push),
-        COVER_COMMAND => Some(Hidden::Cover),
-        _ => None,
-    }
-}
-
-/// The row the root's list grafts for the toggle, as the `,` row is grafted:
-/// its key is the LEADER — the label the person reads on every other key —
-/// and its command the toggle of this set. `None` in the full set.
+/// The row the root's list grafts for the cycle, as the `,` row is grafted:
+/// its key is `CTRL` ([`crate::leader::BARS_TAP_KEY`]), the key a tap of which
+/// walks the modes, and its command [`CYCLE_COMMAND`]. In every set: the tap
+/// cycles at the root of each.
 ///
-/// It exists for the pointer (invariant 19): the toggle's key is the leader
-/// pressed again, which the list cannot otherwise show and a click cannot
-/// otherwise press. A click on it does what the leader again does.
+/// It exists for the pointer (invariant 19): the cycle's key is a modifier
+/// tapped alone, which the list cannot otherwise show and a click cannot
+/// otherwise press. A click on it runs the cycle (`Click::Bars`).
 #[must_use]
-pub fn bars_row(set: Set, leader_label: &str) -> Option<ronoctua_keymap::Entry> {
-    let command = command_of(toggle_of(set)?);
-    Some(ronoctua_keymap::Entry {
-        key: leader_label.to_owned(),
-        // THE LEADER AS DATA is `SPC`, the keymap's own name for it. What a
-        // click on this row does is not pressing it — no tree has the leader
-        // as a key — but the leader arriving again (`Click::Leader`).
-        sym: ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Space),
-        label: format!("cmd-{command}"),
-        command: Some(command.to_owned()),
+pub fn bars_row() -> ronoctua_keymap::Entry {
+    let ctrl = ronoctua_keymap::Mods {
+        ctrl: true,
+        ..ronoctua_keymap::Mods::default()
+    };
+    ronoctua_keymap::Entry {
+        key: crate::leader::BARS_TAP_KEY.to_owned(),
+        // THE ROW'S KEY AS DATA is never pressed — a click on it is
+        // `Click::Bars` — and it is `C-ESC`: `Ctrl` for the key it stands
+        // for, and `ESC` because no tree may bind it (`Leader::key` ends on
+        // it before any tree is asked), so the data cannot be taken for a
+        // binding. It was `SPC`, which the root now leaves to the fast access.
+        sym: ronoctua_keymap::Key {
+            mods: ctrl,
+            sym: ronoctua_keymap::Sym::Esc,
+        },
+        label: format!("cmd-{CYCLE_COMMAND}"),
+        command: Some(CYCLE_COMMAND.to_owned()),
         is_group: false,
-    })
+    }
 }
 
 /// What decides the shape — facts the footer reads, never its rows.
@@ -485,7 +487,7 @@ pub struct Geometry {
 /// always did; the layer moves only when a mode is switched, by a key.
 ///
 /// THE PRICE, written down: hidden, the footer ignores the resizer's
-/// curtains (`resizer.rs`, a development tool, `LEADER d r`). Lying over, its
+/// curtains (`resizer.rs`, a development tool, `LEADER / r`). Lying over, its
 /// zone of `-1` ignores every other zone; pushing, it is reserved before the
 /// curtains, made later on the same `overlay` layer. Either way it does not
 /// sit on the shorter screen the curtains make: it keeps the real bottom
@@ -659,13 +661,16 @@ mod tests {
         assert!(waiting.draws_minibuffer() && !waiting.pushing);
     }
 
-    /// FAILS IF: the leader again toggles the wrong mode in a set, toggles in
-    /// the full set, or a toggle does not come back to visible.
+    /// FAILS IF: the tap stops walking normal → push → cover → normal, or a
+    /// mode toggled by name stops coming back to visible.
     #[test]
-    fn the_leader_again_toggles_per_set() {
-        assert_eq!(toggle_of(Set::Footer), Some(Hidden::Push));
-        assert_eq!(toggle_of(Set::Window), Some(Hidden::Cover));
-        assert_eq!(toggle_of(Set::Full), None);
+    fn a_tap_walks_the_three_modes_round() {
+        assert_eq!(next_mode(None), Some(Hidden::Push));
+        assert_eq!(next_mode(Some(Hidden::Push)), Some(Hidden::Cover));
+        assert_eq!(next_mode(Some(Hidden::Cover)), None);
+        // THREE TAPS ARE HOME.
+        assert_eq!(next_mode(next_mode(next_mode(None))), None);
+        // AND BY NAME, EACH MODE STILL TOGGLES.
         assert_eq!(toggled(None, Hidden::Push), Some(Hidden::Push));
         assert_eq!(toggled(Some(Hidden::Push), Hidden::Push), None);
         // FROM THE OTHER MODE, THE ONE ASKED — not back to visible.
@@ -678,17 +683,13 @@ mod tests {
             Some(Hidden::Cover)
         );
         assert_eq!(toggled(Some(Hidden::Cover), Hidden::Cover), None);
-        for mode in [Hidden::Push, Hidden::Cover] {
-            assert_eq!(mode_of(command_of(mode)), Some(mode));
-        }
-        assert_eq!(mode_of("files-open"), None);
     }
 
-    /// FAILS IF: the leader arriving toggles anything but an open leader
-    /// with nothing typed — a fresh opening, a sequence under way, or the
-    /// full set — or toggles the wrong mode for its set.
+    /// FAILS IF: the leader arriving switches anything but an open leader
+    /// with nothing typed — a fresh opening, a sequence under way — or
+    /// switches to any set but the next one.
     #[test]
-    fn the_leader_again_toggles_only_at_the_root() {
+    fn the_leader_again_switches_only_at_the_root() {
         for set in [Set::Footer, Set::Window, Set::Full] {
             assert_eq!(
                 leader_again(false, true, set),
@@ -700,24 +701,27 @@ mod tests {
                 None,
                 "a sequence under way, {set:?}"
             );
-            assert_eq!(leader_again(true, true, set), toggle_of(set), "{set:?}");
+            assert_eq!(leader_again(true, true, set), Some(set.next()), "{set:?}");
         }
-        assert_eq!(leader_again(true, true, Set::Full), None);
+        // AND ROUND: from the whole tree, back to the default.
+        assert_eq!(leader_again(true, true, Set::Full), Some(Set::Footer));
     }
 
-    /// FAILS IF: the grafted row is missing where a toggle exists, present in
-    /// the full set, names a command the registry does not have, or teaches a
-    /// key other than the leader's own label.
+    /// FAILS IF: the grafted row names a command the registry does not have,
+    /// teaches a key other than `CTRL`, is a group, or carries `SPC` as its
+    /// data — the root's `SPC` is the fast access's.
     #[test]
-    fn the_root_teaches_the_toggle_of_its_set() {
+    fn the_root_teaches_the_cycle() {
         let (_, registry) = crate::leader::default_of().expect("the keymap builds");
-        assert!(bars_row(Set::Full, "SUPER").is_none());
-        for (set, command) in [(Set::Footer, PUSH_COMMAND), (Set::Window, COVER_COMMAND)] {
-            let row = bars_row(set, "SUPER").expect("a row");
-            assert_eq!(row.key, "SUPER");
-            assert_eq!(row.command.as_deref(), Some(command));
-            assert_eq!(row.label, format!("cmd-{command}"));
-            assert!(!row.is_group);
+        let row = bars_row();
+        assert_eq!(row.key, crate::leader::BARS_TAP_KEY);
+        assert_eq!(row.key, "CTRL");
+        assert_eq!(row.command.as_deref(), Some(CYCLE_COMMAND));
+        assert_eq!(row.label, format!("cmd-{CYCLE_COMMAND}"));
+        assert!(!row.is_group);
+        assert_ne!(row.sym.sym, ronoctua_keymap::Sym::Space);
+        assert_eq!(row.sym.sym, ronoctua_keymap::Sym::Esc);
+        for command in [CYCLE_COMMAND, "footer-hide-push", "footer-hide-cover"] {
             assert!(
                 registry.search(command).is_some(),
                 "{command} is not registered"

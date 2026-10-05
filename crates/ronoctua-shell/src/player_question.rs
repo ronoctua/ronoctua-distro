@@ -24,19 +24,11 @@ pub const PAIR_CODE: &str = "player-pair-code";
 /// Another name for an entry of the queue — the view's to answer
 /// (`View::answered`), which knows which entry it asked about.
 pub const RENAME: &str = "player-rename";
-/// The name a set is saved under: the first of two questions, the view's.
+/// The name a set is saved under, typed from no question (`LEADER :` with
+/// an argument): the view opens the save's picker holding it.
 pub const SAVE_SET: &str = "player-save-set";
-/// The folder a set is saved in: the second question.
-pub const SAVE_SET_FOLDER: &str = "player-save-set-folder";
-/// The name the queue is saved under: the first of two questions.
+/// The name the queue is saved under, the same way.
 pub const SAVE_QUEUE: &str = "player-save-queue";
-/// The folder the queue is saved in: the second question.
-pub const SAVE_QUEUE_FOLDER: &str = "player-save-queue-folder";
-/// A set or a queue to open, typed on the page that picks one.
-pub const OPEN_SAVED: &str = "player-open-saved";
-/// A subtitle file to lay over the picture, typed on the page that picks one
-/// — the view's to answer (`View::answered`): a subtitle whatever its name.
-pub const SUBTITLE_FILE: &str = "player-subtitle-file";
 /// When a lane begins, typed on its page — the view's to answer
 /// (`View::answered`), which knows which lane it asked about.
 pub const LANE_START: &str = "player-lane-start";
@@ -44,9 +36,6 @@ pub const LANE_START: &str = "player-lane-start";
 pub const LANE_UNTIL: &str = "player-lane-until";
 /// A lane's own name, typed on its page — the view's to answer.
 pub const LANE_TITLE: &str = "player-lane-title";
-/// A picture for the cover of the file the Metadata section shows, typed on
-/// the page that picks one — the view's to answer.
-pub const COVER_FILE: &str = "player-cover-file";
 /// A tag's new value, typed on the Every-tag page, the line holding the one
 /// it has — the view's to answer, which knows which tag it asked about.
 pub const TAG_VALUE: &str = "player-tag-value";
@@ -76,8 +65,6 @@ pub const ACCOUNT_PASSWORD: &str = "player-account-password";
 pub const SEARCH_RADIO: &str = "player-search-radio";
 /// Words a TV channel is named by.
 pub const SEARCH_TV: &str = "player-search-tv";
-/// Words a film of the Internet Archive is titled by.
-pub const SEARCH_ARCHIVE: &str = "player-search-archive";
 /// A genre of radio, by its name — any, the ones past the list's most too.
 pub const SEARCH_GENRE: &str = "player-search-genre";
 /// A language of radio, by radio-browser's word for it.
@@ -189,7 +176,7 @@ pub fn answered_saying(
     }
 }
 
-/// An order typed, with the sentence its pick says (`View::among_the_files`).
+/// An order typed, with the sentence its pick says (`View::picked`).
 fn told(ask: Ask, texts: &ronoctua_i18n::Texts) -> Errand {
     use ronoctua_i18n::key;
     let name = |location: &str| {
@@ -220,13 +207,13 @@ fn told(ask: Ask, texts: &ronoctua_i18n::Texts) -> Errand {
 }
 
 /// What playing `source` together with what plays asks: a lane of the kind
-/// the file is (`player_browse::lane_kind_of`), from the set's start, over
+/// the file is (`player_kinds::lane_kind_of`), from the set's start, over
 /// the first picture when it is subtitles — the file that played alone
 /// becomes a set, and keeps its place in the queue.
 #[must_use]
 pub fn together(source: String) -> Ask {
     Ask::AddLane {
-        kind: crate::player_browse::lane_kind_of(&source),
+        kind: crate::player_kinds::lane_kind_of(&source),
         source,
         track: None,
         start_seconds: 0.0,
@@ -359,6 +346,7 @@ mod tests {
                 into: None,
                 play: true,
                 replace: false,
+                once: false,
             })
         );
         assert_eq!(typed(PLAY, "   "), None);

@@ -48,8 +48,9 @@ from lexicon import SOURCE, search_forms, subtag_of, translate, words_of
 # THESE NAMES ARE THE SAME ONES THE FILTER PANEL SHOWS. There they come from
 # the `.ftl` (invariant 8: what speaks on screen is the interface, and translation
 # belongs to the host); here they become search TAGS. They are two representations
-# of the same fact, and what keeps the two from diverging is `browser-filters`: the
-# label the panel shows has to find, when typed into the search, the whole set.
+# of the same fact, and what keeps the two from diverging is
+# `ronoctua-iconset`'s test `every_panel_label_finds_its_whole_category_in_every_language`:
+# the label the app shows has to find, when typed into the search, the whole set.
 #
 # That is why the Portuguese comes ACCENTED: each glyph's `search_terms` gets the
 # unaccented form for free (see `no_accent`), so accenting here makes "indentacao"

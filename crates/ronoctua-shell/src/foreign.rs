@@ -320,7 +320,11 @@ fn launch_with(scopes: bool, scope: &str, direct: &[String], cmd: &[String]) -> 
     // It is still `status()`, and not `spawn()`: waiting is what keeps the
     // scope's name meaning "this application is running", and the wait is on
     // this thread, never on the loop's.
-    let ran = scopes.then(|| std::process::Command::new(prog).args(rest).status());
+    let ran = scopes.then(|| {
+        crate::watchdog::unshared(&mut std::process::Command::new(prog))
+            .args(rest)
+            .status()
+    });
     let reason = match next(scopes, ran.as_ref()) {
         Next::Ended => {
             if let Some(Ok(st)) = &ran
@@ -340,7 +344,10 @@ fn launch_with(scopes: bool, scope: &str, direct: &[String], cmd: &[String]) -> 
     };
 
     // It DEGRADES, and does not give up. See `Launch::Orphan`.
-    match std::process::Command::new(program).args(args).spawn() {
+    match crate::watchdog::unshared(&mut std::process::Command::new(program))
+        .args(args)
+        .spawn()
+    {
         // WAITED FOR, aside: with no scope nothing else ever reaps it.
         Ok(child) => {
             let _ = waited(child);

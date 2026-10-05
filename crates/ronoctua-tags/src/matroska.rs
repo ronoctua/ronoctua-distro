@@ -69,6 +69,19 @@ impl Targets {
         self.global() && self.type_value.is_none_or(|v| v == 50)
     }
 
+    /// The track it targets ALONE — its one UID a `TrackUID` — or `None`.
+    pub(crate) fn only_track(&self) -> Option<u64> {
+        match self.uids.as_slice() {
+            [(kind, uid)] if kind == "TrackUID" => Some(*uid),
+            _ => None,
+        }
+    }
+
+    /// Whether it names `uid`'s track among what it targets.
+    fn names_track(&self, uid: u64) -> bool {
+        self.uids.iter().any(|(k, u)| k == "TrackUID" && *u == uid)
+    }
+
     fn target(&self) -> Target {
         if self.global() {
             Target::Global
@@ -343,6 +356,163 @@ pub(crate) fn set_named(tags: &mut Tags, name: &str, value: Option<&str>) {
     }
 }
 
+/// Writes a tag by its own name into track `uid`'s tags: out of every
+/// block that targets that track alone, the new value into the first of
+/// them (made at the default level when the track has none).
+pub(crate) fn set_named_track(tags: &mut Tags, uid: u64, name: &str, value: Option<&str>) {
+    for block in tags
+        .blocks
+        .iter_mut()
+        .filter(|b| b.targets.only_track() == Some(uid))
+    {
+        block.simples.retain(|s| !s.name.eq_ignore_ascii_case(name));
+    }
+    tags.blocks
+        .retain(|b| !(b.targets.only_track() == Some(uid) && b.simples.is_empty()));
+    let Some(v) = value else { return };
+    let at = match tags
+        .blocks
+        .iter()
+        .position(|b| b.targets.only_track() == Some(uid))
+    {
+        Some(at) => at,
+        None => {
+            tags.blocks.push(Block {
+                targets: Targets {
+                    type_value: Some(50),
+                    type_name: None,
+                    uids: vec![("TrackUID".to_owned(), uid)],
+                },
+                simples: Vec::new(),
+            });
+            tags.blocks.len() - 1
+        }
+    };
+    tags.blocks[at].simples.push(Simple::text(name, v));
+}
+
+/// Track `uid`'s blocks as the XML `--tags track:<n>:` takes — their
+/// targets without the UID, which `mkvpropedit` gives the track it is told
+/// — or `None` when the track has no tag left.
+pub(crate) fn track_xml(tags: &Tags, uid: u64) -> Option<String> {
+    let blocks: Vec<&Block> = tags
+        .blocks
+        .iter()
+        .filter(|b| b.targets.only_track() == Some(uid) && !b.simples.is_empty())
+        .collect();
+    if blocks.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE Tags SYSTEM \"matroskatags.dtd\">\n<Tags>\n",
+    );
+    for block in blocks {
+        out.push_str("  <Tag>\n    <Targets>\n");
+        if let Some(v) = block.targets.type_value {
+            let _ = writeln!(out, "      <TargetTypeValue>{v}</TargetTypeValue>");
+        }
+        if let Some(n) = &block.targets.type_name {
+            let _ = writeln!(out, "      <TargetType>{}</TargetType>", escape(n));
+        }
+        out.push_str("    </Targets>\n");
+        for s in &block.simples {
+            write_simple(&mut out, s, 2);
+        }
+        out.push_str("  </Tag>\n");
+    }
+    out.push_str("</Tags>\n");
+    Some(out)
+}
+
+/// A chapter's start as Matroska's XML writes it (`HH:MM:SS.nnnnnnnnn`),
+/// in milliseconds, rounded.
+fn chapter_ms(text: &str) -> Option<u64> {
+    let mut parts = text.trim().split(':');
+    let h: u64 = parts.next()?.parse().ok()?;
+    let m: u64 = parts.next()?.parse().ok()?;
+    let rest = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (s, frac) = rest.split_once('.').unwrap_or((rest, "0"));
+    let s: u64 = s.parse().ok()?;
+    let mut nanos = frac.chars().take(9).collect::<String>();
+    while nanos.len() < 9 {
+        nanos.push('0');
+    }
+    let ns: u64 = nanos.parse().ok()?;
+    Some((h * 3600 + m * 60 + s) * 1000 + (ns + 500_000) / 1_000_000)
+}
+
+/// `mkvextract`'s chapters XML with every atom that starts at `start_ms`
+/// (one in each edition) retitled — its first display's string replaced,
+/// or a display added where it has none — and every other byte as it was.
+///
+/// # Errors
+///
+/// [`crate::sheet::Why::Unreadable`] for XML that is not the chapters'
+/// and [`crate::sheet::Why::NoSuchThing`] when no chapter starts there.
+pub(crate) fn retitle_chapters(
+    xml: &str,
+    start_ms: u64,
+    title: &str,
+) -> Result<String, crate::sheet::Why> {
+    use crate::sheet::Why;
+    let options = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..roxmltree::ParsingOptions::default()
+    };
+    let doc = ronoctua_xml::parse(xml, options).map_err(|_| Why::Unreadable)?;
+    if doc.root_element().tag_name().name() != "Chapters" {
+        return Err(Why::Unreadable);
+    }
+    fn child<'a, 'i>(n: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::Node<'a, 'i>> {
+        n.children()
+            .find(|c| c.is_element() && c.has_tag_name(name))
+    }
+    // (where, how much of it goes, what comes in), back to front.
+    let mut splices: Vec<(usize, usize, String)> = Vec::new();
+    let written = escape(title);
+    for atom in doc.descendants().filter(|n| n.has_tag_name("ChapterAtom")) {
+        let starts = child(atom, "ChapterTimeStart")
+            .and_then(|s| s.text())
+            .and_then(chapter_ms);
+        if starts.is_none_or(|ms| ms.abs_diff(start_ms) > 1) {
+            continue;
+        }
+        match child(atom, "ChapterDisplay").and_then(|d| child(d, "ChapterString")) {
+            Some(string) => {
+                let r = string.range();
+                splices.push((
+                    r.start,
+                    r.len(),
+                    format!("<ChapterString>{written}</ChapterString>"),
+                ));
+            }
+            None => {
+                let r = atom.range();
+                let close = xml[r.clone()].rfind("</").ok_or(Why::Unreadable)?;
+                splices.push((
+                    r.start + close,
+                    0,
+                    format!(
+                        "<ChapterDisplay><ChapterString>{written}</ChapterString></ChapterDisplay>"
+                    ),
+                ));
+            }
+        }
+    }
+    if splices.is_empty() {
+        return Err(Why::NoSuchThing);
+    }
+    splices.sort_by_key(|(at, ..)| std::cmp::Reverse(*at));
+    let mut out = xml.to_owned();
+    for (at, len, with) in splices {
+        out.replace_range(at..at + len, &with);
+    }
+    Ok(out)
+}
+
 /// Whether a file has a global TITLE tag to keep in step with the segment's
 /// title.
 pub(crate) fn has_title_tag(tags: &Tags) -> bool {
@@ -384,12 +554,39 @@ pub(crate) fn any_global(tags: &Tags) -> bool {
         .any(|b| b.targets.global() && !b.simples.is_empty())
 }
 
-/// Every tag, by its own name, for the Every-tag page.
-pub(crate) fn listing(tags: &Tags, can_global: &crate::sheet::Can) -> Vec<Tag> {
+/// Whether the tags of track `uid` can be handed back whole: every block
+/// that names it names it ALONE — `--tags track:<n>:` replaces the track's
+/// tags, and one that also targets a chapter would come back as the track's
+/// only.
+fn track_is_whole(tags: &Tags, uid: u64) -> bool {
+    tags.blocks
+        .iter()
+        .filter(|b| b.targets.names_track(uid))
+        .all(|b| b.targets.only_track() == Some(uid))
+}
+
+/// Every tag, by its own name, for the Every-tag page — a global one
+/// written as `can_global` says, one of a single track as `can_track` says
+/// (its writer also needs `mkvmerge` to find the track by its UID).
+pub(crate) fn listing(
+    tags: &Tags,
+    can_global: &crate::sheet::Can,
+    can_track: &crate::sheet::Can,
+) -> Vec<Tag> {
     use crate::sheet::{Can, TagValue, Why};
     let mut out = Vec::new();
     for block in &tags.blocks {
         let target = block.targets.target();
+        // A TAG OF ONE TRACK ALONE is written into that track by its UID.
+        let track = block
+            .targets
+            .only_track()
+            .filter(|uid| track_is_whole(tags, *uid));
+        let can_here = if track.is_some() {
+            can_track
+        } else {
+            can_global
+        };
         let mut stack: Vec<&Simple> = block.simples.iter().rev().collect();
         while let Some(s) = stack.pop() {
             let value = match (&s.string, &s.binary) {
@@ -405,18 +602,22 @@ pub(crate) fn listing(tags: &Tags, can_global: &crate::sheet::Can) -> Vec<Tag> {
             // every other one back as it was read. One nested in another, or
             // holding others, would lose them in the replace; a track's,
             // chapter's or attachment's is not global at all.
-            let can = if target != Target::Global || !top || !s.children.is_empty() {
+            let origin = Origin::Matroska { target, track };
+            let can = if (target != Target::Global && track.is_none())
+                || !top
+                || !s.children.is_empty()
+            {
                 Can::No(Why::NotGlobal)
             } else if s.string.is_none() {
                 Can::No(Why::NotText)
             } else {
-                match crate::sheet::tag_name(&Origin::Matroska { target }, &s.name) {
-                    Ok(_) => can_global.clone(),
+                match crate::sheet::tag_name(&origin, &s.name) {
+                    Ok(_) => can_here.clone(),
                     Err(why) => Can::No(why),
                 }
             };
             out.push(Tag {
-                origin: Origin::Matroska { target },
+                origin,
                 name: s.name.clone(),
                 value,
                 can,
@@ -434,6 +635,26 @@ pub(crate) struct Identified {
     pub title: Option<String>,
     /// The attachments.
     pub attachments: Vec<Attachment>,
+    /// Every track's UID, in the order `track:<n>` counts them.
+    pub tracks: Vec<u64>,
+}
+
+/// Each track of `streams` given its UID, `uids` being mkvmerge's in the
+/// order `track:<n>` counts them: ffprobe lists a Matroska file's tracks in
+/// that same order, and its attachments (a cover among them) after. When the
+/// two do not count the same tracks, no stream is named — a wrong name would
+/// put one track's tags under another's.
+pub(crate) fn name_tracks(streams: &mut [crate::sheet::Stream], uids: &[u64]) {
+    let mut tracks: Vec<&mut crate::sheet::Stream> = streams
+        .iter_mut()
+        .filter(|s| s.kind != crate::sheet::StreamKind::Attachment && !s.attached)
+        .collect();
+    if tracks.len() != uids.len() {
+        return;
+    }
+    for (stream, uid) in tracks.iter_mut().zip(uids) {
+        stream.uid = Some(*uid);
+    }
 }
 
 /// One attachment.
@@ -476,7 +697,22 @@ pub(crate) fn parse_identified(text: &[u8]) -> Result<Identified, crate::sheet::
             })
         })
         .collect();
-    Ok(Identified { title, attachments })
+    let tracks = doc
+        .get("tracks")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|t| {
+            t.pointer("/properties/uid")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        })
+        .collect();
+    Ok(Identified {
+        title,
+        attachments,
+        tracks,
+    })
 }
 
 /// Whether an attachment is a FRONT cover, by the names Matroska's own
@@ -495,8 +731,13 @@ pub(crate) struct Edit {
     pub title: Option<Option<String>>,
     /// The global tags file; `Some(None)` removes every global tag.
     pub tags: Option<Option<PathBuf>>,
+    /// Per track, by its 1-based ORDER (`track:n`), its tags file — `None`
+    /// removes every tag of that track.
+    pub track_tags: Vec<(u32, Option<PathBuf>)>,
     /// Per track, by its 1-based ORDER (`track:n`), the properties.
     pub tracks: Vec<(u32, Vec<Property>)>,
+    /// The chapters file `--chapters` replaces every chapter with.
+    pub chapters: Option<PathBuf>,
     /// Attachments to delete, by name.
     pub delete_attachments: Vec<String>,
     /// An attachment to add: path, name, MIME type.
@@ -561,6 +802,10 @@ pub(crate) fn propedit_args(draft: &Path, edit: &Edit) -> Vec<OsString> {
             push(&mut a, &what);
         }
     }
+    if let Some(path) = &edit.chapters {
+        push(&mut a, "--chapters");
+        a.push(path.as_os_str().to_owned());
+    }
     for name in &edit.delete_attachments {
         push(&mut a, "--delete-attachment");
         push(&mut a, &format!("name:{name}"));
@@ -577,6 +822,14 @@ pub(crate) fn propedit_args(draft: &Path, edit: &Edit) -> Vec<OsString> {
             push(&mut a, "global:");
         }
         None => {}
+    }
+    for (n, file) in &edit.track_tags {
+        let mut arg = OsString::from(format!("track:{n}:"));
+        if let Some(path) = file {
+            arg.push(path.as_os_str());
+        }
+        push(&mut a, "--tags");
+        a.push(arg);
     }
     if let Some((path, name, mime)) = &edit.add_attachment {
         for s in [
@@ -601,6 +854,43 @@ mod tests {
     };
     use crate::sheet::{Can, Field, Origin, Target, Why, Writer};
     use std::path::{Path, PathBuf};
+
+    /// FAILS IF: a stream is given another track's UID — ffprobe's
+    /// attachments and covers counted as tracks — or any stream is named
+    /// when mkvmerge counts other tracks than ffprobe lists.
+    #[test]
+    fn each_track_is_named_by_its_uid_and_no_other() {
+        use crate::sheet::{Stream, StreamKind};
+        let stream = |index: u32, kind: StreamKind, attached: bool| Stream {
+            index,
+            kind,
+            codec: None,
+            lang: None,
+            title: None,
+            default: false,
+            forced: false,
+            hearing: false,
+            attached,
+            can: Can::No(Why::AttachmentIsNotAStream),
+            uid: None,
+        };
+        let mut streams = vec![
+            stream(0, StreamKind::Video, false),
+            stream(1, StreamKind::Audio, false),
+            stream(2, StreamKind::Subtitle, false),
+            stream(3, StreamKind::Video, true),
+            stream(4, StreamKind::Attachment, false),
+        ];
+        super::name_tracks(&mut streams, &[11, 22, 33]);
+        let uids: Vec<Option<u64>> = streams.iter().map(|s| s.uid).collect();
+        assert_eq!(uids, [Some(11), Some(22), Some(33), None, None]);
+        let mut streams = vec![
+            stream(0, StreamKind::Video, false),
+            stream(1, StreamKind::Audio, false),
+        ];
+        super::name_tracks(&mut streams, &[11, 22, 33]);
+        assert!(streams.iter().all(|s| s.uid.is_none()));
+    }
 
     /// What `mkvextract … tags` writes for a file ffmpeg made and a ripper
     /// touched: a global block, a track's block, a nested simple.
@@ -710,7 +1000,8 @@ mod tests {
     #[test]
     fn only_a_global_top_level_text_tag_is_editable() {
         let tags = parse_tags(XML).expect("parsed");
-        let rows = listing(&tags, &Can::Yes(Writer::Matroska));
+        let no_track = Can::No(Why::NotGlobal);
+        let rows = listing(&tags, &Can::Yes(Writer::Matroska), &no_track);
         let row = |name: &str| rows.iter().find(|r| r.name == name).expect(name);
         assert_eq!(row("ARTIST").can, Can::Yes(Writer::Matroska));
         assert_eq!(
@@ -724,11 +1015,15 @@ mod tests {
             Can::No(Why::NotGlobal),
             "a parent: the replace would lose its child"
         );
-        assert_eq!(row("BPS").can, Can::No(Why::NotGlobal), "a track's");
+        assert_eq!(
+            row("BPS").can,
+            no_track,
+            "a track's, as its track's writer says"
+        );
         let missing = Can::No(Why::Missing {
             program: crate::sheet::Program::Mkvpropedit,
         });
-        let rows = listing(&tags, &missing);
+        let rows = listing(&tags, &missing, &no_track);
         assert_eq!(
             rows.iter()
                 .find(|r| r.name == "ARTIST")
@@ -739,9 +1034,146 @@ mod tests {
         assert_eq!(
             row("BPS").origin,
             Origin::Matroska {
-                target: Target::Track
+                target: Target::Track,
+                track: Some(1_234_567),
             }
         );
+    }
+
+    /// FAILS IF: a tag of one track says it is not written, where its track
+    /// can be found by its UID — or one that also targets something else is
+    /// offered, which `--tags track:` would hand back as the track's alone.
+    #[test]
+    fn a_track_s_own_tag_is_editable_by_its_uid() {
+        let tags = parse_tags(XML).expect("parsed");
+        let rows = listing(
+            &tags,
+            &Can::Yes(Writer::Matroska),
+            &Can::Yes(Writer::Matroska),
+        );
+        let bps = rows.iter().find(|r| r.name == "BPS").expect("BPS");
+        assert_eq!(bps.can, Can::Yes(Writer::Matroska));
+        let shared = XML.replace(
+            "<Targets><TrackUID>1234567</TrackUID></Targets>\n    <Simple><Name>BPS",
+            "<Targets><TrackUID>1234567</TrackUID></Targets>\n    <Simple><Name>BPS</Name><String>1</String></Simple>\n  </Tag>\n  <Tag>\n    <Targets><TrackUID>1234567</TrackUID><ChapterUID>9</ChapterUID></Targets>\n    <Simple><Name>X",
+        );
+        let tags = parse_tags(&shared).expect("parsed");
+        let rows = listing(
+            &tags,
+            &Can::Yes(Writer::Matroska),
+            &Can::Yes(Writer::Matroska),
+        );
+        let bps = rows.iter().find(|r| r.name == "BPS").expect("BPS");
+        assert_eq!(
+            bps.can,
+            Can::No(Why::NotGlobal),
+            "the track's tags are not whole"
+        );
+        assert_eq!(
+            bps.origin,
+            Origin::Matroska {
+                target: Target::Track,
+                track: None,
+            }
+        );
+    }
+
+    /// FAILS IF: a track's tag is written into another block — the global
+    /// ones, another track's — or the XML handed for `track:` keeps a UID,
+    /// or a track left with no tag is not said to be emptied.
+    #[test]
+    fn a_track_s_tags_are_written_apart_from_the_global_ones() {
+        let mut tags = parse_tags(XML).expect("parsed");
+        let before_global = global_xml(&tags);
+        super::set_named_track(&mut tags, 1_234_567, "BPS", Some("256000"));
+        super::set_named_track(&mut tags, 1_234_567, "MOOD", Some("calm"));
+        assert_eq!(
+            global_xml(&tags),
+            before_global,
+            "the global tags untouched"
+        );
+        let xml = super::track_xml(&tags, 1_234_567).expect("the track's tags");
+        assert!(
+            xml.contains("<Name>BPS</Name>") && xml.contains("256000"),
+            "{xml}"
+        );
+        assert!(xml.contains("<Name>MOOD</Name>"), "{xml}");
+        assert!(!xml.contains("UID"), "mkvpropedit gives the UID: {xml}");
+        // A TRACK WITH NO TAG YET gets a block of its own.
+        super::set_named_track(&mut tags, 42, "LANGUAGE_NOTE", Some("dub"));
+        assert!(super::track_xml(&tags, 42).is_some());
+        // EMPTIED: nothing to hand back.
+        super::set_named_track(&mut tags, 42, "LANGUAGE_NOTE", None);
+        assert_eq!(super::track_xml(&tags, 42), None);
+        let edit = Edit {
+            track_tags: vec![(2, Some(PathBuf::from("/run/t2.xml"))), (3, None)],
+            ..Edit::default()
+        };
+        let args: Vec<String> = propedit_args(Path::new("f"), &edit)
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args[1..],
+            ["--tags", "track:2:/run/t2.xml", "--tags", "track:3:"]
+        );
+    }
+
+    /// FAILS IF: a chapter is retitled by its place instead of where it
+    /// starts, another chapter's title or any other byte moves, a chapter
+    /// with no display gets none, or a start no chapter has is taken.
+    #[test]
+    fn a_chapter_is_retitled_by_where_it_starts() {
+        let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE Chapters SYSTEM "matroskachapters.dtd">
+<Chapters>
+  <EditionEntry>
+    <ChapterAtom>
+      <ChapterUID>1</ChapterUID>
+      <ChapterTimeStart>00:00:00.000000000</ChapterTimeStart>
+      <ChapterDisplay><ChapterString>Opening</ChapterString><ChapterLanguage>eng</ChapterLanguage></ChapterDisplay>
+    </ChapterAtom>
+    <ChapterAtom>
+      <ChapterUID>2</ChapterUID>
+      <ChapterTimeStart>00:01:01.500000000</ChapterTimeStart>
+    </ChapterAtom>
+  </EditionEntry>
+</Chapters>"#;
+        let out = super::retitle_chapters(xml, 0, "The <Harbour> & sea").expect("retitled");
+        assert!(
+            out.contains(
+                "<ChapterString>The &lt;Harbour&gt; &amp; sea</ChapterString><ChapterLanguage>eng"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            out.matches("<ChapterString>").count(),
+            1,
+            "the other untouched"
+        );
+        let out = super::retitle_chapters(&out, 61_500, "Second").expect("one with no display");
+        assert!(
+            out.contains("<ChapterDisplay><ChapterString>Second</ChapterString></ChapterDisplay>"),
+            "{out}"
+        );
+        assert!(
+            out.contains("<ChapterUID>2</ChapterUID>"),
+            "every other byte kept"
+        );
+        assert_eq!(
+            super::retitle_chapters(xml, 5_000, "x"),
+            Err(Why::NoSuchThing)
+        );
+        assert_eq!(super::chapter_ms("01:02:03.4"), Some(3_723_400));
+        let edit = Edit {
+            chapters: Some(PathBuf::from("/run/c.xml")),
+            ..Edit::default()
+        };
+        let args: Vec<String> = propedit_args(Path::new("f"), &edit)
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[1..], ["--chapters", "/run/c.xml"]);
     }
 
     #[test]
@@ -749,6 +1181,8 @@ mod tests {
         let edit = Edit {
             title: Some(Some("a = b".to_owned())),
             tags: Some(Some(PathBuf::from("/run/t.xml"))),
+            track_tags: Vec::new(),
+            chapters: None,
             tracks: vec![(
                 2,
                 vec![
@@ -810,8 +1244,14 @@ mod tests {
         let json = br#"{"container":{"properties":{"title":"A Film"},"type":"Matroska"},
           "attachments":[{"id":0,"file_name":"cover.jpg","content_type":"image/jpeg","size":51234},
                          {"id":1,"file_name":"font.ttf","content_type":"font/ttf","size":9}],
-          "tracks":[]}"#;
+          "tracks":[{"id":0,"type":"video","properties":{"uid":11}},
+                    {"id":1,"type":"audio","properties":{"uid":1234567}}]}"#;
         let id = parse_identified(json).expect("parsed");
+        assert_eq!(
+            id.tracks,
+            vec![11, 1_234_567],
+            "in the order track:n counts"
+        );
         assert_eq!(id.title.as_deref(), Some("A Film"));
         assert_eq!(id.attachments.len(), 2);
         assert!(is_front_cover(&id.attachments[0].file_name));

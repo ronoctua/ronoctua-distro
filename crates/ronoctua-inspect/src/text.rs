@@ -150,42 +150,8 @@ pub fn of(path: &Path, mime: &str, tab: usize) -> Option<Result<Read, Refusal>> 
 
 /// The whole of it, once the type has been settled.
 fn read_it(path: &Path, mime: &str, tab: usize) -> Result<Read, Refusal> {
-    let mut file = File::open(path).map_err(|_| Refusal::Unreadable)?;
-    let mut raw = Vec::new();
-    // TAKE, so a four-hundred-megabyte file does not allocate itself into the
-    // inspector's thread before anything gets to check its size. The ceiling
-    // is the read, not a test after one.
-    file.by_ref()
-        .take(BYTE_CEILING)
-        .read_to_end(&mut raw)
-        .map_err(|_| Refusal::Unreadable)?;
-    // Whether there was more: one more byte is all this needs to know.
-    let mut over = [0u8; 1];
-    let mut cut = matches!(file.read(&mut over), Ok(n) if n > 0);
-
-    if raw.is_empty() {
-        return Err(Refusal::Empty);
-    }
-    // A NUL IN THE HEAD IS WHAT SEPARATES a file that lies about being text
-    // from a file in Latin-1, which is merely unreadable as UTF-8 and is still
-    // a file of letters.
-    if raw[..raw.len().min(SNIFF)].contains(&0) {
-        return Err(Refusal::NotText);
-    }
-
-    let text = match std::str::from_utf8(&raw) {
-        Ok(s) => s,
-        Err(e) => {
-            // A CHARACTER THE CEILING CUT IN HALF is not a broken file. It is
-            // this module's own cut, and refusing here would make a large
-            // valid file unreadable one time in four.
-            let cut_by_us = e.error_len().is_none() && raw.len() as u64 == BYTE_CEILING;
-            if !cut_by_us {
-                return Err(Refusal::NotText);
-            }
-            std::str::from_utf8(&raw[..e.valid_up_to()]).map_err(|_| Refusal::NotText)?
-        }
-    };
+    let (text, mut cut) = decoded(path, BYTE_CEILING)?;
+    let text = text.as_str();
 
     let language = ronoctua_syntax::of_mime(mime).or_else(|| ronoctua_syntax::guess(text));
 
@@ -221,6 +187,53 @@ fn read_it(path: &Path, mime: &str, tab: usize) -> Result<Read, Refusal> {
         cut,
         language,
     })
+}
+
+/// The first `ceiling` bytes of a text file as a string, and whether there
+/// was more — the half of reading that the panel and the index share
+/// (`crate::plain` asks with the index's ceiling, and never highlights).
+pub(crate) fn decoded(path: &Path, ceiling: u64) -> Result<(String, bool), Refusal> {
+    let mut file = File::open(path).map_err(|_| Refusal::Unreadable)?;
+    let mut raw = Vec::new();
+    // TAKE, so a four-hundred-megabyte file does not allocate itself into the
+    // inspector's thread before anything gets to check its size. The ceiling
+    // is the read, not a test after one.
+    file.by_ref()
+        .take(ceiling)
+        .read_to_end(&mut raw)
+        .map_err(|_| Refusal::Unreadable)?;
+    // Whether there was more: one more byte is all this needs to know.
+    let mut over = [0u8; 1];
+    let cut = matches!(file.read(&mut over), Ok(n) if n > 0);
+
+    if raw.is_empty() {
+        return Err(Refusal::Empty);
+    }
+    // A NUL IN THE HEAD IS WHAT SEPARATES a file that lies about being text
+    // from a file in Latin-1, which is merely unreadable as UTF-8 and is still
+    // a file of letters.
+    if raw[..raw.len().min(SNIFF)].contains(&0) {
+        return Err(Refusal::NotText);
+    }
+
+    match String::from_utf8(raw) {
+        Ok(s) => Ok((s, cut)),
+        Err(e) => {
+            // A CHARACTER THE CEILING CUT IN HALF is not a broken file. It is
+            // this module's own cut, and refusing here would make a large
+            // valid file unreadable one time in four.
+            let utf8 = e.utf8_error();
+            let mut raw = e.into_bytes();
+            let cut_by_us = utf8.error_len().is_none() && raw.len() as u64 == ceiling;
+            if !cut_by_us {
+                return Err(Refusal::NotText);
+            }
+            raw.truncate(utf8.valid_up_to());
+            String::from_utf8(raw)
+                .map(|s| (s, cut))
+                .map_err(|_| Refusal::NotText)
+        }
+    }
 }
 
 /// One line, with its tabs opened out and its carriage return gone.

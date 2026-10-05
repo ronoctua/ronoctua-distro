@@ -178,7 +178,7 @@ pub fn sweep(addresses: &[Ipv4Addr], patience: Duration) -> anyhow::Result<Vec<R
 /// # Errors
 ///
 /// The kernel refused the socket.
-pub fn ping(address: Ipv4Addr, patience: Duration) -> anyhow::Result<Option<u32>> {
+pub fn ping(address: Ipv4Addr, patience: Duration) -> anyhow::Result<Option<Duration>> {
     let socket = open()?;
     let to = SocketAddr::V4(SocketAddrV4::new(address, 0));
     let at = Instant::now();
@@ -191,10 +191,10 @@ pub fn ping(address: Ipv4Addr, patience: Duration) -> anyhow::Result<Option<u32>
         else {
             continue;
         };
+        // A DURATION AND NOT MILLISECONDS: a router in the next room answers
+        // in a fraction of one, and a whole-millisecond count said `0`.
         if sequence_of(&packet[..read]) == Some(1) {
-            return Ok(Some(
-                u32::try_from(at.elapsed().as_millis()).unwrap_or(u32::MAX),
-            ));
+            return Ok(Some(at.elapsed()));
         }
     }
     Ok(None)

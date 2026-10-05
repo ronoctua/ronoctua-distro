@@ -224,7 +224,7 @@ in
 
     # THE RULE. See the header for why it exists and how wide it is.
     #
-    # There is no polkit agent in this session (`nix/modules/update.nix`), so it
+    # There is no polkit agent in this session (the update's `module.nix`), so it
     # answers `YES` rather than asking. What buys that width back is that the
     # door is one millimetre wide.
     security.polkit.extraConfig = ''

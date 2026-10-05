@@ -90,8 +90,15 @@ impl Keys for Kept {
     }
 }
 
-/// A lookup's refusal, as the wire says it.
-pub(super) const fn lookup(r: Refusal) -> Trouble {
+/// A lookup's refusal, as the wire says it. A host the person has not let
+/// in `consent.json` ([`Why::NotLet`]: the lookup's pass was refused, and
+/// nothing was sent) is said as the service being off — the consent row,
+/// whose press lets the hosts its row names and asks again — never as a
+/// failure the person cannot act on.
+pub(super) fn lookup(r: Refusal) -> Trouble {
+    if r.why == Why::NotLet {
+        return off(r.service);
+    }
     Trouble::Lookup(r)
 }
 

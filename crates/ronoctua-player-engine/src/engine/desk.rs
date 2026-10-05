@@ -330,7 +330,7 @@ impl Engine {
     /// A search asked ([`wire::Ask::Find`]): checked now — the consent, the
     /// key —, then asked on the desk's thread, replacing the one under way.
     pub(super) fn find(&mut self, query: Query) -> Result<(), Refused> {
-        let prefs = prefs::store().read();
+        let prefs = prefs::read();
         let query = with_absolute_location(query);
         if query.location().trim().is_empty() {
             return Err(lookups::lookup(ronoctua_lookup::Refusal::new(
@@ -394,7 +394,7 @@ impl Engine {
     /// now — the candidate, its cover, the consent of its host —, then
     /// fetched on the suggestions desk's thread, behind whatever it does.
     pub(super) fn suggested_cover(&mut self, candidate: CandidateId) -> Result<(), Refused> {
-        let prefs = prefs::store().read();
+        let prefs = prefs::read();
         let shared = self.shared()?;
         let Some((serial, cover)) = self.desks.preview_asked(candidate, &prefs)? else {
             return Ok(());
@@ -443,7 +443,7 @@ impl Engine {
             })
             .into());
         }
-        let prefs = prefs::store().read();
+        let prefs = prefs::read();
         let job = match &slot.desk.page {
             Page::Suggestions {
                 location,
@@ -507,9 +507,7 @@ impl Engine {
             | Page::Genres { .. }
             | Page::Languages { .. }
             | Page::TvCountries { .. }
-            | Page::Channels { .. }
-            | Page::Archive { .. }
-            | Page::Lives { .. } => return Err(gone()),
+            | Page::Channels { .. } => return Err(gone()),
         };
         self.queue_take(kind, candidate, job)
     }
@@ -774,9 +772,7 @@ fn with_absolute_location(query: Query) -> Query {
             words,
         },
         // A DIRECTORY'S LISTING is about no file (`directory.rs`).
-        other @ (Query::Radio(_) | Query::Tv(_) | Query::Archive { .. } | Query::Lives { .. }) => {
-            other
-        }
+        other @ (Query::Radio(_) | Query::Tv(_)) => other,
     }
 }
 
@@ -1083,7 +1079,7 @@ fn run_find(
         }
         // A DIRECTORY'S LISTING is `directory.rs`'s, on a desk of its own;
         // it never reaches a lookup's thread.
-        Query::Radio(_) | Query::Tv(_) | Query::Archive { .. } | Query::Lives { .. } => None,
+        Query::Radio(_) | Query::Tv(_) => None,
     };
     with_engine(shared, |e| e.search_ended(kind, serial, trouble));
 }
@@ -1287,7 +1283,7 @@ impl Engine {
 /// on the asking connection's thread, never under the lock — and says the
 /// downloads left today when a login said.
 pub(super) fn key_check(service: Service, shared: &Shared) -> Say {
-    let prefs = prefs::store().read();
+    let prefs = prefs::read();
     let session = shared
         .0
         .lock()

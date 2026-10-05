@@ -3,7 +3,7 @@
 # ONE PLACE. From this file the generator makes the Rust table the highlighter
 # reads, the MIME index that selects a language, the tag index a markdown fence
 # uses, and the refusal of an invalid row — all at build time, in the same
-# shape as `assets/updates.nix`, `assets/notifications.nix` and
+# shape as the update's `steps.nix`, `assets/notifications.nix` and
 # `assets/tokens/*.nix`.
 #
 # WHY THIS DECLARES MIME TYPES AND NEVER EXTENSIONS
@@ -37,7 +37,7 @@
 #
 # ORDER MATTERS, and there is no `order` field on purpose. `guess` — the door
 # for text that arrives with no usable name — tries the languages in the order
-# they are written here. The same argument `assets/updates.nix` makes about its
+# they are written here. The same argument the update's `steps.nix` makes about its
 # sequence: two sources for one order is one too many.
 #
 # WHAT THE GENERATOR REFUSES
@@ -3271,6 +3271,2279 @@
       keywords = [ ];
       types = [ ];
       constants = [ ];
+    }
+
+    # ================================================================
+    # THE SECOND WAVE — data only
+    # ================================================================
+    #
+    # Each row here is ONLY a row: no Rust, no role and no colour came with
+    # any of them, which is the point of the table's shape. None is
+    # guessable — they are reached by their MIME type or a fence's tag, and
+    # a sniff marker weak enough to fire on another language's file would
+    # cost more than it gives.
+    {
+      id = "erlang";
+      label = "Erlang";
+      kind = "code";
+      mime = [ "text/x-erlang" ];
+      tags = [
+        "erlang"
+        "erl"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "%" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "after"
+        "and"
+        "andalso"
+        "band"
+        "begin"
+        "bnot"
+        "bor"
+        "bsl"
+        "bsr"
+        "bxor"
+        "case"
+        "catch"
+        "cond"
+        "div"
+        "end"
+        "fun"
+        "if"
+        "let"
+        "maybe"
+        "not"
+        "of"
+        "or"
+        "orelse"
+        "receive"
+        "rem"
+        "try"
+        "when"
+        "xor"
+      ];
+      types = [ ];
+      constants = [
+        "error"
+        "false"
+        "ok"
+        "true"
+        "undefined"
+      ];
+    }
+
+    {
+      id = "elixir";
+      label = "Elixir";
+      kind = "code";
+      mime = [ "text/x-elixir" ];
+      tags = [
+        "elixir"
+        "ex"
+        "exs"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "#{" ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ "capitalised-is-type" ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "after"
+        "alias"
+        "and"
+        "case"
+        "catch"
+        "cond"
+        "def"
+        "defdelegate"
+        "defexception"
+        "defguard"
+        "defimpl"
+        "defmacro"
+        "defmodule"
+        "defp"
+        "defprotocol"
+        "defstruct"
+        "do"
+        "else"
+        "end"
+        "fn"
+        "for"
+        "if"
+        "import"
+        "in"
+        "not"
+        "or"
+        "quote"
+        "raise"
+        "receive"
+        "require"
+        "rescue"
+        "try"
+        "unless"
+        "unquote"
+        "use"
+        "when"
+        "with"
+      ];
+      types = [ ];
+      constants = [
+        "false"
+        "nil"
+        "true"
+      ];
+    }
+
+    # ONE ROW FOR THE FAMILY: Common Lisp, Emacs Lisp and Scheme share the comment,
+    # the string and the words that matter, and three rows would be three copies.
+    {
+      id = "lisp";
+      label = "Lisp";
+      kind = "code";
+      mime = [
+        "text/x-common-lisp"
+        "text/x-emacs-lisp"
+        "text/x-scheme"
+      ];
+      tags = [
+        "lisp"
+        "elisp"
+        "emacs-lisp"
+        "scheme"
+        "scm"
+        "clojure"
+        "clj"
+        "racket"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ ";" ];
+      block-comment = {
+        open = "#|";
+        close = "|#";
+        nests = true;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "and"
+        "case"
+        "cond"
+        "declare"
+        "def"
+        "defclass"
+        "defconst"
+        "defcustom"
+        "defgeneric"
+        "define"
+        "defmacro"
+        "defmethod"
+        "defn"
+        "defpackage"
+        "defparameter"
+        "defrecord"
+        "defstruct"
+        "defsubst"
+        "defun"
+        "defvar"
+        "do"
+        "dolist"
+        "dotimes"
+        "flet"
+        "fn"
+        "if"
+        "labels"
+        "lambda"
+        "let"
+        "letrec"
+        "loop"
+        "ns"
+        "or"
+        "progn"
+        "quote"
+        "require"
+        "setf"
+        "setq"
+        "unless"
+        "when"
+      ];
+      types = [ ];
+      constants = [
+        "nil"
+        "t"
+      ];
+    }
+
+    {
+      id = "ocaml";
+      label = "OCaml";
+      kind = "code";
+      mime = [ "text/x-ocaml" ];
+      tags = [
+        "ocaml"
+        "ml"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ ];
+      block-comment = {
+        open = "(*";
+        close = "*)";
+        nests = true;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ "capitalised-is-type" ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "and"
+        "as"
+        "assert"
+        "begin"
+        "class"
+        "constraint"
+        "do"
+        "done"
+        "downto"
+        "else"
+        "end"
+        "exception"
+        "external"
+        "for"
+        "fun"
+        "function"
+        "functor"
+        "if"
+        "in"
+        "include"
+        "inherit"
+        "initializer"
+        "lazy"
+        "let"
+        "match"
+        "method"
+        "module"
+        "mutable"
+        "new"
+        "nonrec"
+        "object"
+        "of"
+        "open"
+        "or"
+        "private"
+        "rec"
+        "sig"
+        "struct"
+        "then"
+        "to"
+        "try"
+        "type"
+        "val"
+        "virtual"
+        "when"
+        "while"
+        "with"
+      ];
+      types = [
+        "array"
+        "bool"
+        "char"
+        "float"
+        "int"
+        "list"
+        "option"
+        "string"
+        "unit"
+      ];
+      constants = [
+        "false"
+        "true"
+      ];
+    }
+
+    {
+      id = "crystal";
+      label = "Crystal";
+      kind = "code";
+      mime = [ "text/x-crystal" ];
+      tags = [
+        "crystal"
+        "cr"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "#{" ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [
+        "capitalised-is-type"
+        "screaming-is-constant"
+      ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abstract"
+        "alias"
+        "annotation"
+        "begin"
+        "break"
+        "case"
+        "class"
+        "def"
+        "do"
+        "else"
+        "elsif"
+        "end"
+        "ensure"
+        "enum"
+        "extend"
+        "for"
+        "fun"
+        "if"
+        "include"
+        "lib"
+        "macro"
+        "module"
+        "next"
+        "of"
+        "private"
+        "protected"
+        "require"
+        "rescue"
+        "return"
+        "select"
+        "struct"
+        "then"
+        "type"
+        "typeof"
+        "uninitialized"
+        "union"
+        "unless"
+        "until"
+        "when"
+        "while"
+        "with"
+        "yield"
+      ];
+      types = [ ];
+      constants = [
+        "false"
+        "nil"
+        "self"
+        "true"
+      ];
+    }
+
+    {
+      id = "julia";
+      label = "Julia";
+      kind = "code";
+      mime = [ "text/julia" ];
+      tags = [
+        "julia"
+        "jl"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = {
+        open = "#=";
+        close = "=#";
+        nests = true;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "$(" ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ "capitalised-is-type" ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abstract"
+        "baremodule"
+        "begin"
+        "break"
+        "catch"
+        "const"
+        "continue"
+        "do"
+        "else"
+        "elseif"
+        "end"
+        "export"
+        "finally"
+        "for"
+        "function"
+        "global"
+        "if"
+        "import"
+        "let"
+        "local"
+        "macro"
+        "module"
+        "mutable"
+        "primitive"
+        "quote"
+        "return"
+        "struct"
+        "try"
+        "type"
+        "using"
+        "where"
+        "while"
+      ];
+      types = [ ];
+      constants = [
+        "false"
+        "missing"
+        "nothing"
+        "true"
+      ];
+    }
+
+    # Fortran ignores case; the words are the lower-case spelling modern code is written in.
+    {
+      id = "fortran";
+      label = "Fortran";
+      kind = "code";
+      mime = [ "text/x-fortran" ];
+      tags = [
+        "fortran"
+        "f90"
+        "f95"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "!" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "allocatable"
+        "allocate"
+        "call"
+        "case"
+        "character"
+        "complex"
+        "contains"
+        "cycle"
+        "deallocate"
+        "dimension"
+        "do"
+        "double"
+        "else"
+        "elseif"
+        "end"
+        "exit"
+        "function"
+        "if"
+        "implicit"
+        "in"
+        "inout"
+        "integer"
+        "intent"
+        "interface"
+        "logical"
+        "module"
+        "none"
+        "out"
+        "parameter"
+        "precision"
+        "print"
+        "program"
+        "read"
+        "real"
+        "recursive"
+        "result"
+        "return"
+        "select"
+        "subroutine"
+        "then"
+        "type"
+        "use"
+        "while"
+        "write"
+      ];
+      types = [ ];
+      constants = [ ];
+    }
+
+    {
+      id = "verilog";
+      label = "Verilog";
+      kind = "code";
+      mime = [ "text/x-verilog" ];
+      tags = [
+        "verilog"
+        "systemverilog"
+        "sv"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "/*";
+        close = "*/";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ "screaming-is-constant" ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "always"
+        "assign"
+        "automatic"
+        "begin"
+        "case"
+        "casex"
+        "casez"
+        "default"
+        "else"
+        "end"
+        "endcase"
+        "endfunction"
+        "endgenerate"
+        "endmodule"
+        "endtask"
+        "for"
+        "forever"
+        "function"
+        "generate"
+        "genvar"
+        "if"
+        "initial"
+        "inout"
+        "input"
+        "integer"
+        "localparam"
+        "logic"
+        "module"
+        "negedge"
+        "output"
+        "parameter"
+        "posedge"
+        "reg"
+        "repeat"
+        "signed"
+        "task"
+        "while"
+        "wire"
+      ];
+      types = [ ];
+      constants = [ ];
+    }
+
+    {
+      id = "vhdl";
+      label = "VHDL";
+      kind = "code";
+      mime = [ "text/x-vhdl" ];
+      tags = [ "vhdl" ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "--" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "architecture"
+        "array"
+        "begin"
+        "block"
+        "case"
+        "component"
+        "configuration"
+        "constant"
+        "downto"
+        "else"
+        "elsif"
+        "end"
+        "entity"
+        "exit"
+        "for"
+        "function"
+        "generate"
+        "generic"
+        "if"
+        "in"
+        "inout"
+        "is"
+        "library"
+        "loop"
+        "map"
+        "next"
+        "null"
+        "of"
+        "others"
+        "out"
+        "package"
+        "port"
+        "procedure"
+        "process"
+        "record"
+        "report"
+        "return"
+        "select"
+        "signal"
+        "subtype"
+        "then"
+        "to"
+        "type"
+        "use"
+        "variable"
+        "wait"
+        "when"
+        "while"
+      ];
+      types = [
+        "bit"
+        "boolean"
+        "integer"
+        "natural"
+        "signed"
+        "std_logic"
+        "std_logic_vector"
+        "string"
+        "unsigned"
+      ];
+      constants = [
+        "false"
+        "true"
+      ];
+    }
+
+    {
+      id = "tcl";
+      label = "Tcl";
+      kind = "code";
+      mime = [ "text/tcl" ];
+      tags = [ "tcl" ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "$" ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "after"
+        "append"
+        "array"
+        "break"
+        "catch"
+        "continue"
+        "else"
+        "elseif"
+        "error"
+        "eval"
+        "expr"
+        "for"
+        "foreach"
+        "global"
+        "if"
+        "incr"
+        "lappend"
+        "lindex"
+        "list"
+        "namespace"
+        "proc"
+        "puts"
+        "return"
+        "set"
+        "source"
+        "string"
+        "switch"
+        "then"
+        "upvar"
+        "variable"
+        "while"
+      ];
+      types = [ ];
+      constants = [
+        "false"
+        "true"
+      ];
+    }
+
+    # Gradle's build files are Groovy, and `text/x-gradle` comes along through the subclass DAG.
+    {
+      id = "groovy";
+      label = "Groovy";
+      kind = "code";
+      mime = [ "text/x-groovy" ];
+      tags = [
+        "groovy"
+        "gradle"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "/*";
+        close = "*/";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "\${" ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [
+        "capitalised-is-type"
+        "screaming-is-constant"
+      ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abstract"
+        "as"
+        "assert"
+        "break"
+        "case"
+        "catch"
+        "class"
+        "continue"
+        "def"
+        "default"
+        "do"
+        "else"
+        "enum"
+        "extends"
+        "final"
+        "finally"
+        "for"
+        "if"
+        "implements"
+        "import"
+        "in"
+        "instanceof"
+        "interface"
+        "new"
+        "package"
+        "private"
+        "protected"
+        "public"
+        "return"
+        "static"
+        "super"
+        "switch"
+        "this"
+        "throw"
+        "throws"
+        "trait"
+        "try"
+        "var"
+        "void"
+        "while"
+      ];
+      types = [ ];
+      constants = [
+        "false"
+        "null"
+        "true"
+      ];
+    }
+
+    {
+      id = "d";
+      label = "D";
+      kind = "code";
+      mime = [ "text/x-dsrc" ];
+      tags = [ "d" ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "/*";
+        close = "*/";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "`";
+          close = "`";
+          escape = "";
+          spans-lines = true;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = 4;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [
+        "capitalised-is-type"
+        "screaming-is-constant"
+      ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abstract"
+        "alias"
+        "align"
+        "asm"
+        "assert"
+        "auto"
+        "break"
+        "case"
+        "cast"
+        "catch"
+        "class"
+        "const"
+        "continue"
+        "debug"
+        "default"
+        "delegate"
+        "do"
+        "else"
+        "enum"
+        "export"
+        "extern"
+        "final"
+        "finally"
+        "for"
+        "foreach"
+        "foreach_reverse"
+        "function"
+        "goto"
+        "if"
+        "immutable"
+        "import"
+        "in"
+        "inout"
+        "interface"
+        "is"
+        "lazy"
+        "mixin"
+        "module"
+        "new"
+        "nothrow"
+        "out"
+        "override"
+        "package"
+        "pragma"
+        "private"
+        "protected"
+        "public"
+        "pure"
+        "ref"
+        "return"
+        "scope"
+        "shared"
+        "static"
+        "struct"
+        "super"
+        "switch"
+        "synchronized"
+        "template"
+        "this"
+        "throw"
+        "try"
+        "typeid"
+        "typeof"
+        "union"
+        "unittest"
+        "version"
+        "while"
+        "with"
+      ];
+      types = [
+        "bool"
+        "byte"
+        "char"
+        "double"
+        "float"
+        "int"
+        "long"
+        "real"
+        "short"
+        "string"
+        "ubyte"
+        "uint"
+        "ulong"
+        "ushort"
+        "void"
+        "wchar"
+      ];
+      constants = [
+        "false"
+        "null"
+        "true"
+      ];
+    }
+
+    {
+      id = "vala";
+      label = "Vala";
+      kind = "code";
+      mime = [
+        "text/x-vala"
+        "text/x-genie"
+      ];
+      tags = [
+        "vala"
+        "genie"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "/*";
+        close = "*/";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "$(" ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [
+        "capitalised-is-type"
+        "screaming-is-constant"
+      ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abstract"
+        "as"
+        "async"
+        "base"
+        "break"
+        "case"
+        "catch"
+        "class"
+        "const"
+        "construct"
+        "continue"
+        "default"
+        "delegate"
+        "do"
+        "else"
+        "enum"
+        "errordomain"
+        "extern"
+        "finally"
+        "for"
+        "foreach"
+        "get"
+        "if"
+        "in"
+        "interface"
+        "internal"
+        "is"
+        "lock"
+        "namespace"
+        "new"
+        "out"
+        "override"
+        "owned"
+        "private"
+        "protected"
+        "public"
+        "ref"
+        "return"
+        "set"
+        "signal"
+        "sizeof"
+        "static"
+        "struct"
+        "switch"
+        "this"
+        "throw"
+        "throws"
+        "try"
+        "typeof"
+        "unowned"
+        "using"
+        "var"
+        "virtual"
+        "void"
+        "weak"
+        "while"
+        "yield"
+      ];
+      types = [
+        "bool"
+        "char"
+        "double"
+        "float"
+        "int"
+        "int64"
+        "long"
+        "string"
+        "uint"
+        "uint8"
+        "unichar"
+      ];
+      constants = [
+        "false"
+        "null"
+        "true"
+      ];
+    }
+
+    {
+      id = "nim";
+      label = "Nim";
+      kind = "code";
+      mime = [
+        "text/x-nim"
+        "text/x-nimscript"
+      ];
+      tags = [
+        "nim"
+        "nims"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = {
+        open = "#[";
+        close = "]#";
+        nests = true;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ "capitalised-is-type" ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "addr"
+        "and"
+        "as"
+        "asm"
+        "bind"
+        "block"
+        "break"
+        "case"
+        "cast"
+        "concept"
+        "const"
+        "continue"
+        "converter"
+        "defer"
+        "discard"
+        "distinct"
+        "div"
+        "do"
+        "elif"
+        "else"
+        "end"
+        "enum"
+        "except"
+        "export"
+        "finally"
+        "for"
+        "from"
+        "func"
+        "if"
+        "import"
+        "in"
+        "include"
+        "interface"
+        "is"
+        "isnot"
+        "iterator"
+        "let"
+        "macro"
+        "method"
+        "mixin"
+        "mod"
+        "not"
+        "notin"
+        "object"
+        "of"
+        "or"
+        "out"
+        "proc"
+        "ptr"
+        "raise"
+        "ref"
+        "return"
+        "shl"
+        "shr"
+        "static"
+        "template"
+        "try"
+        "tuple"
+        "type"
+        "using"
+        "var"
+        "when"
+        "while"
+        "xor"
+        "yield"
+      ];
+      types = [
+        "bool"
+        "char"
+        "cstring"
+        "float"
+        "int"
+        "seq"
+        "string"
+        "uint"
+      ];
+      constants = [
+        "false"
+        "nil"
+        "true"
+      ];
+    }
+
+    {
+      id = "qml";
+      label = "QML";
+      kind = "code";
+      mime = [ "text/x-qml" ];
+      tags = [ "qml" ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "/*";
+        close = "*/";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "c";
+      property = "colon";
+      shapes = [ "capitalised-is-type" ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "alias"
+        "break"
+        "case"
+        "component"
+        "const"
+        "default"
+        "else"
+        "enum"
+        "for"
+        "function"
+        "if"
+        "import"
+        "let"
+        "property"
+        "readonly"
+        "required"
+        "return"
+        "signal"
+        "switch"
+        "var"
+        "while"
+      ];
+      types = [
+        "bool"
+        "color"
+        "double"
+        "int"
+        "list"
+        "real"
+        "string"
+        "url"
+      ];
+      constants = [
+        "false"
+        "null"
+        "true"
+        "undefined"
+      ];
+    }
+
+    # The step words, which is all a feature file has to say apart from its prose.
+    {
+      id = "gherkin";
+      label = "Gherkin";
+      kind = "code";
+      mime = [ "text/x-gherkin" ];
+      tags = [
+        "gherkin"
+        "feature"
+        "cucumber"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "And"
+        "Background"
+        "But"
+        "Examples"
+        "Feature"
+        "Given"
+        "Rule"
+        "Scenario"
+        "Then"
+        "When"
+      ];
+      types = [ ];
+      constants = [ ];
+    }
+
+    # A SPEC FILE IS ITS MACROS: `%build`, `%files`, `%{name}`. The prefix is the attribute,
+    # and the `Name:` header is the key side of a pair.
+    {
+      id = "rpm-spec";
+      label = "RPM spec";
+      kind = "code";
+      mime = [ "text/x-rpm-spec" ];
+      tags = [
+        "spec"
+        "rpm-spec"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "%{" ];
+      attribute = {
+        prefix = "%";
+        close = null;
+      };
+      numbers = "plain";
+      property = "colon";
+      shapes = [ ];
+      call = false;
+      fences = [ ];
+      keywords = [ ];
+      types = [ ];
+      constants = [ ];
+    }
+
+    {
+      id = "gettext";
+      label = "Gettext";
+      kind = "code";
+      mime = [
+        "text/x-gettext-translation"
+        "text/x-gettext-translation-template"
+      ];
+      tags = [
+        "po"
+        "pot"
+        "gettext"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "%" ];
+      attribute = null;
+      numbers = "none";
+      property = "none";
+      shapes = [ ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "msgctxt"
+        "msgid"
+        "msgid_plural"
+        "msgstr"
+      ];
+      types = [ ];
+      constants = [ ];
+    }
+
+    {
+      id = "pascal";
+      label = "Pascal";
+      kind = "code";
+      mime = [ "text/x-pascal" ];
+      tags = [
+        "pascal"
+        "delphi"
+        "pas"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "{";
+        close = "}";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "'";
+          close = "'";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "and"
+        "array"
+        "begin"
+        "case"
+        "class"
+        "const"
+        "constructor"
+        "destructor"
+        "div"
+        "do"
+        "downto"
+        "else"
+        "end"
+        "except"
+        "file"
+        "finally"
+        "for"
+        "function"
+        "goto"
+        "if"
+        "implementation"
+        "in"
+        "inherited"
+        "interface"
+        "label"
+        "mod"
+        "nil"
+        "not"
+        "object"
+        "of"
+        "or"
+        "packed"
+        "procedure"
+        "program"
+        "property"
+        "record"
+        "repeat"
+        "set"
+        "shl"
+        "shr"
+        "then"
+        "to"
+        "try"
+        "type"
+        "unit"
+        "until"
+        "uses"
+        "var"
+        "while"
+        "with"
+        "xor"
+      ];
+      types = [
+        "boolean"
+        "byte"
+        "char"
+        "double"
+        "integer"
+        "longint"
+        "real"
+        "string"
+        "word"
+      ];
+      constants = [
+        "false"
+        "true"
+      ];
+    }
+
+    {
+      id = "ada";
+      label = "Ada";
+      kind = "code";
+      mime = [ "text/x-adasrc" ];
+      tags = [
+        "ada"
+        "adb"
+        "ads"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "--" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abort"
+        "abs"
+        "accept"
+        "access"
+        "all"
+        "and"
+        "array"
+        "at"
+        "begin"
+        "body"
+        "case"
+        "constant"
+        "declare"
+        "delay"
+        "delta"
+        "digits"
+        "do"
+        "else"
+        "elsif"
+        "end"
+        "entry"
+        "exception"
+        "exit"
+        "for"
+        "function"
+        "generic"
+        "goto"
+        "if"
+        "in"
+        "is"
+        "limited"
+        "loop"
+        "mod"
+        "new"
+        "not"
+        "null"
+        "of"
+        "or"
+        "others"
+        "out"
+        "overriding"
+        "package"
+        "pragma"
+        "private"
+        "procedure"
+        "protected"
+        "raise"
+        "range"
+        "record"
+        "rem"
+        "renames"
+        "return"
+        "reverse"
+        "select"
+        "separate"
+        "subtype"
+        "task"
+        "terminate"
+        "then"
+        "type"
+        "until"
+        "use"
+        "when"
+        "while"
+        "with"
+        "xor"
+      ];
+      types = [
+        "Boolean"
+        "Character"
+        "Float"
+        "Integer"
+        "Natural"
+        "Positive"
+        "String"
+      ];
+      constants = [
+        "False"
+        "True"
+      ];
+    }
+
+    {
+      id = "dart";
+      label = "Dart";
+      kind = "code";
+      mime = [ "application/vnd.dart" ];
+      tags = [ "dart" ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "//" ];
+      block-comment = {
+        open = "/*";
+        close = "*/";
+        nests = true;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [
+        "\${"
+        "$"
+      ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ "capitalised-is-type" ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "abstract"
+        "as"
+        "assert"
+        "async"
+        "await"
+        "break"
+        "case"
+        "catch"
+        "class"
+        "const"
+        "continue"
+        "covariant"
+        "default"
+        "deferred"
+        "do"
+        "dynamic"
+        "else"
+        "enum"
+        "export"
+        "extends"
+        "extension"
+        "external"
+        "factory"
+        "final"
+        "finally"
+        "for"
+        "get"
+        "hide"
+        "if"
+        "implements"
+        "import"
+        "in"
+        "interface"
+        "is"
+        "late"
+        "library"
+        "mixin"
+        "new"
+        "on"
+        "operator"
+        "part"
+        "required"
+        "rethrow"
+        "return"
+        "sealed"
+        "set"
+        "show"
+        "static"
+        "super"
+        "switch"
+        "sync"
+        "this"
+        "throw"
+        "try"
+        "typedef"
+        "var"
+        "void"
+        "when"
+        "while"
+        "with"
+        "yield"
+      ];
+      types = [
+        "Future"
+        "List"
+        "Map"
+        "Set"
+        "Stream"
+        "String"
+        "bool"
+        "double"
+        "int"
+        "num"
+      ];
+      constants = [
+        "false"
+        "null"
+        "true"
+      ];
+    }
+
+    {
+      id = "coffeescript";
+      label = "CoffeeScript";
+      kind = "code";
+      mime = [ "application/vnd.coffeescript" ];
+      tags = [
+        "coffeescript"
+        "coffee"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "#" ];
+      block-comment = {
+        open = "###";
+        close = "###";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ "#{" ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ "capitalised-is-type" ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "and"
+        "break"
+        "by"
+        "catch"
+        "class"
+        "continue"
+        "delete"
+        "do"
+        "else"
+        "extends"
+        "finally"
+        "for"
+        "if"
+        "in"
+        "instanceof"
+        "is"
+        "isnt"
+        "loop"
+        "new"
+        "not"
+        "of"
+        "or"
+        "own"
+        "return"
+        "super"
+        "switch"
+        "then"
+        "this"
+        "throw"
+        "try"
+        "typeof"
+        "unless"
+        "until"
+        "when"
+        "while"
+        "yield"
+      ];
+      types = [ ];
+      constants = [
+        "false"
+        "no"
+        "null"
+        "off"
+        "on"
+        "true"
+        "undefined"
+        "yes"
+      ];
+    }
+
+    {
+      id = "matlab";
+      label = "MATLAB";
+      kind = "code";
+      mime = [ "text/x-matlab" ];
+      tags = [
+        "matlab"
+        "octave"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "%" ];
+      block-comment = {
+        open = "%{";
+        close = "%}";
+        nests = false;
+      };
+      strings = [
+        {
+          open = "'";
+          close = "'";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "\"";
+          close = "\"";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ ];
+      call = true;
+      fences = [ ];
+      keywords = [
+        "break"
+        "case"
+        "catch"
+        "classdef"
+        "continue"
+        "else"
+        "elseif"
+        "end"
+        "for"
+        "function"
+        "global"
+        "if"
+        "otherwise"
+        "parfor"
+        "persistent"
+        "return"
+        "spmd"
+        "switch"
+        "try"
+        "while"
+      ];
+      types = [ ];
+      constants = [
+        "Inf"
+        "NaN"
+        "false"
+        "pi"
+        "true"
+      ];
+    }
+
+    {
+      id = "cobol";
+      label = "COBOL";
+      kind = "code";
+      mime = [ "text/x-cobol" ];
+      tags = [
+        "cobol"
+        "cbl"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "*>" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+        {
+          open = "'";
+          close = "'";
+          escape = "";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ "screaming-is-constant" ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "ACCEPT"
+        "ADD"
+        "CALL"
+        "COMPUTE"
+        "DATA"
+        "DISPLAY"
+        "DIVIDE"
+        "DIVISION"
+        "ELSE"
+        "END"
+        "EVALUATE"
+        "IF"
+        "MOVE"
+        "MULTIPLY"
+        "PERFORM"
+        "PIC"
+        "PROCEDURE"
+        "PROGRAM"
+        "SECTION"
+        "STOP"
+        "SUBTRACT"
+        "THEN"
+        "UNTIL"
+        "VARYING"
+        "WHEN"
+        "WORKING"
+      ];
+      types = [ ];
+      constants = [
+        "SPACE"
+        "SPACES"
+        "ZERO"
+        "ZEROS"
+      ];
+    }
+
+    {
+      id = "eiffel";
+      label = "Eiffel";
+      kind = "code";
+      mime = [ "text/x-eiffel" ];
+      tags = [
+        "eiffel"
+        "e"
+      ];
+      guessable = false;
+      shebang = [ ];
+      sniff = [ ];
+      sniff-shape = "none";
+      line-comment = [ "--" ];
+      block-comment = null;
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = false;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "plain";
+      property = "none";
+      shapes = [ "screaming-is-constant" ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "across"
+        "agent"
+        "alias"
+        "all"
+        "and"
+        "as"
+        "attached"
+        "check"
+        "class"
+        "convert"
+        "create"
+        "debug"
+        "deferred"
+        "detachable"
+        "do"
+        "else"
+        "elseif"
+        "end"
+        "ensure"
+        "expanded"
+        "export"
+        "external"
+        "feature"
+        "from"
+        "frozen"
+        "if"
+        "implies"
+        "inherit"
+        "inspect"
+        "invariant"
+        "like"
+        "local"
+        "loop"
+        "not"
+        "note"
+        "obsolete"
+        "old"
+        "once"
+        "or"
+        "redefine"
+        "rename"
+        "require"
+        "rescue"
+        "retry"
+        "select"
+        "separate"
+        "then"
+        "undefine"
+        "until"
+        "variant"
+        "when"
+        "xor"
+      ];
+      types = [
+        "BOOLEAN"
+        "CHARACTER"
+        "INTEGER"
+        "REAL"
+        "STRING"
+      ];
+      constants = [
+        "Current"
+        "False"
+        "Result"
+        "True"
+        "Void"
+      ];
     }
 
     # ================================================================

@@ -24,8 +24,8 @@
 //!
 //! # Blocking
 //!
-//! [`from_site`], [`from_dashboard`] and [`prepare`] reach the network or the
-//! disk and decode images: call them on a THREAD.
+//! [`from_site`], [`typed_pass`], [`from_dashboard`] and [`prepare`] reach
+//! the network or the disk and decode images: call them on a THREAD.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -90,55 +90,96 @@ pub const METADATA_FRESH: Duration = Duration::from_secs(7 * 24 * 3600);
 /// (see `net`), and nearly every site answers both. The web app itself still
 /// opens the address as typed. Reaches the network: call it on a thread.
 ///
+/// # On the person's pass
+///
+/// The page, and every probe and manifest on its host, are asked on `pass`
+/// — the person's consent to the host they typed ([`typed_pass`]). A
+/// manifest or a redirect the PAGE names on another host is the page's
+/// answer, as a redirect is, and is asked BARE on the page's pass — no
+/// header and no body of ours (`web::request_named`): nobody could let it
+/// before the page named it.
+///
 /// # Errors
 ///
-/// The network's refusal, when the page could not be read and no probe found
+/// [`Refusal::NotLet`] when the address is not on the pass's host, and the
+/// network's refusal, when the page could not be read and no probe found
 /// anything.
-pub fn from_site(page_url: &str) -> Result<(Option<String>, Vec<Candidate>), crate::Refusal> {
+pub fn from_site(
+    pass: &ronoctua_consent::Pass,
+    page_url: &str,
+) -> Result<(Option<String>, Vec<Candidate>), crate::Refusal> {
     #[cfg(feature = "net")]
     {
-        site(page_url)
+        site(pass, page_url)
     }
     #[cfg(not(feature = "net"))]
     {
-        let _ = page_url;
+        let _ = (pass, page_url);
         Err(Refusal::Offline)
     }
 }
 
+/// The pass for the host of a web app's address the person TYPED: typing it
+/// is the consent to ask it, and it is RECORDED in `consent.json` like any
+/// other — the person's newest answer for that host, so a host they refused
+/// once and now typed is let — and then minted from there.
+///
+/// # Errors
+///
+/// [`Refusal::UrlInvalid`] for an address with no host, and
+/// [`Refusal::NotLet`] when the consent could not be kept or does not let it.
+pub fn typed_pass(page_url: &str) -> Result<ronoctua_consent::Pass, Refusal> {
+    let host = host_typed(page_url).ok_or(Refusal::UrlInvalid)?;
+    ronoctua_consent::let_hosts(&[host.as_str()], true).map_err(|_| Refusal::NotLet)?;
+    ronoctua_consent::pass(&host).map_err(|_| Refusal::NotLet)
+}
+
+/// The host of a typed address, as it is asked. Pure.
+fn host_typed(page_url: &str) -> Option<String> {
+    url::Url::parse(page_url.trim())
+        .ok()?
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .map(str::to_owned)
+}
+
 #[cfg(feature = "net")]
-fn site(page_url: &str) -> Result<(Option<String>, Vec<Candidate>), Refusal> {
+fn site(
+    pass: &ronoctua_consent::Pass,
+    page_url: &str,
+) -> Result<(Option<String>, Vec<Candidate>), Refusal> {
     let mut at = url::Url::parse(page_url.trim()).map_err(|_| Refusal::UrlInvalid)?;
     if at.scheme() == "http" {
         at.set_scheme("https").map_err(|()| Refusal::UrlScheme)?;
     }
-    let (head, page, refused) = match crate::net::get(at.as_str(), PAGE_MOST) {
+    let (head, page, refused) = match crate::net::get_let(pass, at.as_str(), PAGE_MOST) {
         Ok(got) => (
             crate::html::head_of(&got.reply.body, &got.url),
             got.url,
             None,
         ),
-        // No network: every probe would wait for the same nothing.
-        Err(Refusal::Offline) => return Err(Refusal::Offline),
+        // No network: every probe would wait for the same nothing. Not
+        // let: nothing may be asked of it at all.
+        Err(r @ (Refusal::Offline | Refusal::NotLet)) => return Err(r),
         Err(r) => (Head::default(), at.to_string(), Some(r)),
     };
-    let manifest = head
-        .manifest
-        .as_deref()
-        .and_then(|m| match crate::net::get(m, MANIFEST_MOST) {
-            Ok(got) => Some(crate::html::manifest_icons(&got.reply.body, &got.url)),
-            Err(r) => {
-                tracing::debug!(
-                    manifest = m,
-                    refusal = r.word(),
-                    "the manifest could not be read"
-                );
-                None
-            }
-        });
+    let manifest =
+        head.manifest
+            .as_deref()
+            .and_then(|m| match named(pass, at.as_str(), m, MANIFEST_MOST) {
+                Ok(got) => Some(crate::html::manifest_icons(&got.reply.body, &got.url)),
+                Err(r) => {
+                    tracing::debug!(
+                        manifest = m,
+                        refusal = r.word(),
+                        "the manifest could not be read"
+                    );
+                    None
+                }
+            });
     let probe = |path: &str| {
         let url = url::Url::parse(&page).ok()?.join(path).ok()?.to_string();
-        let got = crate::net::get(&url, ICON_MOST).ok()?;
+        let got = named(pass, at.as_str(), &url, ICON_MOST).ok()?;
         sniff(&got.reply.body).map(|_| got.url)
     };
     let apple = (!head.icons.iter().any(|o| o.from == Declared::AppleTouch))
@@ -147,10 +188,35 @@ fn site(page_url: &str) -> Result<(Option<String>, Vec<Candidate>), Refusal> {
     let favicon = (!head.icons.iter().any(|o| o.from == Declared::Icon))
         .then(|| probe("/favicon.ico"))
         .flatten();
-    let (name, found) = ranked(&head, manifest, apple, favicon);
+    let (name, mut found) = ranked(&head, manifest, apple, favicon);
+    // EACH ONE KNOWS THE PAGE THAT NAMED IT, for the fetch that prepares it
+    // later (`prepare`): an icon on a CDN is the page's answer.
+    for c in &mut found {
+        if let IconChoice::Site { page, .. } = &mut c.choice {
+            *page = Some(at.to_string());
+        }
+    }
     match (found.is_empty(), refused) {
         (true, Some(r)) => Err(r),
         _ => Ok((name, found)),
+    }
+}
+
+/// A file the page NAMED: on the pass when it is on the typed host, and as
+/// the page's answer — bare, on the page's pass (`net::get_named`) — when
+/// the page put it on another (a manifest on a CDN, a page that
+/// redirected). See [`from_site`].
+#[cfg(feature = "net")]
+fn named(
+    pass: &ronoctua_consent::Pass,
+    page: &str,
+    url: &str,
+    most: u64,
+) -> Result<crate::net::Got, Refusal> {
+    if crate::net::first_host_is(pass, url) {
+        crate::net::get_let(pass, url, most)
+    } else {
+        crate::net::get_named(pass, page, url, most)
     }
 }
 
@@ -199,7 +265,10 @@ pub fn ranked(
         .filter(|o| seen.insert(o.url.clone()))
         .map(|o| Candidate {
             about: about_of(&o),
-            choice: IconChoice::Site { url: o.url },
+            choice: IconChoice::Site {
+                url: o.url,
+                page: None,
+            },
         })
         .collect();
     (manifest_name.or_else(|| head.title.clone()), found)
@@ -411,7 +480,7 @@ pub fn prepare(
     out: &Path,
 ) -> Result<PathBuf, crate::Refusal> {
     let png = match choice {
-        IconChoice::Site { url } => normalised(&fetched(url)?)?,
+        IconChoice::Site { url, page } => normalised(&site_icon(url, page.as_deref())?)?,
         IconChoice::Dashboard { name, .. } => {
             if !dashboard::is_file_name(name) {
                 return Err(Refusal::UnknownItem);
@@ -447,7 +516,28 @@ pub fn prepare(
     Ok(out.join(name))
 }
 
-/// An icon's bytes from the network.
+/// A site's icon: on a pass of its own host when the person let it (the
+/// host they typed), else bare on the pass of the page that named it.
+fn site_icon(url: &str, page: Option<&str>) -> Result<Vec<u8>, Refusal> {
+    #[cfg(feature = "net")]
+    {
+        match (crate::net::pass_for(url), page) {
+            (Ok(_), _) | (Err(_), None) => fetched(url),
+            (Err(_), Some(page)) => {
+                let pass =
+                    crate::net::pass_for(page).map_err(|f| f.refusal.unwrap_or(Refusal::NotLet))?;
+                crate::net::get_named(&pass, page, url, ICON_MOST).map(|g| g.reply.body)
+            }
+        }
+    }
+    #[cfg(not(feature = "net"))]
+    {
+        let _ = page;
+        fetched(url)
+    }
+}
+
+/// An icon's bytes from the network, on a pass of its host.
 fn fetched(url: &str) -> Result<Vec<u8>, Refusal> {
     #[cfg(feature = "net")]
     {
@@ -1253,7 +1343,7 @@ mod tests {
         let urls: Vec<&str> = found
             .iter()
             .map(|c| match &c.choice {
-                IconChoice::Site { url } => url.as_str(),
+                IconChoice::Site { url, .. } => url.as_str(),
                 other => panic!("{other:?}"),
             })
             .collect();

@@ -56,11 +56,37 @@ let
   # (`tests/player-client.py`).
   media = import ./player-media.nix { inherit pkgs; };
   client = ./player-client.py;
+
+  # THREE PLAIN PICTURES, one colour each, for the two screens: what each
+  # screen shows is told apart by its colours alone.
+  colours =
+    pkgs.runCommand "ronoctua-player-colours" { nativeBuildInputs = [ pkgs.ffmpeg-headless ]; }
+      ''
+        mkdir -p $out
+        for c in red:0xff0000 green:0x00ff00 blue:0x0000ff; do
+          ffmpeg -loglevel error -f lavfi \
+            -i "color=c=''${c#*:}:size=320x180:rate=25:duration=120" \
+            -c:v libx264 -pix_fmt yuv444p -qp 0 "$out/''${c%%:*}.mp4"
+        done
+      '';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-player";
 
   nodes.machine = {
+    # THE ADULT CATALOGUE'S LOCK, as the distro declares it
+    # (`nix/modules/unlock.nix`): the one option it reads, as the player's
+    # module declares it, and a person whose password the door asks —
+    # `ronoctua-shell unlock-check` is that person's check.
+    imports = [
+      ../nix/modules/unlock.nix
+      { options.ronoctua.player.enable = lib.mkEnableOption "the player"; }
+    ];
+    ronoctua.player.enable = true;
+    users.users.alice = {
+      isNormalUser = true;
+      password = "right-horse";
+    };
     virtualisation.memorySize = 3072;
     virtualisation.cores = 4;
     environment.systemPackages = [
@@ -69,6 +95,9 @@ pkgs.testers.runNixOSTest {
       pkgs.python3
       pkgs.dbus
       pkgs.playerctl
+      # A PICTURE OF ONE OUTPUT at a time (`grim -o`), over the compositor's
+      # own capture: the two outputs' X windows overlap on the Xvfb screen.
+      pkgs.grim
     ]
     ++ xvfb.packages;
     fonts.enableDefaultPackages = false;
@@ -81,6 +110,7 @@ pkgs.testers.runNixOSTest {
     import json
     import math
     import re
+    import time
     ${xvfb.prelude}
 
     COLUMN = json.loads('${builtins.toJSON columnTokens}')
@@ -273,15 +303,16 @@ pkgs.testers.runNixOSTest {
         assert f["lit"] > 0.3, f"the paused picture never came: {f}"
         player({"ask": "play"})
 
-    with subtest("a second picture is a lane of a set, held to the film's sound"):
+    with subtest("a second picture is a lane of a set, held to the film's sound, and brings its own"):
         before = player({"ask": "queue"})["entries"][0]
         said = player({"ask": "add-lane", "source": "${media}/other.mp4", "kind": "video"})
         assert said["say"] == "done", said
-        # THE SAME ENTRY, with its id: the file became a set of three lanes —
-        # its picture, its sound, and the other picture — and kept playing.
+        # THE SAME ENTRY, with its id: the file became a set of four lanes —
+        # its picture, its sound, the other picture and THAT picture's own
+        # sound, brought with it (no track was chosen) — and kept playing.
         after = player({"ask": "queue"})["entries"][0]
         assert after["id"] == before["id"] and after["kind"] == "set", (before, after)
-        assert after["lanes"] == 3, after
+        assert after["lanes"] == 4, after
         machine.sleep(6)
         s = player({"ask": "look"})
         other = next(l for l in s["lane_states"] if l["lane"] == 3)
@@ -290,14 +321,98 @@ pkgs.testers.runNixOSTest {
         assert other["status"]["status"] == "playing", other
         assert master == [2], f"the film's sound does not keep the time: {s['lane_states']}"
         assert abs(other["drift_ms"]) < 60, f"lane 3 is {other['drift_ms']} ms away"
+        # `other.mp4` HAS NO SOUND: its sound lane says so, once it is loaded,
+        # in a sentence of its own — never a silence that looks like playing.
+        sound = next(l for l in s["lane_states"] if l["lane"] == 4)
+        assert sound["status"] == {
+            "status": "refused", "trouble": "no-sound", "lane": 4
+        }, sound
         # ITS OWN PICTURE, asked by its lane.
         f = json.loads(machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} frame 3"
         ))
         assert f["lit"] > 0.3, f"lane 3's picture is dark: {f}"
-        said = player({"ask": "lane", "lane": 3, "change": {"what": "remove"}})
-        assert said["say"] == "done", said
+        for lane in (4, 3):
+            said = player({"ask": "lane", "lane": lane, "change": {"what": "remove"}})
+            assert said["say"] == "done", said
         assert player({"ask": "queue"})["entries"][0]["lanes"] == 2
+
+    with subtest("a queue opened from its file is the file's until it changes, and is saved again"):
+        machine.succeed("mkdir -p /root/queues")
+        machine.succeed(
+            "cat > /root/queues/Sunday.rqueue <<'EOF'\n"
+            '{"format":"ronoctua-queue","version":1,"name":"Sunday","entries":['
+            '{"single":{"location":"${media}/tone.flac"}},'
+            '{"single":{"location":"${media}/film.mp4"}}]}\n'
+            "EOF"
+        )
+        said = player({"ask": "put", "what": ["/root/queues/Sunday.rqueue"], "replace": True})
+        assert said["say"] == "done", said
+        kept = player({"ask": "look"})["queue_file"]
+        assert kept == {"kept": "same", "path": "/root/queues/Sunday.rqueue", "name": "Sunday"}, kept
+        # AN ENTRY TAKEN OUT: not saved.
+        leaf = player({"ask": "queue"})["entries"][1]["id"]
+        assert player({"ask": "remove", "id": leaf})["say"] == "done"
+        kept = player({"ask": "look"})["queue_file"]
+        assert kept["kept"] == "changed" and kept["name"] == "Sunday", kept
+        # SAVED AGAIN, into the same file: the file's once more.
+        assert player({"ask": "save-queue-again"})["say"] == "done"
+        assert player({"ask": "look"})["queue_file"]["kept"] == "same"
+        text = machine.succeed("cat /root/queues/Sunday.rqueue")
+        assert "film.mp4" not in text and "tone.flac" in text, text
+        # KILLED AND STARTED AGAIN — no farewell, so what it wakes with is
+        # what it kept on the disk as it went: still the file's, not "not
+        # saved" (the queue read back fingerprints as it was written).
+        machine.succeed("systemctl kill -s KILL player")
+        machine.wait_until_succeeds(
+            "systemctl show -p ActiveState --value player | grep -qvx active", timeout=15
+        )
+        machine.succeed("systemctl reset-failed player || true")
+        machine.wait_until_fails("systemctl cat player", timeout=15)
+        # THE DEAD DAEMON'S SOCKET, by its whole name: a KILL leaves it on the
+        # disk, and the wait below would otherwise be answered by it — then
+        # the first ask is refused by nobody listening.
+        machine.succeed("rm -f /run/user/0/ronoctua-player.sock")
+        machine.succeed(
+            "systemd-run --unit=player --setenv=XDG_RUNTIME_DIR=/run/user/0 "
+            "--setenv=HOME=/root --setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
+            "--setenv=RUST_LOG=ronoctua_player=debug ${setenv} "
+            "--setenv=RONOCTUA_AMBIENCE=${media}/ambience "
+            "${player}/bin/ronoctua-player"
+        )
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        kept = player({"ask": "look"})["queue_file"]
+        assert kept == {"kept": "same", "path": "/root/queues/Sunday.rqueue", "name": "Sunday"}, kept
+        # THE FILE CHANGED ON THE DISK since: saving over it is asked, and
+        # `force` is the person's answer.
+        machine.succeed("echo >> /root/queues/Sunday.rqueue")
+        said = player({"ask": "put", "what": ["${media}/tune.mod"]})
+        assert said["say"] == "done", said
+        said = player({"ask": "save-queue-again"})
+        assert said == {
+            "say": "refused", "trouble": "changed-on-disk", "path": "/root/queues/Sunday.rqueue"
+        }, said
+        assert player({"ask": "save-queue-again", "force": True})["say"] == "done"
+        assert "tune.mod" in machine.succeed("cat /root/queues/Sunday.rqueue")
+        # A QUEUE NEVER KEPT has nowhere to be saved again.
+        assert player({"ask": "clear"})["say"] == "done"
+        assert player({"ask": "look"})["queue_file"] == {"kept": "empty"}
+        player({"ask": "put", "what": ["${media}/tone.flac"]})
+        assert player({"ask": "look"})["queue_file"] == {"kept": "never"}
+        said = player({"ask": "save-queue-again"})
+        assert said == {"say": "refused", "trouble": "no-origin"}, said
+
+    with subtest("put once: what is in the queue already is asked about, by the place it is"):
+        machine.succeed("ln -sf ${media}/tone.flac /root/tone-link.flac")
+        for spelled in ["${media}/tone.flac", "/root/tone-link.flac", "file://${media}/tone.flac"]:
+            said = player({"ask": "put", "what": [spelled], "once": True})
+            assert said["say"] == "refused" and said["trouble"] == "already-queued", (spelled, said)
+        # AND WITHOUT `once`, it goes in again — the person said so.
+        assert player({"ask": "put", "what": ["/root/tone-link.flac"]})["say"] == "done"
+        q = player({"ask": "queue"})
+        assert len(q["entries"]) == 2, q
+        # PUT BY THE FILE IT NAMES, not by the link.
+        assert q["entries"][1]["name"] == {"location": "${media}/tone.flac"}, q
 
     with subtest("a sound that starts two seconds in waits, and then keeps the time"):
         late = {"lanes": [
@@ -616,7 +731,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds("grep -q ' pip' /run/user/0/ronoctua-player-stage.pid", timeout=30)
         pid = int(machine.succeed("systemctl show -p MainPID --value pip").strip())
         msg = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg"
-        room = next(
+        space = next(
             w["rect"] for w in json.loads(machine.succeed(f"{msg} -t get_workspaces"))
             if w["focused"]
         )
@@ -648,12 +763,12 @@ pkgs.testers.runNixOSTest {
             r, c, d = node["rect"], node["window_rect"], node.get("deco_rect") or {}
             title = d.get("height", 0)
             box = (c["width"], c["height"], r["x"], r["y"] - title)
-            want = (w, h, room["x"] + room["width"] - r["width"] - air,
-                    room["y"] + room["height"] - r["height"] - title - air)
+            want = (w, h, space["x"] + space["width"] - r["width"] - air,
+                    space["y"] + space["height"] - r["height"] - title - air)
             if floating and box == want:
                 break
             machine.sleep(1)
-        print(f"room {room}, the small window {box}, floating {floating}, wanted {want}")
+        print(f"room {space}, the small window {box}, floating {floating}, wanted {want}")
         assert floating, "the small window is in the layout, not floating"
         assert box == want, f"the small window is at {box}, not {want}"
         assert node.get("sticky"), "the small window does not follow the workspaces"
@@ -704,7 +819,6 @@ pkgs.testers.runNixOSTest {
         assert player({"ask": "ambient", "id": "thunderstorm", "on": True})["say"] == "done"
 
     with subtest("a title written into a FLAC: the stamp moves, it reads back, and no draft is left"):
-        import time
         # A COPY THE TEST OWNS: the store's is read-only, and a write goes
         # into a draft beside the file that is renamed over it.
         machine.succeed(
@@ -758,7 +872,6 @@ pkgs.testers.runNixOSTest {
         assert field_of(player({"ask": "sheet", "location": flac}), "title")["value"] == "Written here"
 
     with subtest("nothing is looked up until somebody says so, and a host out of reach is said"):
-        import time
         song = "${media}/tone.flac"
         lyrics = {"ask": "find", "query": {"what": "lyrics", "location": song}}
         # NOTHING LET: refused at once, naming the host — a search and a key.
@@ -767,10 +880,13 @@ pkgs.testers.runNixOSTest {
         said = player({"ask": "key-check", "service": "tmdb"})
         assert said == {"say": "refused", "trouble": "off", "host": "api.themoviedb.org"}, said
         # THE PRESS ON A ROW THAT NAMES THE HOST is the consent: the door
-        # writes it, then asks — the daemon reads it at the moment of asking.
+        # lets its hosts in the distro's consent file (`ronoctua-consent`),
+        # then asks — the daemon reads it at the moment of asking, and the
+        # lookup's pass is minted from it. TMDB is its API AND its images.
         machine.succeed(
             "mkdir -p /root/.config/ronoctua && "
-            "echo '{\"consented\":[\"lrclib\",\"tmdb\"]}' > /root/.config/ronoctua/player.json"
+            "echo '{\"hosts\":{\"lrclib.net\":true,\"api.themoviedb.org\":true,"
+            "\"image.tmdb.org\":true}}' > /root/.config/ronoctua/consent.json"
         )
         said = player({"ask": "key-check", "service": "tmdb"})
         assert said == {"say": "refused", "trouble": "lookup", "service": "tmdb", "why": "no-key"}, said
@@ -788,30 +904,37 @@ pkgs.testers.runNixOSTest {
         # A CANDIDATE NO PAGE HAS is refused, never carried out.
         said = player({"ask": "take", "desk": "lyrics", "candidate": 99})
         assert said == {"say": "refused", "trouble": "no-such-candidate", "candidate": 99}, said
-        machine.succeed("rm /root/.config/ronoctua/player.json")
+        machine.succeed("rm /root/.config/ronoctua/consent.json")
 
     with subtest("nothing is asked of a directory until somebody says so, and one out of reach is said"):
-        import time
         radio = {"ask": "find", "query": {"what": "radio", "list": "countries"}}
         # NOTHING LET: each directory refused at once, naming its host.
         for query, host in [
             (radio["query"], "radio-browser.info"),
             ({"what": "tv", "list": "countries"}, "iptv-org.github.io"),
-            ({"what": "archive", "category": "films"}, "archive.org"),
-            ({"what": "lives", "category": "news"}, "youtube.com"),
         ]:
             said = player({"ask": "find", "query": query})
             assert said == {"say": "refused", "trouble": "off", "host": host}, said
+        # THE THEMES' DESKS ARE RETIRED — a theme is the local catalogue's —
+        # and their lists are no ask at all.
+        for query in [
+            {"what": "archive", "category": "films"},
+            {"what": "lives", "category": "news"},
+            {"what": "tv", "list": "category", "category": "news"},
+        ]:
+            said = player({"ask": "find", "query": query})
+            assert said["say"] == "refused" and said["trouble"] == "not-understood", said
         # A STAR ON WHAT NO PAGE HAS is refused, and nothing is written.
         uuid = "7ada8a81-5ae1-418c-8f18-51d2f38d86a4"
         said = player({"ask": "favourite", "kind": "radio", "id": uuid, "on": True})
         assert said == {"say": "refused", "trouble": "no-such-pick", "kind": "radio", "id": uuid}, said
         machine.fail("test -e /root/.config/ronoctua/player-favourites.json")
         # THE PRESS ON "ASK radio-browser.info" is the consent: the door
-        # writes it, then asks — and the VM has no network.
+        # lets the host in the consent file, then asks — and the VM has no
+        # network.
         machine.succeed(
             "mkdir -p /root/.config/ronoctua && "
-            "echo '{\"directories\":[\"radio\"]}' > /root/.config/ronoctua/player.json"
+            "echo '{\"hosts\":{\"radio-browser.info\":true}}' > /root/.config/ronoctua/consent.json"
         )
         assert player(radio)["say"] == "done"
         for _ in range(150):
@@ -825,10 +948,285 @@ pkgs.testers.runNixOSTest {
         assert page["page"] == {"page": "nothing"} and page["query"] == radio["query"], page
         # EVERY DESK IS IN THE STATE, the directories' after the lookups'.
         kinds = [d["kind"] for d in player({"ask": "look"})["desks"]]
-        assert kinds == [
-            "suggestions", "subtitles", "lyrics", "radio", "television", "channels", "archive", "lives",
-        ], kinds
-        machine.succeed("rm /root/.config/ronoctua/player.json")
+        assert kinds == ["suggestions", "subtitles", "lyrics", "radio", "television"], kinds
+        machine.succeed("rm /root/.config/ronoctua/consent.json")
+
+    with subtest("a pasted http list is read into the catalogue when asked, kept 0600, said plain, and its account never said"):
+        CATALOG = "/root/.cache/ronoctua/player-catalog"
+        BOOK = "/root/.config/ronoctua/player-sources/sources.json"
+        # NOTHING IS READ ON A CLOCK: minutes of player and no catalogue yet.
+        machine.fail(f"test -e {CATALOG}/catalog.sqlite")
+        # A DEFAULT SOURCE WHOSE HOSTS ARE NOT LET is refused at once.
+        said = player({"ask": "ingest", "source": "nasa"})
+        assert said == {"say": "refused", "trouble": "source", "why": "not-let"}, said
+        # A PERSON'S LIST, on a plain-http host of the VM's own — an IPTV
+        # provider's shape: the account in the query, a group of each kind,
+        # and one the adult words send to the other file.
+        machine.succeed(
+            "mkdir -p /srv/iptv && printf '%s\\n' '#EXTM3U' "
+            "'#EXTINF:-1 group-title=\"News\",Channel One' 'http://127.0.0.1:8099/one.m3u8' "
+            "'#EXTINF:-1 group-title=\"Films\",Film Two' 'http://127.0.0.1:8099/two.mp4' "
+            "'#EXTINF:-1 group-title=\"Adult 18+\",Night' 'http://127.0.0.1:8099/three.mp4' "
+            "> /srv/iptv/list.m3u"
+        )
+        machine.succeed(
+            "systemd-run --unit=iptv ${pkgs.python3}/bin/python3 -m http.server 8099 "
+            "--bind 127.0.0.1 --directory /srv/iptv"
+        )
+        machine.wait_for_open_port(8099)
+        url = "http://127.0.0.1:8099/list.m3u?username=ana&password=hunter2"
+        said = player({"ask": "add-source", "url": url})
+        assert said == {"say": "done"}, said
+        for _ in range(150):
+            # A PERSON'S LIST IS `p<stamp>`; a default source's id is a word,
+            # and `peertube` starts with a `p` too.
+            mine = [s for s in player({"ask": "look"})["catalog"]["sources"] if re.fullmatch(r"p\d+", s["id"])]
+            if mine and not mine[0]["busy"]:
+                break
+            time.sleep(0.2)
+        assert len(mine) == 1, mine
+        source = mine[0]
+        assert source["trouble"] is None and source["items"] == 3, source
+        # SAID PLAIN, and shown by its host alone.
+        assert source["plain"] is True and source["shown"] == "127.0.0.1/…", source
+        # THE BOOK is the daemon's, private from its first byte; the two
+        # files hold the rows, the adult group apart.
+        assert machine.succeed(f"stat -c %a {BOOK}").strip() == "600"
+        assert machine.succeed(f"stat -c %a {CATALOG}/catalog-adult.sqlite").strip() == "600"
+        # THE ACCOUNT never reaches the state nor the journal.
+        assert "hunter2" not in json.dumps(player({"ask": "look"}))
+        machine.fail("journalctl -u player --no-pager | grep -q hunter2")
+        # READ AGAIN WHEN ASKED — what a door that showed it stale asks —
+        # replaced whole: the same three.
+        said = player({"ask": "ingest", "source": source["id"]})
+        assert said == {"say": "done"}, said
+        for _ in range(150):
+            again = next(s for s in player({"ask": "look"})["catalog"]["sources"] if s["id"] == source["id"])
+            if not again["busy"]:
+                break
+            time.sleep(0.2)
+        assert again["items"] == 3 and again["trouble"] is None, again
+        # FORGOTTEN: out of the book and out of the state.
+        said = player({"ask": "remove-source", "id": source["id"]})
+        assert said == {"say": "done"}, said
+        assert "127.0.0.1" not in machine.succeed(f"cat {BOOK}")
+        assert not [s for s in player({"ask": "look"})["catalog"]["sources"] if s["id"] == source["id"]]
+        machine.succeed("systemctl stop iptv")
+
+    with subtest("the adult catalogue's lock: the right password opens it; a wrong one, and no service, do not"):
+        check = "su -l alice -c 'ronoctua-shell unlock-check'"
+        machine.succeed("test -e /etc/pam.d/ronoctua-unlock")
+        # THE RIGHT ONE, through pam_unix and its setuid helper, as the door
+        # asks it: the session's own user.
+        said = machine.succeed(f"printf '%s\\n' 'right-horse' | {check}").strip()
+        assert said == "open", said
+        # A WRONG ONE is wrong — after the service's delay (three seconds,
+        # which Linux-PAM spreads around that), never at once.
+        began = time.monotonic()
+        code, said = machine.execute(f"printf '%s\\n' 'wrong-horse' | {check}")
+        waited = time.monotonic() - began
+        assert code != 0 and said.strip() == "wrong", (code, said)
+        assert waited >= 1.5, f"a wrong password was answered in {waited:.1f} s"
+        # AN EMPTY ONE is never let in.
+        code, said = machine.execute(f"printf '\\n' | {check}")
+        assert code != 0 and said.strip() == "wrong", (code, said)
+        # NO SERVICE — a machine that never declared it — is said, and PAM
+        # is never asked: every right password would read "wrong" under
+        # `other`.
+        machine.succeed("mv /etc/pam.d/ronoctua-unlock /etc/pam.d/ronoctua-unlock.away")
+        code, said = machine.execute(f"printf '%s\\n' 'right-horse' | {check}")
+        machine.succeed("mv /etc/pam.d/ronoctua-unlock.away /etc/pam.d/ronoctua-unlock")
+        assert code != 0 and said.strip() == "no-service", (code, said)
+
+    # `C-s` PRESSED IN A DOOR. What the socket says of the queue's file
+    # (`queue_file`: never saved, the same, changed since, changed on the
+    # disk) is the engine's subtests'; this one is the doors' part of it: the
+    # key in a window saves the queue again — the mark the Queue's title draws
+    # goes — and over a file changed on the disk the window asks first, with
+    # the cursor born on "no", and writes over it only on a yes. Every
+    # assertion is the player's answer over its socket, from outside.
+    with subtest("C-s in a window saves the queue again, and asks before writing over a changed file"):
+
+        def kept():
+            return player({"ask": "look"})["queue_file"]["kept"]
+
+        def settles(what, why, seconds=30):
+            until = time.time() + seconds
+            while time.time() < until:
+                if kept() == what:
+                    return
+                time.sleep(1)
+            print(machine.execute("journalctl -u queue-door --no-pager -o cat | tail -n 40")[1])
+            raise AssertionError(f"{why}: the queue's file is {kept()!r}, not {what!r}")
+
+        def stays(what, why, seconds=4):
+            until = time.time() + seconds
+            while time.time() < until:
+                assert kept() == what, f"{why}: the queue's file is {kept()!r}, not {what!r}"
+                time.sleep(1)
+
+        def press(*keys):
+            for k in keys:
+                machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {k}")
+                machine.sleep(1)
+
+        said = player({"ask": "put", "what": ["${media}/tone.flac", "${media}/film.mp4"], "replace": True})
+        assert said["say"] == "done", said
+        said = player({"ask": "save-queue", "to": "/root/door.rqueue", "name": "door"})
+        assert said["say"] == "done", said
+        settles("same", "saved by name")
+
+        # A COMPOSITOR OF ITS OWN and the window in it: the earlier one was
+        # stopped with its sockets left on the disk, and a stale socket
+        # answers "the compositor is up" at once.
+        machine.succeed("rm -f /run/user/0/wayland-* /run/user/0/scroll-ipc.*.sock")
+        start_compositor("compositor-queue", "${scroll}")
+        sock = socket_of("compositor-queue")
+        machine.succeed(
+            "systemd-run --unit=queue-door ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+            "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+            f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
+            "${ronoctua-shell}/bin/ronoctua-shell player"
+        )
+        await_windows(sock, 1, timeout=60)
+        # With no WM on Xvfb nobody has input focus, and the key would be lost.
+        focus_compositor()
+        machine.sleep(2)
+
+        # CHANGED SINCE ITS FILE — the mark appears — and `C-s` in the window
+        # saves it again: the mark goes.
+        first = player({"ask": "queue"})["entries"][0]["id"]
+        assert player({"ask": "remove", "id": first})["say"] == "done"
+        settles("changed", "an entry taken off")
+        press("ctrl+s")
+        settles("same", "C-s in the window")
+
+        # THE FILE CHANGED ON THE DISK: `C-s` asks, "no" first — `RET` at once
+        # answers no, and nothing is written over — then `C-s`, `↓`, `RET`
+        # writes over it.
+        said = player({"ask": "put", "what": ["${media}/tone.flac"], "once": False})
+        assert said["say"] == "done", said
+        settles("changed", "an entry added")
+        machine.succeed("echo >> /root/door.rqueue")
+        press("ctrl+s", "Return")
+        stays("changed", "a file changed on the disk was written over on the first RET")
+        press("ctrl+s", "Down", "Return")
+        settles("same", "the yes of the window's question")
+
+        machine.succeed("systemctl stop queue-door")
+        stop_compositor("compositor-queue")
+
+    # TWO SCREENS (`docs/PENDING.md`, the columns' "two screens of truth"):
+    # "Show on every screen" (`M` in a door, `player-every-screen`) opens one
+    # window per screen something is routed to — the door decides which
+    # (`player_stage::everywhere`, from the screens it knows by name and the
+    # routes of what plays) and starts `ronoctua-shell player maximized
+    # --screen <connector>` for each — each whole-screen on ITS output and
+    # showing only the pictures routed there. Three plain pictures: red to
+    # the first screen, blue to the second, green to every one. The key is
+    # pressed in a real door; the door then leaves (its windows are not its
+    # to close), and each output is photographed by itself (`grim -o`).
+    with subtest("every screen, a window: the door's M opens one whole on each output, with its own pictures"):
+        start_compositor("compositor-two", "${scroll}", outputs=2)
+        sock = socket_of("compositor-two")
+        msg2 = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg"
+        outputs = json.loads(machine.succeed(f"{msg2} -t get_outputs"))
+        names = sorted(o["name"] for o in outputs if o.get("active"))
+        assert len(names) == 2, f"the compositor has {names}, not two screens"
+        first, second = names
+        said = player({"ask": "put", "what": ["${colours}/red.mp4"], "replace": True})
+        assert said["say"] == "done", said
+        # LOADED FIRST: a lane is added to what plays, and until mpv has the
+        # file its answer is `nothing-playing` — the file's lanes are its
+        # tracks, and there are none to read before it loads.
+        for _ in range(30):
+            if any(l["kind"] == "video" for l in player({"ask": "look"})["lanes"]):
+                break
+            machine.sleep(1)
+        for name in ("green", "blue"):
+            said = player({"ask": "add-lane", "source": f"${colours}/{name}.mp4", "kind": "video"})
+            assert said["say"] == "done", said
+        lanes = player({"ask": "look"})["lanes"]
+        picture = {l["source"].rsplit("/", 1)[-1]: l["id"] for l in lanes if l["kind"] == "video"}
+        assert set(picture) == {"red.mp4", "green.mp4", "blue.mp4"}, lanes
+        for clip, screens in (("red.mp4", {"only": [first]}), ("blue.mp4", {"only": [second]}),
+                              ("green.mp4", "every")):
+            said = player({"ask": "lane", "lane": picture[clip],
+                           "change": {"what": "screens", "screens": screens}})
+            assert said["say"] == "done", (clip, said)
+
+        # THE DOOR, and `M` pressed in it. `KillMode=process`: the windows it
+        # starts are its children in its unit, and stopping the door must not
+        # take them with it.
+        machine.succeed(
+            "systemd-run --unit=every-door -p KillMode=process ${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 --setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
+            f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
+            "${ronoctua-shell}/bin/ronoctua-shell player"
+        )
+        await_windows(sock, 1, timeout=60)
+        door = int(machine.succeed("systemctl show -p MainPID --value every-door").strip())
+        # The door knows the screens by name once the compositor has told it.
+        machine.sleep(3)
+        window = focus_compositor(0)
+        machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key --window {window} shift+m")
+        await_windows(sock, 3, timeout=60)
+        said = machine.succeed("journalctl -u every-door --no-pager -o cat | tail -n 20")
+        print(said)
+        machine.succeed("systemctl kill --kill-whom=main every-door")
+        machine.wait_until_fails(f"kill -0 {door}", timeout=30)
+        await_windows(sock, 2, timeout=30)
+        machine.sleep(4)
+
+        def placed():
+            """Each window's output, box and pid, from the tree."""
+            tree = json.loads(machine.succeed(f"{msg2} -t get_tree"))
+            out = []
+            def walk(node, output):
+                if node.get("type") == "output":
+                    output = node
+                if node.get("pid"):
+                    out.append((output["name"], node["rect"], output["rect"], node["pid"]))
+                for kid in node.get("nodes", []) + node.get("floating_nodes", []):
+                    walk(kid, output)
+            walk(tree, None)
+            return out
+
+        where = placed()
+        print(where)
+        assert sorted(o for o, _, _, _ in where) == [first, second], f"not one window per screen: {where}"
+        for output, box, whole, pid in where:
+            assert (box["width"], box["height"]) == (whole["width"], whole["height"]), (
+                f"the window on {output} is {box}, not its whole screen {whole}"
+            )
+            line = machine.succeed(f"tr '\\0' ' ' < /proc/{pid}/cmdline")
+            assert f"player maximized --screen {output}" in line, (
+                f"the window on {output} was not started for it by the door: {line!r}"
+            )
+
+        def seen(screen):
+            machine.succeed(
+                f"XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 grim -t ppm -o {screen} /tmp/{screen}.ppm"
+            )
+            found = json.loads(machine.succeed(
+                f"python3 ${client} colours /tmp/{screen}.ppm ff0000 00ff00 0000ff"
+            ))["found"]
+            return {c: found[c]["pixels"] for c in found}
+
+        on_first, on_second = seen(first), seen(second)
+        print(f"{first}: {on_first}, {second}: {on_second}")
+        # A PICTURE IS THERE when it covers a good part of a quarter of its
+        # place, and not there when not one pixel of its colour is.
+        enough = 2000
+        assert on_first["ff0000"] > enough and on_first["00ff00"] > enough, f"{first} lacks red or green: {on_first}"
+        assert on_first["0000ff"] == 0, f"blue, routed to {second}, shows on {first}: {on_first}"
+        assert on_second["0000ff"] > enough and on_second["00ff00"] > enough, f"{second} lacks blue or green: {on_second}"
+        assert on_second["ff0000"] == 0, f"red, routed to {first}, shows on {second}: {on_second}"
+
+        for _, _, _, pid in where:
+            machine.succeed(f"kill {pid}")
+        machine.succeed("systemctl stop every-door || true")
+        stop_compositor("compositor-two")
 
     with subtest("closed everywhere: the watcher hears farewell, and the player leaves with success"):
         # A DOOR'S WATCH, from outside, and a quit that does not wait for its

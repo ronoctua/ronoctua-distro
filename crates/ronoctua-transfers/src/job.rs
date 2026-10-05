@@ -45,19 +45,32 @@ pub enum Engine {
     /// do the work itself: that program links a TLS stack and image decoders,
     /// and this daemon runs for as long as the machine is on.
     Software,
+    /// A file sent to VirusTotal: `ronoctua-scan`, as a child — the software
+    /// engine's shape and reason (a TLS stack this daemon does not carry).
+    Scan,
+    /// The person's containers: podman pulling, building and running
+    /// compose, as a child (`crate::container`).
+    Container,
+    /// The person's belongings: their CLI, as a child — for the software
+    /// engine's reason and a sharper one: it links `age`, which this daemon
+    /// must never carry.
+    Belongings,
 }
 
 impl Engine {
     /// Every one of them, for the check that demands a text and an icon per
     /// engine. A `match` would compile with one missing; a list is what can be
     /// compared against the `.ftl`.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Local,
         Self::Fetch,
         Self::Media,
         Self::Torrent,
         Self::Atlas,
         Self::Software,
+        Self::Scan,
+        Self::Container,
+        Self::Belongings,
     ];
 
     /// The stem of its text key and of its icon token.
@@ -74,6 +87,9 @@ impl Engine {
             Self::Torrent => "torrent",
             Self::Atlas => "atlas",
             Self::Software => "software",
+            Self::Scan => "scan",
+            Self::Container => "container",
+            Self::Belongings => "belongings",
         }
     }
 
@@ -89,9 +105,25 @@ impl Engine {
     /// `SIGSTOP` would freeze them holding it — so the update run, which takes
     /// the same lane, would wait behind a row somebody forgot was held. A key
     /// that says no is better than a held row quietly blocking the machine.
+    ///
+    /// Nor does the belongings': a sync held between its commit and its push
+    /// would hold the passphrase in the runtime directory for as long as
+    /// somebody forgot the row.
     #[must_use]
+    ///
+    /// Nor does the container engine, for the same reason in podman's words:
+    /// a stopped pull holds the person's container storage locked, and every
+    /// other podman — the app's own listing — would wait behind it.
     pub const fn pauses(self) -> bool {
-        !matches!(self, Self::Software)
+        // AN UPLOAD HELD is a socket the host times out, and the file would
+        // have to go again from its first byte: the same "no" as the software
+        // engine's, for a different reason — and a container's job is podman's
+        // own child, which a pause would leave half done, as the belongings'
+        // CLI is.
+        !matches!(
+            self,
+            Self::Software | Self::Scan | Self::Container | Self::Belongings
+        )
     }
 }
 
@@ -216,7 +248,14 @@ pub enum Work {
         /// The names inside it.
         names: Vec<String>,
     },
-    /// Pack these names, relative to that directory, into that archive.
+    /// Pack these names, relative to that directory, into that archive —
+    /// through `ronoctua-archive`, which runs the program.
+    ///
+    /// THE SHEET'S FOUR ANSWERS travel with it: the format, the level, the
+    /// size of a volume and the password's FILE (never the password: see
+    /// [`crate::secrets`]). Each has a default, so a request from before they
+    /// existed still parses — as the format its name says, at the normal
+    /// level, whole and in clear.
     Compress {
         /// Where the names are.
         #[serde(with = "crate::wire::path")]
@@ -226,8 +265,24 @@ pub enum Work {
         /// Where it lands.
         #[serde(with = "crate::wire::path")]
         archive: PathBuf,
+        /// The format; `None` is the one the archive's name says.
+        #[serde(default)]
+        format: Option<ronoctua_archive::Format>,
+        /// How hard to compress.
+        #[serde(default)]
+        level: ronoctua_archive::Level,
+        /// Split into volumes of this many bytes (zip and 7z).
+        #[serde(default)]
+        volume_bytes: Option<u64>,
+        /// The names too, behind the password (7z).
+        #[serde(default)]
+        hide_names: bool,
+        /// The password's `0600` file, which the job removes when it ends.
+        #[serde(default, with = "crate::wire::maybe_path")]
+        secret: Option<PathBuf>,
     },
-    /// Unpack that archive into that directory.
+    /// Unpack that archive — or only these members of it — into that
+    /// directory. Nothing there is replaced: what comes out takes a free name.
     Extract {
         /// What to unpack.
         #[serde(with = "crate::wire::path")]
@@ -235,6 +290,64 @@ pub enum Work {
         /// Where to.
         #[serde(with = "crate::wire::path")]
         into: PathBuf,
+        /// The members, by their path inside; empty is every one.
+        #[serde(default)]
+        members: Vec<String>,
+        /// The password's `0600` file, which the job removes when it ends.
+        #[serde(default, with = "crate::wire::maybe_path")]
+        secret: Option<PathBuf>,
+    },
+    /// Add these files to that archive, or take these members out of it — in
+    /// place, zip and 7z only (a tar is converted instead).
+    ArchiveEdit {
+        /// Which archive.
+        #[serde(with = "crate::wire::path")]
+        archive: PathBuf,
+        /// What goes in, all from one folder.
+        #[serde(with = "crate::wire::paths")]
+        add: Vec<PathBuf>,
+        /// What comes out, by path inside.
+        remove: Vec<String>,
+        /// The password's `0600` file: what goes in is encrypted with it,
+        /// and hidden names need it to be read at all.
+        #[serde(default, with = "crate::wire::maybe_path")]
+        secret: Option<PathBuf>,
+    },
+    /// Read every member of that archive and check it against its sums.
+    ArchiveTest {
+        /// Which archive.
+        #[serde(with = "crate::wire::path")]
+        archive: PathBuf,
+        /// The password's `0600` file.
+        #[serde(default, with = "crate::wire::maybe_path")]
+        secret: Option<PathBuf>,
+    },
+    /// Write that archive again, in another format, beside it.
+    ArchiveConvert {
+        /// The archive as it is.
+        #[serde(with = "crate::wire::path")]
+        from: PathBuf,
+        /// Its password's `0600` file, when it has one.
+        #[serde(default, with = "crate::wire::maybe_path")]
+        from_secret: Option<PathBuf>,
+        /// The archive to make.
+        #[serde(with = "crate::wire::path")]
+        to: PathBuf,
+        /// Its format; `None` is the one its name says.
+        #[serde(default)]
+        format: Option<ronoctua_archive::Format>,
+        /// How hard to compress.
+        #[serde(default)]
+        level: ronoctua_archive::Level,
+        /// Split into volumes of this many bytes (zip and 7z).
+        #[serde(default)]
+        volume_bytes: Option<u64>,
+        /// The names too, behind the password (7z).
+        #[serde(default)]
+        hide_names: bool,
+        /// The NEW archive's password's `0600` file.
+        #[serde(default, with = "crate::wire::maybe_path")]
+        secret: Option<PathBuf>,
     },
     /// Walk a directory and report how big it is.
     ///
@@ -329,6 +442,34 @@ pub enum Work {
         /// it is a program's name and it does not get translated.
         label: String,
     },
+    /// One file sent to VirusTotal, after the person answered yes to the
+    /// question that says what that shares — the security centre's.
+    Scan {
+        /// The file.
+        #[serde(with = "crate::wire::path")]
+        path: PathBuf,
+        /// Its SHA-256 when the question was asked: a file that changed since
+        /// is not sent.
+        sha256: String,
+    },
+    /// Something asked of the person's containers: pull, build, compose —
+    /// `ronoctua-containers`' own job type, carried whole, for the reason
+    /// `Software` carries its order.
+    Container {
+        /// What to do.
+        job: ronoctua_containers::Job,
+        /// The name to show — the image, the folder, the project. Data.
+        label: String,
+    },
+    /// Something asked of the person's belongings — a sync, its apply or its
+    /// abandon, a deploy key, a new passphrase. The ORDER only: the passphrase
+    /// is a `0600` runtime file a door wrote, and the plan and the decisions
+    /// are files beside it (`ronoctua_belongings::places`), so nothing secret
+    /// crosses this socket or sits in the ledger.
+    Belongings {
+        /// What to do.
+        op: ronoctua_belongings::order::Op,
+    },
 }
 
 /// Whose session a download is made with.
@@ -379,6 +520,10 @@ impl Work {
             Self::Restore { .. } => "restore",
             Self::Compress { .. } => "compress",
             Self::Extract { .. } => "extract",
+            Self::ArchiveEdit { add, .. } if !add.is_empty() => "archive-add",
+            Self::ArchiveEdit { .. } => "archive-remove",
+            Self::ArchiveTest { .. } => "archive-test",
+            Self::ArchiveConvert { .. } => "archive-convert",
             Self::Measure { .. } => "measure",
             Self::Fetch { .. } => "fetch",
             Self::Media {
@@ -394,11 +539,20 @@ impl Work {
             Self::Torrent { .. } => "torrent",
             Self::Atlas { .. } => "region",
             Self::Software { .. } => "software",
+            Self::Scan { .. } => "scan",
+            Self::Container { job, .. } => match job {
+                ronoctua_containers::Job::Pull { .. } => "container-pull",
+                ronoctua_containers::Job::Build { .. } => "container-build",
+                ronoctua_containers::Job::ComposeUp { .. } => "container-compose-up",
+                ronoctua_containers::Job::ComposeDown { .. } => "container-compose-down",
+                ronoctua_containers::Job::ComposePull { .. } => "container-compose-pull",
+            },
+            Self::Belongings { .. } => "belongings",
         }
     }
 
     /// Every stem, for the check that demands a text per kind of work.
-    pub const WORDS: [&'static str; 16] = [
+    pub const WORDS: [&'static str; 27] = [
         "copy",
         "move",
         "delete",
@@ -407,6 +561,10 @@ impl Work {
         "restore",
         "compress",
         "extract",
+        "archive-add",
+        "archive-remove",
+        "archive-test",
+        "archive-convert",
         "measure",
         "fetch",
         "media",
@@ -415,6 +573,13 @@ impl Work {
         "torrent",
         "region",
         "software",
+        "scan",
+        "container-pull",
+        "container-build",
+        "container-compose-up",
+        "container-compose-down",
+        "container-compose-pull",
+        "belongings",
     ];
 
     /// Who does it.
@@ -431,6 +596,9 @@ impl Work {
             Self::Torrent { .. } => Engine::Torrent,
             Self::Atlas { .. } => Engine::Atlas,
             Self::Software { .. } => Engine::Software,
+            Self::Scan { .. } => Engine::Scan,
+            Self::Container { .. } => Engine::Container,
+            Self::Belongings { .. } => Engine::Belongings,
             Self::Paste { .. }
             | Self::Delete { .. }
             | Self::Shred { .. }
@@ -438,15 +606,42 @@ impl Work {
             | Self::Restore { .. }
             | Self::Compress { .. }
             | Self::Extract { .. }
+            | Self::ArchiveEdit { .. }
+            | Self::ArchiveTest { .. }
+            | Self::ArchiveConvert { .. }
             | Self::Measure { .. } => Engine::Local,
+        }
+    }
+
+    /// The password files this work carries — what the job removes when it
+    /// ends, however it ends ([`crate::secrets::forget`]).
+    #[must_use]
+    pub fn secrets(&self) -> Vec<&std::path::Path> {
+        match self {
+            Self::Compress { secret, .. }
+            | Self::Extract { secret, .. }
+            | Self::ArchiveEdit { secret, .. }
+            | Self::ArchiveTest { secret, .. } => secret.iter().map(PathBuf::as_path).collect(),
+            Self::ArchiveConvert {
+                from_secret,
+                secret,
+                ..
+            } => from_secret
+                .iter()
+                .chain(secret.iter())
+                .map(PathBuf::as_path)
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
     /// What the counter will count.
     ///
     /// Bytes wherever bytes are what takes the time, entries wherever they are
-    /// not. Compressing and extracting are neither: what decides them is the
-    /// compressor, and the honest answer is that we do not know — see
+    /// not. An archive's work is BYTES — what is read, the sources or the
+    /// archive — and its total is only written once the program says how far
+    /// it is (7zz does, bsdtar does not): until then the total is unknown and
+    /// the row says the stage, never a bar that would be a guess. See
     /// [`Job::total`].
     #[must_use]
     pub const fn measure(&self) -> Measure {
@@ -456,17 +651,26 @@ impl Work {
             | Self::Fetch { .. }
             | Self::Media { .. }
             | Self::Torrent { .. }
-            | Self::Atlas { .. } => Measure::Bytes,
+            | Self::Atlas { .. }
+            | Self::Compress { .. }
+            | Self::Extract { .. }
+            | Self::ArchiveEdit { .. }
+            | Self::ArchiveTest { .. }
+            | Self::ArchiveConvert { .. }
+            | Self::Scan { .. } => Measure::Bytes,
             Self::Measure { .. }
             | Self::Delete { .. }
             | Self::Trash { .. }
-            | Self::Restore { .. }
-            | Self::Compress { .. }
-            | Self::Extract { .. } => Measure::Items,
+            | Self::Restore { .. } => Measure::Items,
             // WHERE IT STARTS, and not where it stays: the measure of a
             // software job follows its PHASE (`software::measure_of`) — bytes
             // while something downloads, things otherwise.
             Self::Software { .. } => Measure::Items,
+            // A build's steps, a pull's layers: things, never bytes — podman
+            // prints no byte count on a line a pipe can read.
+            Self::Container { .. } => Measure::Items,
+            // The CLI counts files: read, encrypted, written.
+            Self::Belongings { .. } => Measure::Items,
         }
     }
 
@@ -490,13 +694,18 @@ impl Work {
             | Self::Torrent { into, .. }
             | Self::Atlas { into, .. } => Some(into),
             Self::Trash { root, .. } | Self::Restore { root, .. } => Some(root),
-            Self::Compress { archive, .. } => Some(archive),
+            Self::Compress { archive, .. } | Self::ArchiveEdit { archive, .. } => Some(archive),
+            Self::ArchiveConvert { to, .. } => Some(to),
             // A program lands in the person's profile, in Flatpak's tree, in
             // `~/Applications` or inside Android — nowhere one path says.
             Self::Delete { .. }
             | Self::Shred { .. }
             | Self::Measure { .. }
-            | Self::Software { .. } => None,
+            | Self::ArchiveTest { .. }
+            | Self::Software { .. }
+            | Self::Scan { .. }
+            | Self::Container { .. }
+            | Self::Belongings { .. } => None,
         }
     }
 
@@ -509,8 +718,18 @@ impl Work {
             }
             Self::Trash { paths, .. } => Paths::Some(paths),
             Self::Restore { names, .. } | Self::Compress { names, .. } => Paths::Named(names),
-            Self::Extract { archive, .. } => Paths::One(archive),
-            Self::Measure { path } => Paths::One(path),
+            Self::ArchiveEdit { add, remove, .. } => {
+                if add.is_empty() {
+                    Paths::Named(remove)
+                } else {
+                    Paths::Some(add)
+                }
+            }
+            Self::Extract { archive, .. } | Self::ArchiveTest { archive, .. } => {
+                Paths::One(archive)
+            }
+            Self::ArchiveConvert { from, .. } => Paths::One(from),
+            Self::Measure { path } | Self::Scan { path, .. } => Paths::One(path),
             Self::Fetch { url, .. } | Self::Media { url, .. } => Paths::Text(url),
             Self::Torrent { source, .. } => Paths::Text(source),
             // THE LABEL AND NOT THE URL: the row says what a person chose, and
@@ -518,7 +737,10 @@ impl Work {
             // catalogue and nobody typed it.
             Self::Atlas { label, .. } => Paths::Text(label),
             // The same rule: the program's name, not the attribute or the id.
-            Self::Software { label, .. } => Paths::Text(label),
+            Self::Software { label, .. } | Self::Container { label, .. } => Paths::Text(label),
+            // THE ORDER'S WORD: what is synced is the person's configuration,
+            // and the row names what it is doing to it.
+            Self::Belongings { op } => Paths::Text(op.word()),
         }
     }
 
@@ -587,6 +809,14 @@ pub struct Job {
     /// SENTENCE for. [`Job::trouble`] keeps the program's own words beside it.
     #[serde(default)]
     pub refusal: Option<ronoctua_software::Refusal>,
+    /// Why an archive's work was not done, as the closed set the screen has a
+    /// sentence for (`files-archive-why-<id>`) — and the one that decides
+    /// whether a door asks for a password and tries again. [`Job::trouble`]
+    /// stays empty beside it: the archive crate answers with this word and
+    /// not with the program's prose, and a word in `trouble` would be drawn
+    /// as it is.
+    #[serde(default)]
+    pub archive: Option<ronoctua_archive::Why>,
 }
 
 impl Job {
@@ -607,6 +837,7 @@ impl Job {
             phase: None,
             outcome: None,
             refusal: None,
+            archive: None,
         }
     }
 
@@ -676,10 +907,140 @@ mod tests {
     }
 
     #[test]
-    fn only_the_software_engine_refuses_a_pause() {
-        for engine in Engine::ALL {
-            assert_eq!(engine.pauses(), engine != Engine::Software, "{engine:?}");
+    fn an_archive_s_work_crosses_the_wire_with_its_sheet_and_no_password() {
+        let work = Work::Compress {
+            directory: PathBuf::from("/home/a"),
+            names: vec!["one.txt".into(), "two".into()],
+            archive: PathBuf::from("/home/a/one.7z"),
+            format: Some(ronoctua_archive::Format::SevenZ),
+            level: ronoctua_archive::Level::Ultra,
+            volume_bytes: Some(1_000_000),
+            hide_names: true,
+            secret: Some(PathBuf::from(
+                "/run/user/1000/ronoctua-transfers/secrets/job-1",
+            )),
+        };
+        let text = serde_json::to_string(&work).unwrap();
+        assert!(
+            text.contains(r#""format":"7z""#) && text.contains(r#""level":"ultra""#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<Work>(&text).unwrap(), work);
+        assert_eq!(work.secrets().len(), 1);
+        assert_eq!(work.engine(), Engine::Local);
+        assert_eq!(work.measure(), Measure::Bytes);
+        // A REQUEST FROM BEFORE THE SHEET still parses, as the format its name
+        // says, at the normal level, whole and in clear.
+        let old = r#"{"work":"compress","directory":"/a","names":["x"],"archive":"/a/x.zip"}"#;
+        let Work::Compress {
+            format,
+            level,
+            volume_bytes,
+            hide_names,
+            secret,
+            ..
+        } = serde_json::from_str::<Work>(old).unwrap()
+        else {
+            panic!("not a compress");
+        };
+        assert_eq!(
+            (format, level, volume_bytes, hide_names, secret),
+            (None, ronoctua_archive::Level::Normal, None, false, None)
+        );
+        let old = r#"{"work":"extract","archive":"/a/x.zip","into":"/a"}"#;
+        assert!(serde_json::from_str::<Work>(old).is_ok());
+        // EVERY WORD HAS A PLACE IN THE CENSUS the texts are checked against.
+        for w in [
+            work.word(),
+            Work::ArchiveTest {
+                archive: PathBuf::from("/a.zip"),
+                secret: None,
+            }
+            .word(),
+            Work::ArchiveEdit {
+                archive: PathBuf::from("/a.zip"),
+                add: vec![PathBuf::from("/b")],
+                remove: vec![],
+                secret: None,
+            }
+            .word(),
+            Work::ArchiveEdit {
+                archive: PathBuf::from("/a.zip"),
+                add: vec![],
+                remove: vec!["b".into()],
+                secret: None,
+            }
+            .word(),
+        ] {
+            assert!(Work::WORDS.contains(&w), "{w}");
         }
+        let convert = Work::ArchiveConvert {
+            from: PathBuf::from("/a.tar.gz"),
+            from_secret: Some(PathBuf::from("/s/job-1")),
+            to: PathBuf::from("/a.7z"),
+            format: None,
+            level: ronoctua_archive::Level::Normal,
+            volume_bytes: None,
+            hide_names: false,
+            secret: Some(PathBuf::from("/s/job-2")),
+        };
+        assert_eq!(convert.secrets().len(), 2, "both passwords go with the job");
+        assert_eq!(convert.landing(), Some(std::path::Path::new("/a.7z")));
+    }
+
+    #[test]
+    fn only_the_child_engines_refuse_a_pause() {
+        for engine in Engine::ALL {
+            assert_eq!(
+                engine.pauses(),
+                !matches!(
+                    engine,
+                    Engine::Software | Engine::Scan | Engine::Container | Engine::Belongings
+                ),
+                "{engine:?}"
+            );
+        }
+    }
+
+    /// A CONTAINER'S JOB crosses the socket whole, names what the person
+    /// chose, and has a word per kind — the five texts the rows need.
+    #[test]
+    fn a_container_job_crosses_the_socket_and_says_its_kind() {
+        let work = Work::Container {
+            job: ronoctua_containers::Job::Pull {
+                image: "docker.io/library/nginx:latest".into(),
+            },
+            label: "nginx".into(),
+        };
+        let text = serde_json::to_string(&work).unwrap();
+        assert!(
+            text.starts_with(r#"{"work":"container","job":{"do":"pull""#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<Work>(&text).unwrap(), work);
+        assert_eq!(work.word(), "container-pull");
+        assert_eq!(work.engine(), Engine::Container);
+        assert_eq!(work.subjects().first(), "nginx");
+        assert_eq!(work.landing(), None);
+        for word in ronoctua_containers::Job::WORDS {
+            assert!(
+                Work::WORDS.contains(&format!("container-{word}").as_str()),
+                "no stem for {word}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_belongings_order_crosses_the_wire_with_no_secret() {
+        let work = Work::Belongings {
+            op: ronoctua_belongings::order::Op::Prepare,
+        };
+        let text = serde_json::to_string(&work).unwrap();
+        assert_eq!(text, r#"{"work":"belongings","op":"prepare"}"#);
+        assert_eq!(serde_json::from_str::<Work>(&text).unwrap(), work);
+        assert_eq!(work.engine(), Engine::Belongings);
+        assert!(Work::WORDS.contains(&work.word()));
+        assert_eq!(work.subjects().first(), "prepare");
     }
 
     #[test]

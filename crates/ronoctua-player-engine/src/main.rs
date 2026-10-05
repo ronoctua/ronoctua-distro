@@ -46,6 +46,7 @@ fn main() -> Result<()> {
         into: None,
         play: true,
         replace: false,
+        once: false,
     };
     // A socket that answers is another player: hand it the items and leave.
     if std::os::unix::net::UnixStream::connect(&path).is_ok() {

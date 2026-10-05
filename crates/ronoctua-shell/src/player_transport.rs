@@ -110,6 +110,10 @@ pub fn glyph_of(id: &str, s: Option<&State>, stage: Stage, door: Door) -> char {
             Repeat::Queue => tokens::icon::PLAYER_REPEAT,
             Repeat::One => tokens::icon::PLAYER_REPEAT_ONE,
         },
+        // THE SEEKS AROUND THE CLOCK (`player_media::clock_group`), never
+        // among the eleven: ten seconds back and ahead.
+        "player-rewind" => tokens::icon::PLAYER_REWIND,
+        "player-forward" => tokens::icon::PLAYER_FORWARD,
         _ => ' ',
     }
 }
@@ -194,8 +198,40 @@ pub fn button_errand(id: &str, s: Option<&State>, texts: &ronoctua_i18n::Texts) 
         "player-maximize" => Errand::Show(Show::Maximized),
         "player-pip" => Errand::Show(Show::Small),
         "player-swap" => Errand::Swap,
+        "player-rewind" => seek_errand(false, texts),
+        "player-forward" => seek_errand(true, texts),
         _ => Errand::Nothing,
     }
+}
+
+/// TEN SECONDS BACK OR AHEAD — the seeks beside the clock, `j` and `l`, and
+/// a double click on a side of the picture — and the sentence that says it,
+/// which goes again after the footer's seconds (`Ui::say`).
+#[must_use]
+pub fn seek_errand(ahead: bool, texts: &ronoctua_i18n::Texts) -> Errand {
+    let step = crate::player::SEEK_STEP;
+    Errand::TellSaying(
+        Ask::Seek {
+            seconds: if ahead { step } else { -step },
+            relative: true,
+        },
+        seek_said(ahead, texts),
+    )
+}
+
+/// What a seek of ten seconds says: `−10 s`, `+10 s`.
+#[must_use]
+pub fn seek_said(ahead: bool, texts: &ronoctua_i18n::Texts) -> String {
+    #[allow(clippy::cast_possible_truncation)]
+    let seconds = crate::player::SEEK_STEP.round() as i64;
+    texts.t_args(
+        if ahead {
+            ronoctua_i18n::key::PLAYER_SEEKED_AHEAD
+        } else {
+            ronoctua_i18n::key::PLAYER_SEEKED_BACK
+        },
+        &[("seconds", ronoctua_i18n::Arg::Number(seconds))],
+    )
 }
 
 #[cfg(test)]
@@ -250,6 +286,40 @@ mod tests {
             glyph_of("player-swap", None, Stage::Off, Door::Footer),
             tokens::icon::PLAYER_WINDOW
         );
+    }
+
+    /// FAILS IF: a seek beside the clock stops asking the player ten
+    /// seconds back or ahead — saying so — or has no glyph in a door, or is
+    /// no command of the registry; or it becomes one of the eleven, which
+    /// fill the small column to its last cell. And the commands' sentences
+    /// say TEN seconds: the step moving under them is a sentence lying.
+    #[test]
+    fn the_seeks_beside_the_clock_ask_ten_seconds() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        assert!((crate::player::SEEK_STEP - 10.0).abs() < f64::EPSILON);
+        for (id, seconds) in [("player-rewind", -10.0), ("player-forward", 10.0)] {
+            assert!(!BUTTONS.contains(&id), "{id} is one of the eleven");
+            match button_errand(id, None, &texts) {
+                Errand::TellSaying(
+                    Ask::Seek {
+                        seconds: s,
+                        relative: true,
+                    },
+                    said,
+                ) => {
+                    assert!((s - seconds).abs() < f64::EPSILON, "{id}: {s}");
+                    assert!(said.contains("10"), "{id}: {said}");
+                }
+                other => panic!("{id} does {other:?}"),
+            }
+            for door in [Door::Window, Door::Column, Door::Footer] {
+                assert_ne!(glyph_of(id, None, Stage::Off, door), ' ', "{id}");
+            }
+            assert!(
+                crate::leader::default_of().is_ok_and(|(_, r)| r.search(id).is_some()),
+                "{id} is not a command of the registry"
+            );
+        }
     }
 
     /// FAILS IF: the media's glyph is drawn while the file offers no choice

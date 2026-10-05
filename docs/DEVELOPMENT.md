@@ -187,8 +187,27 @@ nix run .#png -- --door column --size small --state look.json --frame 1=quadro.p
 ```
 
 Com `--door`, a foto é de uma porta nativa — hoje a janela e a coluna do player, em todo tamanho,
-barra inclusive —, tirada por `ronoctua-shell photograph`. A porta é a de produção, desligada, e o
-quadro sai da mesma função com que ela se desenha na tela (`door::compose`); a comparação pixel a
+barra inclusive, a janela das preferências do rodapé (`--door footer-settings`), a da atualização
+(`--door update`, sobre os relatórios das duas metades e o que os diários disseram, `--report` e
+`--journal`, nunca os da máquina; o `u` dela não começa nada, diz `would have …`), a da central de
+segurança (`--door security`, sobre uma cena inteira em `--state`), a do gerenciador de arquivos
+(`--door files`, que lê o resto da linha com as opções dela: `photograph --door files --help`), a
+do app de ícones (`--door icons`, idem: `--screen`, `--type`, `--key`), a do navegador git
+(`--door git --dir <pasta>`, sobre um repositório de verdade), a da calculadora (`--door calc`,
+sobre um histórico vazio dela, que teclas e cliques enchem), a do video-metrics
+(`--door video-metrics --catalog <arquivo>`, sobre uma cópia do catálogo dado), a dos containers
+(`--door containers`, com um podman de mentira que responde o que foi gravado), a dos pertences
+(`--door belongings --places <pasta>`, sobre uma cópia da máquina plantada nela), e quatro sobre uma
+cena dada inteira (`scene_photograph.rs`): a das telas (`--door display --screens
+one|two|stacked|dark`), a do clipboard (`--door clipboard --entry <texto> --image <png>`), a cortina
+de baixo do redimensionador (`--door curtain --screen <l>x<a> --room <l>x<a>`) e a linha de vida
+(`--door lifeline --result <palavra> [--asking]`) —, e o próprio rodapé (`--door footer`,
+`footer_photograph.rs`: modeline, minibuffer e região sobre um compositor substituto com um monitor;
+`--app`, `--state`, `--tone`, `--states` e `--local` descrevem a janela em foco, `--screens` e
+`--entry` dão as telas e o histórico, e os passos são `--leader`, `--key` e `--command`), tirada por
+`ronoctua-shell photograph`; toda porta que lê o resto da linha diz as opções dela em
+`photograph --door <porta> --help`. A porta é a de produção, desligada, e o quadro sai da mesma
+função com que ela se desenha na tela (`door::compose`); a comparação pixel a
 pixel com a porta numa tela ainda está no `docs/PENDING.md`. O player dela não age fora da porta: o
 que um clique faria sai impresso (`asked the player: …`, `would have …`), e a resposta do daemon é o
 `--state` seguinte, que vale na ordem em que aparece, como as teclas e os cliques. O contorno da
@@ -196,7 +215,8 @@ fila é outra resposta e outro passo, o `--queue` (a resposta a `{"ask":"queue"}
 foto é vazia. O `--frame <faixa>=<png>` é uma imagem parada no lugar dos quadros da imagem daquela
 faixa (`every=` para toda imagem sem a sua), o `--output` descreve uma tela que a porta conhece pelo
 nome — a primeira é a em que ela está, e o que é roteado a ela é o que ela mostra —, e o `--places`
-é a pasta que o navegador de arquivos lista no lugar das pastas da máquina. O `--sheet` é a folha de
+é a pasta pessoal do seletor de arquivos, com os lugares dele nas pastas que há nela, no lugar das
+da máquina. O `--sheet` é a folha de
 um arquivo como o daemon a responde (`{"ask":"sheet"}`: as etiquetas, as capas, os fluxos, o que
 pode ser gravado e por que não), o `--desk` é uma página de uma mesa do daemon (as buscas, os
 diretórios de rádio e TV), o `--refused` é uma lista de diretório que o daemon recusou na hora
@@ -227,13 +247,14 @@ nix run .#shot -- <cena.py>        fotografa a feature do momento numa VM, pela 
 
 Teste verde não vê espaço em branco, sobreposição nem uma faixa no lugar errado. A foto vê.
 
-O palco também tem o player: `start_player()` sobe o daemon com a tabela de decodificadores,
-`player({...})` pergunta ao socket, `frame_png(None, "nome")` salva a primeira imagem que o daemon
-mostra, e `frame_png(<faixa>, "nome")` a de uma faixa, e `MEDIA` é a pasta de arquivos que o
-`player-vm` prova que tocam (`tests/player-media.nix`). Ali estão também `words.mkv` e
-`words.en.srt` (uma legenda de dentro e uma de ao lado do mesmo filme) e `list.xspf` (uma playlist
-que diz o próprio nome). Suba o player antes de abrir a vista, senão o rodapé sobe um sem os
-decodificadores. Que a legenda do libass sai no quadro ainda não foi visto nesta VM
+O palco também tem o player: `start_player()` sobe o daemon (sem a tabela de decodificadores, que
+custa 198 MiB; quem abre um formato dela roda `nix run .#shot -- --player-tools <cena.py>` e pede
+`start_player(tools=True)`), `player({...})` pergunta ao socket, `frame_png(None, "nome")` salva a
+primeira imagem que o daemon mostra, e `frame_png(<faixa>, "nome")` a de uma faixa, e `MEDIA` é a
+pasta de arquivos que o `player-vm` prova que tocam (`tests/player-media.nix`). Ali estão também
+`words.mkv` e `words.en.srt` (uma legenda de dentro e uma de ao lado do mesmo filme) e `list.xspf`
+(uma playlist que diz o próprio nome). Suba o player antes de abrir a vista, senão o rodapé sobe um
+por conta própria. Que a legenda do libass sai no quadro ainda não foi visto nesta VM
 (`docs/PENDING.md`).
 
 **A modeline do quiosque, sem Chrome.** A cena monta as duas metades do par à mão (`<N>` é o nonce,
@@ -323,7 +344,7 @@ ali dentro, com o nome próprio que ele tem (ver [`.#dev`](#dev--o-compositor-nu
 | um vídeo falha com `esta instalacao nao tem o yt-dlp` | o caminho vem da unidade, não do binário | no laço, `export RONOCTUA_YT_DLP=$(which yt-dlp)` antes de subir |
 | um vídeo com restrição de idade falha, mesmo com `t i v` | os cookies são decisão da MÁQUINA | `export RONOCTUA_COOKIES_BROWSER=chrome+basictext` antes de subir, ou `RONOCTUA_COOKIES_FILE`; no sistema instalado é `ronoctua.transfers.cookies` |
 | `Login with OAuth is no longer supported` | o yt-dlp recusa OAuth | cookies é o caminho, e o PO token (`$XDG_STATE_HOME/ronoctua/po-token`) faz o papel de "dispositivo real" |
-| o yt-dlp diz que precisa de PO token | o gerador é opcional e vem desligado | `ronoctua.transfers.poToken = "on-demand"`; no laço, `export RONOCTUA_POT_HOME=$(nix build --no-link --print-out-paths .#pot-provider)/server RONOCTUA_DENO=$(command -v deno)` |
+| o yt-dlp diz que precisa de PO token | o gerador está desligado nesta instalação (sem `ronoctua.media`), ou falta uma das três variáveis | `ronoctua.transfers.poToken = "on-demand"`; o `.#dev` já exporta `RONOCTUA_POT_HOME`, `RONOCTUA_POT_PLUGINS` e `RONOCTUA_DENO` — as três, ou o plugin não é carregado |
 | o navegador se desloga depois de um download identificado | o YouTube gira os cookies | `ronoctua.transfers.cookies = "file"` com um jar exportado de uma janela anônima que você fechou SEM sair da conta |
 | um magnet não abre nada | o `.desktop` é do sistema instalado | à mão, `ronoctua-transfers open '<magnet>'` |
 | a extensão não aparece no Chrome | a política é escrita por unidade de SISTEMA, no boot | `systemctl status ronoctua-browser-extension`; feche todas as janelas do Chrome antes de conferir |

@@ -1,0 +1,16 @@
+[package]
+name = "ronoctua-resolve"
+description = "The one boundary with systemd-resolved: a machine's name from its address, for the LAN view."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# `org.freedesktop.resolve1.Manager.ResolveAddress` over zbus's blocking API,
+# on the caller's thread — the shape of every other D-Bus boundary here.
+[dependencies]
+zbus.workspace = true
+
+[lints]
+workspace = true

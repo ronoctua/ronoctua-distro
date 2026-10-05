@@ -102,6 +102,20 @@ pub fn apply_watched(
     tools: &Tools,
     watch: &Watch<'_>,
 ) -> Result<Stamp, Why> {
+    apply_within(path, stamp, edits, tools, watch, LOFTY_MOST_BYTES)
+}
+
+/// [`apply_watched`], with lofty trusted with files up to `lofty_most`
+/// bytes — [`LOFTY_MOST_BYTES`] but in a test, which cannot make a file of
+/// half a gibibyte to see the way past it.
+pub(crate) fn apply_within(
+    path: &Path,
+    stamp: Stamp,
+    edits: &[Edit],
+    tools: &Tools,
+    watch: &Watch<'_>,
+    lofty_most: u64,
+) -> Result<Stamp, Why> {
     let (location, meta) = located(path)?;
     if Stamp::of(&meta) != stamp {
         return Err(Why::ChangedSince);
@@ -128,21 +142,59 @@ pub fn apply_watched(
     watch.at(0);
 
     let draft = match writer {
+        // AN MP4 PAST WHAT LOFTY HOLDS — lofty rewrites with the whole file
+        // in memory, and that is nearly every film — is remuxed instead:
+        // its fields only, every stream copied, and read back whole.
+        Writer::Lofty if meta.len() > lofty_most => {
+            big_mp4_by_remux(
+                &location,
+                &folder,
+                &meta,
+                (container, file_type),
+                &asked,
+                tools,
+                watch,
+            )
+            .map_err(|why| {
+                match why {
+                    // NOT A BIG MP4, or asked what the remux cannot write:
+                    // the ceiling is the reason.
+                    Why::NoWriter { .. } => Why::TooBig {
+                        bytes: meta.len(),
+                        most_bytes: lofty_most,
+                    },
+                    other => other,
+                }
+            })?
+        }
         Writer::Lofty => {
-            if meta.len() > LOFTY_MOST_BYTES {
-                return Err(Why::TooBig {
-                    bytes: meta.len(),
-                    most_bytes: LOFTY_MOST_BYTES,
-                });
-            }
             let file_type = file_type.ok_or(Why::Unreadable)?;
             let plan = lofty_plan(&asked)?;
             let mut draft = Draft::copy_of(&location, &folder, meta.len(), watch)?;
             watch.stopped()?;
             let file = draft.file()?;
             let opened = native::open(file, file_type)?;
-            native::apply(file, opened, &plan)?;
-            draft
+            let frames = native::frames_of(file, file_type)?;
+            let planned = native::planned(opened, &plan)?;
+            if planned.empties_the_comment(file_type) {
+                // THE LAST FIELD OF A FLAC TAKEN OUT: lofty 0.25.4 does not
+                // write a Vorbis comment with nothing in it; its blocks are
+                // written here, every other one kept.
+                drop(draft);
+                flac_by_blocks(
+                    &location,
+                    &folder,
+                    meta.len(),
+                    &plan,
+                    &planned,
+                    frames,
+                    watch,
+                )?
+            } else {
+                native::save_planned(file, &planned)?;
+                native::verify_planned(file, file_type, &plan, &planned, frames)?;
+                draft
+            }
         }
         Writer::Matroska => {
             let edit_scratch = Scratch::new()?;
@@ -164,16 +216,23 @@ pub fn apply_watched(
                 .ok(Program::Mkvpropedit, &[0, 1])?;
             draft
         }
-        Writer::Remux => remux(
-            &location,
-            &folder,
-            meta.len(),
-            container,
-            &asked,
-            tools,
-            watch,
-            probed.as_ref(),
-        )?,
+        Writer::Remux => {
+            let muxer = container.remux_muxer().ok_or(Why::NoWriter { container })?;
+            remux(
+                &location,
+                &folder,
+                meta.len(),
+                &Remux {
+                    muxer,
+                    streams_too: true,
+                    also: Vec::new(),
+                },
+                &asked,
+                tools,
+                watch,
+                probed.as_ref(),
+            )?
+        }
     };
     finish(draft, &location, &folder, &meta, stamp, watch)
 }
@@ -210,6 +269,8 @@ struct Asked {
     cover: Option<CoverChange>,
     native: Vec<(Origin, String, Option<String>)>,
     streams: Vec<(u32, StreamChange)>,
+    /// Chapters retitled, by where each starts.
+    chapters: Vec<(u64, String)>,
 }
 
 impl Asked {
@@ -218,6 +279,7 @@ impl Asked {
             && self.cover.is_none()
             && self.native.is_empty()
             && self.streams.is_empty()
+            && self.chapters.is_empty()
     }
 }
 
@@ -273,6 +335,13 @@ fn asked(edits: &[Edit]) -> Result<Asked, Why> {
                 }
                 out.streams.push((*index, change.clone()));
             }
+            // A CHAPTER'S TITLE is one line of text; the last word on a
+            // chapter wins.
+            Edit::Chapter { start_ms, title } => {
+                let title = crate::sheet::tag_text(title)?;
+                out.chapters.retain(|(at, _)| at != start_ms);
+                out.chapters.push((*start_ms, title));
+            }
         }
     }
     Ok(out)
@@ -294,28 +363,44 @@ fn writer_for(container: Container, asked: &Asked) -> Result<Writer, Why> {
     if !asked.streams.is_empty() {
         need(container.streams_writer())?;
     }
-    let writer = writer.ok_or(Why::NoPlace)?;
+    if !asked.chapters.is_empty() {
+        need(container.chapters_writer())?;
+    }
+    let writer = writer.ok_or(Why::NoWriter { container })?;
     for (origin, _, _) in &asked.native {
         match (writer, origin) {
             (Writer::Lofty, Origin::Lofty { .. })
             | (Writer::Matroska, Origin::Matroska { .. })
             | (Writer::Remux, Origin::Ffprobe { .. }) => {}
-            // ffprobe's row of a file lofty or Matroska's tools write MIRRORS
-            // their tag, which is where it changes.
-            (Writer::Lofty | Writer::Matroska, Origin::Ffprobe { .. }) => {
-                return Err(Why::ReadOnlyView);
-            }
-            _ => return Err(Why::NoPlace),
+            _ => return Err(misplaced(origin)),
         }
     }
     Ok(writer)
+}
+
+/// Why a tag read by one reader is not written by the writer a file has —
+/// said by where the row came from.
+///
+/// ffprobe's row of a file lofty or Matroska's tools write MIRRORS their
+/// tag, which is where it changes (and so does any other row a door sends to
+/// the wrong writer: it is shown, and changed through the file's own tag);
+/// a tag of lofty's that this writer does not take is that tag's kind shown
+/// and not written; exiftool's rows and a stream's are never written here.
+fn misplaced(origin: &Origin) -> Why {
+    match origin {
+        Origin::Lofty { format } => Why::TagReadOnly { format: *format },
+        Origin::Stream => Why::NotAFile,
+        Origin::Exiftool { .. } | Origin::Ffprobe { .. } | Origin::Matroska { .. } => {
+            Why::ReadOnlyView
+        }
+    }
 }
 
 fn lofty_plan(asked: &Asked) -> Result<native::Plan, Why> {
     let mut native_edits = Vec::new();
     for (origin, name, value) in &asked.native {
         let Origin::Lofty { format } = origin else {
-            return Err(Why::NoPlace);
+            return Err(misplaced(origin));
         };
         let edit = NativeEdit {
             format: *format,
@@ -359,13 +444,25 @@ fn matroska_edit(
                 matroska::set_field(&mut tags, *field, value.as_deref());
             }
         }
-        for (_, name, value) in &asked.native {
+        // THE TRACKS whose own tags change, by their UIDs.
+        let mut tracks_touched: Vec<u64> = Vec::new();
+        for (origin, name, value) in &asked.native {
             if name.is_empty() || name.chars().any(char::is_control) {
-                return Err(Why::NoPlace);
+                return Err(Why::BadName);
             }
-            matroska::set_named(&mut tags, name, value.as_deref());
+            match origin {
+                Origin::Matroska {
+                    track: Some(uid), ..
+                } => {
+                    matroska::set_named_track(&mut tags, *uid, name, value.as_deref());
+                    if !tracks_touched.contains(uid) {
+                        tracks_touched.push(*uid);
+                    }
+                }
+                _ => matroska::set_named(&mut tags, name, value.as_deref()),
+            }
         }
-        if tags != before {
+        if matroska::global_xml(&tags) != matroska::global_xml(&before) {
             edit.tags = Some(if matroska::any_global(&tags) {
                 let xml = scratch.path("tags.xml");
                 std::fs::write(&xml, matroska::global_xml(&tags)).map_err(|_| Why::Unwritable)?;
@@ -374,6 +471,46 @@ fn matroska_edit(
                 None
             });
         }
+        // EACH TRACK BY ITS ORDER, found by its UID in `mkvmerge -J`:
+        // `--tags track:<n>:` replaces that track's tags with the file's.
+        if !tracks_touched.is_empty() {
+            let order = read::identified(location, tools)?.tracks;
+            for uid in tracks_touched {
+                let before_xml = matroska::track_xml(&before, uid);
+                let now = matroska::track_xml(&tags, uid);
+                if now == before_xml {
+                    continue;
+                }
+                let n = order
+                    .iter()
+                    .position(|u| *u == uid)
+                    .ok_or(Why::NoSuchThing)?
+                    + 1;
+                let n = u32::try_from(n).map_err(|_| Why::NoSuchThing)?;
+                let file = match now {
+                    Some(xml) => {
+                        let path = scratch.path(&format!("track-{n}.xml"));
+                        std::fs::write(&path, xml).map_err(|_| Why::Unwritable)?;
+                        Some(path)
+                    }
+                    None => None,
+                };
+                edit.track_tags.push((n, file));
+            }
+        }
+    }
+    // THE CHAPTERS, all of them: `--chapters` replaces them with the file's.
+    if !asked.chapters.is_empty() {
+        let mut xml = read::matroska_chapters(location, tools)?;
+        if xml.trim().is_empty() {
+            return Err(Why::NoSuchThing);
+        }
+        for (start_ms, title) in &asked.chapters {
+            xml = matroska::retitle_chapters(&xml, *start_ms, title)?;
+        }
+        let path = scratch.path("chapters.xml");
+        std::fs::write(&path, xml).map_err(|_| Why::Unwritable)?;
+        edit.chapters = Some(path);
     }
     if !asked.streams.is_empty() || asked.cover.is_some() {
         let probed = read::probed(location, tools)?;
@@ -438,19 +575,32 @@ fn patience_for(len: u64) -> Duration {
     Duration::from_secs(60 + len / (16 * 1024 * 1024))
 }
 
+/// How a remux writes: with which muxer, and where a field goes.
+struct Remux<'a> {
+    /// ffmpeg's muxer (`-f`).
+    muxer: &'a str,
+    /// A field goes into every stream's tags too — an Ogg file's comments
+    /// belong to each stream, and the muxer does not let the container's
+    /// replace a stream's own. Elsewhere a stream's tags are its own (a FLAC
+    /// picture's title is its description) and a field is the container's.
+    streams_too: bool,
+    /// Container tags written besides the asked ones, `key=value`: what the
+    /// muxer keeps only when told it by another name (an MP4's `©too`).
+    also: Vec<String>,
+}
+
 /// The remux: `ffmpeg -map 0 -c copy` into the draft, with the new tags.
 #[allow(clippy::too_many_arguments)]
 fn remux(
     location: &Path,
     folder: &Path,
     len: u64,
-    container: Container,
+    how: &Remux<'_>,
     asked: &Asked,
     tools: &Tools,
     watch: &Watch<'_>,
     probed: Option<&crate::probe::Probed>,
 ) -> Result<Draft, Why> {
-    let muxer = container.remux_muxer().ok_or(Why::NoWriter { container })?;
     let mut draft = Draft::reserve(location, folder, len)?;
     draft.file = None;
     let mut args: Vec<OsString> = ["-nostdin", "-v", "error", "-y", "-i"]
@@ -458,25 +608,35 @@ fn remux(
         .map(OsString::from)
         .collect();
     args.push(location.as_os_str().to_owned());
+    args.push(OsString::from("-map"));
+    args.push(OsString::from("0"));
     for a in [
-        "-map",
-        "0",
         "-c",
         "copy",
         "-map_metadata",
         "0",
         "-map_chapters",
         "0",
+        // NOTHING OF FFMPEG'S OWN in the tags: no encoder written in.
+        "-fflags",
+        "+bitexact",
     ] {
         args.push(OsString::from(a));
+    }
+    let places: &[&str] = if how.streams_too {
+        &["-metadata", "-metadata:s"]
+    } else {
+        &["-metadata"]
+    };
+    for pair in &how.also {
+        args.push(OsString::from("-metadata"));
+        args.push(OsString::from(pair));
     }
     for (field, value) in &asked.fields {
         let key = read::ffmpeg_keys(*field)[0];
         let pair = format!("{key}={}", value.as_deref().unwrap_or_default());
-        // BOTH PLACES: an Ogg file's comments belong to each stream, and the
-        // muxer does not let the container's replace a stream's own.
-        for place in ["-metadata", "-metadata:s"] {
-            args.push(OsString::from(place));
+        for place in places {
+            args.push(OsString::from(*place));
             args.push(OsString::from(&pair));
         }
     }
@@ -486,7 +646,7 @@ fn remux(
     // empty value is ffmpeg's way of taking a key out.
     for (origin, name, value) in &asked.native {
         let Origin::Ffprobe { stream } = origin else {
-            return Err(Why::NoPlace);
+            return Err(misplaced(origin));
         };
         let pair = format!("{name}={}", value.as_deref().unwrap_or_default());
         let places = match stream {
@@ -498,7 +658,7 @@ fn remux(
             args.push(OsString::from(&pair));
         }
     }
-    for a in ["-progress", "pipe:1", "-f", muxer] {
+    for a in ["-progress", "pipe:1", "-f", how.muxer] {
         args.push(OsString::from(a));
     }
     args.push(draft.path.as_os_str().to_owned());
@@ -529,6 +689,172 @@ fn remux(
         Some(&mut on_line),
     )?
     .ok(Program::Ffmpeg, &[0])?;
+    Ok(draft)
+}
+
+/// The fields the MP4 muxer writes back as the atoms lofty reads them from
+/// — what a remux of an MP4 may be asked; any other is refused before a
+/// byte is written, and every one is read back after.
+const MP4_REMUX_FIELDS: [Field; 13] = [
+    Field::Title,
+    Field::Artist,
+    Field::Album,
+    Field::AlbumArtist,
+    Field::Composer,
+    Field::Date,
+    Field::Genre,
+    Field::Comment,
+    Field::Lyrics,
+    Field::Description,
+    Field::Show,
+    Field::Track,
+    Field::Disc,
+];
+
+/// Whether a big MP4's remux writes `field` — what its sheet offers.
+#[must_use]
+pub(crate) fn remux_keeps_in_mp4(field: Field) -> bool {
+    MP4_REMUX_FIELDS.contains(&field)
+}
+
+/// The MP4 muxer of ffmpeg's for a file named `location`: `mov` for a
+/// QuickTime file, `ipod` for an audio book or song, `mp4` otherwise.
+fn mp4_muxer(location: &Path) -> &'static str {
+    match location
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("mov" | "qt") => "mov",
+        Some("m4a" | "m4b" | "m4r") => "ipod",
+        _ => "mp4",
+    }
+}
+
+/// AN MP4 PAST LOFTY'S CEILING, written by the remux: its fields — the ones
+/// its muxer keeps ([`MP4_REMUX_FIELDS`]) — and nothing else; every stream
+/// and chapter copied, and the draft read back by lofty (which READS a file
+/// of any size) against what was planned: a muxer that dropped an item of
+/// the tag is refused, the file as it was. A file with an item its muxer
+/// does not write back (`native::mp4_remux_drops`) is refused before the
+/// copy.
+///
+/// # Errors
+///
+/// [`Why::NoWriter`] for what is not a big MP4 the remux can take (the
+/// caller says the ceiling instead), [`Why::NoFieldIn`] for a field its muxer
+/// does not keep, [`Why::RemuxWouldDrop`] for an item it would lose,
+/// [`Why::Missing`] without ffmpeg, and every remux refusal.
+fn big_mp4_by_remux(
+    location: &Path,
+    folder: &Path,
+    meta: &std::fs::Metadata,
+    (container, file_type): (Container, Option<lofty::file::FileType>),
+    asked: &Asked,
+    tools: &Tools,
+    watch: &Watch<'_>,
+) -> Result<Draft, Why> {
+    let file_type = file_type
+        .filter(|ft| container == Container::Mp4 && *ft == lofty::file::FileType::Mp4)
+        .ok_or(Why::NoWriter { container })?;
+    if asked.cover.is_some() || !asked.native.is_empty() || !asked.streams.is_empty() {
+        return Err(Why::NoWriter { container });
+    }
+    if let Some((field, _)) = asked
+        .fields
+        .iter()
+        .find(|(f, _)| !MP4_REMUX_FIELDS.contains(f))
+    {
+        return Err(Why::NoFieldIn {
+            field: *field,
+            format: crate::sheet::TagFormat::Mp4,
+        });
+    }
+    if !tools.has(Program::Ffmpeg) {
+        return Err(Why::Missing {
+            program: Program::Ffmpeg,
+        });
+    }
+    let plan = lofty_plan(asked)?;
+    let mut original = File::open(location).map_err(|_| Why::Gone)?;
+    let opened = native::open(&mut original, file_type)?;
+    drop(original);
+    // AN ITEM THE MUXER WOULD LOSE is said before a byte is copied — a film
+    // is minutes of copying to be refused at the end.
+    if native::mp4_remux_drops(&opened) {
+        return Err(Why::RemuxWouldDrop);
+    }
+    let also = native::mp4_encoding_tool(&opened)
+        .map(|tool| format!("encoding_tool={tool}"))
+        .into_iter()
+        .collect();
+    let planned = native::planned(opened, &plan)?;
+    let how = Remux {
+        muxer: mp4_muxer(location),
+        streams_too: false,
+        also,
+    };
+    let probed = read::probed(location, tools).ok();
+    let mut draft = remux(
+        location,
+        folder,
+        meta.len(),
+        &how,
+        asked,
+        tools,
+        watch,
+        probed.as_ref(),
+    )?;
+    native::verify_remuxed(draft.file()?, file_type, &plan, &planned, None)?;
+    Ok(draft)
+}
+
+/// THE LAST FIELD OF A FLAC TAKEN OUT, written block by block: lofty 0.25.4
+/// does not write a Vorbis comment with nothing in it, and ffmpeg's FLAC
+/// muxer drops the cue sheet, the seek table and every application block.
+/// The comment is emptied in place, the pictures go (the plan has none),
+/// every other block and every frame is copied as it was, and the draft is
+/// read back by lofty against what was planned, the frames counted.
+///
+/// # Errors
+///
+/// [`Why::Unreadable`] for a block chain that cannot be walked,
+/// [`Why::Unwritable`] when the draft does not read back as planned.
+fn flac_by_blocks(
+    location: &Path,
+    folder: &Path,
+    len: u64,
+    plan: &native::Plan,
+    planned: &native::Planned,
+    frames: Option<u64>,
+    watch: &Watch<'_>,
+) -> Result<Draft, Why> {
+    use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+    let mut source = File::open(location).map_err(|_| Why::Gone)?;
+    let front = native::flac_front(&mut source)?;
+    let head = native::flac_emptied(&front)?;
+    let mut draft = Draft::reserve(location, folder, len)?;
+    let file = draft.file()?;
+    file.write_all(&head).map_err(|_| Why::Unwritable)?;
+    source
+        .seek(SeekFrom::Start(front.frames_at))
+        .map_err(|_| Why::Unreadable)?;
+    let mut chunk = vec![0_u8; 8 * 1024 * 1024];
+    let mut copied: u64 = 0;
+    let rest = len.saturating_sub(front.frames_at).max(1);
+    loop {
+        watch.stopped()?;
+        let n = source.read(&mut chunk).map_err(|_| Why::Unreadable)?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&chunk[..n]).map_err(|_| Why::Unwritable)?;
+        copied += n as u64;
+        watch.at(u16::try_from(copied.min(rest) * 900 / rest).unwrap_or(900));
+    }
+    native::save_besides_the_comment(file, planned)?;
+    native::verify_planned(file, lofty::file::FileType::Flac, plan, planned, frames)?;
     Ok(draft)
 }
 

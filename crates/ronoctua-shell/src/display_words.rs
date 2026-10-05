@@ -25,6 +25,8 @@ pub fn press_of(id: &str) -> Option<crate::display::Press> {
         "display-automatic" => Press::Automatic,
         "display-forget" => Press::Forget,
         "display-arrange" => Press::Arrange,
+        "display-rise" => Press::Rise,
+        "display-sink" => Press::Sink,
         _ => return None,
     })
 }
@@ -44,6 +46,10 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<crate::display::Press> 
     use ronoctua_keymap::Sym;
     Some(match key.sym {
         Sym::Esc => Press::Escape,
+        // THE SHIFTED PAIR IS THE OTHER AXIS on a place row (`OF_THE_VIEW`),
+        // read before the bare arrows that are the cursor.
+        Sym::Up if key.mods.shift => Press::Rise,
+        Sym::Down if key.mods.shift => Press::Sink,
         Sym::Up => Press::Up,
         Sym::Down => Press::Down,
         Sym::Left => Press::Less,
@@ -94,22 +100,16 @@ pub fn went_away(at: &str, applied: bool, texts: &ronoctua_i18n::Texts) -> Strin
 
 /// What the message line says when the screens refused an order.
 ///
-/// # A NAMED refusal says its name and stops there
+/// # Every refusal says its NAME, and only its name
 ///
 /// `Refused` carries two things: a reason with a key in every language, and
-/// the WORDS the crate wrote beside it. Those words are English — they are a
-/// `bail!` or a `.context`, which invariant 18 requires them to be — so
-/// putting them on the screen next to the translated reason gave a pt-BR
-/// machine "o brilho desta tela está nos botões dela (this screen's
-/// brightness is on its own buttons)": the same sentence twice, once in the
-/// wrong language. That is invariant 8, and the five named reasons are the
-/// ones that do not need them: their key already says the whole fact.
-///
-/// `Other` keeps them, and has to: it is the refusal with no name, and the
-/// words are the only thing that says what went wrong. They are still
-/// English, which is this view inheriting a shape `power`, `network` and the
-/// radio all have — recorded in `docs/PENDING.md` rather than redesigned
-/// here, because it is four views' plumbing and one of them is not this one.
+/// the WORDS the crate wrote beside it. Those words are English — a `bail!` or
+/// a `.context`, which invariant 18 requires them to be — so on a pt-BR
+/// machine they put a sentence on the message line in a language the person
+/// did not choose (invariant 8). Every way a refusal reaches here has a name
+/// now (`ronoctua_display::Refusal`); the one left, `Other`, is the error
+/// nobody classified, and its words go to the LOG — where whoever reads a log
+/// reads English — while the line says the refusal in the person's language.
 #[must_use]
 pub fn refused(why: &Refused, texts: &ronoctua_i18n::Texts) -> String {
     use ronoctua_i18n::key;
@@ -119,14 +119,13 @@ pub fn refused(why: &Refused, texts: &ronoctua_i18n::Texts) -> String {
         Refusal::NoLight => key::DISPLAY_REFUSED_NO_LIGHT,
         Refusal::NotWritable => key::DISPLAY_REFUSED_NOT_WRITABLE,
         Refusal::NoPlaceToWrite => key::DISPLAY_REFUSED_NOWHERE,
+        Refusal::CompositorRefused => key::DISPLAY_REFUSED_COMPOSITOR,
+        Refusal::UnreadableFile => key::DISPLAY_REFUSED_UNREADABLE,
+        Refusal::PanelRefused => key::DISPLAY_REFUSED_PANEL,
+        Refusal::MonitorSilent => key::DISPLAY_REFUSED_MONITOR,
         Refusal::Other => key::DISPLAY_REFUSED_OTHER,
     });
-    if why.why == Refusal::Other {
-        return texts.t_with(
-            key::ECHO_DISPLAY_REFUSED,
-            &[("why", &reason), ("words", &why.words)],
-        );
-    }
+    tracing::info!(why = ?why.why, words = %why.words, "the screens refused");
     texts.t_with(key::ECHO_DISPLAY_REFUSED_PLAIN, &[("why", &reason)])
 }
 
@@ -180,6 +179,10 @@ mod tests {
             of(Refusal::NoLight),
             of(Refusal::NotWritable),
             of(Refusal::NoPlaceToWrite),
+            of(Refusal::CompositorRefused),
+            of(Refusal::UnreadableFile),
+            of(Refusal::PanelRefused),
+            of(Refusal::MonitorSilent),
             of(Refusal::Other),
         ];
         let mut seen: Vec<&String> = all.iter().collect();
@@ -213,14 +216,18 @@ mod tests {
             "{said}"
         );
 
-        // AND THE UNNAMED ONE KEEPS THEM, because they are the only thing that
-        // says what went wrong.
+        // AND THE UNNAMED ONE DOES NOT CARRY THEM EITHER: no sentence on the
+        // message line has a half in a language the person did not choose.
         let other = Refused {
             why: Refusal::Other,
             words: "the socket went away".to_owned(),
         };
         let said = refused(&other, &t);
-        assert!(said.contains("the socket went away"), "{said}");
+        assert!(!said.contains("the socket went away"), "{said}");
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::DISPLAY_REFUSED_OTHER)),
+            "{said}"
+        );
     }
 
     #[test]
@@ -263,6 +270,8 @@ mod tests {
             assert_eq!(read(taught), press_of(id), "`{taught}`");
         }
         assert_eq!(read("S-<left>"), Some(Press::Less));
+        assert_eq!(read("S-<up>"), Some(Press::Rise));
+        assert_eq!(read("S-<down>"), Some(Press::Sink));
         assert_eq!(read("ESC"), Some(Press::Escape));
         assert_eq!(read("C-a"), None, "a chord was taken for its letter");
         assert_eq!(read("M-d"), None, "a chord was taken for its letter");

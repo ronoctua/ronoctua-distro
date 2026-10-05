@@ -74,6 +74,7 @@ use ronoctua_player::{
 use crate::mpv::{self, Event, Mpv, Value};
 
 mod ambience;
+mod catalog;
 mod decode;
 mod desk;
 mod directory;
@@ -86,12 +87,13 @@ mod session;
 mod sinks;
 mod subtitles;
 mod tags;
+mod translate;
 mod voice;
 
 pub use decode::forget_old_decodes;
 pub(crate) use fetch::{Fetch, spawn_fetch};
 pub(crate) use queue::name_text;
-pub use resolve::{Resolved, path_of_uri, resolve_all};
+pub use resolve::{Resolved, path_of_uri, places_of, resolve_all};
 
 /// Why an ask was not carried out: the trouble the asker is answered with.
 ///
@@ -186,6 +188,9 @@ pub struct Engine {
     desks: desk::Desks,
     /// What the directories listed, for every door (`directory.rs`).
     directories: directory::Directories,
+    /// The local catalogue: its writer, its sources' ingests, the person's
+    /// sources and the posters (`catalog.rs`).
+    catalog: catalog::Catalog,
     /// The engine's own place in the process, for the threads it starts.
     me: Option<Weak<(Mutex<Self>, Condvar)>>,
     state: State,
@@ -198,8 +203,14 @@ pub struct Engine {
     window: Vec<(i64, EntryId)>,
     /// The outline's revision the watchers were last sent.
     told: Option<u64>,
-    /// The revision last written to the disk.
-    kept_revision: Option<u64>,
+    /// What was last written to the disk: the tree's revision and the lanes
+    /// changed in place ([`Engine::lanes_moved`]) — a lane's start or volume
+    /// is kept like any other change, or a restart would lose it.
+    kept_revision: Option<(u64, u64)>,
+    /// When the queue was last written to the disk ([`queue::keep_due`]).
+    queue_kept_at: Option<Instant>,
+    /// Whether a lane's change waits for its write ([`Engine::keep_after`]).
+    keep_armed: bool,
     /// Entries still being read from the network.
     resolving: Vec<EntryId>,
     /// The entry to play once its reading is done.
@@ -252,6 +263,21 @@ pub struct Engine {
     /// sound moves mpv's place in the queue, and the file would wake with
     /// none.
     leaving: bool,
+    /// Where the queue was opened from or last saved as (`queue.rs`).
+    origin: Option<queue::Origin>,
+    /// Where the files a `.rqueue` or an older queue writes otherwise ARE:
+    /// written → canonical, found off the lock (`resolve::aliases_of`), for
+    /// "is it in the queue already?" (`queue::not_queued_in`).
+    aliases: std::collections::HashMap<String, String>,
+    /// Moves every time a set's lanes change in place (`Queue::set_mut`) —
+    /// a volume, a start — which the tree's revision does not: with it, the
+    /// revision says when the queue's fingerprint is to be computed again.
+    lanes_moved: u64,
+    /// The queue's fingerprint, as last computed, and the (revision, lanes
+    /// moved) it was computed at: computed again only when one moved.
+    fingerprinted: std::cell::RefCell<Option<((u64, u64), String)>>,
+    /// The lyrics' translation under way or answered (`translate.rs`).
+    translating: translate::Translating,
 }
 
 impl Engine {
@@ -271,6 +297,7 @@ impl Engine {
             drafts: drafts::Drafts::open(),
             desks: desk::Desks::open(),
             directories: directory::Directories::open(),
+            catalog: catalog::Catalog::open(),
             me: None,
             state: State {
                 protocol: wire::PROTOCOL,
@@ -283,6 +310,8 @@ impl Engine {
             window: Vec::new(),
             told: None,
             kept_revision: None,
+            queue_kept_at: None,
+            keep_armed: false,
             resolving: Vec::new(),
             play_when_resolved: None,
             resume: None,
@@ -297,7 +326,7 @@ impl Engine {
             dirty: false,
             last_tick: Instant::now(),
             idle: true,
-            prefs: prefs::store().read(),
+            prefs: Self::reread_prefs(),
             segments: Vec::new(),
             jumped: Vec::new(),
             fetches: Vec::new(),
@@ -307,15 +336,40 @@ impl Engine {
             following: None,
             mpris: None,
             leaving: false,
+            origin: None,
+            aliases: std::collections::HashMap::new(),
+            lanes_moved: 0,
+            fingerprinted: std::cell::RefCell::new(None),
+            translating: translate::Translating::default(),
         };
         engine.restore();
         engine
+    }
+
+    /// The preferences read again — the player's older list of services
+    /// let merged into the consent file first, once
+    /// (`ronoctua_player::prefs::merge_consent`) — with the hosts the
+    /// consent file lets.
+    fn reread_prefs() -> Preferences {
+        match prefs::merge_consent() {
+            Ok(true) => {
+                tracing::info!("the player's own consents were merged into the consent file")
+            }
+            Ok(false) => {}
+            Err(why) => tracing::warn!(
+                ?why,
+                "the player's own consents could not be merged; they still count"
+            ),
+        }
+        prefs::read()
     }
 
     /// Where the engine lives: the threads it starts — a voice's, the
     /// clock's, the outputs' reading — reach it through this.
     pub fn set_shared(&mut self, shared: &Shared) {
         self.me = Some(Arc::downgrade(shared));
+        // THE QUEUE IT WOKE WITH: where its files are, asked off the lock.
+        self.find_aliases(shared);
     }
 
     /// The engine's place, for a thread it starts.
@@ -362,8 +416,10 @@ impl Engine {
                 .and_then(|n| self.queue.find(n))
                 .map(|n| n.body.name());
         }
+        s.queue_file = self.queue_kept();
         let (lanes, arrangement) = self.lanes_now();
         s.lane_states = self.lane_states(&lanes, arrangement.as_ref());
+        s.lengths_off = self.lengths_off(&lanes);
         s.sources = self.sources_of(&lanes);
         s.lanes = lanes;
         s.arrangement = arrangement;
@@ -372,6 +428,7 @@ impl Engine {
         s.drafts = self.drafts.list();
         s.desks = self.desks.summaries();
         s.desks.extend(self.directories.summaries());
+        s.catalog = self.catalog.summary();
         s.invite = self
             .invite
             .as_ref()
@@ -547,6 +604,9 @@ impl Engine {
     /// is written to the disk then too — a change is an event), then the
     /// state.
     pub fn broadcast(&mut self) {
+        // THE LYRICS, looked at before they are said: new ones are asked to
+        // be translated while the translation is on (`translate.rs`).
+        self.mind_translation();
         let revision = self.queue.revision();
         // EACH LINE MADE ONCE, and written whole to every watcher.
         if self.told != Some(revision) {
@@ -555,8 +615,15 @@ impl Engine {
             }
             self.told = Some(revision);
         }
-        if self.kept_revision != Some(revision) {
-            self.keep_queue();
+        match queue::keep_due(
+            self.kept_revision,
+            (revision, self.lanes_moved),
+            self.queue_kept_at,
+            Instant::now(),
+        ) {
+            queue::Keep::Now => self.keep_queue(),
+            queue::Keep::After(wait) => self.keep_after(wait),
+            queue::Keep::Nothing => {}
         }
         if let Ok(line) = wire::line_of(&Say::State(Box::new(self.state()))) {
             self.watchers.retain_mut(|w| w.write_all(&line).is_ok());
@@ -608,6 +675,7 @@ impl Engine {
         // written goes; nor do the directories.
         self.desks.end();
         self.directories.end();
+        self.catalog.end();
         farewell_to(std::mem::take(&mut self.watchers));
         for v in self.viewers.drain(..) {
             let _ = v.stream.shutdown(std::net::Shutdown::Both);
@@ -647,6 +715,23 @@ const LEAVING: Duration = Duration::from_millis(200);
 /// lock held by something that never lets go must not keep a player that
 /// was asked to close alive.
 const FAREWELL_AT_MOST: Duration = Duration::from_secs(5);
+
+/// The answer to whoever asked, out of what was carried: done, or the
+/// refusal — which is ALSO said in `troubles`, every door's (most doors tell
+/// and do not wait for the answer, and a refusal nobody hears is the silence
+/// the protocol promises not to leave), except "it is in the queue already":
+/// that is the asker's question to put to the person, not a trouble for
+/// every door.
+fn answer_of(carried: Result<(), Refused>, troubles: &mut Vec<Trouble>) -> Say {
+    match carried {
+        Ok(()) => Say::Done,
+        Err(Refused(t @ Trouble::AlreadyQueued { .. })) => Say::Refused(t),
+        Err(Refused(t)) => {
+            *troubles = vec![t.clone()];
+            Say::Refused(t)
+        }
+    }
+}
 
 /// CLOSES THE PLAYER, everywhere — [`Ask::Quit`] on the socket, MPRIS's
 /// `Quit`: the farewell ([`Engine::farewell`]), and the process leaves
@@ -724,15 +809,12 @@ fn options() -> Vec<(&'static str, String)> {
         ("audio-fallback-to-null", "yes".to_owned()),
         ("ytdl", "yes".to_owned()),
     ];
-    // YT-DLP BY PATH, where the unit names it (`ronoctua_ytdlp::program`):
+    // YT-DLP BY PATH, where the unit names it (`ronoctua_ytdlp::named`):
     // a unit's PATH does not have it.
-    if std::env::var_os(ronoctua_ytdlp::VARIABLE).is_some() {
+    if let Some(path) = ronoctua_ytdlp::named() {
         o.push((
             "script-opts",
-            format!(
-                "ytdl_hook-ytdl_path={}",
-                ronoctua_ytdlp::program().display()
-            ),
+            format!("ytdl_hook-ytdl_path={}", path.display()),
         ));
     }
     // ONE VIDEO, NEVER A LIST: a list is OURS to open — a playlist of the
@@ -758,6 +840,11 @@ static DECODED: LazyLock<mpv::Opener> = LazyLock::new(|| Box::new(open_decoded))
 fn open_mpv() -> Result<Arc<Mpv>> {
     let owned = options();
     let pairs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // WHAT yt-dlp IS HANDED, where a play that does not start is looked
+    // into: the PO token's plugin among it, or not.
+    if let Some((_, raw)) = pairs.iter().find(|(k, _)| *k == "ytdl-raw-options") {
+        tracing::debug!(raw, "a voice's yt-dlp options");
+    }
     let mpv = Arc::new(Mpv::new(&pairs)?);
     mpv.streams(decoders::PROTOCOL, &DECODED)?;
     Ok(mpv)
@@ -811,17 +898,42 @@ pub(crate) fn load(mpv: &Mpv, location: &str, how: &str, options: &[(&str, Strin
 }
 
 /// `loadfile <target> <how> -1 <options>`: `-1` is "no index", and the
-/// options last as long as this one file does.
+/// options last as long as this one file does — the sound outputs mpv may
+/// try ([`outputs`]) among them.
 pub(crate) fn loadfile(
     mpv: &Mpv,
     target: &str,
     how: &str,
     options: &[(&str, String)],
 ) -> Result<()> {
+    let mut options = options.to_vec();
+    if let Some(list) = outputs() {
+        options.push(("ao", list.to_owned()));
+    }
     if options.is_empty() {
         return mpv.command(&["loadfile", target, how]);
     }
-    mpv.command(&["loadfile", target, how, "-1", &options_text(options)])
+    mpv.command(&["loadfile", target, how, "-1", &options_text(&options)])
+}
+
+/// The sound outputs mpv tries when no PipeWire server can be listening: the
+/// two others the machine may have, and then `null`
+/// (`audio-fallback-to-null`).
+pub(crate) const WITHOUT_PIPEWIRE: &str = "pulse,alsa";
+
+/// The sound outputs a file may try: mpv's own list, unless no PipeWire
+/// server can be listening ([`ronoctua_audio::pipewire::server_may_listen`]),
+/// and then [`WITHOUT_PIPEWIRE`].
+///
+/// ASKED AT EVERY FILE, because mpv opens its output again at every file and
+/// the server may have come or gone. Trying PipeWire's output with no server
+/// is not a refusal but a throw of a die: libpipewire's thread loop, stopped
+/// the instant it started, can leave mpv's core joining a thread that never
+/// wakes — measured in `player-vm`, the core in `pw_thread_loop_stop`, the
+/// loop's thread in `epoll_wait` — and the daemon stops answering with it.
+/// OpenAL's output goes too: it asks PipeWire on its own.
+pub(crate) fn outputs() -> Option<&'static str> {
+    (!ronoctua_audio::pipewire::server_may_listen()).then_some(WITHOUT_PIPEWIRE)
 }
 
 /// Per-file options as mpv reads them: `key=value,…`, every value quoted by
@@ -875,13 +987,8 @@ impl Engine {
     /// protocol promises not to leave.
     pub fn ask(&mut self, ask: Ask, shared: &Shared) -> Say {
         self.dirty = true;
-        match self.carry(ask, shared) {
-            Ok(()) => Say::Done,
-            Err(Refused(t)) => {
-                self.state.troubles = vec![t.clone()];
-                Say::Refused(t)
-            }
-        }
+        let carried = self.carry(ask, shared);
+        answer_of(carried, &mut self.state.troubles)
     }
 
     fn carry(&mut self, ask: Ask, shared: &Shared) -> Result<(), Refused> {
@@ -893,10 +1000,14 @@ impl Engine {
                 into,
                 play,
                 replace,
+                once,
             } => {
                 // RESOLVED HERE only when the asker did not do it first
                 // (`serve_one` does, outside the lock): a folder is a walk of
                 // the disk, and the engine's lock is every door's.
+                if once {
+                    self.not_queued(&places_of(&what))?;
+                }
                 let resolved = resolve_all(what);
                 self.put_resolved(resolved, after, into, play, replace, shared)?;
             }
@@ -1094,7 +1205,10 @@ impl Engine {
             // tried on the network and a favourite's file written, outside
             // the lock; they never reach here.
             Ask::Desk { .. } | Ask::KeyCheck { .. } | Ask::Favourite { .. } => {}
-            Ask::Reload => self.prefs = prefs::store().read(),
+            Ask::Reload => {
+                self.prefs = Self::reread_prefs();
+                self.retry_a_refused_translation();
+            }
             Ask::Invite => {
                 let code = ronoctua_player::remote::code_of(
                     ronoctua_player::remote::random().map_err(anyhow::Error::from)?,
@@ -1104,6 +1218,18 @@ impl Engine {
             // PAIRING TALKS TO ANOTHER MACHINE, so it is `serve_one`'s, outside
             // the lock; it never reaches here.
             Ask::PairWith { .. } => {}
+            Ask::SaveQueueAgain { force } => self.save_queue_again(force)?,
+            Ask::LyricsTranslation { on, to } => self.translate_lyrics(on, to)?,
+            // ASKS THIS PLAYER KNOWS AND DOES NOT DO YET: refused in a
+            // sentence, never taken as if they worked.
+            // THE CATALOGUE: an ingest a door asked (it showed the source
+            // stale) and the posters of what it shows, each on a thread of
+            // its own (`catalog.rs`). Adding, removing and switching a
+            // source write the person's sources' file, on the asking
+            // connection's thread (`serve_one`); they never reach here.
+            Ask::Ingest { source, category } => self.ingest(&source, category.as_deref())?,
+            Ask::Posters { items } => self.posters(&items)?,
+            Ask::AddSource { .. } | Ask::RemoveSource { .. } | Ask::SetSource { .. } => {}
             // CLOSING IS `quit`'s, taken before the lock — it ends the
             // process. Reaching here is a defect, and says so.
             Ask::Quit => {
@@ -1252,16 +1378,36 @@ impl Engine {
                 },
                 Event::EndFile {
                     error: Some(why), ..
-                } => v.failed = Some(why.clone()),
+                } => {
+                    v.failed = Some(why.clone());
+                    // WHAT THE PROGRAM BEHIND mpv SAID, from its log: the one
+                    // place yt-dlp's reason is (`voice::said_of`).
+                    v.said = voice::said_of(v.heard.iter());
+                }
                 Event::FileLoaded => {
                     v.failed = None;
                     v.eof = false;
+                    v.file_loaded = true;
+                    // ITS TRACKS AS THEY ARE NOW: the list's own change may
+                    // come after this event, and a sound lane would be said
+                    // to have no sound until it did.
+                    v.tracks = voice::tracks_of(mpv);
                     if self.session.is_none() && k == 0 {
                         v.loaded = mpv.text("path").map(|p| location_of(&p));
                     }
                 }
+                Event::StartFile => v.starting(),
+                Event::Log {
+                    prefix,
+                    level,
+                    text,
+                } => v.hear(prefix, level, text),
                 _ => {}
             }
+        }
+        // A LINE OF mpv'S LOG is kept by its voice and nothing else.
+        if matches!(event, Event::Log { .. }) {
+            return;
         }
         if let Event::Property {
             id: id::IDLE,
@@ -1422,9 +1568,11 @@ impl Engine {
             } => {
                 // SAID NOW, and acted on when mpv goes idle (`queue.rs`,
                 // `ended`): a stream tries its next address, anything else
-                // gives way to the next leaf.
+                // gives way to the next leaf. With what yt-dlp said of it,
+                // when it said something (`voice::said_of`).
                 self.failed = true;
-                self.state.troubles = vec![Trouble::Unplayable { why }];
+                let said = self.voices.first().and_then(|v| v.said.clone());
+                self.state.troubles = vec![Trouble::Unplayable { why, said }];
                 self.dirty = true;
             }
             Event::EndFile { .. } => self.failed = false,
@@ -1441,6 +1589,7 @@ impl Engine {
                 self.lyrics_asked = None;
                 self.segments.clear();
                 self.jumped.clear();
+                self.adopt_media_title(mpv);
                 if self.prefs.sponsorblock
                     && let Some(item) = mpv.text("path").map(|p| location_of(&p))
                     && let Some(id) = sponsorblock::video_id(&item)
@@ -1460,6 +1609,27 @@ impl Engine {
     /// The location of the item playing.
     fn playing(&self) -> Option<String> {
         self.loaded.clone()
+    }
+
+    /// A leaf that arrived as an address, and nobody named, takes mpv's
+    /// own title for it at FILE_LOADED — when the ytdl hook opened it (mpv
+    /// plays another address than the one it was given, the video's stream)
+    /// and so the title is the video's, not the file name of an address nor
+    /// the song a radio's stream is playing now.
+    fn adopt_media_title(&mut self, mpv: &Mpv) {
+        let Some(current) = self.state.current else {
+            return;
+        };
+        let Some(path) = mpv.text("path") else { return };
+        let opened_by_the_hook = mpv
+            .text("stream-open-filename")
+            .is_some_and(|opened| opened != path);
+        if !path.contains("://") || !opened_by_the_hook {
+            return;
+        }
+        if let Some(title) = mpv.text("media-title") {
+            self.adopt_title(current, &path, &title);
+        }
     }
 
     /// The fourth source of lyrics, when the other three had none and the
@@ -1647,6 +1817,22 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
         let _ = wire::write_line(&mut out, &say);
         return;
     }
+    // THE CATALOGUE'S SOURCES: a pasted link is fetched to be recognised,
+    // and the book is written — the connection waits for it; the lock is
+    // held only for the book (`catalog.rs`).
+    let catalogued = match &ask {
+        Ask::AddSource { url, adult } => Some(catalog::add_source(url, *adult, shared)),
+        Ask::RemoveSource { id } => Some(catalog::remove_source(id, shared)),
+        Ask::SetSource { id, posters, adult } => {
+            Some(catalog::set_source(id, *posters, *adult, shared))
+        }
+        _ => None,
+    };
+    if let Some(say) = catalogued {
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &say);
+        return;
+    }
     // PAIRING TALKS TO ANOTHER MACHINE, and a host on the tailnet is given
     // seconds: the engine's lock is not held across it.
     if let Ask::PairWith { to, code } = &ask {
@@ -1667,6 +1853,8 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
     }
     // WHAT IS PUT IS READ FIRST, outside the lock: a folder is a walk of the
     // disk and a playlist a file to read, and the lock is every door's.
+    // AND WHERE IT IS, for `once`: a file's canonical path is a question
+    // for the disk, asked here too; under the lock only text is compared.
     let (ask, resolved) = match ask {
         Ask::Put {
             what,
@@ -1674,7 +1862,14 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
             into,
             play,
             replace,
-        } => (None, Some((resolve_all(what), after, into, play, replace))),
+            once,
+        } => {
+            let places = if once { places_of(&what) } else { Vec::new() };
+            (
+                None,
+                Some((resolve_all(what), places, after, into, play, replace)),
+            )
+        }
         other => (Some(other), None),
     };
     let (lock, bell) = &**shared;
@@ -1688,15 +1883,15 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
         let _ = wire::write_line(&mut out, &Say::Farewell);
         return;
     }
-    if let Some((resolved, after, into, play, replace)) = resolved {
+    if let Some((resolved, places, after, into, play, replace)) = resolved {
         e.dirty = true;
-        let say = match e.put_resolved(resolved, after, into, play, replace, shared) {
-            Ok(_) => Say::Done,
-            Err(Refused(t)) => {
-                e.state.troubles = vec![t.clone()];
-                Say::Refused(t)
-            }
-        };
+        // "IS IT IN THE QUEUE ALREADY?" under the lock, where nothing can be
+        // put between the answer and the put.
+        let put = e
+            .not_queued(&places)
+            .and_then(|()| e.put_resolved(resolved, after, into, play, replace, shared))
+            .map(|_| ());
+        let say = answer_of(put, &mut e.state.troubles);
         e.broadcast();
         let mut out = stream;
         let _ = wire::write_line(&mut out, &say);
@@ -1804,6 +1999,67 @@ pub fn absolute(item: &str) -> String {
         .unwrap_or(p)
         .to_string_lossy()
         .into_owned()
+}
+
+/// A test run AGAIN, alone, in a process of its own ([`alone::run`]).
+#[cfg(test)]
+pub(crate) mod alone {
+    /// The mark of a test run again in a process of its own.
+    const ALONE: &str = "RONOCTUA_TEST_ALONE";
+
+    /// Whether this is the run [`run`] started: the half of a test that
+    /// returns at once otherwise.
+    #[must_use]
+    pub(crate) fn is_alone() -> bool {
+        std::env::var_os(ALONE).is_some()
+    }
+
+    /// Runs the test `name` of `module` (its `module_path!()`) again, ALONE,
+    /// in a process of its own: a home of its own (every `XDG_*` root in a
+    /// scratch folder, so the engine it makes reads and writes nothing of
+    /// the person's), and `env` set — what a test of a program's variable
+    /// needs, since the tests of one binary share one process and one
+    /// environment. Panics when it failed, or did not run.
+    pub(crate) fn run(module: &str, name: &str, env: &[(&str, &std::ffi::OsStr)]) {
+        let home = std::env::temp_dir().join(format!(
+            "ronoctua-engine-alone-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let module = module.split_once("::").map_or(module, |(_, m)| m);
+        let test = format!("{module}::{name}");
+        let mut run = std::process::Command::new(std::env::current_exe().expect("this binary"));
+        run.args([test.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+            .env(ALONE, "1")
+            .env("HOME", &home)
+            .env_remove("RONOCTUA_INSTANCE");
+        for (variable, leaf) in [
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_STATE_HOME", "state"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_RUNTIME_DIR", "run"),
+        ] {
+            let dir = home.join(leaf);
+            std::fs::create_dir_all(&dir).expect("a root");
+            run.env(variable, dir);
+        }
+        for (variable, value) in env {
+            run.env(variable, value);
+        }
+        let out = run.output().expect("the test, again");
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{test} failed alone:\n{said}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            said.contains("1 passed"),
+            "{test} did not run alone:\n{said}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }
 
 #[cfg(test)]

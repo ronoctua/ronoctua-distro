@@ -1164,10 +1164,11 @@ DESKS = {"backdrop": "surface.backdrop", "near": "surface.near", "absolute": "su
 #: THE ROLES THAT ARE THE SAME ON EVERY PAGE, copied from the base into each
 #: page's palette. The notification band and the brain's line keep their own
 #: grounds and inks whatever the footer stands on (the owner: they never change
-#: with these options), and so do the glance's two stripes; the desks are what
+#: with these options), and so do the glance's two stripes and the maximum
+#: alert bar that takes the band's place; the desks are what
 #: the pages ARE; the outlines are the compositor's, whose fragments carry the
 #: base; and the subtitle lanes are drawn on a film, never on a page.
-IDENTICAL_ON_EVERY_PAGE = ("notification.", "brain.", "glance.", "border.", "subtitle.")
+IDENTICAL_ON_EVERY_PAGE = ("notification.", "brain.", "glance.", "border.", "subtitle.", "alert.")
 IDENTICAL_KEYS = frozenset(DESKS.values())
 #: THE ROLES THAT ARE THE SAME IN EVERY THEME, byte for byte, or the build is
 #: refused: the subtitle lanes, which the player draws into a film with no
@@ -1369,6 +1370,17 @@ CONTRAST_GATES = (
     ("modeline.device", ("modeline.background",), 40, 45),
     # AND THE CAMERA'S, at the same rung.
     ("modeline.watching", ("modeline.background",), 40, 45),
+    # AND ON A WINDOW'S GROUNDS, where the brain's page draws a watch in the
+    # colour the modeline marks one with — its rows, a module's row toned
+    # `watching` — on the page, under the cursor's band and the pointer's, and
+    # on the two raised grounds the page is framed in.
+    ("modeline.watching", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
+    # THE TONES A BRAIN MODULE GIVES A MARK, on the modeline's own band, and
+    # the levels of its notices on the brain's page — the page, the cursor's
+    # band and the pointer's. `text.secondary`, the quiet one, already is.
+    ("state.warning", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover"), 45, 50),
+    ("state.error", ("modeline.background", "surface.buffer", "surface.selection"), 45, 50),
+    ("state.accent", ("modeline.background",), 45, 50),
     # AND THE SELECTION'S, at the same rung.
     ("modeline.selection", ("modeline.background",), 40, 45),
     # AND THE DRAWER'S.
@@ -1409,8 +1421,24 @@ CONTRAST_GATES = (
     ("state.error", ("surface.hover",), 45, 45),
     ("state.success", ("surface.hover",), 45, 45),
     ("syntax.comment", ("surface.buffer",), 15, 20),
+    # THE GIT BROWSER'S DIFF BANDS (`surface.diff.*`): the code on them is
+    # the body text, the diff's own quiet lines and every ink of the syntax
+    # palette (measured by `SYNTAX_GROUNDS` below), at the floors each holds
+    # on the window's ground.
+    ("text.primary", ("surface.diff.added", "surface.diff.removed"), 75, 82),
+    ("text.dim", ("surface.diff.added", "surface.diff.removed"), 15, 20),
+    ("syntax.comment", ("surface.diff.added", "surface.diff.removed"), 15, 20),
+    # THE MAXIMUM ALERT BAR's two phases (`crate::alert`): each ink on its own
+    # ground, at the floor every solid's ink is solved to (`ON_SOLID_FLOOR`,
+    # the `on-solid` step) — a bar whose words cannot be read in one of its
+    # two colours is a bar that shouts nothing half of the time.
+    ("alert.text", ("alert.ground",), 45, 50),
+    ("alert.text-alt", ("alert.ground-alt",), 45, 50),
 )
 SYNTAX_LOUD_FLOOR = (45, 48)
+#: WHERE THE SYNTAX PALETTE'S INKS ARE DRAWN: a buffer's page, and the git
+#: browser's two diff bands, where a line's code keeps its language's colours.
+SYNTAX_GROUNDS = ("surface.buffer", "surface.diff.added", "surface.diff.removed")
 CONTEXT_TEXT_FLOOR, CONTEXT_ON_FLOOR = (75, 80), 45
 TERMINAL_FLOOR, TERMINAL_DIM_FLOOR = (40, 45), (15, 20)
 
@@ -1494,6 +1522,16 @@ DISTANCE_GATES = (
     ("surface.chrome", "modeline.background", 0.03, 0.04),
     ("modeline.background", "notification.background", 0.02, 0.024),
     ("surface.chrome", "surface.hover", 0.05, 0.06),
+    # THE GIT BROWSER'S DIFF BANDS: each one seen on the two grounds it is
+    # drawn over — a window's and the footer's — and the two told apart. The
+    # floors are the notification band's against the chrome: a ground beside
+    # a ground, and the sign in its own ink (`syntax.added`, `.removed`) says
+    # which band it is besides.
+    ("surface.diff.added", "surface.buffer", 0.02, 0.03),
+    ("surface.diff.added", "surface.chrome", 0.02, 0.03),
+    ("surface.diff.removed", "surface.buffer", 0.02, 0.03),
+    ("surface.diff.removed", "surface.chrome", 0.02, 0.03),
+    ("surface.diff.added", "surface.diff.removed", 0.02, 0.03),
     # THE KEYBOARD'S KEYS stand apart from the footer they are drawn on, the
     # two kinds of key from each other, the key under the pointer from the key
     # it is, and a latched modifier from a locked one.
@@ -1734,6 +1772,13 @@ DISTANCE_GATES = (
     # and the lit one against it (0.268).
     ("player.tile", "surface.chrome", 0.10, 0.12),
     ("player.tile-lit", "player.tile", 0.15, 0.20),
+    # THE ALERT BAR'S TWO GROUNDS ALTERNATE (`crate::alert`), and an
+    # alternation the eye cannot see is a bar standing still: a hue apart, and
+    # well over the distance two bands of one list keep. And each stands out
+    # of the footer's chrome it rises over.
+    ("alert.ground", "alert.ground-alt", 0.10, 0.12),
+    ("alert.ground", "surface.chrome", 0.10, 0.12),
+    ("alert.ground-alt", "surface.chrome", 0.10, 0.12),
 )
 #: THE NEAR DESK AMONG THE OTHERS, measured where the chooser offers it: in a
 #: LIGHT theme only. A dark theme has the token (every theme has the same keys)
@@ -1893,8 +1938,9 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
             findings.append(Finding(_level(v, low, band), "contrast", f"{text} on {ground}", v, f"Lc ≥ {low} (warn < {band})"))
     for key in tokens:
         if key.startswith("syntax.") and key != "syntax.comment":
-            v = lc(key, "surface.buffer")
-            findings.append(Finding(_level(v, *SYNTAX_LOUD_FLOOR), "contrast", f"{key} on surface.buffer", v, f"Lc ≥ {SYNTAX_LOUD_FLOOR[0]}"))
+            for ground in SYNTAX_GROUNDS:
+                v = lc(key, ground)
+                findings.append(Finding(_level(v, *SYNTAX_LOUD_FLOOR), "contrast", f"{key} on {ground}", v, f"Lc ≥ {SYNTAX_LOUD_FLOOR[0]}"))
     for family in CONTEXT_FAMILIES:
         v = lc(f"context.{family}.text", f"context.{family}.ground")
         findings.append(Finding(_level(v, *CONTEXT_TEXT_FLOOR), "contrast", f"context.{family}.text on .ground", v, f"Lc ≥ {CONTEXT_TEXT_FLOOR[0]}"))

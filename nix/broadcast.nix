@@ -2,9 +2,16 @@
 #
 # `assets/channels.nix` becomes three things here:
 #
-#   broadcast.rs  the table `ronoctua_broadcast::table` compiles
-#   keys.txt      the text keys BOTH languages have to carry
-#   a refusal     an iptv-org category that does not exist takes the build down
+#   broadcast.rs  the table `ronoctua_broadcast::table` compiles: the desks'
+#                 categories, and the catalogue's themes (with their aliases),
+#                 default sources (with the categories each asks for, its
+#                 consent hosts and its poster hosts), adult words and bounds
+#   keys.txt      the text keys BOTH languages have to carry — a theme's
+#                 `player-channels-<id>` and a default source's
+#                 `player-channels-source-<id>`
+#   a refusal     an iptv-org category that does not exist takes the build down,
+#                 and so does a theme nothing reaches, an alias two themes
+#                 claim, a host that is not a host's name
 #
 # The third is the one that matters: the index is filtered by those ids at run
 # time, and a typo would be a TV row that is always empty.

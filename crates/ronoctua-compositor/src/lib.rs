@@ -191,6 +191,22 @@ pub struct Corner {
     pub air: u32,
 }
 
+/// A floating window's size as a PORTION of the room windows have on the
+/// screen it is on — what a window floated in the middle is given
+/// (`Compositor::float_centred`): the calculator's compact window.
+///
+/// In HUNDREDTHS — the unit the rule that opens a window floating is written
+/// in, so the window floated again lands on the size it opened at — of the
+/// ROOM, the footer and the right column carved out of it, for the reason
+/// [`Corner`] gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Portion {
+    /// Its width, in hundredths of the room's.
+    pub width_ppt: u8,
+    /// Its height, in hundredths of the room's.
+    pub height_ppt: u8,
+}
+
 // ---------------------------------------------------------------------
 // OUTPUTS — the monitors the compositor draws onto.
 // ---------------------------------------------------------------------
@@ -811,7 +827,12 @@ pub trait Compositor: Send {
     /// and keep it there on every workspace.
     fn float_in_corner(&mut self, id: u64, corner: Corner) -> Result<()>;
 
-    /// Put a window floated by [`Self::float_in_corner`] back in the layout.
+    /// Float a window in the middle of the room windows have, `portion` of
+    /// it in size (see [`Portion`]) — over the layout, on its workspace only.
+    fn float_centred(&mut self, id: u64, portion: Portion) -> Result<()>;
+
+    /// Put a window floated by [`Self::float_in_corner`] or
+    /// [`Self::float_centred`] back in the layout.
     fn back_in_the_layout(&mut self, id: u64) -> Result<()>;
 
     /// Take THIS window out of the drawer, over the workspace in front.
@@ -927,6 +948,9 @@ impl Compositor for Absent {
     fn float_in_corner(&mut self, _id: u64, _corner: Corner) -> Result<()> {
         Self::nothing_there()
     }
+    fn float_centred(&mut self, _id: u64, _portion: Portion) -> Result<()> {
+        Self::nothing_there()
+    }
     fn back_in_the_layout(&mut self, _id: u64) -> Result<()> {
         Self::nothing_there()
     }
@@ -1002,6 +1026,8 @@ pub enum Said {
     Focused(u64),
     /// A window was floated in the corner.
     Cornered(u64, Corner),
+    /// A window was floated in the middle, this portion of the room.
+    Centred(u64, Portion),
     /// A window was put back in the layout.
     Laid(u64),
     /// A window was taken out of the drawer.
@@ -1137,6 +1163,11 @@ impl Compositor for Scripted {
     fn float_in_corner(&mut self, id: u64, corner: Corner) -> Result<()> {
         self.allowed()?;
         self.told.push(Said::Cornered(id, corner));
+        Ok(())
+    }
+    fn float_centred(&mut self, id: u64, portion: Portion) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Centred(id, portion));
         Ok(())
     }
     fn back_in_the_layout(&mut self, id: u64) -> Result<()> {

@@ -58,6 +58,75 @@ pub struct Row {
     /// each door draws the view's globe over its lines and takes the pointer
     /// there (`crate::player_globe`). A figure, and no band lights behind it.
     pub globe: Option<GlobeRow>,
+    /// The cell a TEXT CARET stands before, on a line of a text being edited
+    /// (`crate::text_area`): each door draws it as a thin bar in the
+    /// cursor's colour (`chrome::caret`) — the cursor is a colour,
+    /// and a text's is a place between two letters.
+    pub caret: Option<u16>,
+    /// How the pointer resting on the line LIGHTS it ([`Lit`]): the row
+    /// whole, the words beside a figure at its head, or only its controls —
+    /// what both doors paint, through [`lighting`].
+    pub lit: Lit,
+}
+
+/// How the pointer resting on a line lights it — the answer both doors paint
+/// with ([`lighting`]), the cells a click takes being the ones lit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Lit {
+    /// The row whole — or, on a grid's row, the one cell under the pointer
+    /// ([`grid_cells`]).
+    #[default]
+    Row,
+    /// From this column to the row's end, wherever on the row the pointer
+    /// rests: a FIGURE AT THE ROW'S HEAD — a strip's picture, or the box
+    /// that waits for it (`player_posters::strip`) — is never lit, and the
+    /// words beside it are, on every line of the row, the same with its
+    /// picture or without.
+    From(u16),
+    /// Only the control under the pointer: a line of a grid's tiles whose
+    /// cells are all controls — nothing else on it is taken by a click, so
+    /// nothing else is lit (`player_posters::tiled`, the `⋯`).
+    Controls,
+}
+
+/// What the pointer resting on line `n` lights ([`Row::lit`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lighting {
+    /// The row whole.
+    Whole,
+    /// The one of these cells under the pointer — `(first column, columns)`
+    /// — and nothing where none is.
+    Cell(Vec<(u16, u16)>),
+    /// From this column to the row's end, wherever the pointer rests on it.
+    From(u16),
+}
+
+/// What line `n` of `rows` lights under the pointer — the ONE answer the
+/// window's bands and the footer's read.
+#[must_use]
+pub fn lighting(rows: &[Row], n: usize) -> Lighting {
+    match rows.get(n).map(|r| r.lit) {
+        Some(Lit::From(column)) => Lighting::From(column),
+        Some(Lit::Controls) => Lighting::Cell(
+            rows.get(n)
+                .map(|r| {
+                    r.cells
+                        .iter()
+                        .filter(|c| c.control)
+                        .map(|c| (c.from, c.width))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        Some(Lit::Row) | None => {
+            let cells = grid_cells(rows, n);
+            if cells.is_empty() {
+                Lighting::Whole
+            } else {
+                Lighting::Cell(cells)
+            }
+        }
+    }
 }
 
 /// A row that is a line of the GLOBE: which line of how many, where its box
@@ -156,10 +225,15 @@ impl Row {
     }
 
     /// The row line `n` of `rows` belongs to — itself, or for the rest of a
-    /// wrapped label the row it continues.
+    /// wrapped label the row it continues. A line PAST THE LAST ROW is no
+    /// row's, and stays where it is: a click in the empty room under a list
+    /// finds nothing there (`rows.get` is `None`), and never the last row.
     #[must_use]
     pub fn owner(rows: &[Self], n: usize) -> usize {
-        let mut n = n.min(rows.len().saturating_sub(1));
+        if n >= rows.len() {
+            return n;
+        }
+        let mut n = n;
         while n > 0 && rows.get(n).is_some_and(|r| r.continues) {
             n -= 1;
         }
@@ -321,6 +395,113 @@ pub struct Cell {
     /// glyph, the glyph that plays a medium too — instead of choosing it as
     /// the entry of a grid the next `RET` acts on.
     pub control: bool,
+    /// What it does, as the COMMAND ID whose sentence the pointer resting on
+    /// it says (`chrome::hint_sentence`: `cmd-<id>`, else `about-<id>`) —
+    /// every title's control has one ([`Builder::heading_controls`]), read
+    /// by both doors through [`control_under`].
+    pub about: Option<&'static str>,
+}
+
+/// Every control a click on line `n` takes that says what it does: its
+/// cell, its width and its sentence's id. What a door that PLACES the row
+/// writes down for its pointer (the footer's `player_controls_placed`), the
+/// cells [`control_under`] reads.
+///
+/// A CONTROL IS TAKEN ON THE LINE IT IS DRAWN ON — its row's first — and
+/// nowhere else of a row of several lines: a strip's `⋯`, on the first line
+/// of a tile six lines tall, was taken on all six (`View::clicked_at` reads
+/// the same).
+#[must_use]
+pub fn controls_under(rows: &[Row], n: usize) -> Vec<(u16, u16, &'static str)> {
+    rows.get(n).map_or_else(Vec::new, |row| {
+        row.cells
+            .iter()
+            .filter(|c| c.control)
+            .filter_map(|c| Some((c.from, c.width, c.about?)))
+            .collect()
+    })
+}
+
+/// The sentence id of the control at `column` of line `n` — what the
+/// pointer resting there says, in every door. The same cells a click takes
+/// (`View::clicked_at`): the line's own, the line a control is drawn on
+/// ([`controls_under`]), and a cell by `from` and `width`.
+#[must_use]
+pub fn control_under(rows: &[Row], n: usize, column: u16) -> Option<&'static str> {
+    let row = rows.get(n)?;
+    row.cells
+        .iter()
+        .find(|c| c.control && crate::chrome::in_cell(column, c.from, c.width))
+        .and_then(|c| c.about)
+}
+
+/// The cells of row `n` that are entries of a GRID — `(first column,
+/// columns)` each — and none for a row that is one thing, or whose cells are
+/// only its controls: what the hover lights one of (`chrome::hover_cells`),
+/// the same cells a click chooses among (`View::clicked_at`).
+#[must_use]
+pub fn grid_cells(rows: &[Row], n: usize) -> Vec<(u16, u16)> {
+    rows.get(n).map_or_else(Vec::new, |r| {
+        r.cells
+            .iter()
+            .filter(|c| !c.control)
+            .map(|c| (c.from, c.width))
+            .collect()
+    })
+}
+
+/// The GRID cell the cursor is on — its row, and its `(first column,
+/// columns)` — when the cursor is on a grid: what wears the selection
+/// (`chrome::cell_selection`).
+#[must_use]
+pub fn grid_cursor(rows: &[Row]) -> Option<(usize, (u16, u16))> {
+    rows.iter().enumerate().find_map(|(n, r)| {
+        r.cells
+            .iter()
+            .filter(|c| !c.control)
+            .find(|c| r.focused && c.target == r.target)
+            .map(|c| (n, (c.from, c.width)))
+    })
+}
+
+/// A row of the FILE PICKER (`crate::file_picker`), as a row of this view:
+/// its fields as they were placed, and its cells as the cells of a grid —
+/// each one a click chooses and the pointer lights alone
+/// (`chrome::hover_cells`).
+pub(crate) fn of_the_picker(r: crate::file_picker::Row) -> Row {
+    let of = |t: crate::file_picker::Target| match t {
+        crate::file_picker::Target::Nothing => Target::Nothing,
+        t => Target::Picker(t),
+    };
+    let cells = r
+        .cells
+        .into_iter()
+        .map(|c| Cell {
+            from: c.from,
+            width: c.width,
+            spot: c.target.spot(),
+            target: of(c.target),
+            control: false,
+            about: None,
+        })
+        .collect();
+    Row {
+        fields: r.fields,
+        focused: r.focused,
+        heading: r.heading,
+        target: of(r.target),
+        spot: r.spot,
+        cells,
+        slider: None,
+        continues: r.continues,
+        chips: Vec::new(),
+        deck: None,
+        schematic: None,
+        covers: Vec::new(),
+        globe: None,
+        caret: r.caret,
+        lit: Lit::Row,
+    }
 }
 
 /// A row of the queue's tree (`crate::player_queue`), before it is placed.
@@ -412,6 +593,9 @@ pub struct Builder<'a> {
     measured: Option<Vec<Vec<(u16, u16, u16)>>>,
     /// Where each section's values begin, in the second pass.
     columns: Vec<u16>,
+    /// A MARK for the next title — words of their own tone after it
+    /// ([`Builder::title_mark`]) — taken by that title.
+    mark: Option<(String, tokens::Color)>,
 }
 
 impl<'a> Builder<'a> {
@@ -437,6 +621,7 @@ impl<'a> Builder<'a> {
             section: 0,
             measured,
             columns,
+            mark: None,
         };
         let mut first = blank(Some(vec![Vec::new()]), Vec::new());
         fill(&mut first);
@@ -511,6 +696,8 @@ impl Builder<'_> {
             schematic: None,
             covers: Vec::new(),
             globe: None,
+            caret: None,
+            lit: Lit::Row,
         });
     }
 
@@ -622,27 +809,9 @@ impl Builder<'_> {
                 schematic: None,
                 covers: Vec::new(),
                 globe: None,
+                caret: None,
+                lit: Lit::Row,
             });
-        }
-    }
-
-    /// A pair whose value is a PATH: cut, when it is, from its START — the
-    /// folder a path names is its last part, and `/tmp/claude-10…` said
-    /// everything but which folder.
-    pub(crate) fn path_pair(&mut self, label: String, path: String, target: Target, spot: &str) {
-        let first = self.out.len();
-        self.pair(label, path.clone(), target, spot);
-        let end = self.left + self.room;
-        // THE VALUE is the first line's second field; a line with none left
-        // for it has only its label.
-        if let Some(value) = self
-            .out
-            .get_mut(first)
-            .filter(|row| row.fields.len() > 1)
-            .and_then(|row| row.fields.last_mut())
-            .filter(|f| f.text != path)
-        {
-            value.text = ronoctua_render::layout::elide_start(&path, end.saturating_sub(value.at));
         }
     }
 
@@ -721,6 +890,12 @@ impl Builder<'_> {
     /// `←`/`→` across. Three where the room holds three of the longest name,
     /// two where names are long, one where a column would cut every name to
     /// a stub (`space.player.browseColumn`).
+    ///
+    /// NO PAGE OF THIS VIEW DRAWS ONE NOW — the files are the file picker's
+    /// (`crate::file_picker`, whose grid fills the same way) — and it stays
+    /// for the catalogue's compact columns (`player_posters::columns`), which
+    /// another lane of this wave writes on it.
+    #[allow(dead_code)]
     pub(crate) fn grid(&mut self, entries: &[(char, String, Target, String)]) {
         if entries.is_empty() {
             return;
@@ -776,6 +951,7 @@ impl Builder<'_> {
                     target: target.clone(),
                     spot: spot.clone(),
                     control: false,
+                    about: None,
                 });
             }
             let on = self.cell.min(cells.len().saturating_sub(1));
@@ -799,17 +975,139 @@ impl Builder<'_> {
                 schematic: None,
                 covers: Vec::new(),
                 globe: None,
+                caret: None,
+                lit: Lit::Row,
             });
         }
     }
 
     /// A title with a control at the end of its line — a glyph that acts on a
-    /// click (`View::clicked_at`); the key that does the same is taught in the
-    /// hint line.
-    pub(crate) fn heading_with(&mut self, key: &str, glyph: char, target: Target) {
-        self.heading(key);
-        if let Some(row) = self.out.last_mut() {
-            let at = self.left + self.room.saturating_sub(2);
+    /// click (`View::clicked_at`) and says what it does under the pointer:
+    /// `about` is the command id of its sentence, never optional. The key
+    /// that does the same is taught in the hint line.
+    pub(crate) fn heading_with(
+        &mut self,
+        key: &str,
+        glyph: char,
+        target: Target,
+        about: &'static str,
+    ) {
+        self.heading_controls(key, &[(glyph, target, about)]);
+    }
+
+    /// A title with CONTROLS at the end of its first line, side by side —
+    /// each a glyph in its own `space.player.queueGlyph` cells, COUNTED FROM
+    /// THE RIGHT EDGE of the room, so a control keeps its place whatever the
+    /// title says and in either language; the last one given is the one at
+    /// the edge. Each acts on a click and says its `about` under the pointer
+    /// ([`control_under`]).
+    ///
+    /// THE TITLE IS WRAPPED IN WHAT IS LEFT, with a cell of air before the
+    /// first control (`space.player.queueAir`): a long title in a narrow
+    /// door ran under the glyphs.
+    pub(crate) fn heading_controls(
+        &mut self,
+        key: &str,
+        controls: &[(char, Target, &'static str)],
+    ) {
+        let mark = self.mark.take();
+        self.title_marked(key, mark, controls);
+    }
+
+    /// A MARK after the next title ([`Builder::heading_with`],
+    /// [`Builder::heading_controls`]) — words of its own tone, after the
+    /// title and the `player-meta-joiner`: the Queue's file, "not saved" in
+    /// the danger tone (`player_queue::kept_mark`). Set apart from the title
+    /// so its controls stay literals at the call the checks read.
+    pub(crate) fn title_mark(&mut self, mark: Option<(String, tokens::Color)>) {
+        self.mark = mark;
+    }
+
+    /// A title, its mark and its controls. Title and mark share the line
+    /// when they fit before the controls; else the mark wraps onto the lines
+    /// under the title, whole and in its tone.
+    fn title_marked(
+        &mut self,
+        key: &str,
+        mark: Option<(String, tokens::Color)>,
+        controls: &[(char, Target, &'static str)],
+    ) {
+        let text = self.texts.t(key);
+        self.title_said_marked(text, mark, controls);
+    }
+
+    /// [`Builder::heading_controls`] for a title already in words — what a
+    /// listing of the catalogue is titled by: a theme's name, a category's,
+    /// a search's words. A mark set before it ([`Builder::title_mark`]) is
+    /// taken by it, as by any title.
+    pub(crate) fn heading_controls_said(
+        &mut self,
+        text: String,
+        controls: &[(char, Target, &'static str)],
+    ) {
+        let mark = self.mark.take();
+        self.title_said_marked(text, mark, controls);
+    }
+
+    /// [`Builder::title_marked`], for a title already in words.
+    fn title_said_marked(
+        &mut self,
+        text: String,
+        mark: Option<(String, tokens::Color)>,
+        controls: &[(char, Target, &'static str)],
+    ) {
+        self.section += 1;
+        if let Some(m) = self.measured.as_mut() {
+            m.push(Vec::new());
+        }
+        if !self.out.is_empty() {
+            self.inert(crate::chrome::AIR);
+        }
+        let step = tokens::space::PLAYER_QUEUEGLYPH;
+        let n = u16::try_from(controls.len()).unwrap_or(u16::MAX);
+        let cells = n.saturating_mul(step).saturating_add(if n > 0 {
+            tokens::space::PLAYER_QUEUEAIR
+        } else {
+            0
+        });
+        let first = self.out.len();
+        let room = self.room;
+        self.room = self.room.saturating_sub(cells).max(1);
+        match mark {
+            None => self.title_lines(text),
+            Some((mark, tone)) => {
+                let joiner = self.texts.t(ronoctua_i18n::key::PLAYER_META_JOINER);
+                let wide = |t: &str| ronoctua_render::layout::width(t);
+                let title = wide(&text);
+                // ON THE TITLE'S LINE when the whole of it fits there.
+                if title + wide(&joiner) + wide(&mark) <= self.room {
+                    // THE JOINER IS THE TITLE'S, and only the mark wears
+                    // its own tone.
+                    let at = self.left + title + wide(&joiner);
+                    self.inert(vec![
+                        Self::piece(
+                            self.left,
+                            format!("{text}{joiner}"),
+                            tokens::color::TEXT_HEADING,
+                        ),
+                        Self::piece(at, mark, tone),
+                    ]);
+                } else {
+                    self.title_lines(text);
+                    for line in crate::chrome::note_lines(&mark, self.room) {
+                        self.inert(vec![Self::piece(self.left, line, tone)]);
+                    }
+                }
+            }
+        }
+        self.room = room;
+        let edge = self.left + self.room;
+        let Some(row) = self.out.get_mut(first) else {
+            return;
+        };
+        for (k, (glyph, target, about)) in controls.iter().enumerate() {
+            let from_edge = (n - u16::try_from(k).unwrap_or(0)).saturating_mul(step);
+            let at = edge.saturating_sub(from_edge);
             // THE GLYPH WEARS ITS TITLE'S TONE, as the drawers' chevrons do
             // (`network::drawer`): a second, quieter text tone on a title
             // line is the title read as body text.
@@ -820,10 +1118,11 @@ impl Builder<'_> {
             ));
             row.cells.push(Cell {
                 from: at,
-                width: 2,
-                target,
-                spot: "control".to_owned(),
+                width: step,
+                target: target.clone(),
+                spot: format!("control-{about}"),
                 control: true,
+                about: Some(about),
             });
         }
     }
@@ -858,6 +1157,7 @@ impl Builder<'_> {
                 target: acts,
                 spot: format!("{spot}-control"),
                 control: true,
+                about: None,
             });
         }
     }
@@ -925,6 +1225,7 @@ impl Builder<'_> {
                 target: acts.clone(),
                 spot: format!("{spot}-control-{k}"),
                 control: true,
+                about: None,
             });
         }
     }
@@ -953,6 +1254,8 @@ impl Builder<'_> {
                 }),
                 covers: Vec::new(),
                 globe: None,
+                caret: None,
+                lit: Lit::Row,
             });
         }
     }
@@ -1004,7 +1307,7 @@ impl Builder<'_> {
             tokens::metrics::cell_width(size),
             tokens::metrics::line_height(size),
         );
-        let air = f32::from(tokens::space::FILES_PICTUREAIR);
+        let air = crate::files::picture_air();
         let most = tokens::space::PLAYER_COVERLINES;
         let lines = pictures
             .iter()
@@ -1089,6 +1392,8 @@ impl Builder<'_> {
                 schematic: None,
                 covers,
                 globe: None,
+                caret: None,
+                lit: Lit::Row,
             });
         }
     }
@@ -1128,6 +1433,8 @@ impl Builder<'_> {
                 schematic: None,
                 covers: Vec::new(),
                 globe: None,
+                caret: None,
+                lit: Lit::Row,
             });
         }
     }
@@ -1172,6 +1479,7 @@ impl Builder<'_> {
                 target: star,
                 spot: format!("{spot}-star"),
                 control: true,
+                about: None,
             });
         }
     }
@@ -1200,6 +1508,8 @@ impl Builder<'_> {
                     left: self.left,
                     cells: self.room,
                 }),
+                caret: None,
+                lit: Lit::Row,
             });
         }
     }
@@ -1247,6 +1557,7 @@ impl Builder<'_> {
                 target,
                 spot: format!("{spot}-toggle"),
                 control: true,
+                about: None,
             });
         }
     }
@@ -1319,6 +1630,8 @@ impl Builder<'_> {
                     schematic: None,
                     covers: Vec::new(),
                     globe: None,
+                    caret: None,
+                    lit: Lit::Row,
                 }),
             }
         }
@@ -1422,6 +1735,7 @@ impl Builder<'_> {
                 target: toggle,
                 spot: format!("{spot}-chip"),
                 control: true,
+                about: None,
             });
         }
     }
@@ -1477,6 +1791,7 @@ impl Builder<'_> {
                 target: fold,
                 spot: format!("{}-fold", e.spot),
                 control: true,
+                about: None,
             });
         }
         if let Some(mark) = e.mark {
@@ -1505,6 +1820,7 @@ impl Builder<'_> {
                     target: acts.clone(),
                     spot: format!("{}-move-{k}", e.spot),
                     control: true,
+                    about: None,
                 });
             }
         }
@@ -1522,6 +1838,8 @@ impl Builder<'_> {
             schematic: None,
             covers: Vec::new(),
             globe: None,
+            caret: None,
+            lit: Lit::Row,
         });
     }
 
@@ -1570,6 +1888,8 @@ impl Builder<'_> {
                 schematic: None,
                 covers: Vec::new(),
                 globe: None,
+                caret: None,
+                lit: Lit::Row,
             });
         }
     }
@@ -1598,23 +1918,23 @@ mod whole_row_tests {
     fn a_row_of_several_lines_lights_whole_from_any_of_them() {
         let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
         let rows = Builder::build(0, 24, 99, 0, &t, |b| {
-            b.pair("First".into(), String::new(), Target::Typed, "first");
+            b.pair("First".into(), String::new(), Target::Rename, "first");
             b.pair_under(
                 "Harbour.2024.1080p.BluRay".into(),
                 String::new(),
                 "OpenSubtitles · 12 downloads · timed for this file",
-                Target::Up,
+                Target::Invite,
                 "result",
             );
-            b.pair("After".into(), String::new(), Target::Place, "after");
+            b.pair("After".into(), String::new(), Target::Silence, "after");
         });
         let first = rows
             .iter()
-            .position(|r| r.target == Target::Up)
+            .position(|r| r.target == Target::Invite)
             .expect("the result");
         let last = rows
             .iter()
-            .rposition(|r| r.target == Target::Up)
+            .rposition(|r| r.target == Target::Invite)
             .expect("the result");
         assert!(last > first, "the fixture has one line: {rows:?}");
         for n in first..=last {
@@ -1637,14 +1957,14 @@ mod whole_row_tests {
                     b.pair(
                         "Ask api.opensubtitles.com and api.subdl.com now".into(),
                         String::new(),
-                        Target::Typed,
+                        Target::Rename,
                         "ask",
                     );
                 }
-                b.pair("Left today".into(), "18".into(), Target::Up, "left");
+                b.pair("Left today".into(), "18".into(), Target::Invite, "left");
             });
             rows.iter()
-                .find(|r| r.target == Target::Up)
+                .find(|r| r.target == Target::Invite)
                 .and_then(|r| r.fields.get(1))
                 .map(|f| f.at)
                 .expect("the value")

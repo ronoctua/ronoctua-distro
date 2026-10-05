@@ -212,30 +212,29 @@ rec {
     _compositor_outputs = 1
 
 
-    def start_xvfb(brain=False):
+    def start_xvfb():
         machine.succeed("mkdir -p /run/user/0 && chmod 700 /run/user/0")
-        # AND NO MACHINE UNDER TEST SCHEDULES A REBUILD OF ITSELF.
+        # AND NOTHING THE BRAIN DOES STARTS BY ITSELF: `{"quiet": true}`.
         #
         # The footer wakes a brain beside it when there is no systemd unit for
-        # one — which in these VMs is always — and the update task's default
-        # window is the AFTERNOON, 13h to 18h. So the same battery passed at
-        # noon and failed at half past one: the brain announced, its line took
-        # a row, and three tests that assert "the footer at rest is two lines"
-        # measured three. Nothing in the code had changed; the CLOCK had.
-        #
-        # A machine under test has no business rebuilding its own system, so it
-        # is told not to. `brain=True` is for the one test that photographs the
-        # brain's line and therefore needs it to speak.
-        #
-        # Nor making room on its disk: a small test disk crosses the floor
+        # one — which in these VMs is always — and the update's default window
+        # is the AFTERNOON, 13h to 18h. So the same battery passed at noon and
+        # failed at half past one: the brain announced, its line took a row,
+        # and three tests that assert "the footer at rest is two lines"
+        # measured three. Nothing in the code had changed; the CLOCK had. Nor
+        # may it make room on its disk: a small test disk crosses the floor
         # easily, and the relief's collection of the store would take the
         # paths a test registered and never rooted.
+        #
+        # QUIET, AND NO MODULE NAMED: this used to switch the two off by their
+        # ids, which put a module's id in four test files and would have
+        # forgotten the next module that starts something. A quiet brain
+        # still publishes its marks and notices, and a run somebody asks for
+        # still runs — which is how a scene that photographs the brain's line
+        # makes it speak, at the moment it chooses rather than the clock's.
         machine.succeed("mkdir -p /root/.config/ronoctua")
         machine.succeed(
-            "printf '%s' "
-            f"'{{\"tasks\":{{\"system-update\":{{\"enabled\":{str(brain).lower()}}},"
-            "\"disk-space\":{\"enabled\":false}}}'"
-            " > /root/.config/ronoctua/brain.json"
+            "printf '%s' '{\"quiet\":true}' > /root/.config/ronoctua/brain.json"
         )
         machine.succeed(
             "systemd-run --unit=xvfb "

@@ -111,10 +111,6 @@ fn cache(name: &str) -> Cache {
     Cache::at(dir, 64 * MIB)
 }
 
-fn no_lives(_: &str, _: usize) -> Result<Vec<Live>, ronoctua_ytdlp::Trouble> {
-    Err(ronoctua_ytdlp::Trouble::Failed)
-}
-
 /// Every directory let.
 fn all_let() -> Preferences {
     let mut p = Preferences::default();
@@ -134,7 +130,6 @@ fn looked(
     net: &Canned,
     cache: Option<&Cache>,
     now: SystemTime,
-    lives: &SearchLives<'_>,
 ) -> (Result<(), Trouble>, Posted) {
     let drawn = map();
     let radio = Mutex::new(None);
@@ -147,8 +142,6 @@ fn looked(
         index: &index,
         seed: 0,
         now,
-        yt_dlp: true,
-        lives,
     };
     let mut pages = Vec::new();
     let outcome = look(query, prefs, &tools, &mut |page, refused| {
@@ -293,7 +286,6 @@ fn the_united_kingdom_is_gb_on_the_tv_globe() {
         &net,
         None,
         SystemTime::now(),
-        &no_lives,
     );
     assert_eq!(outcome, Ok(()));
     let Some((
@@ -325,7 +317,6 @@ fn the_united_kingdom_is_gb_on_the_tv_globe() {
         &net,
         None,
         SystemTime::now(),
-        &no_lives,
     );
     assert_eq!(outcome, Ok(()));
     let Some((
@@ -480,23 +471,7 @@ fn nothing_is_asked_while_a_switch_is_off() {
             page: 1,
         }),
         Query::Tv(TvList::Countries),
-        Query::Tv(TvList::Category {
-            category: "news".into(),
-        }),
-        Query::Archive {
-            category: "films".into(),
-            words: None,
-            page: 1,
-        },
-        Query::Lives {
-            category: "news".into(),
-        },
     ];
-    let asked_lives = Mutex::new(0_u32);
-    let counting = |_: &str, _: usize| -> Result<Vec<Live>, ronoctua_ytdlp::Trouble> {
-        *asked_lives.lock().unwrap_or_else(PoisonError::into_inner) += 1;
-        Ok(Vec::new())
-    };
     for query in &queries {
         let net = Canned::new(&[]);
         let (outcome, pages) = looked(
@@ -505,7 +480,6 @@ fn nothing_is_asked_while_a_switch_is_off() {
             &net,
             None,
             SystemTime::now(),
-            &counting,
         );
         let host = query.directory().expect("a directory").host().to_owned();
         assert_eq!(outcome, Err(Trouble::Off { host }), "{query:?}");
@@ -513,51 +487,10 @@ fn nothing_is_asked_while_a_switch_is_off() {
         assert!(pages.is_empty(), "{query:?} posted a page");
         // AND THE DESK REFUSES IT AT ONCE, before a thread is asked.
         assert!(matches!(
-            admitted(&Preferences::default(), query, true),
+            admitted(&Preferences::default(), query),
             Err(Trouble::Off { .. })
         ));
     }
-    assert_eq!(
-        *asked_lives.lock().unwrap_or_else(PoisonError::into_inner),
-        0
-    );
-    // THE LIVES LET, and no yt-dlp on this installation: said, never run.
-    let lives = Query::Lives {
-        category: "news".into(),
-    };
-    assert_eq!(
-        admitted(&all_let(), &lives, false),
-        Err(Trouble::Listing {
-            what: "news".into(),
-            why: ronoctua_ytdlp::Trouble::Absent
-        })
-    );
-    // A THEME THAT HAS NONE OF WHAT IS ASKED — `action` has no TV channels —
-    // and one that does not exist: refused at once.
-    assert_eq!(
-        admitted(
-            &all_let(),
-            &Query::Tv(TvList::Category {
-                category: "action".into()
-            }),
-            true
-        ),
-        Err(Trouble::NoSuchCategory {
-            category: "action".into()
-        })
-    );
-    assert!(matches!(
-        admitted(
-            &all_let(),
-            &Query::Archive {
-                category: "nope".into(),
-                words: None,
-                page: 1
-            },
-            true
-        ),
-        Err(Trouble::NoSuchCategory { .. })
-    ));
     assert!(matches!(
         admitted(
             &all_let(),
@@ -565,7 +498,6 @@ fn nothing_is_asked_while_a_switch_is_off() {
                 words: "  ".into(),
                 page: 1,
             }),
-            true
         ),
         Err(Trouble::Directory(_))
     ));
@@ -595,14 +527,7 @@ fn a_stale_list_is_shown_while_a_fresh_one_is_asked() {
             COUNTRIES_JSON,
         ),
     ]);
-    let (outcome, pages) = looked(
-        &query,
-        &all_let(),
-        &net,
-        Some(&cache),
-        SystemTime::now(),
-        &no_lives,
-    );
+    let (outcome, pages) = looked(&query, &all_let(), &net, Some(&cache), SystemTime::now());
     assert_eq!(outcome, Ok(()));
     assert_eq!(pages.len(), 1);
     let Page::RadioCountries {
@@ -623,14 +548,7 @@ fn a_stale_list_is_shown_while_a_fresh_one_is_asked() {
     assert_eq!(globe.marks.len(), 2);
     // FRESH: shown at once, and nothing asked.
     let silent = Canned::new(&[]);
-    let (outcome, pages) = looked(
-        &query,
-        &all_let(),
-        &silent,
-        Some(&cache),
-        SystemTime::now(),
-        &no_lives,
-    );
+    let (outcome, pages) = looked(&query, &all_let(), &silent, Some(&cache), SystemTime::now());
     assert_eq!(outcome, Ok(()));
     assert_eq!(pages.len(), 1);
     assert!(silent.urls().is_empty(), "{:?}", silent.urls());
@@ -638,7 +556,7 @@ fn a_stale_list_is_shown_while_a_fresh_one_is_asked() {
     // stays, with the refusal.
     let later = SystemTime::now() + Duration::from_secs(24 * 3600);
     let gone = Canned::new(&[]);
-    let (outcome, pages) = looked(&query, &all_let(), &gone, Some(&cache), later, &no_lives);
+    let (outcome, pages) = looked(&query, &all_let(), &gone, Some(&cache), later);
     assert_eq!(
         outcome,
         Err(Trouble::Directory(Refusal::new(
@@ -650,55 +568,6 @@ fn a_stale_list_is_shown_while_a_fresh_one_is_asked() {
     assert!(matches!(&pages[0].0, Page::RadioCountries { listed, .. } if listed.stale));
     assert!(!gone.urls().is_empty(), "a fresh one was asked");
     let _ = std::fs::remove_dir_all(cache.dir());
-}
-
-/// FAILS IF: a theme's lives are not each once, or stop saying which words
-/// found them; or a search that failed while another answered is not said.
-#[test]
-fn a_themes_lives_are_each_once_and_say_what_found_them() {
-    let news = Category::of("news").expect("news");
-    assert!(!news.lives.is_empty());
-    let first = news.lives[0];
-    let found = |words: &str, _: usize| -> Result<Vec<Live>, ronoctua_ytdlp::Trouble> {
-        if words != first {
-            return Err(ronoctua_ytdlp::Trouble::Slow);
-        }
-        let live = |id: &str| Live {
-            id: id.to_owned(),
-            url: format!("https://www.youtube.com/watch?v={id}"),
-            title: format!("live {id}"),
-            channel: None,
-            watching: Some(10),
-        };
-        Ok(vec![
-            live("aaaaaaaaaaa"),
-            live("bbbbbbbbbbb"),
-            live("aaaaaaaaaaa"),
-        ])
-    };
-    let net = Canned::new(&[]);
-    let query = Query::Lives {
-        category: "news".into(),
-    };
-    let (outcome, pages) = looked(&query, &all_let(), &net, None, SystemTime::now(), &found);
-    assert_eq!(outcome, Ok(()));
-    let (Page::Lives { lives, .. }, refused) = &pages[0] else {
-        panic!("{pages:?}");
-    };
-    let ids: Vec<&str> = lives.iter().map(|l| l.live.id.as_str()).collect();
-    assert_eq!(ids, ["aaaaaaaaaaa", "bbbbbbbbbbb"]);
-    assert!(lives.iter().all(|l| l.asked == first && l.stream.live));
-    assert_eq!(
-        lives[0].stream.origin,
-        Origin::YouTube {
-            id: "aaaaaaaaaaa".into()
-        }
-    );
-    assert_eq!(refused.len(), news.lives.len() - 1);
-    assert!(
-        net.urls().is_empty(),
-        "the lives are yt-dlp's, never a request"
-    );
 }
 
 /// FAILS IF: a header with a comma — 741 of iptv-org's user agents have one
@@ -770,9 +639,6 @@ fn the_state_lists_every_desk_in_order() {
             DeskKind::Lyrics,
             DeskKind::Radio,
             DeskKind::Television,
-            DeskKind::Channels,
-            DeskKind::Archive,
-            DeskKind::Lives,
         ]
     );
     let d = Directories::open();
@@ -811,4 +677,31 @@ fn a_language_of_radio_is_named_only_when_the_table_is_sure() {
     assert_eq!(tongue_of("klingon", Some("xx")), None);
     assert_eq!(tongue_of("nothing", Some("")), None);
     assert_eq!(tongue_of("nothing", None), None);
+}
+
+/// FAILS IF: a directory refused for want of the person's pass is said as a
+/// failure, instead of the consent row whose host is the one that
+/// directory's row lets (so its press lets it) — or another refusal is.
+#[test]
+fn a_directory_not_let_is_its_consent_row() {
+    for d in [Directory::Radio, Directory::Iptv, Directory::Archive] {
+        let source = match d {
+            Directory::Radio => Source::Radio,
+            Directory::Iptv => Source::Iptv,
+            _ => Source::Archive,
+        };
+        let t = refused(Refusal::new(source, Why::NotLet));
+        assert_eq!(
+            t,
+            Trouble::Off {
+                host: d.host().to_owned()
+            }
+        );
+        let Trouble::Off { host } = t else {
+            unreachable!()
+        };
+        assert_eq!(Directory::of_host(&host), Some(d), "its row lets it");
+    }
+    let other = Refusal::new(Source::Radio, Why::Unreachable);
+    assert_eq!(refused(other), Trouble::Directory(other));
 }

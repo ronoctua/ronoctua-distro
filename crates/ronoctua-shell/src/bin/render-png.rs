@@ -61,7 +61,20 @@ mod paint;
 #[path = "../mind_wire.rs"]
 mod mind_wire;
 
+// AND THE ONE ARITHMETIC FOR A SIZE, which the brain's records carry and
+// `mind_wire` formats: the footer's own, so a size reads the same in a picture.
+#[allow(dead_code)]
+#[path = "../sizes.rs"]
+mod sizes;
+
 use anyhow::{Context as _, Result, bail};
+
+/// A brain module's page as asked on the command line: an answer of its
+/// socket, or a refusal in the brain's words.
+enum Page {
+    Came(ronoctua_brain::wire::Say, ronoctua_files::when::Zone),
+    Refused(String, String),
+}
 use ronoctua_protocol::Input;
 use ronoctua_tokens as tokens;
 
@@ -72,6 +85,9 @@ struct Ask {
     /// It is not an `Input` yet because converting one needs the language's
     /// bundle; see the note at `--mind`.
     mind: Option<(usize, ronoctua_brain::Mind, ronoctua_files::when::Zone)>,
+    /// A module's page for each `--screen`, and where among the inputs it
+    /// belongs — converted in `main` for the reason the mind is.
+    screens: Vec<(usize, Page)>,
     wasm: String,
     out: std::path::PathBuf,
     columns: u16,
@@ -138,6 +154,10 @@ usage: ronoctua-render-png <component.wasm> [options]
 
   --mind <file>       a brain mind, as JSON, delivered before drawing
   --log <file>        the brain's own log: one `lines` answer of its socket
+  --screen <file>     a brain module's page: one `screen` answer of its socket,
+                      delivered in order (open the task's page before it)
+  --refused <module=words>  that module's page REFUSED, with the brain's words,
+                      delivered in order like `--screen`
   --hover <col,line[,cursor]>  rests a pointer on a cell; the cursor number
                       (from 0) lets two hands rest at once
   --seat <cursor>     the keys after this are that cursor's keyboard's
@@ -196,6 +216,7 @@ fn parse() -> Result<Ask> {
     }
     let mut me = Ask {
         mind: None,
+        screens: Vec::new(),
         wasm: first,
         out: std::path::PathBuf::from("buffer.png"),
         columns: 90,
@@ -335,6 +356,37 @@ fn parse() -> Result<Ask> {
                     ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
                 me.inputs.push(Input::Log(mind_wire::log_of(&lines, &zone)));
             }
+            // A MODULE'S OWN PAGE, in the spelling its socket answers
+            // `Ask::Screen` with — one `{"say":"screen",…}` line — converted by
+            // the production `mind_wire::screen_of`, for the reason `--mind`
+            // gives. In ORDER: the component keeps a page only while its
+            // task's page is open, so it goes after the key that opens it.
+            "--screen" => {
+                let file = value()?;
+                let raw = std::fs::read_to_string(&file)
+                    .with_context(|| format!("could not read `{file}`"))?;
+                let said: ronoctua_brain::wire::Say = serde_json::from_str(&raw)
+                    .with_context(|| format!("`{file}` is not an answer of the brain"))?;
+                if !matches!(said, ronoctua_brain::wire::Say::Screen { .. }) {
+                    anyhow::bail!("`{file}` is an answer of the brain, but not a module's page");
+                }
+                let zone =
+                    ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
+                me.screens.push((me.inputs.len(), Page::Came(said, zone)));
+            }
+            // A PAGE THE BRAIN WOULD NOT GIVE, and its words: the sentence is
+            // made by the production `mind_wire::Answer`, as the window makes
+            // it, once the language's bundle is loaded.
+            "--refused" => {
+                let given = value()?;
+                let Some((module, words)) = given.split_once('=') else {
+                    anyhow::bail!("`--refused` takes `<module>=<words>`, not `{given}`");
+                };
+                me.screens.push((
+                    me.inputs.len(),
+                    Page::Refused(module.to_owned(), words.to_owned()),
+                ));
+            }
             "--list" => me.list = true,
             // WHERE THE POINTER IS RESTING, as `column,line` in the buffer's
             // own cells.
@@ -410,11 +462,43 @@ fn main() -> Result<()> {
         .with_context(|| format!("the language `{}` does not exist", ask.language))?;
 
     let mut ask = ask;
+    // EVERYTHING CONVERTED WITH THE BUNDLE, put back where it was asked for —
+    // from the LAST position down, and the later of two at one position
+    // first, so every one lands where its flag stood.
+    let mut placed: Vec<(usize, usize, Input)> = Vec::new();
     if let Some((at, mind, zone)) = ask.mind.take() {
-        ask.inputs.insert(
+        placed.push((
             at,
+            0,
             Input::Mind(Box::new(mind_wire::mind_of(&mind, &zone, &texts))),
-        );
+        ));
+    }
+    for (n, (at, page)) in std::mem::take(&mut ask.screens).into_iter().enumerate() {
+        let over = match page {
+            Page::Came(
+                ronoctua_brain::wire::Say::Screen {
+                    module,
+                    generation,
+                    screen,
+                },
+                zone,
+            ) => mind_wire::screen_of(&module, generation, &screen, &zone, &texts),
+            // NEWER THAN ANY PAGE GIVEN BEFORE IT, as a refusal that follows
+            // a page is in the window.
+            Page::Refused(module, words) => mind_wire::refused_screen(
+                &module,
+                u64::MAX,
+                mind_wire::Answer::Refused(words)
+                    .sentence(&texts)
+                    .unwrap_or_default(),
+            ),
+            Page::Came(..) => continue,
+        };
+        placed.push((at, n + 1, Input::ModuleScreen(Box::new(over))));
+    }
+    placed.sort_by_key(|p| std::cmp::Reverse((p.0, p.1)));
+    for (at, _, input) in placed {
+        ask.inputs.insert(at, input);
     }
     let ask = ask;
 

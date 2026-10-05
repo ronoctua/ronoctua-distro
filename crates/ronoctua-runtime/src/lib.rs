@@ -2,8 +2,8 @@
 //!
 //! # The 5 ms budget is not a goal, it is a configuration
 //!
-//! Instantiating a component with 1.5 MB of data (the `glyphdb`) copies those
-//! 1.5 MB per instance — unless the memory image is mapped
+//! Instantiating a component with 1.5 MB of data (the old glyph browser's
+//! `glyphdb`) copies those 1.5 MB per instance — unless the memory image is mapped
 //! copy-on-write. `memory_init_cow` is the difference between meeting and not meeting
 //! section 5.2, and there is no later tuning that makes up for having it off.
 //!
@@ -78,8 +78,8 @@ impl Runtime {
     /// The same engine, with `memory_init_cow` TURNED OFF.
     ///
     /// It exists so the benchmark can measure the difference instead of repeating it
-    /// by ear. Do not use it in production: it is the configuration that blows section
-    /// 5.2's budget with the `glyphdb`'s data.
+    /// by ear. Do not use it in production: it is the configuration that blew section
+    /// 5.2's budget with the old glyph browser's embedded table.
     ///
     /// # Errors
     ///
@@ -475,6 +475,7 @@ fn val_of_input(e: &ronoctua_protocol::Input) -> wasmtime::component::Val {
         Input::Keyboards(b) => ("keyboards", Some(val_of_boards(b))),
         Input::Mind(m) => ("mind", Some(val_of_mind(m))),
         Input::Log(lines) => ("log", Some(val_of_log(lines))),
+        Input::ModuleScreen(screen) => ("module-screen", Some(val_of_screen(screen))),
         Input::Formatted(o) => (
             "formatted",
             Some(wasmtime::component::Val::Record(vec![
@@ -555,6 +556,11 @@ const fn engine_name(e: ronoctua_protocol::Engine) -> &'static str {
         E::Fetch => "fetch",
         E::Media => "media",
         E::Torrent => "torrent",
+        E::Atlas => "atlas",
+        E::Software => "software",
+        E::Scan => "scan",
+        E::Container => "container",
+        E::Belongings => "belongings",
     }
 }
 
@@ -589,6 +595,10 @@ const fn errand_name(e: ronoctua_protocol::Errand) -> &'static str {
         E::Audio => "audio",
         E::Subtitles => "subtitles",
         E::Torrent => "torrent",
+        E::ArchiveAdd => "archive-add",
+        E::ArchiveRemove => "archive-remove",
+        E::ArchiveTest => "archive-test",
+        E::ArchiveConvert => "archive-convert",
     }
 }
 
@@ -648,6 +658,7 @@ const fn outcome_kind_name(o: ronoctua_protocol::OutcomeKind) -> &'static str {
         O::Done => "done",
         O::Failed => "failed",
         O::Held => "held",
+        O::Noted => "noted",
     }
 }
 
@@ -689,6 +700,171 @@ fn run_val(r: &ronoctua_protocol::RunRecord) -> wasmtime::component::Val {
                     .collect(),
             ),
         ),
+        // THE KEYS THE HOST RESOLVED, so the component never builds one out
+        // of an id, and what a note says — the key and the sentence made of it.
+        ("task-key".into(), Val::String(r.task_key.clone())),
+        ("at-key".into(), Val::String(r.at_key.clone())),
+        ("why-key".into(), Val::String(r.why_key.clone())),
+        ("says".into(), Val::String(r.says.clone())),
+        ("says-text".into(), Val::String(r.says_text.clone())),
+    ])
+}
+
+/// One action of a module, as the WIT's `module-action`.
+///
+/// A FUNCTION for the reason `run_val` is one: a task's page and a notice's
+/// controls both carry the record, and two copies of four fields are two
+/// chances to trade the two strings.
+fn action_val(a: &ronoctua_protocol::ModuleAction) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::Record(vec![
+        ("id".into(), Val::String(a.id.clone())),
+        ("label-key".into(), Val::String(a.label_key.clone())),
+        ("row".into(), Val::Bool(a.row)),
+        ("asks-key".into(), Val::String(a.asks_key.clone())),
+    ])
+}
+
+/// The name a `notice-level` has in the WIT.
+const fn notice_level_name(l: ronoctua_protocol::NoticeLevel) -> &'static str {
+    use ronoctua_protocol::NoticeLevel as L;
+    match l {
+        L::Info => "info",
+        L::Warn => "warn",
+        L::Danger => "danger",
+        L::Alarm => "alarm",
+    }
+}
+
+/// One notice, as the WIT's `notice`.
+fn notice_val(n: &ronoctua_protocol::Notice) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::Record(vec![
+        ("module".into(), Val::String(n.module.clone())),
+        ("id".into(), Val::String(n.id.clone())),
+        ("says".into(), Val::String(n.says.clone())),
+        ("says-text".into(), Val::String(n.says_text.clone())),
+        (
+            "args".into(),
+            Val::List(
+                n.args
+                    .iter()
+                    .map(|a| {
+                        Val::Record(vec![
+                            ("name".into(), Val::String(a.name.clone())),
+                            ("text".into(), Val::String(a.text.clone())),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "level".into(),
+            Val::Enum(notice_level_name(n.level).to_owned()),
+        ),
+        ("since".into(), Val::U64(n.since)),
+        ("since-text".into(), Val::String(n.since_text.clone())),
+        (
+            "controls".into(),
+            Val::List(n.controls.iter().map(action_val).collect()),
+        ),
+        ("dismissable".into(), Val::Bool(n.dismissable)),
+        (
+            "snooze".into(),
+            Val::List(n.snooze.iter().copied().map(Val::U16).collect()),
+        ),
+    ])
+}
+
+/// One row of the folded activity log, as the WIT's `activity-row`.
+fn activity_row_val(a: &ronoctua_protocol::ActivityRow) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::Record(vec![
+        ("newest".into(), run_val(&a.newest)),
+        ("repeats".into(), Val::U32(a.repeats)),
+        ("last-text".into(), Val::String(a.last_text.clone())),
+        ("first-text".into(), Val::String(a.first_text.clone())),
+        (
+            "members".into(),
+            Val::List(a.members.iter().map(run_val).collect()),
+        ),
+    ])
+}
+
+/// The name a `brain-tone` has in the WIT.
+const fn brain_tone_name(t: ronoctua_protocol::BrainTone) -> &'static str {
+    use ronoctua_protocol::BrainTone as T;
+    match t {
+        T::Quiet => "quiet",
+        T::Watching => "watching",
+        T::Warning => "warning",
+        T::Danger => "danger",
+        T::Accent => "accent",
+    }
+}
+
+/// One cell of a module's row, as the WIT's `screen-cell` variant.
+fn cell_val(c: &ronoctua_protocol::ScreenCell) -> wasmtime::component::Val {
+    use ronoctua_protocol::ScreenCell as C;
+    use wasmtime::component::Val;
+    let (case, payload) = match c {
+        C::Empty => ("empty", None),
+        C::Key(k) => ("key", Some(Val::String(k.clone()))),
+        C::Data(d) => ("data", Some(Val::String(d.clone()))),
+        C::Moment(t) => (
+            "moment",
+            Some(Val::Record(vec![
+                ("at".into(), Val::U64(t.at)),
+                ("text".into(), Val::String(t.text.clone())),
+            ])),
+        ),
+        C::Count(n) => ("count", Some(Val::U64(*n))),
+        C::Bytes(m) => (
+            "bytes",
+            Some(Val::Record(vec![
+                ("bytes".into(), Val::U64(m.bytes)),
+                ("text".into(), Val::String(m.text.clone())),
+            ])),
+        ),
+    };
+    Val::Variant(case.to_owned(), payload.map(Box::new))
+}
+
+/// A module's page, as the WIT's `module-screen`.
+///
+/// The field order is the WIT's, for the reason `val_of_mind` writes down.
+fn val_of_screen(s: &ronoctua_protocol::ModuleScreen) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    let sections = s
+        .sections
+        .iter()
+        .map(|section| {
+            let rows = section
+                .rows
+                .iter()
+                .map(|r| {
+                    Val::Record(vec![
+                        ("id".into(), Val::String(r.id.clone())),
+                        ("label".into(), cell_val(&r.label)),
+                        ("value".into(), cell_val(&r.value)),
+                        ("note".into(), cell_val(&r.note)),
+                        ("tone".into(), Val::Enum(brain_tone_name(r.tone).to_owned())),
+                        ("act".into(), Val::String(r.act.clone())),
+                        ("also".into(), Val::String(r.also.clone())),
+                    ])
+                })
+                .collect();
+            Val::Record(vec![
+                ("heading".into(), Val::String(section.heading.clone())),
+                ("rows".into(), Val::List(rows)),
+            ])
+        })
+        .collect();
+    Val::Record(vec![
+        ("module".into(), Val::String(s.module.clone())),
+        ("generation".into(), Val::U64(s.generation)),
+        ("sections".into(), Val::List(sections)),
+        ("refused".into(), Val::String(s.refused.clone())),
     ])
 }
 
@@ -718,6 +894,7 @@ const fn task_kind_name(k: ronoctua_protocol::TaskKind) -> &'static str {
     match k {
         K::Routine => "routine",
         K::Once => "once",
+        K::Watch => "watch",
     }
 }
 
@@ -1131,6 +1308,9 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                         ("needs-root".into(), Val::Bool(s.needs_root)),
                         ("on".into(), Val::Bool(s.on)),
                         ("on-by-default".into(), Val::Bool(s.on_by_default)),
+                        // THE STEP'S OWN KEYS, as its module declared them.
+                        ("name-key".into(), Val::String(s.name_key.clone())),
+                        ("does-key".into(), Val::String(s.does_key.clone())),
                     ])
                 })
                 .collect();
@@ -1171,6 +1351,17 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                 ),
                 ("history".into(), Val::List(history)),
                 ("steps".into(), Val::List(steps)),
+                // THE MODULES' HALF OF THE ROW: whether it keeps a calendar,
+                // its keys, the generation of its page, and what it offers.
+                ("calendar".into(), Val::Bool(t.calendar)),
+                ("name-key".into(), Val::String(t.name_key.clone())),
+                ("does-key".into(), Val::String(t.does_key.clone())),
+                ("why-key".into(), Val::String(t.why_key.clone())),
+                ("screen-generation".into(), Val::U64(t.screen_generation)),
+                (
+                    "actions".into(),
+                    Val::List(t.actions.iter().map(action_val).collect()),
+                ),
             ])
         })
         .collect();
@@ -1221,24 +1412,21 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
             "cadence".into(),
             Val::List(m.cadence.iter().copied().map(Val::U16).collect()),
         ),
-        // EVERYTHING THE BRAIN HAS DONE, in the same record the per-task
-        // history uses — one shape, so the screen that draws one draws the
-        // other.
+        // EVERYTHING THE BRAIN HAS DONE, folded, in the same record the
+        // per-task history uses — one shape, so the screen that draws one
+        // draws the other.
         (
-            "activity".into(),
-            Val::List(m.activity.iter().map(run_val).collect()),
+            "activity-rows".into(),
+            Val::List(m.activity_rows.iter().map(activity_row_val).collect()),
         ),
         // HOW MANY THAT LIST KEEPS. It crosses for the reason `cadence` does:
         // it is the daemon's policy and the screen's title names it.
         ("remembers".into(), Val::U32(m.remembers)),
         ("recent".into(), Val::U32(m.recent)),
+        // EVERY NOTICE, in the order the strip ranks them.
         (
-            "notice".into(),
-            Val::Record(vec![
-                ("task".into(), Val::String(m.notice.task.clone())),
-                ("says".into(), Val::String(m.notice.says.clone())),
-                ("act".into(), Val::String(m.notice.act.clone())),
-            ]),
+            "notices".into(),
+            Val::List(m.notices.iter().map(notice_val).collect()),
         ),
     ])
 }
@@ -1284,12 +1472,19 @@ fn plan_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol::
     let Some(Val::Bool(whole_disk)) = get("whole-disk") else {
         return None;
     };
+    // AND WHETHER IT IS ENCRYPTED, refused when missing like the rest: a disk
+    // written in the clear by a buffer that asked for a passphrase is the
+    // quiet failure this lift exists to refuse.
+    let Some(Val::Bool(encrypt)) = get("encrypt") else {
+        return None;
+    };
 
     Some(ronoctua_protocol::Plan {
         device: device.clone(),
         recipe,
         label: label.clone(),
         whole_disk: *whole_disk,
+        encrypt: *encrypt,
     })
 }
 
@@ -1420,6 +1615,13 @@ fn demand_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protocol
         "abort-task" => R::AbortTask,
         "proceed" => R::Proceed,
         "postpone" => R::Postpone,
+        "watch-screen" => R::WatchScreen,
+        "act-row" => R::ActRow,
+        "act-row-also" => R::ActRowAlso,
+        "act-page" => R::ActPage,
+        "dismiss-notice" => R::DismissNotice,
+        "snooze-notice" => R::SnoozeNotice,
+        "act-notice" => R::ActNotice,
         otherwise => {
             tracing::warn!(request = otherwise, "an unknown request");
             return None;
@@ -1986,6 +2188,7 @@ mod tests {
                 ("recipe".into(), Val::Enum("universal".into())),
                 ("label".into(), Val::String("PENDRIVE".into())),
                 ("whole-disk".into(), Val::Bool(b)),
+                ("encrypt".into(), Val::Bool(!b)),
             ])
         };
 
@@ -1995,6 +2198,17 @@ mod tests {
         assert_eq!(got.recipe.filesystem(), "vfat");
         assert_eq!(got.label, "PENDRIVE");
         assert!(got.whole_disk);
+        assert!(!got.encrypt, "`encrypt` keeps its own value");
+        assert!(plan_from(Some(&whole(false))).expect("a full plan").encrypt);
+        // A PLAN THAT SAYS NOTHING ABOUT ENCRYPTION is refused, not written in
+        // the clear.
+        let silent = Val::Record(vec![
+            ("device".into(), Val::String("sda".into())),
+            ("recipe".into(), Val::Enum("universal".into())),
+            ("label".into(), Val::String("PENDRIVE".into())),
+            ("whole-disk".into(), Val::Bool(true)),
+        ]);
+        assert!(plan_from(Some(&silent)).is_none());
 
         // AND THE GAP IS A REFUSAL. `Plan` derives `Default`, so the tempting
         // shape here is `unwrap_or_default()` — which would turn a `whole-disk`
@@ -2016,6 +2230,7 @@ mod tests {
             ("recipe".into(), Val::Enum("xfs".into())),
             ("label".into(), Val::String(String::new())),
             ("whole-disk".into(), Val::Bool(false)),
+            ("encrypt".into(), Val::Bool(false)),
         ]);
         assert!(plan_from(Some(&unknown)).is_none());
     }
@@ -2271,8 +2486,42 @@ mod tests {
         let m = ronoctua_protocol::Mind {
             remembers: 100,
             recent: 10,
-            activity: Vec::new(),
-            notice: ronoctua_protocol::Notice::default(),
+            // ONE OF EACH of the modules' lists, so their shapes are walked
+            // below and not merely declared.
+            activity_rows: vec![ronoctua_protocol::ActivityRow {
+                newest: ronoctua_protocol::RunRecord {
+                    task: "update".to_owned(),
+                    outcome: ronoctua_protocol::OutcomeKind::Noted,
+                    says: "fixture-says".to_owned(),
+                    says_text: "It said so".to_owned(),
+                    ..ronoctua_protocol::RunRecord::default()
+                },
+                repeats: 2,
+                last_text: "2026-02-01 03:00".to_owned(),
+                first_text: "2026-01-31 03:00".to_owned(),
+                members: vec![ronoctua_protocol::RunRecord::default()],
+            }],
+            notices: vec![ronoctua_protocol::Notice {
+                module: "fixture".to_owned(),
+                id: "due".to_owned(),
+                says: "fixture-says-due".to_owned(),
+                says_text: "It is due".to_owned(),
+                args: vec![ronoctua_protocol::NoticeArg {
+                    name: "when".to_owned(),
+                    text: "03:00".to_owned(),
+                }],
+                level: ronoctua_protocol::NoticeLevel::Alarm,
+                since: 1_769_999_000,
+                since_text: "2026-02-01 02:43".to_owned(),
+                controls: vec![ronoctua_protocol::ModuleAction {
+                    id: "forget".to_owned(),
+                    label_key: "cmd-fixture-forget".to_owned(),
+                    row: false,
+                    asks_key: String::new(),
+                }],
+                dismissable: true,
+                snooze: vec![5, 10],
+            }],
             now: 1_770_000_000,
             pulse: ronoctua_protocol::Pulse {
                 at: 1_769_999_940,
@@ -2304,7 +2553,7 @@ mod tests {
                 // marshalled by one function, and pinning it here is what
                 // proves the two have not become two.
                 history: vec![ronoctua_protocol::RunRecord {
-                    task: "system-update".to_owned(),
+                    task: "made-up".to_owned(),
                     task_text: "Update the system".to_owned(),
                     began: 1_769_800_000,
                     ended: 1_769_800_100,
@@ -2314,9 +2563,10 @@ mod tests {
                     why: "ram".to_owned(),
                     trouble: String::new(),
                     steps: Vec::new(),
+                    ..ronoctua_protocol::RunRecord::default()
                 }],
                 last: ronoctua_protocol::RunRecord {
-                    task: "system-update".to_owned(),
+                    task: "made-up".to_owned(),
                     task_text: "Update the system".to_owned(),
                     began: 1_769_900_000,
                     ended: 1_769_900_600,
@@ -2331,6 +2581,9 @@ mod tests {
                         seconds: 600,
                         trouble: "error: attribute missing".to_owned(),
                     }],
+                    task_key: "brain-task-update".to_owned(),
+                    at_key: "fixture-step-build".to_owned(),
+                    ..ronoctua_protocol::RunRecord::default()
                 },
                 steps: vec![ronoctua_protocol::TaskStep {
                     id: "build".to_owned(),
@@ -2338,6 +2591,21 @@ mod tests {
                     needs_root: false,
                     on: true,
                     on_by_default: false,
+                    name_key: "fixture-step-build".to_owned(),
+                    does_key: "fixture-step-build-does".to_owned(),
+                }],
+                // A CALENDAR THAT IS NOT KEPT, so the one boolean the task's
+                // page reads to hide its cadence is pinned as sent.
+                calendar: false,
+                name_key: "brain-task-update".to_owned(),
+                does_key: "brain-task-update-does".to_owned(),
+                why_key: String::new(),
+                screen_generation: 4,
+                actions: vec![ronoctua_protocol::ModuleAction {
+                    id: "keep".to_owned(),
+                    label_key: "cmd-fixture-keep".to_owned(),
+                    row: true,
+                    asks_key: "ask-fixture-keep".to_owned(),
                 }],
             }],
             queue: vec!["update".to_owned()],
@@ -2370,16 +2638,59 @@ mod tests {
                 "announcement",
                 "gate",
                 "cadence",
-                "activity",
+                "activity-rows",
                 "remembers",
                 "recent",
-                "notice"
+                "notices"
             ]
         );
         assert_eq!(shape(field(&v, "pulse").expect("pulse")), ["at", "signs"]);
+        let wasmtime::component::Val::List(notices) = field(&v, "notices").expect("notices") else {
+            panic!("notices is not a list")
+        };
         assert_eq!(
-            shape(field(&v, "notice").expect("notice")),
-            ["task", "says", "act"]
+            shape(&notices[0]),
+            [
+                "module",
+                "id",
+                "says",
+                "says-text",
+                "args",
+                "level",
+                "since",
+                "since-text",
+                "controls",
+                "dismissable",
+                "snooze"
+            ]
+        );
+        assert_eq!(
+            field(&notices[0], "level"),
+            Some(&wasmtime::component::Val::Enum("alarm".to_owned()))
+        );
+        assert_eq!(
+            field(&notices[0], "dismissable"),
+            Some(&wasmtime::component::Val::Bool(true))
+        );
+        let wasmtime::component::Val::List(controls) =
+            field(&notices[0], "controls").expect("controls")
+        else {
+            panic!("controls is not a list")
+        };
+        let wanted_action = ["id", "label-key", "row", "asks-key"];
+        assert_eq!(shape(&controls[0]), wanted_action);
+        let wasmtime::component::Val::List(rows) =
+            field(&v, "activity-rows").expect("activity rows")
+        else {
+            panic!("activity-rows is not a list")
+        };
+        assert_eq!(
+            shape(&rows[0]),
+            ["newest", "repeats", "last-text", "first-text", "members"]
+        );
+        assert_eq!(
+            field(&rows[0], "repeats"),
+            Some(&wasmtime::component::Val::U32(2))
         );
         assert_eq!(
             shape(field(&v, "announcement").expect("announcement")),
@@ -2423,7 +2734,13 @@ mod tests {
                 "ran",
                 "last",
                 "history",
-                "steps"
+                "steps",
+                "calendar",
+                "name-key",
+                "does-key",
+                "why-key",
+                "screen-generation",
+                "actions"
             ]
         );
         let last = field(&tasks[0], "last").expect("last");
@@ -2438,7 +2755,15 @@ mod tests {
         };
         assert_eq!(
             shape(&steps[0]),
-            ["id", "command", "needs-root", "on", "on-by-default"]
+            [
+                "id",
+                "command",
+                "needs-root",
+                "on",
+                "on-by-default",
+                "name-key",
+                "does-key"
+            ]
         );
         // AND THE RECORD THE HISTORY AND THE ACTIVITY LOG SHARE. It is one
         // shape in two places on purpose — `run_val` is a function and not a
@@ -2454,6 +2779,11 @@ mod tests {
             "why",
             "trouble",
             "steps",
+            "task-key",
+            "at-key",
+            "why-key",
+            "says",
+            "says-text",
         ];
         assert_eq!(shape(field(&tasks[0], "last").expect("last")), wanted_run);
         let wasmtime::component::Val::List(history) = field(&tasks[0], "history").expect("history")
@@ -2461,6 +2791,35 @@ mod tests {
             panic!("history is not a list")
         };
         assert_eq!(shape(&history[0]), wanted_run);
+        assert_eq!(
+            shape(field(&rows[0], "newest").expect("newest")),
+            wanted_run
+        );
+        // THE KEYS ARE THE ONES SENT, and not blanks the host forgot to fill:
+        // `at-key` and `task-key` are two strings side by side.
+        assert_eq!(
+            field(last, "at-key"),
+            Some(&wasmtime::component::Val::String(
+                "fixture-step-build".to_owned()
+            ))
+        );
+        let wasmtime::component::Val::List(actions) = field(&tasks[0], "actions").expect("actions")
+        else {
+            panic!("actions is not a list")
+        };
+        assert_eq!(shape(&actions[0]), wanted_action);
+        assert_eq!(
+            field(&actions[0], "row"),
+            Some(&wasmtime::component::Val::Bool(true))
+        );
+        assert_eq!(
+            field(&tasks[0], "calendar"),
+            Some(&wasmtime::component::Val::Bool(false))
+        );
+        assert_eq!(
+            field(&tasks[0], "screen-generation"),
+            Some(&wasmtime::component::Val::U64(4))
+        );
 
         // AND THE BOOLEANS ARE READ BACK BY NAME, which is the half the shape
         // check cannot do: it would still pass with any two of them swapped,
@@ -2637,6 +2996,106 @@ mod tests {
             .requires(),
             Some(Capability::Brain)
         );
+    }
+
+    /// A MODULE'S PAGE has the WIT's shape, cell by cell: the variant's case
+    /// crosses by name, and a moment and a size carry their number and text.
+    #[test]
+    fn a_module_screen_has_the_wit_shape() {
+        use ronoctua_protocol::{
+            BrainTone, Measured, ModuleRow, ModuleScreen, ModuleSection, ScreenCell, Timed,
+        };
+        use wasmtime::component::Val;
+        let screen = ModuleScreen {
+            module: "fixture".to_owned(),
+            generation: 9,
+            sections: vec![ModuleSection {
+                heading: "fixture-heading".to_owned(),
+                rows: vec![ModuleRow {
+                    id: "one".to_owned(),
+                    label: ScreenCell::Key("fixture-row".to_owned()),
+                    value: ScreenCell::Bytes(Measured {
+                        bytes: 2048,
+                        text: "2 KB".to_owned(),
+                    }),
+                    note: ScreenCell::Moment(Timed {
+                        at: 5,
+                        text: "1970-01-01 00:00".to_owned(),
+                    }),
+                    tone: BrainTone::Watching,
+                    act: "forget".to_owned(),
+                    also: "keep".to_owned(),
+                }],
+            }],
+            refused: "fixture refusal".to_owned(),
+        };
+        let v = val_of_screen(&screen);
+        assert_eq!(shape(&v), ["module", "generation", "sections", "refused"]);
+        assert_eq!(
+            field(&v, "refused"),
+            Some(&Val::String("fixture refusal".to_owned()))
+        );
+        let Val::List(sections) = field(&v, "sections").expect("sections") else {
+            panic!("sections is not a list")
+        };
+        assert_eq!(shape(&sections[0]), ["heading", "rows"]);
+        let Val::List(rows) = field(&sections[0], "rows").expect("rows") else {
+            panic!("rows is not a list")
+        };
+        assert_eq!(
+            shape(&rows[0]),
+            ["id", "label", "value", "note", "tone", "act", "also"]
+        );
+        assert_eq!(
+            field(&rows[0], "tone"),
+            Some(&Val::Enum("watching".to_owned()))
+        );
+        let Some(Val::Variant(case, Some(payload))) = field(&rows[0], "value") else {
+            panic!("the value is not a variant with a payload")
+        };
+        assert_eq!(case, "bytes");
+        assert_eq!(shape(payload), ["bytes", "text"]);
+        assert_eq!(
+            field(&rows[0], "label"),
+            Some(&Val::Variant(
+                "key".to_owned(),
+                Some(Box::new(Val::String("fixture-row".to_owned())))
+            ))
+        );
+        // AND IT CROSSES AS ITS OWN INPUT, under the WIT's case name.
+        let Val::Variant(case, _) =
+            val_of_input(&ronoctua_protocol::Input::ModuleScreen(Box::new(screen)))
+        else {
+            panic!("the input is not a variant")
+        };
+        assert_eq!(case, "module-screen");
+    }
+
+    /// EVERY VERB OF THE MODULES comes back from the guest, behind the brain's
+    /// capability — a verb with no arm here is a key that does nothing, with
+    /// a `warn` in a log nobody reads.
+    #[test]
+    fn the_modules_verbs_come_back_whole() {
+        use ronoctua_protocol::{Capability, Request};
+        use wasmtime::component::Val;
+        for (name, what) in [
+            ("watch-screen", Request::WatchScreen),
+            ("act-row", Request::ActRow),
+            ("act-row-also", Request::ActRowAlso),
+            ("act-page", Request::ActPage),
+            ("dismiss-notice", Request::DismissNotice),
+            ("snooze-notice", Request::SnoozeNotice),
+            ("act-notice", Request::ActNotice),
+        ] {
+            let asked = Val::Record(vec![
+                ("what".into(), Val::Enum(name.to_owned())),
+                ("target".into(), Val::U64(3)),
+            ]);
+            let demand = demand_from(Some(&asked)).expect(name);
+            assert_eq!(demand.what, what, "{name}");
+            assert_eq!(demand.target, 3, "{name}");
+            assert_eq!(what.requires(), Capability::Brain, "{name}");
+        }
     }
 
     #[test]

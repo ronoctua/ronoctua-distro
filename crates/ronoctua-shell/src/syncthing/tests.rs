@@ -328,8 +328,6 @@ fn a_typed_setting_asks_to_be_typed_rather_than_turning() {
     // test refuses a command with no path at all, and an earlier draft
     // invented three that nothing else could run.
     assert_eq!(Ask::NewDevice.command(), "syncthing-add-device");
-    assert_eq!(Ask::NewFolder.command(), "syncthing-add-folder");
-    assert_eq!(Ask::Invited(0).command(), "syncthing-add-folder");
     assert_eq!(
         Ask::Setting("folder-path", None).command(),
         "syncthing-enter"
@@ -362,8 +360,8 @@ fn what_was_typed_becomes_an_order_for_the_question_that_was_asked() {
         }
         other => panic!("{other:?}"),
     }
-    // A NEW MACHINE, A NEW FOLDER AND AN OFFERED ONE — the three the list
-    // asks, each its own order.
+    // A NEW MACHINE, typed — and A NEW FOLDER typed with no question (the
+    // leader's `s s f` with an argument) — each its own order.
     v.asked(Ask::NewDevice);
     assert_eq!(
         v.answered("syncthing-add-device", " ABCDEFG-1234 ", Some(&snap)),
@@ -372,7 +370,6 @@ fn what_was_typed_becomes_an_order_for_the_question_that_was_asked() {
             name: String::new(),
         })
     );
-    v.asked(Ask::NewFolder);
     assert_eq!(
         v.answered("syncthing-add-folder", "/home/somebody/new", Some(&snap)),
         Some(Order::AddFolder {
@@ -381,19 +378,41 @@ fn what_was_typed_becomes_an_order_for_the_question_that_was_asked() {
             path: "/home/somebody/new".to_owned(),
         })
     );
-    v.asked(Ask::Invited(0));
+    // AN OFFERED ONE, chosen in the picker: where it goes.
+    let picked = |p: &str| crate::file_picker::Picked::Paths {
+        paths: vec![std::path::PathBuf::from(p)],
+        how: crate::file_picker::How::Normal,
+    };
     assert_eq!(
-        v.answered("syncthing-add-folder", "/home/somebody/shared", Some(&snap)),
-        Some(Order::AcceptFolder {
+        v.hosting(
+            crate::file_picker::Hosting::Picked(
+                Picking::Invited(0),
+                picked("/home/somebody/shared")
+            ),
+            Some(&snap),
+            &texts(),
+        ),
+        Errand::Order(Box::new(Order::AcceptFolder {
             folder: "shared".to_owned(),
             from: "THEM".to_owned(),
             label: "the shared one".to_owned(),
             path: "/home/somebody/shared".to_owned(),
-        })
+        }))
+    );
+    assert_eq!(
+        v.hosting(
+            crate::file_picker::Hosting::Picked(Picking::NewFolder, picked("/home/somebody/new")),
+            Some(&snap),
+            &texts(),
+        ),
+        Errand::Order(Box::new(Order::AddFolder {
+            id: String::new(),
+            label: String::new(),
+            path: "/home/somebody/new".to_owned(),
+        }))
     );
     // NOTHING TYPED IS A QUESTION ANSWERED WITH NOTHING, which is how a
     // person says never mind — not an order to write an empty path.
-    v.asked(Ask::NewFolder);
     assert!(
         v.answered("syncthing-add-folder", "   ", Some(&snap))
             .is_none()

@@ -70,6 +70,9 @@ let
     chmod 644 /etc/opt/chrome/native-messaging-hosts/${name}.json
   '';
 
+  # The counter's rule, as a program the sandbox can run too.
+  versioner = pkgs.callPackage ../extension-counter.nix { };
+
   build = pkgs.writeShellApplication {
     name = "ronoctua-browser-extension-setup";
     runtimeInputs = [
@@ -100,18 +103,9 @@ let
 
       # THE FOURTH NUMBER: the same build keeps its number, another build
       # takes the next one. `built` holds the store path last packed and the
-      # counter, and lives and dies with the key.
-      last=""
-      count=0
-      if [ -f "$built" ]; then
-        read -r last count < "$built" || true
-      fi
-      case "$count" in
-        ""|*[!0-9]*) count=0 ;;
-      esac
-      if [ "$last" != "$source" ]; then
-        count=$((count + 1))
-      fi
+      # counter, and lives and dies with the key — see `nix/extension-counter.nix`,
+      # which `extension-version-moves` runs in the sandbox.
+      count=$(${versioner}/bin/ronoctua-extension-counter next "$built" "$source")
       version="${ronoctua.extension.version}.$count"
 
       # The manifest with that version, in a copy: the store's is read-only,
@@ -135,8 +129,7 @@ let
         --id-file "$idf"
       id=$(cat "$idf")
       chmod 644 "$crx"
-      printf '%s %s\n' "$source" "$count" > "$built.tmp"
-      mv "$built.tmp" "$built"
+      ${versioner}/bin/ronoctua-extension-counter keep "$built" "$source" "$count"
 
       # The update manifest Chrome fetches to decide whether to install. A
       # `file://` URL, because there is no server here and there should not be:
@@ -191,6 +184,10 @@ in
       # written after the browser is already running takes effect on the next
       # one. Ordering it here makes the first login the first one that works.
       before = [ "display-manager.service" ];
+      # AFTER THE KEY'S DIRECTORY IS WHERE IT LIVES: under impermanence it is
+      # a bind from `/persist` (`persist.nix`), and a key written before the
+      # bind would be written underneath it — and made again at the next boot.
+      unitConfig.RequiresMountsFor = [ home ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;

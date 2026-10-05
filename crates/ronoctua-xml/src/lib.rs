@@ -63,7 +63,27 @@ pub fn parse<'input>(
     text: &'input str,
     options: roxmltree::ParsingOptions<'input>,
 ) -> Result<roxmltree::Document<'input>, Refusal> {
-    if !shallow(text, DEPTH_MOST) {
+    parse_within(text, options, DEPTH_MOST)
+}
+
+/// `text` parsed with `options`, once it is known to nest no deeper than
+/// `most` — for a format that nests deeper than [`DEPTH_MOST`] by nature.
+///
+/// A COLLADA scene is the case: its node tree IS the nesting, and a rig's
+/// skeleton passes twenty levels. The ceiling is the caller's, MEASURED
+/// against the thread that parses (`roxmltree` recurses once per level), and
+/// written beside the reader with what it was measured on.
+///
+/// # Errors
+///
+/// [`Refusal::TooDeep`] before parsing; [`Refusal::Malformed`] from the
+/// parser.
+pub fn parse_within<'input>(
+    text: &'input str,
+    options: roxmltree::ParsingOptions<'input>,
+    most: usize,
+) -> Result<roxmltree::Document<'input>, Refusal> {
+    if !shallow(text, most) {
         return Err(Refusal::TooDeep);
     }
     roxmltree::Document::parse_with_options(text, options).map_err(|_| Refusal::Malformed)
@@ -194,6 +214,20 @@ mod tests {
         text.push('x');
         text.push_str(&"</a>".repeat(depth));
         text
+    }
+
+    #[test]
+    fn a_ceiling_of_its_own_is_the_one_asked() {
+        let deep = nested(DEPTH_MOST + 10);
+        assert_eq!(
+            parse(&deep, roxmltree::ParsingOptions::default()).err(),
+            Some(Refusal::TooDeep)
+        );
+        assert!(parse_within(&deep, roxmltree::ParsingOptions::default(), DEPTH_MOST + 10).is_ok());
+        assert_eq!(
+            parse_within(&deep, roxmltree::ParsingOptions::default(), DEPTH_MOST + 9).err(),
+            Some(Refusal::TooDeep)
+        );
     }
 
     #[test]

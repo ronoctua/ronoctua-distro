@@ -161,6 +161,9 @@ pub struct Track {
     pub cues: Vec<Cue>,
     /// Its typesetting, kept in place (ASS only).
     pub signs: Vec<Sign>,
+    /// The languages a lane can choose among, when the file carries several
+    /// and shows one (a SAMI's classes, [`sami::languages`]); none otherwise.
+    pub languages: Vec<String>,
 }
 
 /// What a subtitle file turned out to be.
@@ -187,6 +190,23 @@ pub fn open(
     extension: Option<&str>,
     rate: Option<FrameRate>,
 ) -> Result<Opened, Refusal> {
+    open_in(bytes, extension, rate, None)
+}
+
+/// [`open`], read in the language a lane keeps (`tongue`, its
+/// [`Lane::lang`](crate::own::Lane)) when the file carries several and shows
+/// one — a SAMI ([`sami::chosen`]); every other format has one language, and
+/// ignores it.
+///
+/// # Errors
+///
+/// A [`Refusal`] with the reason.
+pub fn open_in(
+    bytes: &[u8],
+    extension: Option<&str>,
+    rate: Option<FrameRate>,
+    tongue: Option<&str>,
+) -> Result<Opened, Refusal> {
     if bytes.len() > BYTES_MOST {
         return Err(Refusal::TooLarge {
             most_bytes: BYTES_MOST,
@@ -203,7 +223,7 @@ pub fn open(
     match (kind, decoded) {
         (Kind::Ours(Format::EbuStl), _) => read(Format::EbuStl, bytes, rate).map(Opened::Ours),
         (Kind::Ours(format), Some(decoded)) => {
-            read_decoded(format, decoded, rate).map(Opened::Ours)
+            read_decoded(format, decoded, rate, tongue).map(Opened::Ours)
         }
         (Kind::Ours(format), None) => read(format, bytes, rate).map(Opened::Ours),
         (Kind::Ffmpeg(tail), _) => Ok(Opened::Ffmpeg(tail)),
@@ -228,21 +248,33 @@ pub fn read(format: Format, bytes: &[u8], rate: Option<FrameRate>) -> Result<Tra
         let title = Some(header.title).filter(|t| !t.is_empty());
         return finish(format, None, title, cues, Vec::new());
     }
-    read_decoded(format, charset::decode(bytes), rate)
+    read_decoded(format, charset::decode(bytes), rate, None)
 }
 
 fn read_decoded(
     format: Format,
     decoded: charset::Decoded,
     rate: Option<FrameRate>,
+    tongue: Option<&str>,
 ) -> Result<Track, Refusal> {
     let text = decoded.text.as_str();
     let none = Vec::new;
+    if format == Format::Sami {
+        let mut track = finish(
+            format,
+            Some(decoded.charset),
+            None,
+            sami::read_in(text, tongue),
+            Vec::new(),
+        )?;
+        track.languages = sami::languages(text);
+        return Ok(track);
+    }
     let (cues, signs) = match format {
         Format::SubRip => (srt::read(text), none()),
         Format::WebVtt => (vtt::read(text), none()),
         Format::Ass => ass::read(text),
-        Format::Sami => (sami::read(text), none()),
+        Format::Sami => (sami::read_in(text, tongue), none()),
         Format::MicroDvd => (microdvd::read(text, rate), none()),
         Format::Mpl2 => (mpl2::read(text), none()),
         Format::SubViewer => (subviewer::read(text), none()),
@@ -278,6 +310,7 @@ fn finish(
         title,
         cues,
         signs,
+        languages: Vec::new(),
     })
 }
 
@@ -385,7 +418,29 @@ mod tests {
 
     #[test]
     fn every_reader_is_reached_from_open() {
-        let fixtures: [(&[u8], &str, Format); 12] = [
+        // EBU STL is binary: a GSI block (code page 850, 25 frames, the
+        // programme starting at 00:00:00:00) and one TTI block shown from
+        // 00:00:01:00 to 00:00:02:00.
+        let mut stl = vec![b' '; 1024];
+        stl[..3].copy_from_slice(b"850");
+        stl[3..11].copy_from_slice(b"STL25.01");
+        stl[11] = b'1';
+        stl[12..14].copy_from_slice(b"00");
+        stl[251..253].copy_from_slice(b"23");
+        stl[256..264].copy_from_slice(b"00000000");
+        let mut tti = vec![0x8F; 128];
+        tti[..16].copy_from_slice(&[0, 1, 0, 0xFF, 0, 0, 0, 1, 0, 0, 0, 2, 0, 20, 2, 0]);
+        tti[16] = b'x';
+        stl.extend(tti);
+        // EVERY FORMAT HAS ONE (`subtitle-formats-are-total` counts them
+        // against `Format`'s variants).
+        let fixtures: [(&[u8], &str, Format); 14] = [
+            (&stl, "stl", Format::EbuStl),
+            (
+                b"<?xml version=\"1.0\"?><transcript><text start=\"1\" dur=\"1\">x</text></transcript>",
+                "srv1",
+                Format::YouTubeXml,
+            ),
             (b"1\n00:00:01,000 --> 00:00:02,000\nx\n", "srt", Format::SubRip),
             (b"WEBVTT\n\n00:01.000 --> 00:02.000\nx\n", "vtt", Format::WebVtt),
             (

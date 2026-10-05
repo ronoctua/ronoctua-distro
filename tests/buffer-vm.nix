@@ -20,7 +20,6 @@
   ronoctua-shell,
   fonts,
   bufferExample,
-  bufferGlyphs,
   bufferFormat,
 }:
 
@@ -161,44 +160,50 @@ pkgs.testers.runNixOSTest {
         # `Effect::Copy` reached the host and became a `tracing::info!`. The
         # glyph browser's nine copy formats NEVER put anything anywhere, and the
         # feature looked finished — the worst failure mode this project knows.
+        # The browser is the native icons app now (`crate::icons`), and the
+        # promise is the same: a copy on its page reaches the clipboard.
         #
         # The criterion is the CLIPBOARD, and not the call: a test that asserted
         # "the wl-copy was invoked" would repeat the same defect one level up.
         machine.succeed("systemctl stop buffer")
         machine.succeed(
-            "systemd-run --unit=glyphs ${xvfb.env} "
+            "systemd-run --unit=icons ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=LANG=pt_BR.UTF-8 "
             "--setenv=RUST_LOG=ronoctua_shell=debug "
-            "${ronoctua-shell}/bin/ronoctua-shell buffer "
-            "${bufferGlyphs}/lib/ronoctua_buffer_glyphs.wasm"
+            "${ronoctua-shell}/bin/ronoctua-shell icons nerd-fonts"
         )
         machine.wait_until_succeeds(
-            "journalctl -u glyphs --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
+            "journalctl -u icons --no-pager | grep 'icons: the tables arrived' > /dev/null",
             timeout=90,
         )
 
         # With no WM on Xvfb nobody has input focus, and the key would be lost.
         focus_compositor()
         machine.sleep(1)
-        # The FIRST Enter opens the sheet; the SECOND copies the selected option,
-        # which is the first of the list — the glyph's NAME.
-        for _ in range(2):
-            machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
+        # `RET` opens the page of the glyph under the cursor, whose cursor
+        # starts on its size; `↓` is the first copy format — the glyph's NAME —
+        # and `RET` there copies it.
+        for key in ("Return", "Down", "Return"):
+            machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {key}")
             machine.sleep(2)
+
+        def pasted_now():
+            return machine.succeed(
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${pkgs.wl-clipboard}/bin/wl-paste --no-newline 2>/dev/null || true"
+            ).strip()
 
         try:
             machine.wait_until_succeeds(
-                "journalctl -u glyphs --no-pager | grep 'copied' > /dev/null", timeout=30
+                "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+                "${pkgs.wl-clipboard}/bin/wl-paste --no-newline | grep -q -- '-'",
+                timeout=30,
             )
         except Exception:
-            print(machine.execute("journalctl -u glyphs --no-pager | tail -40")[1])
+            print(machine.execute("journalctl -u icons --no-pager | tail -40")[1])
             raise
-
-        pasted = machine.succeed(
-            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
-            "${pkgs.wl-clipboard}/bin/wl-paste --no-newline"
-        ).strip()
+        pasted = pasted_now()
         print(f"clipboard: {pasted!r}")
         # A Nerd Fonts glyph NAME: `<set>-<thing>`. Which one is not nailed down —
         # the order of the list with no search depends on the database, and nailing
@@ -207,25 +212,20 @@ pkgs.testers.runNixOSTest {
             f"what was pasted does not look like a glyph name: {pasted!r}"
         )
 
-    with subtest("Ctrl+V reads the clipboard and hands it to the buffer"):
-        # The other side of the same thing. `Ctrl+V` fell into the host's Ctrl
-        # guard and did NOTHING — and there was no way of telling that from
-        # "there was nothing copied", which was exactly the owner's doubt.
-        #
-        # What is asserted here is the HOST's end: it really read the clipboard
-        # and delivered the text to the component. That the text goes into the
-        # search is proved by `browser-filters`, which drives the component
-        # directly — together, the two close the path.
+    with subtest("Ctrl+V reads the clipboard into the icons app's search"):
+        # The other side of the same thing. `Ctrl+V` fell into a Ctrl guard and
+        # did NOTHING once — and there was no way of telling that from "there
+        # was nothing copied". What is asserted is the DOOR's end: it really
+        # read the clipboard and handed the text to the view's search
+        # (`icons::View::pasted`, which its unit tests follow from there).
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
         machine.sleep(1)
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+v")
         machine.sleep(2)
 
-        journal = machine.succeed("journalctl -u glyphs --no-pager")
-        target_path = f'input=Paste("{pasted}")'
-        assert target_path in journal, (
-            f"`Ctrl+V` did not hand the text to the buffer; expected {target_path!r} in the log:\n"
-            + journal[-2000:]
+        journal = machine.succeed("journalctl -u icons --no-pager")
+        assert "icons: the clipboard went into the search" in journal and pasted in journal, (
+            f"`Ctrl+V` did not hand {pasted!r} to the search; the log:\n" + journal[-2000:]
         )
         print(f"Ctrl+V handed over: {pasted!r}")
 
@@ -242,7 +242,7 @@ pkgs.testers.runNixOSTest {
         # the host forgot to read comes back as an empty list, the screen says
         # "no disk here to format", and nothing anywhere reports an error. That
         # is the shape of the defect that reached the owner's screen last time.
-        machine.succeed("systemctl stop glyphs || true")
+        machine.succeed("systemctl stop icons || true")
         machine.succeed("systemctl stop buffer || true")
         machine.sleep(1)
 

@@ -26,11 +26,12 @@
 #
 # WHAT STOPPING IT COSTS, PLAINLY
 # -------------------------------
-# A copy interrupted by `systemctl --user stop` leaves the half-written file in
-# the destination. Cancelling from the panel does not — that path unwinds and
-# removes what it wrote — but a kill is a kill, and the process has no handler
-# for it. `TimeoutStopSec` is short on purpose: a queue that takes ninety
-# seconds to die would hold up every logout.
+# `systemctl --user stop` is the panel's cancel for every job at once: the
+# queue's `SIGTERM` handler stops them all and waits for the copies to unwind
+# — removing what they wrote — before it exits (`Shared::wind_down`), within
+# four seconds. `TimeoutStopSec` is five, and short on purpose: a queue that
+# takes ninety seconds to die would hold up every logout, and only a copy that
+# does not unwind in four seconds is left to the `SIGKILL` and its piece.
 {
   config,
   lib,
@@ -131,8 +132,14 @@ in
     # challenge and therefore needs a JavaScript runtime, but `nix why-depends`
     # says Deno is ALREADY in the closure because nixpkgs' own yt-dlp depends on
     # it. So the runtime is paid for either way, and this option adds only the
-    # minter. It is still off by default: it is a subprocess per token on a
-    # machine that may never download a video.
+    # minter.
+    #
+    # ON WHERE THE MEDIA PROFILE IS (2026-09-30): a machine that plays and
+    # downloads video is one YouTube refuses without the attestation — the
+    # player's YouTube did not play — and the minter costs only while a token
+    # is minted. Off where there is no yt-dlp to use it (`ronoctua.media`), and
+    # where the flake did not hand the minter to the modules (a test's
+    # stripped-down machine), which cannot mint.
     #
     # `on-demand` IS THE ONLY MODE, and the name is the promise: the minter is a
     # SCRIPT that runs once per token and exits. Upstream also ships an HTTP
@@ -144,15 +151,18 @@ in
         "none"
         "on-demand"
       ];
-      default = "none";
+      default = if config.ronoctua.media.enable && ronoctua ? potProvider then "on-demand" else "none";
+      defaultText = lib.literalExpression ''if config.ronoctua.media.enable then "on-demand" else "none"'';
       description = ''
-        Whether this installation generates a PO token for yt-dlp.
+        Whether this installation generates a PO token for yt-dlp — for the
+        queue's downloads and the player's YouTube alike.
 
         `on-demand` runs the generator on request and it exits; nothing stays standing. The
         tokens live in a cache under `XDG_CACHE_HOME`, so the cost of a few
         seconds is paid once every few hours, and not per download.
 
-        It costs Deno and the generator in the closure — hence the default of `none`.
+        It costs the generator in the closure (Deno is there already, through
+        yt-dlp) — hence on only where the media profile is.
       '';
     };
 
@@ -243,14 +253,15 @@ in
         // lib.optionalAttrs (cfg.cookies == "file") {
           RONOCTUA_COOKIES_FILE = cfg.cookiesFile;
         }
-        # BOTH OR NEITHER: the minter is TypeScript and needs the runtime that
-        # reads it. The Rust refuses half a pair rather than producing a plugin
-        # that finds no runtime and says so once per download.
-        // lib.optionalAttrs (cfg.poToken == "on-demand") {
-          RONOCTUA_POT_HOME = "${ronoctua.potProvider}/server";
-          # THE PATH AND NOT THE NAME — a unit's `PATH` is minimal.
-          RONOCTUA_DENO = lib.getExe pkgs.deno;
-        };
+        # ALL THREE OR NONE: the minter is TypeScript and needs the runtime
+        # that reads it, and yt-dlp asks it for a token only through its plugin,
+        # which it loads from the folder it is told and nowhere else — without
+        # `RONOCTUA_POT_PLUGINS` not one token was ever minted. The Rust refuses
+        # a part of the three (`ronoctua_ytdlp::pot_flags_of`). The three are
+        # the minter's own (`potProvider.environment`, `nix/pot-provider.nix`):
+        # where its plugin is is a fact of its layout, and a unit that spelled
+        # it once pointed one level too deep.
+        // lib.optionalAttrs (cfg.poToken == "on-demand") ronoctua.potProvider.environment;
       serviceConfig = {
         ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";
         Restart = "on-failure";
@@ -267,8 +278,8 @@ in
         # gone and the jobs are orphans. Stopping the unit is the honest answer:
         # it comes back with an empty list instead of a wrong one.
         OOMPolicy = "stop";
-        # See the header: a kill leaves a partial file, and a long timeout only
-        # delays a logout without saving it.
+        # See the header: the stop unwinds in four seconds, and a long timeout
+        # only delays a logout.
         TimeoutStopSec = 5;
       };
     };

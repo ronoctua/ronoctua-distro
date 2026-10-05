@@ -265,6 +265,32 @@ pub fn rule(width_px: f32, y_px: f32) -> ronoctua_render::quad::Quad {
     }
 }
 
+/// The caret of a text being edited (`crate::text_area`), as each door draws
+/// it: a bar TWICE A RULE'S WEIGHT (a rule's own weight is lost beside a
+/// letter's stem), the line's height, at the left of cell `cell` of a surface
+/// whose cells are `cell_px` wide from `left` — in the cursor's colour.
+///
+/// HERE with the rules, because it is one of the rectangles a door must not
+/// assemble by hand (`separators-come-from-chrome`): the window and the footer
+/// paint the same one.
+#[must_use]
+pub fn caret(
+    left: f32,
+    top: f32,
+    cell_px: f32,
+    line: f32,
+    cell: u16,
+) -> ronoctua_render::quad::Quad {
+    let thickness = f32::from(tokens::space::RULE_THICKNESS).max(1.0) * 2.0;
+    ronoctua_render::quad::Quad {
+        x: left + f32::from(cell) * cell_px,
+        y: top,
+        width: thickness,
+        height: line,
+        color: tokens::color::TEXT_HERE_ACTS,
+    }
+}
+
 /// A vertical separator between two columns, from a top edge to the surface's
 /// BOTTOM.
 ///
@@ -313,6 +339,34 @@ pub fn divider_lit(x_px: f32, from_px: f32, bottom_px: f32) -> ronoctua_render::
         color: tokens::color::STATE_ACCENT,
         ..divider(x_px, from_px, bottom_px)
     }
+}
+
+/// A BOX'S EDGE, as four rules on a RAISED ground — what the icons app draws
+/// around the em box of a glyph, or the 24 viewBox of a Lucide figure, on
+/// its stage (`crate::icons_page`).
+///
+/// Here with the rules because it is four of them (`separators-come-from-
+/// chrome`), and in `rule.raised` because the stage is `surface.container`:
+/// the default rule on that ground is ΔE 0,047, a line one squints at — the
+/// Pen's own answer for a raised ground (`a-rule-follows-its-ground`). The
+/// rules lie INSIDE the box, so its outer edge is the box's.
+#[must_use]
+pub fn outline(rect: Rect) -> [ronoctua_render::quad::Quad; 4] {
+    let (x, y, w, h) = rect;
+    let t = f32::from(tokens::space::RULE_THICKNESS).min(w).min(h);
+    let side = |x, y, width, height| ronoctua_render::quad::Quad {
+        x,
+        y,
+        width,
+        height,
+        color: tokens::color::RULE_RAISED,
+    };
+    [
+        side(x, y, w, t),
+        side(x, y + h - t, w, t),
+        side(x, y, t, h),
+        side(x + w - t, y, t, h),
+    ]
 }
 
 /// THE COLUMN HAS THE KEYBOARD: a line across its top, edge to edge
@@ -2475,6 +2529,259 @@ pub fn hover_bands(
     out
 }
 
+/// Which of `cells` — each `(first column, columns)` of a row — column
+/// `column` falls in ([`Across::cell`] asks it with the pointer's column).
+#[must_use]
+pub fn cell_under(cells: impl IntoIterator<Item = (u16, u16)>, column: u16) -> Option<usize> {
+    cells
+        .into_iter()
+        .position(|(from, width)| in_cell(column, from, width))
+}
+
+/// Whether `column` falls in the cell that starts at column `from` and is
+/// `width` columns wide — THE containment test of a grid's cell.
+///
+/// Every grid row of every door finds the cell under the pointer with it,
+/// and its paint and its click with the same one: eight doors each wrote
+/// `column >= c.from && column < c.from + c.width` of their own, twice per
+/// door (once to light, once to take), and one copy drifting from the other
+/// is a pointer that lights one video while the click takes the next
+/// (`a-grid-cell-is-lit-alone`).
+#[must_use]
+pub const fn in_cell(column: u16, from: u16, width: u16) -> bool {
+    column >= from && column < from.saturating_add(width)
+}
+
+/// A GRID OF PICTURES on a surface — the icons' grid, the filter panel's
+/// choices: the items a [`ronoctua_design::Grid`] places, from the
+/// surface's column `left`, `air` cells apart.
+///
+/// Each item's box is the whole step: its drawing and HALF the air on each
+/// side, so two boxes meet and every pixel between two drawings belongs to
+/// exactly one of them. [`Shelves::cell_box`] is what the hover and the
+/// cursor paint; [`Shelves::index_at`] is what a click takes, and it is
+/// [`ronoctua_design::Grid::index_at`] — the grid's own arithmetic, the other
+/// direction of [`ronoctua_design::Grid::at`] — over the same half-air
+/// shift. The icons app found its cell by testing every box in turn, a
+/// second calculation beside the one that drew them
+/// (`a-grid-cell-is-lit-alone`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shelves {
+    /// Where the items go.
+    pub grid: ronoctua_design::Grid,
+    /// The surface's column the first item's drawing starts at.
+    pub left: u16,
+    /// The cells of air between two drawings.
+    pub air: u16,
+}
+
+impl Shelves {
+    /// The pixels of a cell and of a line, at the text's size.
+    fn unit() -> (f32, f32) {
+        (
+            cell_width(),
+            tokens::metrics::line_height(tokens::text::size()),
+        )
+    }
+
+    /// The box of the `k`th item shown, in pixels — `None` past the page.
+    #[must_use]
+    pub fn cell_box(self, k: usize) -> Option<Rect> {
+        let (line, column) = self.grid.at(k)?;
+        let (cell, tall) = Self::unit();
+        let half = f32::from(self.air) * cell / 2.0;
+        Some((
+            f32::from(self.left.saturating_add(column)) * cell - half,
+            f32::from(line) * tall,
+            f32::from(self.grid.step) * cell,
+            f32::from(self.grid.down) * tall,
+        ))
+    }
+
+    /// Which item of the page `(x, y)` is on — `None` off the grid. An index
+    /// past the last item SHOWN is the caller's to refuse: the grid answers
+    /// for its every place, filled or not.
+    #[must_use]
+    pub fn index_at(self, x: f32, y: f32) -> Option<usize> {
+        let (cell, tall) = Self::unit();
+        if cell <= 0.0 || tall <= 0.0 || y < 0.0 {
+            return None;
+        }
+        let half = f32::from(self.air) * cell / 2.0;
+        let from_left = x + half;
+        if from_left < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (column, line) = (
+            u16::try_from((from_left / cell).floor() as u32).ok()?,
+            u16::try_from((y / tall).floor() as u32).ok()?,
+        );
+        self.grid.index_at(line, column.checked_sub(self.left)?)
+    }
+}
+
+/// The column of a row under pixel `x`: the cell of the surface the pixel is
+/// in, less the `lead` the door draws the row after — `None` left of the
+/// row's first cell.
+#[must_use]
+pub fn column_at_px(x: f32, lead: u16, cell_px: f32) -> Option<u16> {
+    if cell_px <= 0.0 || x < 0.0 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cell = (x / cell_px).floor() as u32;
+    u16::try_from(cell).ok()?.checked_sub(lead)
+}
+
+/// A grid cell's band, `(x, width)` in pixels: from its first column to the
+/// first of the next, after the door's `lead` — edges and not a gap, so two
+/// cells side by side share one edge and a pixel belongs to exactly one.
+#[must_use]
+pub fn cell_band_px(from: u16, width: u16, lead: u16, cell_px: f32) -> (f32, f32) {
+    (
+        f32::from(lead.saturating_add(from)) * cell_px,
+        f32::from(width) * cell_px,
+    )
+}
+
+/// Where a pointer is ACROSS a door's rows: the rows are drawn `lead` cells
+/// from the surface's left edge, each cell `cell_px` wide.
+///
+/// # One answer for the paint and the hit
+///
+/// A door asks ONE function of its own for this (the player's window:
+/// `across`; the footer: `player_across`), and both the band it paints
+/// under the pointer ([`hover_cells`], [`cell_selection`]) and the cell its
+/// click takes ([`Across::cell`], through `player::View::clicked_px`) read
+/// what it answers. The footer's click once read the column one way and its
+/// hover another — the shape of defect `a-grid-cell-is-lit-alone` is there
+/// for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Across {
+    /// Cells before a row's first.
+    pub lead: u16,
+    /// How wide a cell is, in pixels.
+    pub cell_px: f32,
+}
+
+impl Across {
+    /// The column of a row under pixel `x` — `None` left of the row.
+    #[must_use]
+    pub fn column(self, x: f32) -> Option<u16> {
+        column_at_px(x, self.lead, self.cell_px)
+    }
+
+    /// Which of a grid row's `cells` pixel `x` is on — `None` left of the
+    /// row, or past its last cell.
+    #[must_use]
+    pub fn cell(self, cells: &[(u16, u16)], x: f32) -> Option<usize> {
+        cell_under(cells.iter().copied(), self.column(x)?)
+    }
+
+    /// The band of that cell, `(x, width)` in pixels.
+    #[must_use]
+    pub fn band(self, cells: &[(u16, u16)], x: f32) -> Option<(f32, f32)> {
+        let (from, width) = cells[self.cell(cells, x)?];
+        Some(self.band_of(from, width))
+    }
+
+    /// The band of the cell from column `from`, `width` columns wide.
+    #[must_use]
+    pub fn band_of(self, from: u16, width: u16) -> (f32, f32) {
+        cell_band_px(from, width, self.lead, self.cell_px)
+    }
+}
+
+/// [`hover_bands`] for a list with GRID rows: a row whose `cells_of` answers
+/// cells lights the ONE cell under its pointer's `x` — never the row, and
+/// nothing between cells, where a click takes nothing either — and a row
+/// with none keeps the whole band.
+///
+/// # Why a grid cell is lit alone
+///
+/// A row of a grid holds three answers, and a band across it said the
+/// pointer was on all three: the player's files lit the whole line while the
+/// click took one name of it. The cell is found by [`Across::band`], and the
+/// click by [`Across::cell`] with the same `across` (`a-grid-cell-is-lit-alone`).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn hover_cells(
+    lit: impl Iterator<Item = (tokens::Color, Option<usize>, Option<f32>)>,
+    cells_of: impl Fn(usize) -> Vec<(u16, u16)>,
+    offset: usize,
+    room: usize,
+    total: usize,
+    first_line: u16,
+    width: f32,
+    across: Across,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let line_px = tokens::metrics::line_height(tokens::text::size());
+    let mut seen: Vec<(usize, Option<(u32, u32)>)> = Vec::new();
+    let mut out = Vec::new();
+    for (color, row, x) in lit {
+        let Some(row) = row else { continue };
+        if row < offset || row >= offset + room || row >= total {
+            continue;
+        }
+        let cells = cells_of(row);
+        let band = if cells.is_empty() {
+            Some((0.0, width))
+        } else {
+            x.and_then(|x| across.band(&cells, x))
+                .map(|(at, wide)| (at, wide.min((width - at).max(0.0))))
+        };
+        let Some((at, wide)) = band else { continue };
+        let key = (
+            row,
+            (!cells.is_empty()).then(|| (at.to_bits(), wide.to_bits())),
+        );
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let line = usize::from(first_line) + (row - offset);
+        #[allow(clippy::cast_precision_loss)]
+        out.push(ronoctua_render::quad::Quad {
+            x: at,
+            y: line as f32 * line_px,
+            width: wide,
+            height: line_px,
+            color,
+        });
+    }
+    out
+}
+
+/// The band a GRID'S CURSOR cell wears — `surface.selection`, the file
+/// manager's cursor, on the one cell the cursor is on (`at`: its row and its
+/// `(first column, columns)`) — as a list scrolled to `offset`, `room` rows
+/// from `first_line`, draws it. `None` off screen, or with no cursor on a
+/// grid.
+#[must_use]
+pub fn cell_selection(
+    at: Option<(usize, (u16, u16))>,
+    offset: usize,
+    room: usize,
+    first_line: u16,
+    across: Across,
+) -> Option<ronoctua_render::quad::Quad> {
+    let (row, (from, width)) = at?;
+    if row < offset || row >= offset + room {
+        return None;
+    }
+    let line_px = tokens::metrics::line_height(tokens::text::size());
+    let (x, wide) = across.band_of(from, width);
+    #[allow(clippy::cast_precision_loss)]
+    Some(ronoctua_render::quad::Quad {
+        x,
+        y: (usize::from(first_line) + row - offset) as f32 * line_px,
+        width: wide,
+        height: line_px,
+        color: tokens::color::SURFACE_SELECTION,
+    })
+}
+
 /// That list's bar's TRACK — the whole column it is grabbed in — and `None`
 /// when the list fits. What `crate::bars` records, so the column is the bar's.
 #[must_use]
@@ -3390,10 +3697,18 @@ pub fn section_column(left: u16, room: u16, pairs: &[(u16, u16, u16)]) -> u16 {
 
 /// The lines of one row of a section laid out whole ([`section_column`]), in
 /// the colours of its [`Kind`]: the label from `left`, WRAPPED in the room
-/// before `column` and never cut, and the value at `column`, cut only where
-/// it runs past `end`. The first line carries the value; each line after it
-/// is the rest of the label, in the label's tone. An empty value gives the
-/// label the whole row, wrapped the same way.
+/// before `column`, and the value from `column`, WRAPPED in the room up to
+/// `end` — neither is ever cut. The first line carries the start of both;
+/// each line after it carries what is left of either, each in its own tone
+/// and its own column. An empty value gives the label the whole row, wrapped
+/// the same way.
+///
+/// THE VALUE WRAPS TOO. [`section_column`] moves the column left so the
+/// section's widest value fits, but never before [`value_column`]: in a
+/// narrow door (the column's small size) a file's name or a directory's
+/// sentence is still longer than the room after the floor, and cut there it
+/// read `film.mkv · sub…` — which lane, the page no longer said
+/// (`player-pages-fit-every-size` photographs every page in every door).
 #[must_use]
 pub fn aligned_pair(
     left: u16,
@@ -3431,11 +3746,20 @@ pub fn aligned_pair(
             }
         })
         .collect();
-    let value = ronoctua_render::layout::elide_end(value, end.saturating_sub(column));
-    if !value.is_empty()
-        && let Some(first) = lines.first_mut()
+    if value.is_empty() {
+        return lines;
+    }
+    for (i, part) in note_lines(value, end.saturating_sub(column).max(1))
+        .into_iter()
+        .enumerate()
     {
-        first.push(piece(column, value, value_colour));
+        if part.is_empty() {
+            continue;
+        }
+        if lines.len() <= i {
+            lines.resize_with(i + 1, Vec::new);
+        }
+        lines[i].push(piece(column, part, value_colour));
     }
     lines
 }
@@ -4656,6 +4980,47 @@ mod tests {
             false,
         );
         assert_eq!(alone.len(), 1);
+    }
+
+    /// FAILS IF: a value longer than the room after its column is cut
+    /// (`film.mkv · sub…`) instead of wrapped under itself, a line of it
+    /// leaves the value's column or runs past the row's end, or a label
+    /// shorter than the value loses its lines.
+    #[test]
+    fn an_aligned_value_wraps_in_its_own_column() {
+        let value = "film.mkv · subtitles in Portuguese";
+        let lines = aligned_pair(1, 15, 31, "Name", value, Kind::Setting, true);
+        assert!(lines.len() > 1, "{lines:?}");
+        let parts: Vec<&crate::files::Field> =
+            lines.iter().flatten().filter(|f| f.at == 15).collect();
+        assert!(parts.len() > 1, "{lines:?}");
+        assert_eq!(
+            parts
+                .iter()
+                .map(|f| f.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            value,
+            "the value was cut"
+        );
+        for f in &parts {
+            assert!(
+                f.at + ronoctua_render::layout::width(&f.text) <= 31,
+                "{f:?}"
+            );
+        }
+        assert_eq!(lines[0][0].text, "Name");
+        // BOTH LONG: the row is as tall as the taller of the two.
+        let both = aligned_pair(1, 9, 31, "Where it sits now", value, Kind::Setting, false);
+        let label: Vec<_> = both.iter().flatten().filter(|f| f.at == 1).collect();
+        assert_eq!(
+            label
+                .iter()
+                .map(|f| f.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            "Where it sits now"
+        );
     }
 
     /// FAILS IF: a track stops being one weight in every door — the rule's,

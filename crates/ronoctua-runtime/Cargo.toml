@@ -23,30 +23,6 @@ name = "ronoctua-bench-instance"
 path = "src/bin/bench.rs"
 
 [[bin]]
-# It drives the glyph browser the way the host drives it — `event` and `render`
-# on the SAME instantiated component — and fails if any of section 6.5's five
-# filters stops restricting.
-name = "ronoctua-test-browser"
-path = "src/bin/browser.rs"
-
-[[bin]]
-# The sibling, for the Unicode symbol browser. It asserts what the other does not
-# need to assert: that the database survives the `}` inside it, that the combining
-# mark appears over the dotted circle AND copies without it, and that the 23
-# double-width ones do not come out elided by their own budget.
-name = "ronoctua-test-symbols"
-path = "src/bin/symbols.rs"
-
-[[bin]]
-# The third, for the Lucide icon browser. The criterion only it has: the
-# RANGE the icons are drawn in. Lucide's source range collides with
-# 634 Nerd Fonts codepoints inside the Iosevka, and the primary face wins the
-# fallback — a regression there does not produce tofu, it produces the WRONG icon drawn
-# with confidence, which no visual inspection catches.
-name = "ronoctua-test-lucide"
-path = "src/bin/lucide.rs"
-
-[[bin]]
 # The fourth, for the memory panel. The criterion only it has: the screen is
 # EMPTY until the host speaks. It is the one driver that pushes a `survey` — a
 # record with lists inside, lowered field by field — so a field out of order
@@ -92,6 +68,11 @@ path = "src/bin/format.rs"
 
 [dependencies]
 ronoctua-protocol = { path = "../ronoctua-protocol" }
+# THE BRAIN'S COMPILED REGISTRY, for `ronoctua-test-brain` alone: the steps it
+# draws are the ones a module the brain registers declares, with that module's
+# keys, and never a table read by its name. The shell links the brain already,
+# so the workspace compiles nothing new for it.
+ronoctua-brain = { path = "../ronoctua-brain" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 anyhow.workspace = true

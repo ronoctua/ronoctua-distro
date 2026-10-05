@@ -191,6 +191,8 @@ pub enum Spot {
     Deed(&'static str),
     /// The modeline mark, which is the only preference this view keeps.
     Mark,
+    /// A row of the file picker, by its own spot.
+    Pick(String),
 }
 
 /// Something done rather than changed.
@@ -257,18 +259,40 @@ impl Deed {
 /// Typed on the line of the door the key was pressed in — the footer's
 /// minibuffer, the window's header — and answered through the same
 /// [`View::answered`]. The view keeps which question it was
-/// ([`View::asked`]), because the answer alone cannot say: a path may be a new
-/// folder's or an offered one's.
+/// ([`View::asked`]). A FOLDER on this disk is not typed: it is chosen in
+/// the file picker ([`Picking`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     /// A declared option that is text or a list.
     Setting(&'static str, Option<String>),
     /// A new machine's id.
     NewDevice,
-    /// A new folder's path on this disk.
+}
+
+/// What the file picker is up for, in this view: a folder on this disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picking {
+    /// A new folder to share.
     NewFolder,
-    /// Where an offered folder should be put.
+    /// Where an offered folder, by its invitation, is put.
     Invited(usize),
+}
+
+impl Picking {
+    /// The request the picker opens with: a folder, where the last one was
+    /// chosen, else the home.
+    fn request() -> crate::file_picker::Request {
+        use crate::file_picker::{EVERY_FILE, Mode, Request, Start};
+        Request {
+            purpose: "syncthing-folder",
+            mode: Mode::Folder,
+            filters: EVERY_FILE,
+            start: Start::Remembered,
+            addresses: false,
+            extras: &[],
+            alternate: None,
+        }
+    }
 }
 
 impl Ask {
@@ -288,10 +312,6 @@ impl Ask {
         match self {
             Self::Setting(..) => "syncthing-enter",
             Self::NewDevice => "syncthing-add-device",
-            // AN OFFERED FOLDER IS ASKED THE SAME QUESTION as a new one,
-            // because it IS the same question: where does it go on this disk.
-            // Which of the two it was is the view's to remember.
-            Self::NewFolder | Self::Invited(_) => "syncthing-add-folder",
         }
     }
 }
@@ -319,13 +339,15 @@ pub enum Target {
     Share(String, String, bool),
     /// The modeline mark.
     Mark,
+    /// A row or a cell of the file picker, while it is up.
+    Pick(crate::file_picker::Target),
 }
 
 impl Target {
     /// Whether `S-<arrows>` mean anything here.
     fn turns(&self) -> bool {
         match self {
-            Self::Setting(id, _) => options::by_id(id).is_some_and(|s| s.kind.turns()),
+            Self::Setting(id, _) => options::by_id(id).is_some_and(Setting::turns),
             Self::Mark | Self::Share(..) => true,
             _ => false,
         }
@@ -387,6 +409,10 @@ pub enum Errand {
     Speak(&'static str),
     /// Open this question on the door's own line.
     Ask(Ask),
+    /// Say this; it is already a sentence.
+    Said(String),
+    /// Read the clipboard for the file picker ([`View::picker_pasted`]).
+    Paste,
     /// Open the web interface at this address.
     Web(String),
     /// Shut the view.
@@ -444,6 +470,11 @@ pub struct View {
     asking: Option<Ask>,
     /// Whether anybody has moved the cursor yet.
     moved: bool,
+    /// The file picker, while it is up over the view's rows — a folder to
+    /// share, where an offered one goes (`crate::file_picker::Hosted`).
+    picking: Option<crate::file_picker::Hosted<Picking>>,
+    /// The door's wake, for the file picker ([`View::watch_with`]).
+    wake: Option<crate::player_subtitles::Wake>,
 }
 
 impl View {
@@ -457,6 +488,124 @@ impl View {
             prefs,
             asking: None,
             moved: false,
+            picking: None,
+            wake: None,
+        }
+    }
+
+    /// The door's wake, for the file picker's folder and devices: a door
+    /// with a loop hands it once, and every picker this view opens after is
+    /// watched through it (`file_picker::FilePicker::watch_with`).
+    pub fn watch_with(&mut self, wake: crate::player_subtitles::Wake) {
+        self.wake = Some(wake);
+    }
+
+    /// What the wake brought the file picker, taken — `true` when its rows
+    /// changed and the door draws again.
+    pub fn look(&mut self) -> bool {
+        self.picking
+            .as_mut()
+            .is_some_and(crate::file_picker::Hosted::look)
+    }
+
+    /// How many lines of rows the door shows, for the file picker's `PgUp`
+    /// and `PgDn` — told before a key is handed over.
+    pub fn page_is(&self, lines: usize) {
+        if let Some(h) = self.picking.as_ref() {
+            h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// The file picker, up for `asked`.
+    pub fn choose(&mut self, asked: Picking) {
+        self.asking = None;
+        self.picking = Some(crate::file_picker::Hosted::open(
+            Picking::request(),
+            asked,
+            ronoctua_i18n::key::SYNCTHING_PICK_FOLDER,
+            self.wake.as_ref(),
+        ));
+    }
+
+    /// Whether the file picker is up and takes `key` — the door hands it
+    /// to [`View::pick_key`] before anything else reads it.
+    #[must_use]
+    pub fn picker_takes(&self, key: ronoctua_keymap::Key) -> bool {
+        self.picking.as_ref().is_some_and(|h| h.picker.claims(key))
+    }
+
+    /// A key for the file picker.
+    pub fn pick_key(
+        &mut self,
+        key: ronoctua_keymap::Key,
+        snap: Option<&Snapshot>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let Some(h) = self.picking.as_mut() else {
+            return Errand::Nothing;
+        };
+        let hosting = h.key(key);
+        let errand = self.hosting(hosting, snap, texts);
+        self.settle_in(snap, columns, texts);
+        errand
+    }
+
+    /// What was copied, for the file picker.
+    pub fn picker_pasted(&mut self, text: &str) {
+        if let Some(h) = self.picking.as_mut() {
+            let _ = h.pasted(text);
+        }
+    }
+
+    /// What the picker's step is to this view: the folder chosen is an
+    /// order — shared, or where an offered one is put — and the view's rows
+    /// come back.
+    fn hosting(
+        &mut self,
+        hosting: crate::file_picker::Hosting<Picking>,
+        snap: Option<&Snapshot>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::file_picker::{Hosting, Picked};
+        match hosting {
+            Hosting::Nothing => Errand::Nothing,
+            Hosting::Back => {
+                self.picking = None;
+                Errand::Nothing
+            }
+            Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Paste => Errand::Paste,
+            Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
+                self.picking = None;
+                let Some(path) = paths.first().map(|p| p.to_string_lossy().into_owned()) else {
+                    return Errand::Nothing;
+                };
+                let order = match asked {
+                    Picking::NewFolder => unasked("syncthing-add-folder", &path),
+                    Picking::Invited(n) => Self::put_offered(n, path, snap),
+                };
+                order.map_or(Errand::Nothing, |o| Errand::Order(Box::new(o)))
+            }
+            Hosting::Picked(..) => Errand::Nothing,
+        }
+    }
+
+    /// Where the folder offered by invitation `n` goes: `path`.
+    fn put_offered(n: usize, path: String, snap: Option<&Snapshot>) -> Option<Order> {
+        match snap?.invitations.get(n)? {
+            Invitation::Folder {
+                folder,
+                label,
+                from,
+                ..
+            } => Some(Order::AcceptFolder {
+                folder: folder.clone(),
+                from: from.clone(),
+                label: label.clone(),
+                path,
+            }),
+            Invitation::Device { .. } => None,
         }
     }
 
@@ -488,9 +637,9 @@ impl View {
     ///
     /// `None` when what came back cannot be used — an empty path for a new
     /// folder, say, which is a question somebody answered with nothing.
-    pub fn answered(&mut self, id: &str, said: &str, snap: Option<&Snapshot>) -> Option<Order> {
+    pub fn answered(&mut self, id: &str, said: &str, _snap: Option<&Snapshot>) -> Option<Order> {
         match self.asking.take().filter(|ask| ask.command() == id) {
-            Some(ask) => Self::typed(ask, said, snap),
+            Some(ask) => Self::typed(ask, said),
             None => unasked(id, said),
         }
     }
@@ -508,7 +657,7 @@ impl View {
     }
 
     /// What was typed for `ask`, as an order.
-    fn typed(ask: Ask, said: &str, snap: Option<&Snapshot>) -> Option<Order> {
+    fn typed(ask: Ask, said: &str) -> Option<Order> {
         let said = said.trim();
         if said.is_empty() {
             return None;
@@ -524,21 +673,7 @@ impl View {
                 })
             }
             // THE SAME ORDER THE LEADER'S OWN QUESTION GIVES — one place.
-            Ask::NewDevice | Ask::NewFolder => unasked(ask.command(), said),
-            Ask::Invited(n) => match snap?.invitations.get(n)? {
-                Invitation::Folder {
-                    folder,
-                    label,
-                    from,
-                    ..
-                } => Some(Order::AcceptFolder {
-                    folder: folder.clone(),
-                    from: from.clone(),
-                    label: label.clone(),
-                    path: said.to_owned(),
-                }),
-                Invitation::Device { .. } => None,
-            },
+            Ask::NewDevice => unasked(ask.command(), said),
         }
     }
 
@@ -550,6 +685,9 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
+        if let Some(h) = self.picking.as_ref() {
+            return h.picker.hint(texts);
+        }
         let rows = self.rows(snap, columns, texts);
         let target = rows
             .get(self.cursor)
@@ -584,6 +722,13 @@ impl View {
         let Some(row) = rows.get(n).filter(|r| !r.heading) else {
             return false;
         };
+        // A ROW OF THE PICKER is chosen there: its cursor, and the second
+        // click its `RET`.
+        if let (Some(h), Target::Pick(t)) = (self.picking.as_mut(), &row.target) {
+            let again = h.clicked(t.clone());
+            self.settle_in(snap, columns, texts);
+            return again;
+        }
         let again = self.cursor == n;
         self.moved = true;
         self.aim_at(&row.spot, snap, columns, texts);
@@ -597,6 +742,12 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) {
+        // THE PICKER KEEPS ITS OWN CURSOR: the view's is the row it is on.
+        if self.picking.is_some() {
+            let rows = self.rows(snap, columns, texts);
+            self.cursor = rows.iter().position(|r| r.focused).unwrap_or(0);
+            return;
+        }
         // A LEVEL ABOUT SOMETHING THAT IS GONE GOES BACK TO THE LIST. A folder
         // removed from another machine, or by the person on this one, would
         // otherwise leave a sheet of empty rows with no way to tell why.
@@ -679,6 +830,21 @@ impl View {
         // open every key is the line's, in both doors, so a key here means
         // the line was answered or let go.
         self.asking = None;
+        // THE PICKER takes the view's keys that walk, answer and go back — a
+        // second click's `RET`, a command's arrows, the pointer's way back.
+        if self.picking.is_some() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match press {
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Less => Key::simple(Sym::Left),
+                Press::More => Key::simple(Sym::Right),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                _ => return Errand::Nothing,
+            };
+            return self.pick_key(key, snap, columns, texts);
+        }
         self.settle_in(snap, columns, texts);
         let rows = self.rows(snap, columns, texts);
         if rows.is_empty() {
@@ -746,7 +912,11 @@ impl View {
                 _ => Errand::Nothing,
             },
             Press::Add => match target.addable() {
-                Some(true) => Errand::Ask(Ask::NewFolder),
+                Some(true) => {
+                    self.choose(Picking::NewFolder);
+                    self.settle_in(snap, columns, texts);
+                    Errand::Nothing
+                }
                 Some(false) => Errand::Ask(Ask::NewDevice),
                 None => Errand::Nothing,
             },
@@ -839,7 +1009,22 @@ impl View {
             // becomes: a row only reachable with a modifier is a row the mouse
             // cannot use at all.
             Target::Setting(..) | Target::Mark | Target::Share(..) => self.turn(target, true, snap),
-            Target::Invitation(n) => Self::accept(*n, snap),
+            Target::Invitation(n) => {
+                let errand = Self::accept(*n, snap);
+                // A FOLDER NEEDS SOMEWHERE TO GO, and only the person knows
+                // where: the picker.
+                if errand == Errand::Nothing
+                    && matches!(
+                        snap.and_then(|s| s.invitations.get(*n)),
+                        Some(Invitation::Folder { .. })
+                    )
+                {
+                    self.choose(Picking::Invited(*n));
+                }
+                errand
+            }
+            // A PICKER'S ROW reaches here only when none is up.
+            Target::Pick(_) => Errand::Nothing,
         }
     }
 
@@ -880,9 +1065,8 @@ impl View {
                     name: name.clone(),
                 }))
             }
-            // A FOLDER NEEDS SOMEWHERE TO GO, and only the person knows where.
-            Some(Invitation::Folder { .. }) => Errand::Ask(Ask::Invited(n)),
-            None => Errand::Nothing,
+            // A FOLDER NEEDS SOMEWHERE TO GO: the caller opens the picker.
+            Some(Invitation::Folder { .. }) | None => Errand::Nothing,
         }
     }
 
@@ -938,6 +1122,21 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
+        // THE PICKER'S ROWS while it is up, as this view's own.
+        if let Some(h) = self.picking.as_ref() {
+            return h.rows(columns, texts, |p| Row {
+                fields: p.fields,
+                focused: p.focused,
+                heading: p.heading,
+                target: Target::Pick(p.target),
+                spot: if p.heading {
+                    Spot::Nothing
+                } else {
+                    Spot::Pick(p.spot)
+                },
+                disabled: false,
+            });
+        }
         let (left, room) = extent(columns);
         let mut b = Builder {
             out: Vec::new(),

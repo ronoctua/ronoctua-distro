@@ -156,6 +156,11 @@ fn options(volume_percent: u8) -> Vec<(&'static str, String)> {
     .map(|(k, v)| (k, v.to_owned()))
     .collect();
     o.push(("volume", volume_percent.to_string()));
+    // ONE FILE, ROUND AND ROUND: its outputs are asked once, when it opens
+    // (`super::outputs` says why).
+    if let Some(list) = super::outputs() {
+        o.push(("ao", list.to_owned()));
+    }
     o
 }
 

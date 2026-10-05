@@ -1051,6 +1051,7 @@ mod tests {
             profile: "Default".into(),
             icon: IconChoice::Site {
                 url: "https://mail.example.org/icon.png".into(),
+                page: None,
             },
             prepared: None,
             category: None,

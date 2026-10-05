@@ -7,14 +7,13 @@
 //! It is `audio_window.rs` with the view swapped, deliberately: eleven doors
 //! that drifted apart would be eleven answers to how a wheel scrolls.
 //!
-//! # Why THIS view gets a window and the clipboard does not
+//! # Why this window reads Atuin itself, and the clipboard's does not
 //!
 //! Because `atuin` is a BINARY and `config.toml` is a FILE, and a second
 //! process can read both. The clipboard's history is not: it is a `VecDeque`
 //! inside the footer, filled by that process's own `zwlr_data_control`
-//! watcher. A window would have to open a second watcher and would then hold a
-//! second history — which is the exact defect `ronoctua-clipcascade` exists to
-//! avoid, one process over. See `docs/PENDING.md`.
+//! watcher — so its window follows the FOOTER over the control socket instead
+//! of opening a second watcher (`crate::clipboard_window`).
 //!
 //! # It types what the footer types
 //!
@@ -143,7 +142,7 @@ impl HistoryWindow {
                 if let Some(said) =
                     crate::history::said_when_done(&order, refused.as_deref(), &ui.texts)
                 {
-                    ui.message = Some(said);
+                    ui.say(said);
                     ui.ask_paint();
                 }
             }
@@ -162,7 +161,7 @@ impl HistoryWindow {
             Errand::Order(order) => match &self.atuin {
                 Some(h) => h.send(order),
                 None => {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::ATUIN_ABSENT));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::ATUIN_ABSENT));
                 }
             },
             // THE KEY IS FETCHED HERE, because `atuin key` is a process and
@@ -171,7 +170,7 @@ impl HistoryWindow {
             Errand::ShowKey => match ronoctua_atuin::cli::key() {
                 Ok(key) => self.view.took_the_key(key),
                 Err(e) => {
-                    ui.message = Some(ui.texts.t_with(
+                    ui.say(ui.texts.t_with(
                         ronoctua_i18n::key::ECHO_ATUIN_REFUSED,
                         &[("reason", &e.to_string())],
                     ));

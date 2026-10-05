@@ -43,6 +43,10 @@ use crate::{AppKey, Refusal, Roots};
 
 /// The repository.
 pub const REPO: &str = "https://f-droid.org/repo";
+
+/// The host this catalogue asks — its index, its icons and its packages —
+/// as the person's consent row lets it (`consent.json`).
+pub const HOSTS: &[&str] = &["f-droid.org"];
 /// Its signed entry point.
 pub const ENTRY: &str = "https://f-droid.org/repo/entry.jar";
 /// SHA-256 of the DER of the certificate that signs `entry.jar` — the one

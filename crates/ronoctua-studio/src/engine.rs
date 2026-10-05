@@ -82,6 +82,29 @@ pub struct Engine {
     light: bool,
     dirty: bool,
     last_broadcast: Instant,
+    /// A SECOND COPY OF THE SYSTEM (`nix run .#dev`, `RONOCTUA_INSTANCE`)
+    /// REHEARSES, as its brain does: a photo, a recording and a stream go
+    /// through their motions on screen — the countdown, the rolling clock —
+    /// and nothing is written to `Pictures` or `Videos`, nothing is sent and
+    /// the virtual camera is left to the system's own studio.
+    rehearsing: bool,
+    /// A rehearsed recording: when it "started", seconds since the epoch.
+    rehearsed_recording: Option<u64>,
+    /// A rehearsed stream: when it "started", and where it would go.
+    rehearsed_stream: Option<(u64, String)>,
+}
+
+/// Seconds since the epoch, now.
+fn epoch_now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Whether this studio is a second copy of the system's, which rehearses.
+#[must_use]
+pub fn rehearsing_here() -> bool {
+    ronoctua_xdg::instance().is_some()
 }
 
 /// The camera's size when only the hands read it.
@@ -136,7 +159,14 @@ impl Engine {
             photo_due: false,
             last_photo: None,
             last_recording: None,
-            lasting: Vec::new(),
+            // THE REHEARSAL SAYS ITSELF, for as long as the studio lives: a
+            // person pressing record in the development loop sees that
+            // nothing is written, rather than a file that never appears.
+            lasting: if rehearsing_here() {
+                vec![Trouble::Rehearsal]
+            } else {
+                Vec::new()
+            },
             program: None,
             frames: 0,
             measured: 0,
@@ -148,6 +178,9 @@ impl Engine {
             light: false,
             dirty: true,
             last_broadcast: Instant::now(),
+            rehearsing: rehearsing_here(),
+            rehearsed_recording: None,
+            rehearsed_stream: None,
         }
     }
 
@@ -258,6 +291,13 @@ impl Engine {
         }
         let keys: Vec<String> = need.iter().map(Source::key).collect();
         self.sources.retain(|k, _| keys.contains(k));
+        // THE VIRTUAL CAMERA'S OWN CHAIN goes on the camera it sends, and on
+        // no other source — and only while it sends the camera alone.
+        let own =
+            (!light && self.prefs.virtual_sends == Sends::Camera && self.virtual_cam.is_some())
+                .then(|| self.prefs.virtual_effect.chain())
+                .flatten();
+        let virtual_key = self.virtual_key();
         let mut setup = self.setup();
         if light {
             setup.program = HANDS_SIZE;
@@ -270,7 +310,25 @@ impl Engine {
                 .or_insert_with(|| (s.clone(), sources::start(s, setup.clone())));
             live.shared
                 .set_chain(chains.remove(&key).unwrap_or_default());
+            live.shared.set_own(if key == virtual_key {
+                own.clone()
+            } else {
+                None
+            });
         }
+    }
+
+    /// The key of the camera the virtual camera sends when it sends the
+    /// camera alone: the scene's camera layer, or the default camera.
+    fn virtual_key(&self) -> String {
+        self.book
+            .camera_layer(&self.scene)
+            .and_then(|i| {
+                self.book
+                    .scene(&self.scene)
+                    .map(|s| s.layers[i].source.key())
+            })
+            .unwrap_or_else(|| Source::Camera { identity: None }.key())
     }
 
     /// The layers of the scene on air, ready to compose.
@@ -290,17 +348,15 @@ impl Engine {
             .collect()
     }
 
+    /// What the virtual camera sends when it sends the camera alone: the
+    /// picture through its own chain when it has one, the preview's
+    /// otherwise.
     fn camera_frame(&self) -> Option<Arc<Frame>> {
-        let key = self
-            .book
-            .camera_layer(&self.scene)
-            .and_then(|i| {
-                self.book
-                    .scene(&self.scene)
-                    .map(|s| s.layers[i].source.key())
-            })
-            .unwrap_or_else(|| Source::Camera { identity: None }.key());
-        self.sources.get(&key)?.1.shared.frame.lock().ok()?.clone()
+        let shared = &self.sources.get(&self.virtual_key())?.1.shared;
+        if shared.own.lock().ok().is_some_and(|c| c.is_some()) {
+            return shared.own_frame.lock().ok()?.clone();
+        }
+        shared.frame.lock().ok()?.clone()
     }
 
     /// Every trouble the sources and outputs have now.
@@ -391,14 +447,32 @@ impl Engine {
             effect_values,
             background,
             background_values,
-            recording: self.recording.as_ref().map(|r| Rolling {
-                since: r.since,
-                target: r.finished.to_string_lossy().into_owned(),
-            }),
-            streaming: self.streaming.as_ref().map(|s| Rolling {
-                since: s.since,
-                target: s.url.clone(),
-            }),
+            recording: self
+                .recording
+                .as_ref()
+                .map(|r| Rolling {
+                    since: r.since,
+                    target: r.finished.to_string_lossy().into_owned(),
+                })
+                .or_else(|| {
+                    self.rehearsed_recording.map(|since| Rolling {
+                        since,
+                        target: String::new(),
+                    })
+                }),
+            streaming: self
+                .streaming
+                .as_ref()
+                .map(|s| Rolling {
+                    since: s.since,
+                    target: s.url.clone(),
+                })
+                .or_else(|| {
+                    self.rehearsed_stream.as_ref().map(|(since, url)| Rolling {
+                        since: *since,
+                        target: url.clone(),
+                    })
+                }),
             virtual_node: self
                 .virtual_cam
                 .as_ref()
@@ -554,6 +628,22 @@ impl Engine {
                     self.photo_due = true;
                 }
             }
+            // REHEARSED: the clock rolls on screen, nothing is opened or
+            // written.
+            Ask::Record { on } if self.rehearsing => {
+                let on = on.unwrap_or(self.rehearsed_recording.is_none());
+                self.rehearsed_recording = on.then(epoch_now);
+            }
+            Ask::Stream { on } if self.rehearsing => {
+                let on = on.unwrap_or(self.rehearsed_stream.is_none());
+                self.rehearsed_stream = on.then(|| {
+                    (
+                        epoch_now(),
+                        self.prefs.stream_url.clone().unwrap_or_default(),
+                    )
+                });
+            }
+            Ask::Virtual { .. } if self.rehearsing => return Say::Refused(Trouble::Rehearsal),
             Ask::Record { on } => {
                 let on = on.unwrap_or(self.recording.is_none());
                 if on && self.recording.is_none() {
@@ -1068,6 +1158,11 @@ pub fn run(shared: &Shared) {
                     e.dirty = true;
                 }
             }
+            if e.photo_due && e.rehearsing {
+                // THE COUNTDOWN RAN, and no picture is written.
+                e.photo_due = false;
+                e.dirty = true;
+            }
             if e.photo_due {
                 e.photo_due = false;
                 match outputs::photo(&program, &e.prefs) {
@@ -1207,6 +1302,29 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rehearsing_studio_rolls_on_screen_and_opens_nothing() {
+        // THE DEVELOPMENT LOOP'S STUDIO: record and stream roll their clocks
+        // in the state, no encoder starts, and the virtual camera is refused
+        // with the sentence that says why.
+        let mut e = Engine {
+            rehearsing: true,
+            ..Engine::default()
+        };
+        let shared: Shared = Arc::new((Mutex::new(Engine::default()), Condvar::new()));
+        let _ = e.ask(Ask::Record { on: Some(true) }, &shared);
+        assert!(e.recording.is_none(), "an encoder started in a rehearsal");
+        let rolling = e.state().recording.expect("the clock rolls");
+        assert!(rolling.target.is_empty(), "a rehearsal names no file");
+        let _ = e.ask(Ask::Record { on: Some(false) }, &shared);
+        assert!(e.state().recording.is_none());
+        assert_eq!(
+            e.ask(Ask::Virtual { on: Some(true) }, &shared),
+            Say::Refused(Trouble::Rehearsal)
+        );
+        assert!(e.virtual_cam.is_none());
+    }
 
     #[test]
     fn a_chosen_effect_must_be_of_its_family() {

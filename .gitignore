@@ -46,6 +46,8 @@ icons.rs
 # `icons.rs` above is a generated table's name, and it would hide this one
 # from git — and so from the flake, which then builds without it.
 !/crates/ronoctua-software/src/icons.rs
+# And the icons app's view, for the same reason.
+!/crates/ronoctua-shell/src/icons.rs
 coverage.md
 manifest.json
 

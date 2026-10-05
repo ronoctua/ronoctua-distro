@@ -542,7 +542,10 @@ fn detail_lines(job: &Job, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line
             key::TRANSFERS_IDENTITY_ANONYMOUS
         }),
     ));
-    out.push(fact(key::TRANSFERS_WINDOW_FIELD_SUBJECT, subject_of(job)));
+    out.push(fact(
+        key::TRANSFERS_WINDOW_FIELD_SUBJECT,
+        subject_of(job, texts),
+    ));
     out.push(fact(key::TRANSFERS_WINDOW_FIELD_DONE, amount(job.done)));
     out.push(fact(
         key::TRANSFERS_WINDOW_FIELD_TOTAL,
@@ -558,7 +561,7 @@ fn detail_lines(job: &Job, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line
             crate::files::size_text(answer, texts.decimal_mark()),
         ));
     }
-    if job.trouble.is_some() || job.refusal.is_some() {
+    if job.trouble.is_some() || job.refusal.is_some() || job.archive.is_some() {
         out.push(fact(
             key::TRANSFERS_WINDOW_FIELD_TROUBLE,
             under_the_pointer(job, texts),
@@ -690,6 +693,11 @@ fn plain(at: u16, text: String, color: tokens::Color) -> Field {
 /// What the row says it is: the work, its subject, and where it lands.
 fn sentence(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
     let what = texts.t(&format!("transfers-work-{}", job.work.word()));
+    // THE BELONGINGS' ORDER IS A WORD OF OURS, not a name: said in the
+    // person's language, after the work's.
+    if matches!(job.work, ronoctua_transfers::Work::Belongings { .. }) {
+        return format!("{what} · {}", subject_of(job, texts));
+    }
     let subject = job.work.subjects();
     let name = subject.first();
     let more = job.work.how_many().saturating_sub(1);
@@ -850,6 +858,15 @@ pub fn under_the_pointer(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
             _ => said,
         };
     }
+    // AN ARCHIVE'S REFUSAL IS A SENTENCE too, naming the archive: the job
+    // carries its word (`Job::archive`) and no prose.
+    if let Some(why) = job.archive {
+        let e = crate::files_archive::refusal(
+            why,
+            crate::files_archive::subject_of(&job.work).unwrap_or(std::path::Path::new("")),
+        );
+        return texts.t_with(e.key, &e.borrowed());
+    }
     if let Some(trouble) = &job.trouble {
         return trouble.clone();
     }
@@ -945,41 +962,107 @@ pub fn segment(jobs: &[Job]) -> Option<String> {
 /// job stays in the history for a long time, and reacting to `Done` on every
 /// beat would re-read the directory sixty times a minute for a copy that ended
 /// an hour ago.
+///
+/// `before` is `None` until the door has heard a list at all — see [`ended`].
 #[must_use]
-pub fn what_ended(before: &[Job], now: &[Job]) -> Vec<crate::files::Report> {
+pub fn what_ended(before: Option<&[Job]>, now: &[Job]) -> Vec<crate::files::Report> {
     ended(before, now)
         // A PROGRAM'S ORDER IS NOT THE FILE MANAGER'S: its end is its own
         // notification, with the refusal as a sentence (`software::ended_of`),
         // and a report here would echo the refusal's bare word.
         .filter(|j| !matches!(j.work, ronoctua_transfers::Work::Software { .. }))
-        .map(|j| match (&j.work, j.answer, j.stage) {
-            (ronoctua_transfers::Work::Measure { path }, Some(bytes), _) => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                crate::files::Report::Measured(name, bytes)
-            }
-            // A FAILURE CARRIES ITS OWN WORDS. `copiar /x/y` alone does not say
-            // `No space left on device`, and the second half is the whole
-            // diagnosis.
-            (_, _, Stage::Failed) => crate::files::Report::Failed(
-                j.trouble
-                    .clone()
-                    .unwrap_or_else(|| j.stage.word().to_owned()),
-            ),
-            _ => crate::files::Report::Done,
+        .flat_map(|j| {
+            let report = report_of(j);
+            // AN ARCHIVE'S JOB THAT FAILED WITHOUT A WORD for it — a source
+            // that could not be weighed, a program that died — still ended:
+            // its failure is said with its own words, and the view that sent
+            // it lets go of the password it kept for asking again.
+            let let_go = (j.stage == Stage::Failed
+                && j.archive.is_none()
+                && crate::files_archive::subject_of(&j.work).is_some())
+            .then(|| {
+                crate::files::Report::Archive(Box::new(crate::files_archive::ArchiveReport::Ended(
+                    Box::new(j.work.clone()),
+                )))
+            });
+            std::iter::once(report).chain(let_go)
         })
         .collect()
+}
+
+/// The one report a job that ended makes — see [`what_ended`].
+fn report_of(j: &Job) -> crate::files::Report {
+    match (&j.work, j.answer, j.stage) {
+        (ronoctua_transfers::Work::Measure { path }, Some(bytes), _) => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            crate::files::Report::Measured(name, bytes)
+        }
+        // AN ARCHIVE'S REFUSAL goes to the view that sent it: a password
+        // wanted is a question there, anything else a sentence.
+        (work, _, Stage::Failed) if j.archive.is_some() => crate::files::Report::Archive(Box::new(
+            crate::files_archive::ArchiveReport::JobRefused {
+                work: Box::new(work.clone()),
+                why: j.archive.unwrap_or(ronoctua_archive::Why::Failed),
+            },
+        )),
+        // AN ARCHIVE THE QUEUE CHANGED is listed again by a view standing
+        // in it.
+        (ronoctua_transfers::Work::ArchiveEdit { archive, .. }, _, Stage::Done) => {
+            crate::files::Report::Archive(Box::new(crate::files_archive::ArchiveReport::Changed(
+                archive.clone(),
+            )))
+        }
+        // ANY OTHER END OF AN ARCHIVE'S JOB, so the view that sent it
+        // lets go of the password it kept for asking again — and reads
+        // the directory again, as `Done` does.
+        (work, _, stage)
+            if stage != Stage::Failed && crate::files_archive::subject_of(work).is_some() =>
+        {
+            crate::files::Report::Archive(Box::new(crate::files_archive::ArchiveReport::Ended(
+                Box::new(work.clone()),
+            )))
+        }
+        // A FAILURE CARRIES ITS OWN WORDS. `copiar /x/y` alone does not say
+        // `No space left on device`, and the second half is the whole
+        // diagnosis.
+        (_, _, Stage::Failed) => crate::files::Report::Failed(
+            j.trouble
+                .clone()
+                .unwrap_or_else(|| j.stage.word().to_owned()),
+        ),
+        _ => crate::files::Report::Done,
+    }
 }
 
 /// The jobs that ENDED between two lists: afoot in the first, not in the
 /// second. The one definition of "this job is over", for the file manager's
 /// reports and the software centre's notifications alike.
-pub fn ended<'a>(before: &'a [Job], now: &'a [Job]) -> impl Iterator<Item = &'a Job> + 'a {
-    now.iter()
-        .filter(|j| !j.afoot())
-        .filter(|j| before.iter().any(|old| old.id == j.id && old.afoot()))
+///
+/// # And one that was BORN and ended between them
+///
+/// The queue sends the list as it is when its reader wakes, not once per
+/// change: a job refused in the instant it starts — a password file that does
+/// not open, an archive that is not one — can be added and failed between two
+/// lists, and was never afoot in any list anybody saw. Such a job is newer
+/// than every job of the list before (ids only grow), and it counts as ended.
+///
+/// # `None` is "no list heard yet", and an EMPTY list is a list
+///
+/// The first list a door receives is the whole history, and none of it ended
+/// just now: `before` is `None` for it. After that an empty list is an answer
+/// like any other — and it is the COMMON one: the queue keeps its jobs in
+/// memory and numbers them from one each time it starts, so the first job of a
+/// session follows an empty list, and a refusal in its first instant was
+/// missed while "a list that had jobs" was the rule.
+pub fn ended<'a>(before: Option<&'a [Job]>, now: &'a [Job]) -> impl Iterator<Item = &'a Job> + 'a {
+    let newest = before.map(|b| b.iter().map(|j| j.id).max().unwrap_or(0));
+    now.iter().filter(|j| !j.afoot()).filter(move |j| {
+        before.is_some_and(|b| b.iter().any(|old| old.id == j.id && old.afoot()))
+            || newest.is_some_and(|newest| j.id > newest)
+    })
 }
 
 /// Listens to the queue and turns each list into the file manager's reports.
@@ -996,14 +1079,15 @@ pub fn listen_as_reports(
     let built = std::thread::Builder::new()
         .name("transfers".into())
         .spawn(move || {
-            let mut before: Vec<Job> = Vec::new();
+            // NONE until the first list: that one is the whole history.
+            let mut before: Option<Vec<Job>> = None;
             let _ = ronoctua_transfers::client::watch(|jobs| {
-                for report in what_ended(&before, &jobs) {
+                for report in what_ended(before.as_deref(), &jobs) {
                     if channel.send(report).is_err() {
                         return true;
                     }
                 }
-                before = jobs;
+                before = Some(jobs);
                 false
             });
         });
@@ -1037,6 +1121,14 @@ const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand
         W::Restore { .. } => E::Restore,
         W::Compress { .. } => E::Compress,
         W::Extract { .. } => E::Extract,
+        // AN ARCHIVE'S OTHER WORK, each by its own word — the ones the
+        // footer's door reads out of `Work::word`, so the two doors of one
+        // queue name a job alike. An edit is an ADD when it adds anything,
+        // which is `Work::word`'s own rule.
+        W::ArchiveEdit { add, .. } if !add.is_empty() => E::ArchiveAdd,
+        W::ArchiveEdit { .. } => E::ArchiveRemove,
+        W::ArchiveTest { .. } => E::ArchiveTest,
+        W::ArchiveConvert { .. } => E::ArchiveConvert,
         W::Measure { .. } => E::Measure,
         W::Fetch { .. } => E::Fetch,
         W::Media {
@@ -1065,6 +1157,15 @@ const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand
         // change for a word. The buffer's row says what it is by its subject
         // (the program's name); the footer's door names the order in full.
         W::Software { .. } => E::Fetch,
+        // A FILE SENT TO VIRUSTOTAL, for the same reason: an upload is a
+        // transfer, and the row's subject names the file.
+        W::Scan { .. } => E::Fetch,
+        // A PULL, A BUILD OR COMPOSE, for the same reason: no WIT change for
+        // a word — the row's subject says what it is.
+        W::Container { .. } => E::Fetch,
+        // THE BELONGINGS' SYNC, for the same reason: its row's subject is the
+        // order's word, and the footer's door names it in full.
+        W::Belongings { .. } => E::Fetch,
     }
 }
 
@@ -1072,14 +1173,19 @@ const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand
 const fn engine_of(engine: ronoctua_transfers::Engine) -> ronoctua_protocol::Engine {
     use ronoctua_protocol::Engine as E;
     match engine {
+        // ONE WORD EACH, the queue's own: the buffer names the engine the
+        // footer names, with the same `transfers-engine-<word>` key. It knew
+        // four, and a region, a program, a scan, a container and a sync all
+        // said "link" there while the footer said what they were.
         ronoctua_transfers::Engine::Local => E::Local,
-        // See `errand_of`: the queue's window is a buffer, and this engine's
-        // work is a download with a second half.
-        ronoctua_transfers::Engine::Atlas => E::Fetch,
+        ronoctua_transfers::Engine::Atlas => E::Atlas,
         ronoctua_transfers::Engine::Fetch => E::Fetch,
         ronoctua_transfers::Engine::Media => E::Media,
         ronoctua_transfers::Engine::Torrent => E::Torrent,
-        ronoctua_transfers::Engine::Software => E::Fetch,
+        ronoctua_transfers::Engine::Software => E::Software,
+        ronoctua_transfers::Engine::Scan => E::Scan,
+        ronoctua_transfers::Engine::Container => E::Container,
+        ronoctua_transfers::Engine::Belongings => E::Belongings,
     }
 }
 
@@ -1108,7 +1214,14 @@ const fn amount_of(measure: Measure) -> ronoctua_protocol::Amount {
 /// the footer's sentence prefers it: while twelve files are copying, "which one
 /// is it on" is the question. Already cut to a file name — a component drawing
 /// a whole path would push everything else off the row.
-fn subject_of(job: &Job) -> String {
+///
+/// The belongings' order is not a name but a word of ours (`prepare`,
+/// `apply`…), drawn in the person's language
+/// (`belongings_words::op_key`), never as the CLI writes it.
+fn subject_of(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
+    if let ronoctua_transfers::Work::Belongings { op } = &job.work {
+        return texts.t(crate::belongings_words::op_key(*op));
+    }
     if !job.now.is_empty() {
         return job.now.clone();
     }
@@ -1137,7 +1250,7 @@ const fn identified(work: &ronoctua_transfers::Work) -> bool {
 
 /// The queue as the buffer receives it.
 #[must_use]
-pub fn queue_of(jobs: &[Job]) -> ronoctua_protocol::Queue {
+pub fn queue_of(jobs: &[Job], texts: &ronoctua_i18n::Texts) -> ronoctua_protocol::Queue {
     ronoctua_protocol::Queue {
         jobs: jobs
             .iter()
@@ -1149,12 +1262,21 @@ pub fn queue_of(jobs: &[Job]) -> ronoctua_protocol::Queue {
                 amount: amount_of(j.measure),
                 done: j.done,
                 total: j.total,
-                subject: subject_of(j),
+                subject: subject_of(j, texts),
                 // The failure is DATA, and it crosses as it is: it was written
                 // by whoever failed, and a buffer that received a key here
                 // would need the host to have a key for every `io::Error`
                 // there will ever be.
-                trouble: j.trouble.clone().unwrap_or_default(),
+                //
+                // EXCEPT AN ARCHIVE'S REFUSAL, which is a closed set with a
+                // sentence each: it crosses as that sentence, in the host's
+                // language — the same one the footer's door says under the
+                // pointer — and never as its bare word.
+                trouble: if j.archive.is_some() {
+                    under_the_pointer(j, texts)
+                } else {
+                    j.trouble.clone().unwrap_or_default()
+                },
                 answer: j.answer.unwrap_or(0),
                 identified: identified(&j.work),
                 pauses: j.engine.pauses(),
@@ -1556,8 +1678,21 @@ mod tests {
         // AND ITS END IS NOT THE FILE MANAGER'S, which would echo the word.
         let mut before = broke.clone();
         before.stage = Stage::Running;
-        assert!(what_ended(&[before.clone()], std::slice::from_ref(&broke)).is_empty());
-        assert_eq!(ended(&[before], std::slice::from_ref(&broke)).count(), 1);
+        assert!(
+            what_ended(
+                Some(std::slice::from_ref(&before)),
+                std::slice::from_ref(&broke)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            ended(
+                Some(std::slice::from_ref(&before)),
+                std::slice::from_ref(&broke)
+            )
+            .count(),
+            1
+        );
         // A FAILURE WITH MORE THAN THE WORD keeps the program's words after it.
         broke.refusal = Some(ronoctua_software::Refusal::ToolFailed);
         broke.trouble = Some("error: collision between two files".into());
@@ -1571,9 +1706,178 @@ mod tests {
         // for a copy that ended an hour ago.
         let before = vec![a_job(1, Stage::Running)];
         let now = vec![a_job(1, Stage::Done)];
-        assert_eq!(what_ended(&before, &now).len(), 1);
+        assert_eq!(what_ended(Some(&before), &now).len(), 1);
         // The same list again: nothing crossed the line this time.
-        assert!(what_ended(&now, &now).is_empty());
+        assert!(what_ended(Some(&now), &now).is_empty());
+    }
+
+    /// An archive's job, refused with `why`.
+    fn an_archive_job(id: u64, work: Work, why: Option<ronoctua_archive::Why>) -> Job {
+        let mut j = Job::fresh_one(id, Engine::Local, work);
+        j.stage = if why.is_some() {
+            Stage::Failed
+        } else {
+            Stage::Done
+        };
+        j.archive = why;
+        j
+    }
+
+    #[test]
+    fn an_archive_refusal_crosses_to_the_window_as_a_sentence_and_its_work_by_its_word() {
+        // THE DEFECT: the window drew the refusal's bare word, `wrong-password`,
+        // in English in every language, where the row's subject goes.
+        let zip = PathBuf::from("/home/a/photos.zip");
+        let refused = an_archive_job(
+            7,
+            Work::ArchiveTest {
+                archive: zip.clone(),
+                secret: None,
+            },
+            Some(ronoctua_archive::Why::WrongPassword),
+        );
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect(language);
+            let queue = queue_of(std::slice::from_ref(&refused), &t);
+            let row = &queue.jobs[0];
+            assert_eq!(
+                row.trouble,
+                t.t_with(
+                    ronoctua_i18n::key::FILES_ARCHIVE_WHY_WRONG_PASSWORD,
+                    &[("name", "photos.zip")]
+                ),
+                "{language}"
+            );
+            assert!(!row.trouble.contains("wrong-password"), "{language}");
+        }
+        // EACH OF AN ARCHIVE'S WORKS BY ITS OWN WORD, the footer's own.
+        let t = texts();
+        let cases = [
+            (
+                Work::ArchiveEdit {
+                    archive: zip.clone(),
+                    add: vec![PathBuf::from("/home/a/x")],
+                    remove: Vec::new(),
+                    secret: None,
+                },
+                ronoctua_protocol::Errand::ArchiveAdd,
+            ),
+            (
+                Work::ArchiveEdit {
+                    archive: zip.clone(),
+                    add: Vec::new(),
+                    remove: vec!["x".to_owned()],
+                    secret: None,
+                },
+                ronoctua_protocol::Errand::ArchiveRemove,
+            ),
+            (
+                Work::ArchiveTest {
+                    archive: zip.clone(),
+                    secret: None,
+                },
+                ronoctua_protocol::Errand::ArchiveTest,
+            ),
+            (
+                Work::ArchiveConvert {
+                    from: zip,
+                    from_secret: None,
+                    to: PathBuf::from("/home/a/photos.7z"),
+                    format: None,
+                    level: ronoctua_archive::Level::Normal,
+                    volume_bytes: None,
+                    hide_names: false,
+                    secret: None,
+                },
+                ronoctua_protocol::Errand::ArchiveConvert,
+            ),
+        ];
+        for (work, errand) in cases {
+            let word = work.word();
+            let row = &queue_of(&[an_archive_job(1, work, None)], &t).jobs[0];
+            assert_eq!(row.errand, errand, "{word}");
+            assert_eq!(
+                row.trouble, "",
+                "{word}: a job that went well has no trouble"
+            );
+        }
+    }
+
+    #[test]
+    fn a_job_born_and_refused_between_two_lists_still_ended() {
+        // THE QUEUE SENDS THE LIST AS IT IS when its reader wakes: a refusal
+        // in the instant a job starts was never afoot in any list, and the
+        // door that sent it would never have been asked for the password.
+        let history = vec![a_job(1, Stage::Done)];
+        let zip = PathBuf::from("/home/a/photos.zip");
+        let refused = an_archive_job(
+            2,
+            Work::Extract {
+                archive: zip,
+                into: PathBuf::from("/home/a/photos"),
+                members: Vec::new(),
+                secret: None,
+            },
+            Some(ronoctua_archive::Why::NeedsPassword),
+        );
+        let now = vec![a_job(1, Stage::Done), refused];
+        match what_ended(Some(&history), &now).as_slice() {
+            [crate::files::Report::Archive(r)] => assert!(matches!(
+                **r,
+                crate::files_archive::ArchiveReport::JobRefused { .. }
+            )),
+            other => panic!("{other:?}"),
+        }
+        // THE FIRST LIST A DOOR GETS IS HISTORY, and none of it ended now.
+        assert!(what_ended(None, &now).is_empty());
+        // And the same list again says nothing twice.
+        assert!(what_ended(Some(&now), &now).is_empty());
+        // AN EMPTY LIST IS A LIST, and the usual one before a session's first
+        // job: the queue numbers its jobs from one each time it starts.
+        let first = vec![now[1].clone()];
+        match what_ended(Some(&[]), &first).as_slice() {
+            [crate::files::Report::Archive(r)] => assert!(matches!(
+                **r,
+                crate::files_archive::ArchiveReport::JobRefused { .. }
+            )),
+            other => panic!("{other:?}"),
+        }
+        assert!(what_ended(None, &first).is_empty());
+    }
+
+    #[test]
+    fn an_archive_job_that_failed_without_a_word_says_its_words_and_lets_go() {
+        // THE PASSWORD KEPT FOR ASKING AGAIN went only with a refusal, a
+        // success or a stop: a job that failed for any other reason left it in
+        // the view for as long as the footer lived.
+        let zip = PathBuf::from("/home/a/photos.zip");
+        let work = Work::ArchiveTest {
+            archive: zip,
+            secret: None,
+        };
+        let mut before = an_archive_job(3, work.clone(), None);
+        before.stage = Stage::Running;
+        let mut broke = before.clone();
+        broke.stage = Stage::Failed;
+        broke.trouble = Some("the folder could not be read".to_owned());
+        match what_ended(Some(std::slice::from_ref(&before)), &[broke]).as_slice() {
+            [
+                crate::files::Report::Failed(why),
+                crate::files::Report::Archive(r),
+            ] => {
+                assert_eq!(why, "the folder could not be read");
+                assert_eq!(
+                    **r,
+                    crate::files_archive::ArchiveReport::Ended(Box::new(work))
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // AND ANY OTHER FAILURE stays one report.
+        let before = vec![a_job(1, Stage::Running)];
+        let mut copy = a_job(1, Stage::Failed);
+        copy.trouble = Some("no space".to_owned());
+        assert_eq!(what_ended(Some(&before), &[copy]).len(), 1);
     }
 
     #[test]
@@ -1583,9 +1887,37 @@ mod tests {
         let before = vec![a_job(1, Stage::Running)];
         let mut broke = a_job(1, Stage::Failed);
         broke.trouble = Some("no space left on the disk".to_owned());
-        match what_ended(&before, &[broke]).first() {
+        match what_ended(Some(&before), &[broke]).first() {
             Some(crate::files::Report::Failed(why)) => assert_eq!(why, "no space left on the disk"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// FAILS IF: a belongings order is drawn as the CLI's English verb — on
+    /// the footer's row, the window's page or the buffer's row — instead of
+    /// in the person's language.
+    #[test]
+    fn a_belongings_order_is_said_in_the_persons_language() {
+        let job = Job::fresh_one(
+            9,
+            Engine::Belongings,
+            Work::Belongings {
+                op: ronoctua_belongings::order::Op::Apply,
+            },
+        );
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a declared language");
+            let said = t.t(crate::belongings_words::op_key(
+                ronoctua_belongings::order::Op::Apply,
+            ));
+            let row = sentence(&job, &t);
+            assert!(row.contains(&said), "{language}: {row}");
+            assert!(!row.contains("apply"), "{language}: the CLI's verb: {row}");
+            assert_eq!(
+                queue_of(std::slice::from_ref(&job), &t).jobs[0].subject,
+                said
+            );
+            assert_eq!(subject_of(&job, &t), said);
         }
     }
 }

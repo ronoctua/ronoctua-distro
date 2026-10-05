@@ -77,8 +77,13 @@ pub const TAKES_WAITING_MOST: usize = 4;
 ///
 /// 1 was the flat queue inside every state; 2 is the queue as our own tree,
 /// sent apart ([`Say::Queue`]), and what plays as lanes, each on a voice of
-/// its own.
-pub const PROTOCOL: u32 = 2;
+/// its own; 3 says where the queue is kept ([`State::queue_file`]), refuses
+/// a thing already queued ([`Ask::Put`]'s `once`), carries what mpv's
+/// programs said of a refusal ([`Trouble::Unplayable`]), the lyrics'
+/// translation and the local catalogue's summary. Every field 3 added is
+/// read as absent from a daemon of 2 (`serde(default)`), and the door's
+/// "the player is older" offer covers the rest.
+pub const PROTOCOL: u32 = 3;
 
 /// Where the daemon listens — one per instance (`.#dev` has its own).
 pub fn socket_path() -> Result<std::path::PathBuf> {
@@ -133,7 +138,99 @@ pub enum Thing {
         /// The set.
         set: Set,
     },
+    /// A path or an address that arrives already TITLED — a row of the
+    /// catalogue, a ranking's entry: the daemon resolves `location` as a
+    /// [`Thing::Location`] and the leaf is called `title` from the start,
+    /// never asked for one on the network.
+    Named {
+        /// The path or address.
+        location: String,
+        /// What it is called.
+        title: String,
+    },
 }
+
+/// The address of a source of the catalogue, as a person pasted it.
+///
+/// **A SECRET BY DEFAULT**: an IPTV list's address often carries its account
+/// (`?username=…&password=…`), so this is never printed whole — its `Debug`
+/// is [`SourceUrl::masked`], the host and an ellipsis, which is also what a
+/// door shows. It crosses the socket whole (a local socket, never an argv).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SourceUrl(pub String);
+
+impl SourceUrl {
+    /// The address as a door shows it: its host and `/…`, never the rest —
+    /// and only `…` when the host cannot be told from the account.
+    ///
+    /// # Why not the first `/`, `?` or `#`
+    ///
+    /// A password pasted by hand holds them unescaped
+    /// (`user:pa/ss@host/…`), and the authority cut at the first of them is
+    /// `user:pa` — the account, shown as the host. So when an `@` comes
+    /// AFTER that first delimiter, the host is looked for after each `@`,
+    /// the last first, and only where it can be one: nothing before that `@`
+    /// reads as a query (`=`, `&`), and what follows it is a run of a host's
+    /// own characters with a dot, a port or a bracket in it. An `@` of the
+    /// query (`?mail=a@b&password=…`, `password=se@cret`) is none of that,
+    /// and the answer is `…` — a wrong host at worst, never a secret.
+    #[must_use]
+    pub fn masked(&self) -> String {
+        const CUT: [char; 3] = ['/', '?', '#'];
+        let rest = self
+            .0
+            .split_once("://")
+            .map_or(self.0.as_str(), |(_, rest)| rest);
+        let segment = |from: &str| from.split(CUT).next().unwrap_or_default().to_owned();
+        let authority = segment(rest);
+        let host = if rest[authority.len()..].contains('@') {
+            rest.match_indices('@')
+                .rev()
+                .filter(|&(i, _)| !rest[..i].contains(['=', '&']))
+                .map(|(i, _)| segment(&rest[i + 1..]))
+                .find(|h| plausible_host(h) && h.contains(['.', ':', '[']))
+        } else {
+            authority
+                .rsplit('@')
+                .next()
+                .map(ToOwned::to_owned)
+                .filter(|h| plausible_host(h))
+        };
+        host.map_or_else(|| "…".to_owned(), |h| format!("{h}/…"))
+    }
+}
+
+/// Whether `text` could be a host with its port: letters, digits and the
+/// few marks a name or an address is written with — never `:` alone, never
+/// `&`, `=`, `@` or a space, which only an account or a query holds.
+fn plausible_host(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().any(char::is_alphanumeric)
+        && text
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'))
+}
+
+impl std::fmt::Debug for SourceUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.masked())
+    }
+}
+
+/// A source of the local catalogue, by its id in it: a default source's
+/// (`nasa`, `iptv`, as `assets/channels.nix` declares them) or a person's
+/// (`p…`, `ronoctua_broadcast::sources::Book::next_id`) — the id the
+/// catalogue's rows carry (`ronoctua_broadcast::catalog::SourceRow::id`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SourceId(pub String);
+
+/// An item of the local catalogue — a channel, a film, an episode — by its
+/// number in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ItemId(pub i64);
 
 /// A request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,6 +282,13 @@ pub enum Ask {
         /// Start the queue over with them (and play the first).
         #[serde(default)]
         replace: bool,
+        /// ONLY IF NOT THERE: refused under the daemon's lock with
+        /// [`Trouble::AlreadyQueued`] when a leaf of the queue is already
+        /// at the same place (`queue::same_place` — one file however its
+        /// path is written, one YouTube video however its address is). A
+        /// door that asked the person sends it again without it.
+        #[serde(default)]
+        once: bool,
     },
     /// Play or pause.
     Toggle,
@@ -237,6 +341,16 @@ pub enum Ask {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Write the queue again into the `.rqueue` it was opened from or last
+    /// saved as ([`State::queue_file`]). Refused with
+    /// [`Trouble::NoOrigin`] when it has none, and with
+    /// [`Trouble::ChangedOnDisk`] when that file changed since — unless
+    /// `force`, which the person said after a question ("no" first).
+    SaveQueueAgain {
+        /// Write over a file that changed since.
+        #[serde(default)]
+        force: bool,
+    },
     /// Empty the queue.
     Clear,
     /// Go to `seconds`, or move by them when `relative`.
@@ -276,6 +390,11 @@ pub enum Ask {
     /// Play something together with what plays: another picture, a sound to
     /// other headphones, a commentary, subtitles. A file that played alone
     /// becomes a set, and keeps its place in the queue and its id.
+    ///
+    /// A PICTURE LANE ADDED WITHOUT A CHOSEN TRACK BRINGS ITS SOUND: the
+    /// film's own sound comes as a lane beside it, on the same timing — a
+    /// second film played together is heard too. With `track` it is that
+    /// one track and nothing else.
     AddLane {
         /// The file or address.
         source: String,
@@ -532,6 +651,65 @@ pub enum Ask {
         /// Kept, or let go.
         on: bool,
     },
+    /// Translate the lyrics shown, line by line (`on`), into `to` — `None`
+    /// is the language of the person's doors — or stop. How it goes is
+    /// [`State::lyrics_translation`]; the lines carry
+    /// [`LyricLine::translated`].
+    LyricsTranslation {
+        /// Translate, or stop.
+        on: bool,
+        /// Into which language, by its code.
+        #[serde(default)]
+        to: Option<String>,
+    },
+    /// Keep a new source of the local catalogue — an IPTV list, a feed, a
+    /// channel, a collection — by its address. The daemon writes the
+    /// sources' file; an `adult` one goes to the catalogue kept apart.
+    AddSource {
+        /// Its address: a secret ([`SourceUrl`]).
+        url: SourceUrl,
+        /// It goes to the adult catalogue.
+        #[serde(default)]
+        adult: bool,
+    },
+    /// Forget a source of the catalogue, and every item it brought — one of
+    /// the person's: a default source is never removed.
+    RemoveSource {
+        /// Which.
+        id: SourceId,
+    },
+    /// Turn a source's switches: whether its posters are fetched (`posters`
+    /// — for a default source, turning it on lets the hosts its pictures
+    /// come from) and whether it is kept in the adult catalogue (`adult`,
+    /// a person's source only: its rows move there with a new ingest). A
+    /// switch left `None` stays as it is.
+    SetSource {
+        /// Which.
+        id: SourceId,
+        /// Its posters fetched, or not.
+        #[serde(default)]
+        posters: Option<bool>,
+        /// Kept apart, or not.
+        #[serde(default)]
+        adult: Option<bool>,
+    },
+    /// Read a source again into the catalogue — what a door asks when it
+    /// shows one that is stale: an event, never a clock. `category` narrows
+    /// it to one of the source's categories.
+    Ingest {
+        /// Which source.
+        source: SourceId,
+        /// Only this category of it.
+        #[serde(default)]
+        category: Option<String>,
+    },
+    /// Fetch the posters of these items — the ones a door shows now — into
+    /// the catalogue's posters; [`CatalogSummary::posters_generation`] moves
+    /// when some arrived.
+    Posters {
+        /// Which items.
+        items: Vec<ItemId>,
+    },
     /// Close the player EVERYWHERE: what plays stops, the queue is
     /// remembered, every watcher is told [`Say::Farewell`] — each door closes
     /// on it — and the daemon leaves, with success, so its unit does not
@@ -547,7 +725,46 @@ pub enum Trouble {
     Unplayable {
         /// What mpv said.
         why: String,
+        /// What the program behind mpv said of it — yt-dlp's last `ERROR:`
+        /// line: DATA, the program's own words, which a door frames with a
+        /// key of its own and never takes for a sentence of ours.
+        #[serde(default)]
+        said: Option<String>,
     },
+    /// It is already in the queue ([`Ask::Put`]'s `once`): the entry that
+    /// holds it, and what it is called — the door asks whether to add it
+    /// again, "no" first.
+    AlreadyQueued {
+        /// The leaf at the same place.
+        entry: EntryId,
+        /// Its name.
+        name: Name,
+    },
+    /// The queue's file changed on the disk since it was opened or saved
+    /// ([`Ask::SaveQueueAgain`]): writing over it is the person's to say.
+    ChangedOnDisk {
+        /// Its path.
+        path: String,
+    },
+    /// The queue was never opened from a file nor saved as one: there is
+    /// nowhere to save it again ([`Ask::SaveQueueAgain`]).
+    NoOrigin,
+    /// This player knows the ask and does not do it yet: an honest refusal,
+    /// never an ask that seems to work. `ask` is its kebab-case name, for
+    /// the log: a door says the sentence, never the name.
+    NotYet {
+        /// Which ask.
+        ask: String,
+    },
+    /// A sound lane whose source has no sound to play.
+    NoSound {
+        /// The lane.
+        lane: LaneId,
+    },
+    /// The lyrics could not be translated: why, as the translating crate
+    /// says it (`ronoctua_words::Why`, one sentence each), and the host it
+    /// concerns.
+    Translation(ronoctua_words::Refusal),
     /// A decoder this format needs is not installed.
     NoDecoder {
         /// Its program.
@@ -649,6 +866,12 @@ pub enum Trouble {
     SinkGone {
         /// The output's name.
         device: String,
+    },
+    /// The translator's server address kept in `player.json` is no
+    /// `https://` address with a host: nothing was asked.
+    NotAnAddress {
+        /// The address as it is kept — DATA, framed by a door's sentence.
+        address: String,
     },
     /// An address on the network did not answer, or answered no.
     Unreachable {
@@ -786,6 +1009,30 @@ pub enum Trouble {
         /// Why.
         why: ronoctua_broadcast::picks::Trouble,
     },
+    /// A source of the catalogue gave nothing — a pasted link that is none
+    /// of the shapes read, a host that did not answer, a host not let — one
+    /// sentence per reason (`ronoctua_broadcast::sources::Refused`).
+    Source {
+        /// Why.
+        why: ronoctua_broadcast::sources::Refused,
+    },
+    /// The catalogue's files did not do what was asked — one sentence per
+    /// reason (`ronoctua_broadcast::catalog::Trouble`).
+    Catalog {
+        /// Why.
+        why: ronoctua_broadcast::catalog::Trouble,
+    },
+    /// The person's sources' file did not do what was asked.
+    Sources {
+        /// Why.
+        why: SourcesTrouble,
+    },
+    /// No source of the catalogue has this id (any more) — or it is a
+    /// default source, which is never removed nor marked adult.
+    NoSuchSource {
+        /// The id asked about.
+        id: SourceId,
+    },
 }
 
 impl From<crate::queue::Refusal> for Trouble {
@@ -825,6 +1072,14 @@ pub enum LaneChange {
     Start {
         /// Seconds, never below zero.
         seconds: f64,
+        /// ITS VOICE MOVES WITH IT: the lane that shares its voice — a
+        /// picture's own sound, brought with it ([`Ask::AddLane`]) — begins
+        /// there too, so the two stay one voice and in step. What a picture
+        /// dragged along the timeline sends; `false` moves this lane alone,
+        /// which is how a sound is put back in step with its picture
+        /// (lip-sync), typed on the sound's row.
+        #[serde(default)]
+        voice: bool,
     },
     /// Which stretch of its source plays.
     Trim {
@@ -833,6 +1088,9 @@ pub enum LaneChange {
         /// Where it stops; `None` is the source's end.
         #[serde(default)]
         until_seconds: Option<f64>,
+        /// ITS VOICE IS TRIMMED WITH IT, as [`LaneChange::Start`]'s `voice`.
+        #[serde(default)]
+        voice: bool,
     },
     /// On or off; off, it is kept and costs nothing.
     Enabled {
@@ -877,6 +1135,15 @@ pub enum LaneChange {
         /// The name.
         #[serde(default)]
         title: Option<String>,
+    },
+    /// The language it keeps ([`Lane::lang`](crate::own::Lane)) — which of a
+    /// subtitle file of several languages it shows (a SAMI's class): one of
+    /// its [`LaneState::languages`]; `None` gives it back the first that
+    /// says something. Subtitles only.
+    Language {
+        /// The language's code, as the file declares it.
+        #[serde(default)]
+        lang: Option<String>,
     },
     /// Take it out of the set.
     Remove,
@@ -939,6 +1206,141 @@ pub struct LyricLine {
     pub at: Option<f64>,
     /// The words.
     pub text: String,
+    /// The same line in the language asked ([`Ask::LyricsTranslation`]),
+    /// when it is translated.
+    #[serde(default)]
+    pub translated: Option<String>,
+}
+
+/// The lyrics' translation, as the state says it
+/// ([`State::lyrics_translation`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Translation {
+    /// Into which language, by its code.
+    pub to: String,
+    /// From which, when the lyrics or the translator said.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// How it goes.
+    pub status: TranslationStatus,
+    /// THE TRANSLATION AS ONE BLOCK, when it did not come back a line for
+    /// every line: under each verse it would be the wrong verse, so no line
+    /// carries [`LyricLine::translated`] and a door shows this apart, not
+    /// in step with the song.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsynced: Option<String>,
+}
+
+/// How a translation goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "status")]
+pub enum TranslationStatus {
+    /// Being asked.
+    Translating,
+    /// The lines carry it; `by` is who translated them, as a door credits it.
+    Translated {
+        /// The translator's name.
+        by: String,
+    },
+    /// Not translated, and why.
+    Refused(Trouble),
+}
+
+/// The local catalogue, as the state says it: a door reads the catalogue's
+/// file itself (read-only) and reads it again when a generation moves.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CatalogSummary {
+    /// Moves every time an ingest is written into the catalogue.
+    pub generation: u64,
+    /// Moves every time posters arrived ([`Ask::Posters`]).
+    pub posters_generation: u64,
+    /// Every source: the defaults (`assets/channels.nix`), then the
+    /// person's in the order they were added.
+    pub sources: Vec<SourceStatus>,
+    /// Why the person's sources could not be read ([`Trouble::Sources`]):
+    /// none is added over a file that is there and did not read.
+    pub trouble: Option<Trouble>,
+}
+
+/// One source of the catalogue, as the state says it: every default source
+/// (`assets/channels.nix`), then the person's in the order they were added.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceStatus {
+    /// Its id.
+    pub id: SourceId,
+    /// What kind of source it is.
+    #[serde(default = "a_playlist")]
+    pub kind: ronoctua_broadcast::sources::Kind,
+    /// What it calls itself, once read.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Its address, MASKED ([`SourceUrl::masked`]): the whole one never
+    /// leaves the daemon's file.
+    pub shown: String,
+    /// It is kept in the adult catalogue.
+    #[serde(default)]
+    pub adult: bool,
+    /// Its posters are fetched.
+    #[serde(default)]
+    pub posters: bool,
+    /// Its address is `http`: what it answers crosses the network NOT
+    /// ENCRYPTED, and a door says so beside it — a person's source only (a
+    /// default source is always `https`).
+    #[serde(default)]
+    pub plain: bool,
+    /// How many items it brought, in the two catalogues together.
+    #[serde(default)]
+    pub items: u64,
+    /// An ingest of it is under way.
+    #[serde(default)]
+    pub busy: bool,
+    /// Why its last ingest failed.
+    #[serde(default)]
+    pub trouble: Option<Trouble>,
+}
+
+/// A source whose kind a daemon of an earlier 3 did not say: the kind every
+/// person's source had then.
+const fn a_playlist() -> ronoctua_broadcast::sources::Kind {
+    ronoctua_broadcast::sources::Kind::Playlist
+}
+
+/// Why the person's sources' file (`sources.json`) did not do what was asked
+/// — each a sentence on screen (`player-trouble-sources-<id>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourcesTrouble {
+    /// There is no config root to keep it in.
+    NoHome,
+    /// It is there and could not be read.
+    Unreadable,
+    /// It is there and is not the sources' file (another version, damaged):
+    /// it is kept as it is, and nothing is written over it.
+    Unparseable,
+    /// It could not be written.
+    Unwritable,
+}
+
+impl SourcesTrouble {
+    /// Every one, for a test that walks the words.
+    pub const ALL: [Self; 4] = [
+        Self::NoHome,
+        Self::Unreadable,
+        Self::Unparseable,
+        Self::Unwritable,
+    ];
+
+    /// Its kebab-case name, the suffix of its key.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::NoHome => "no-home",
+            Self::Unreadable => "unreadable",
+            Self::Unparseable => "unparseable",
+            Self::Unwritable => "unwritable",
+        }
+    }
 }
 
 /// Playing in step with another machine.
@@ -972,6 +1374,20 @@ pub struct LaneState {
     pub size: Option<(u32, u32)>,
     /// Its picture is a cover, not a film.
     pub cover: bool,
+    /// THE LANGUAGES ITS FILE CARRIES, when a subtitle file holds several and
+    /// shows one (a SAMI's classes), by their codes in the file's order:
+    /// what [`LaneChange::Language`] chooses among. None otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
+}
+
+/// How long a lane that is off runs ([`State::lengths_off`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LaneLength {
+    /// Which lane.
+    pub lane: LaneId,
+    /// Its source's length, in seconds.
+    pub seconds: f64,
 }
 
 /// What a lane is doing.
@@ -1090,13 +1506,6 @@ pub enum DeskKind {
     /// The world's TV: countries, a country's channels, a search
     /// ([`crate::find::TvList`]).
     Television,
-    /// The live TV of one theme — "channels by theme"'s first section, on a
-    /// desk of its own so the world's TV page stays where it was.
-    Channels,
-    /// A theme's films on the Internet Archive.
-    Archive,
-    /// What is live on YouTube now for a theme.
-    Lives,
 }
 
 /// A desk, as the state names it: a door asks for its page when the
@@ -1214,6 +1623,13 @@ pub struct State {
     pub lanes: Vec<Lane>,
     /// What each lane that is on is doing.
     pub lane_states: Vec<LaneState>,
+    /// THE LENGTHS OF THE LANES THAT ARE OFF — a picture or a sound switched
+    /// off has no voice to say how long it runs, and its band would run to
+    /// the track's end like a live one: as the file said it while it played,
+    /// or as its sheet reads it. A lane whose length is not known yet is not
+    /// here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lengths_off: Vec<LaneLength>,
     /// How the pictures of what plays share a screen.
     pub arrangement: Option<Arrangement>,
     /// The sources of the lanes, with their tracks.
@@ -1228,12 +1644,21 @@ pub struct State {
     /// Where the lyrics came from: `file` (a `.lrc` beside it), `tag` (its
     /// own tags), or the host they were asked of (`prefs::LRCLIB_HOST`).
     pub lyrics_from: Option<String>,
+    /// The lyrics' translation, while one is asked for
+    /// ([`Ask::LyricsTranslation`]).
+    pub lyrics_translation: Option<Translation>,
+    /// Where the queue is kept: nowhere yet, a file it is the same as, or
+    /// one it changed from — what the Queue's title says.
+    pub queue_file: crate::queue::QueueKept,
+    /// The local catalogue's summary.
+    pub catalog: CatalogSummary,
     /// What is wrong now.
     pub troubles: Vec<Trouble>,
-    /// The pages of results the daemon keeps — ALWAYS the eight, in
+    /// The pages of results the daemon keeps — ALWAYS the five, in
     /// [`DeskKind`]'s order: the lookups' three (suggestions, subtitles,
-    /// lyrics) and the directories' five (radio, television, channels,
-    /// archive, lives), each with its generation.
+    /// lyrics) and the directories' two (radio, television), each with its
+    /// generation. Channels by theme are the local catalogue's
+    /// ([`State::catalog`]), read by the doors themselves.
     pub desks: Vec<DeskSummary>,
     /// Moves when what is known of a playing file's tags changes — it was
     /// read, written, refreshed, or a stream said something new. A door
@@ -1373,6 +1798,7 @@ mod tests {
             into: None,
             play: true,
             replace: false,
+            once: true,
         };
         let s = serde_json::to_string(&a).expect("serialises");
         assert!(s.contains("\"ask\":\"put\""), "{s}");
@@ -1397,6 +1823,7 @@ mod tests {
                 into: None,
                 play: true,
                 replace: false,
+                once: false,
             }
         );
         let m: Ask = serde_json::from_str(r#"{"ask":"move","id":3}"#).expect("a move");
@@ -1445,7 +1872,7 @@ mod tests {
         };
         let s = serde_json::to_string(&state).expect("serialises");
         assert!(
-            s.contains(r#""protocol":2"#) && s.contains(r#""current":2"#),
+            s.contains(r#""protocol":3"#) && s.contains(r#""current":2"#),
             "{s}"
         );
         // A DAEMON FROM BEFORE THERE WAS A PROTOCOL says nothing of it, and
@@ -1545,10 +1972,26 @@ mod tests {
             change: LaneChange::Trim {
                 from_seconds: 1.5,
                 until_seconds: Some(9.0),
+                voice: true,
             },
         };
         let s = serde_json::to_string(&every).expect("serialises");
         assert_eq!(serde_json::from_str::<Ask>(&s).expect("parses"), every);
+        // A DOOR OF PROTOCOL 2 moves one lane: no `voice` is `false`.
+        let old: Ask = serde_json::from_str(
+            r#"{"ask":"lane","lane":2,"change":{"what":"start","seconds":3.5}}"#,
+        )
+        .expect("an older door's start");
+        assert_eq!(
+            old,
+            Ask::Lane {
+                lane: LaneId(2),
+                change: LaneChange::Start {
+                    seconds: 3.5,
+                    voice: false
+                }
+            }
+        );
     }
 
     /// FAILS IF: a lane's refusal loses the lane it is about, or a state
@@ -1567,18 +2010,24 @@ mod tests {
             lane_states: vec![LaneState {
                 lane: LaneId(2),
                 duration_seconds: Some(30.0),
-                status: LaneStatus::Refused(Trouble::Unplayable { why: "x".into() }),
+                status: LaneStatus::Refused(Trouble::Unplayable {
+                    why: "x".into(),
+                    said: None,
+                }),
                 picture: false,
                 drift_ms: -12,
                 master: true,
                 size: None,
                 cover: true,
+                languages: Vec::new(),
             }],
             ..State::default()
         };
         let s = serde_json::to_string(&state).expect("serialises");
         assert!(
-            s.contains(r#""status":{"status":"refused","trouble":"unplayable","why":"x"}"#),
+            s.contains(
+                r#""status":{"status":"refused","trouble":"unplayable","why":"x","said":null}"#
+            ),
             "{s}"
         );
         assert_eq!(serde_json::from_str::<State>(&s).expect("parses"), state);
@@ -2033,6 +2482,194 @@ mod tests {
             assert_eq!(serde_json::to_string(&t).expect("serialises"), want);
             assert_eq!(serde_json::from_str::<Trouble>(want).expect(want), t);
         }
+    }
+
+    /// FAILS IF: what protocol 2 wrote stops being read by protocol 3 — a
+    /// put with no `once`, an unplayable with no `said`, a lyric with no
+    /// translation, a state with none of the new fields — or a field 3 added
+    /// stops crossing whole.
+    #[test]
+    fn protocol_2_is_read_and_3_round_trips() {
+        let put: Ask = serde_json::from_str(r#"{"ask":"put","what":["/m/a.flac"],"play":false}"#)
+            .expect("an old put");
+        assert!(matches!(put, Ask::Put { once: false, .. }), "{put:?}");
+        let t: Trouble =
+            serde_json::from_str(r#"{"trouble":"unplayable","why":"x"}"#).expect("an old refusal");
+        assert_eq!(
+            t,
+            Trouble::Unplayable {
+                why: "x".into(),
+                said: None
+            }
+        );
+        let line: LyricLine = serde_json::from_str(r#"{"at":1.5,"text":"la"}"#).expect("a line");
+        assert_eq!(line.translated, None);
+        let old: State = serde_json::from_str(
+            r#"{"protocol":2,"playing":true,"lyrics":[{"at":null,"text":"a"}]}"#,
+        )
+        .expect("a state of protocol 2");
+        assert_eq!(old.protocol, 2);
+        assert_eq!(old.queue_file, crate::queue::QueueKept::Empty);
+        assert_eq!(old.lyrics_translation, None);
+        assert_eq!(old.catalog, CatalogSummary::default());
+
+        let asks = [
+            Ask::SaveQueueAgain { force: true },
+            Ask::LyricsTranslation {
+                on: true,
+                to: Some("pt-BR".into()),
+            },
+            Ask::AddSource {
+                url: SourceUrl("https://iptv.example/get.php?username=u&password=p".into()),
+                adult: false,
+            },
+            Ask::RemoveSource {
+                id: SourceId("p3".into()),
+            },
+            Ask::Ingest {
+                source: SourceId("iptv".into()),
+                category: Some("news".into()),
+            },
+            Ask::SetSource {
+                id: SourceId("lives".into()),
+                posters: Some(true),
+                adult: None,
+            },
+            Ask::Posters {
+                items: vec![ItemId(1), ItemId(9)],
+            },
+            Ask::Put {
+                what: vec![Thing::Named {
+                    location: "https://youtu.be/dQw4w9WgXcQ".into(),
+                    title: "A song".into(),
+                }],
+                after: None,
+                into: None,
+                play: false,
+                replace: false,
+                once: true,
+            },
+        ];
+        for ask in asks {
+            let s = serde_json::to_string(&ask).expect("serialises");
+            assert_eq!(serde_json::from_str::<Ask>(&s).expect(&s), ask);
+        }
+        assert_eq!(
+            serde_json::from_str::<Ask>(r#"{"ask":"save-queue-again"}"#).expect("parses"),
+            Ask::SaveQueueAgain { force: false }
+        );
+        // A NAMED THING is told apart from a stream and a set by its fields.
+        let named: Thing =
+            serde_json::from_str(r#"{"location":"/m/a.flac","title":"A"}"#).expect("named");
+        assert!(matches!(named, Thing::Named { .. }), "{named:?}");
+
+        for t in [
+            Trouble::AlreadyQueued {
+                entry: EntryId(4),
+                name: Name::Titled("A".into()),
+            },
+            Trouble::ChangedOnDisk {
+                path: "/q.rqueue".into(),
+            },
+            Trouble::NoOrigin,
+            Trouble::NoSound { lane: LaneId(2) },
+            Trouble::Unplayable {
+                why: "loading failed".into(),
+                said: Some("ERROR: [youtube] x: Sign in".into()),
+            },
+        ] {
+            let s = serde_json::to_string(&t).expect("serialises");
+            assert_eq!(serde_json::from_str::<Trouble>(&s).expect(&s), t);
+        }
+        assert_eq!(
+            serde_json::to_string(&Trouble::NoOrigin).expect("serialises"),
+            r#"{"trouble":"no-origin"}"#
+        );
+
+        let state = State {
+            protocol: PROTOCOL,
+            lyrics: vec![LyricLine {
+                at: Some(1.0),
+                text: "la".into(),
+                translated: Some("lá".into()),
+            }],
+            lyrics_translation: Some(Translation {
+                to: "pt-BR".into(),
+                from: Some("en".into()),
+                status: TranslationStatus::Translated { by: "x".into() },
+                unsynced: Some("one\ntwo".into()),
+            }),
+            queue_file: crate::queue::QueueKept::Changed {
+                path: "/q.rqueue".into(),
+                name: "q".into(),
+            },
+            catalog: CatalogSummary {
+                generation: 2,
+                posters_generation: 1,
+                sources: vec![SourceStatus {
+                    id: SourceId("p1".into()),
+                    kind: ronoctua_broadcast::sources::Kind::Playlist,
+                    title: None,
+                    shown: "iptv.example/…".into(),
+                    adult: false,
+                    posters: false,
+                    plain: true,
+                    items: 10,
+                    busy: true,
+                    trouble: Some(Trouble::Source {
+                        why: ronoctua_broadcast::sources::Refused::Unreachable,
+                    }),
+                }],
+                trouble: Some(Trouble::Sources {
+                    why: SourcesTrouble::Unparseable,
+                }),
+            },
+            ..State::default()
+        };
+        let s = serde_json::to_string(&state).expect("serialises");
+        assert!(
+            s.contains(r#""queue_file":{"kept":"changed","path":"/q.rqueue","name":"q"}"#),
+            "{s}"
+        );
+        assert_eq!(serde_json::from_str::<State>(&s).expect("parses"), state);
+    }
+
+    /// FAILS IF: a source's address reaches a log or a door whole — its
+    /// account rides in the query.
+    #[test]
+    fn a_source_address_is_never_printed_whole() {
+        let url = SourceUrl("http://user:pw@iptv.example:8080/get.php?password=p".into());
+        assert_eq!(url.masked(), "iptv.example:8080/…");
+        // A PASSWORD WITH A DELIMITER IN IT, unescaped as pasted by hand.
+        for (pasted, shown) in [
+            (
+                "http://user:pa/ss@iptv.example/get.php?x=1",
+                "iptv.example/…",
+            ),
+            ("http://user:p#w@iptv.example/", "iptv.example/…"),
+            ("http://user:p?w@iptv.example:81/x", "iptv.example:81/…"),
+            ("http://u:p@ss/w@iptv.example/x", "iptv.example/…"),
+            // AN `@` OF THE QUERY is no account: nothing after it is a host.
+            ("http://h.example/get.php?mail=me@x.y&password=secret", "…"),
+            ("http://h.example/get.php?username=me&password=se@cret", "…"),
+            ("http://iptv.example/list.m3u", "iptv.example/…"),
+            ("iptv.example", "iptv.example/…"),
+        ] {
+            let masked = SourceUrl(pasted.into()).masked();
+            assert_eq!(masked, shown, "{pasted}");
+            for secret in ["pa", "ss", "p#w", "p?w", "secret", "se@cret", "user"] {
+                assert!(
+                    !masked.contains(secret),
+                    "{pasted} showed {secret}: {masked}"
+                );
+            }
+        }
+        let ask = Ask::AddSource { url, adult: true };
+        let printed = format!("{ask:?}");
+        assert!(
+            !printed.contains("pw") && !printed.contains("password"),
+            "{printed}"
+        );
     }
 
     #[test]

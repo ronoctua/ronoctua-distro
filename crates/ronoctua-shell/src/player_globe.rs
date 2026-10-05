@@ -125,7 +125,8 @@ pub fn of_page(v: &View) -> Option<(&Query, &Desk, &find::Globe)> {
         return None;
     }
     let query = top.query.as_ref()?;
-    let desk = v.found.listing(query)?;
+    // A DIRECTORY ALLOWED NO MORE has no marks: its list is of before.
+    let desk = v.allowed_listing(query)?;
     let globe = match &desk.page {
         Page::RadioCountries { globe, .. }
         | Page::Stations { globe, .. }

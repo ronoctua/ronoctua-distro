@@ -40,7 +40,8 @@ use ronoctua_tokens as tokens;
 /// A glyph of the pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zone {
-    /// Play or pause: a click toggles, the right button raises the column.
+    /// Play or pause: a click toggles, the right button opens the column or
+    /// closes it (`player-column`, `LEADER p c`).
     Toggle,
     /// The next item: a click skips to it, the right button opens the
     /// player in the footer.

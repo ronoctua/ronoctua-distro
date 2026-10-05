@@ -12,11 +12,22 @@
 //!
 //! # What it is not
 //!
-//! It is not the `M-x` finder: no list, no filter, no candidate. It holds what
-//! is typed, and answers with it. There is no cursor inside the text, as there
-//! never was in the minibuffer: what is typed goes at the end.
+//! It is not the `M-x` finder: no list, no filter. It holds what is typed,
+//! and answers with it. There is no cursor inside the text, as there never was
+//! in the minibuffer: what is typed goes at the end.
+//!
+//! # What it OFFERS
+//!
+//! A question whose answers are a closed set it can read — a time zone — has
+//! a [`Completer`] ([`completer_of`], by the question's id): the line shows the
+//! first answers that fit what is typed, after it, and `TAB` takes the first.
+//! `Lis` offers `Europe/Lisbon`. In both doors, because both draw the line
+//! with one builder (`door::list::question_pieces`) and both hand it the keys.
 
 use ronoctua_keymap::{Key, Sym};
+
+/// The key that takes a line's first offer, as the offer says it.
+pub const TAKE_OFFER: &str = "TAB";
 
 /// The keys a question teaches on a window's header, clickable
 /// (invariant 19): `Esc` lets it go, `RET` answers.
@@ -30,6 +41,44 @@ pub const OF_THE_LINE: &[(&str, &str)] = &[
     ("RET", "line-answer"),
 ];
 
+/// What a question offers for what is typed — a closed set of answer sets,
+/// so a [`Line`] stays `Clone` and comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completer {
+    /// The time zones tzdb knows (`locale::zones_matching`).
+    Zones,
+    /// A list of the tests' own.
+    #[cfg(test)]
+    Fixed(&'static [&'static str]),
+}
+
+impl Completer {
+    /// The answers that fit what is typed, best first.
+    #[must_use]
+    pub fn answers(self, typed: &str) -> Vec<String> {
+        match self {
+            Self::Zones => crate::locale::zones_matching(typed),
+            #[cfg(test)]
+            Self::Fixed(all) => crate::locale::zones_matching_in(all, typed),
+        }
+    }
+}
+
+/// How many offers a line shows after what is typed — the first few, which is
+/// what a glance reads; `TAB` takes the first, and typing narrows the rest.
+pub const OFFERS: usize = 3;
+
+/// The completer of the question asked under `id`, when its answers are a
+/// set this system can read. The time zones — this interface's, a place's
+/// and the machine's — are the three that have one.
+#[must_use]
+pub fn completer_of(id: &str) -> Option<Completer> {
+    match id {
+        "locale-zone" | "locale-place" | "locale-system-zone" => Some(Completer::Zones),
+        _ => None,
+    }
+}
+
 /// A question being typed.
 ///
 /// `Debug` is written by hand: a SECRET never reaches a log through it.
@@ -38,16 +87,23 @@ pub struct Line {
     /// The command that asks — and that answers: the question is its
     /// `ask-<id>` key, and the answer goes back under this id.
     pub id: &'static str,
+    /// The question's OWN key, when it is not `ask-<id>` — what a brain
+    /// module declared for one of its actions, which it names as it likes.
+    pub asks: Option<&'static str>,
     /// Whether what is typed is hidden — a password, a PIN, a key.
     pub secret: bool,
     /// What has been typed.
     pub text: String,
+    /// What the question offers for what is typed, when it can read its
+    /// answers ([`completer_of`]); never for a secret.
+    pub completes: Option<Completer>,
 }
 
 impl std::fmt::Debug for Line {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Line")
             .field("id", &self.id)
+            .field("asks", &self.asks)
             .field("secret", &self.secret)
             .field("text", &self.shown())
             .finish()
@@ -82,8 +138,57 @@ impl Line {
     pub fn new(id: &'static str, secret: bool, initial: Option<&str>) -> Self {
         Self {
             id,
+            asks: None,
             secret,
             text: initial.map(one_line).unwrap_or_default(),
+            completes: if secret { None } else { completer_of(id) },
+        }
+    }
+
+    /// The first answers that fit what is typed — none for a line that offers
+    /// nothing, or with nothing typed yet (four hundred zones are not an
+    /// offer, they are a list).
+    #[must_use]
+    pub fn offered(&self) -> Vec<String> {
+        match self.completes {
+            Some(complete) if !self.text.trim().is_empty() => {
+                let mut all = complete.answers(self.text.trim());
+                all.truncate(OFFERS);
+                all
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The offers as the line draws them, after what is typed: `TAB` and the
+    /// answers it would take — or nothing.
+    #[must_use]
+    pub fn offers_drawn(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        let offered = self.offered();
+        // AN EXACT ANSWER OFFERS NOTHING: it is already typed.
+        if offered.is_empty() || offered.first().is_some_and(|o| *o == self.text.trim()) {
+            return None;
+        }
+        Some(texts.t_with(
+            ronoctua_i18n::key::LINE_OFFERS,
+            &[
+                ("keys", TAKE_OFFER),
+                (
+                    "offers",
+                    &offered.join(&format!(" {} ", ronoctua_tokens::mark::SEPARATOR)),
+                ),
+            ],
+        ))
+    }
+
+    /// A question asked under `id` in the words of the key `asks` — a brain
+    /// module's action, whose answer goes back under the action's command
+    /// and whose question is the key its module declared.
+    #[must_use]
+    pub fn asking(id: &'static str, asks: &'static str) -> Self {
+        Self {
+            asks: Some(asks),
+            ..Self::new(id, false, None)
         }
     }
 
@@ -117,7 +222,9 @@ impl Line {
             // that is how this asks whether it exists at all.
             (!text.starts_with('[')).then_some(text)
         };
-        said(&format!("ask-{}", self.id))
+        self.asks
+            .and_then(said)
+            .or_else(|| said(&format!("ask-{}", self.id)))
             .or_else(|| said(&format!("cmd-{}", self.id)))
             .unwrap_or_else(|| self.id.to_owned())
     }
@@ -125,7 +232,10 @@ impl Line {
     /// The whole line as it is drawn: the question, and the text or its mask.
     #[must_use]
     pub fn drawn(&self, texts: &ronoctua_i18n::Texts) -> String {
-        format!("{}: {}", self.question(texts), self.shown())
+        match self.offers_drawn(texts) {
+            Some(offers) => format!("{}: {}  {offers}", self.question(texts), self.shown()),
+            None => format!("{}: {}", self.question(texts), self.shown()),
+        }
     }
 
     /// The same, with no localiser — the command's id for the question. The
@@ -142,9 +252,11 @@ impl Line {
     /// cluster; a letter and the space are typed. Every other key does
     /// nothing — a question is not a list, and an arrow has nowhere to go.
     pub fn key(&mut self, key: Key) -> Step {
+        if pastes(key) {
+            return Step::WantsPaste;
+        }
         if key.mods.ctrl {
             return match key.sym {
-                Sym::Char('v' | 'y') => Step::WantsPaste,
                 Sym::Char('g') => Step::Cancel,
                 _ => Step::Nothing,
             };
@@ -171,8 +283,16 @@ impl Line {
                 self.text.push(c);
                 Step::Changed
             }
-            Sym::Tab
-            | Sym::Left
+            // `TAB` TAKES THE FIRST OFFER, on a line that offers; anywhere
+            // else it has nowhere to go.
+            Sym::Tab => match self.offered().into_iter().next() {
+                Some(first) if first != self.text => {
+                    self.text = first;
+                    Step::Changed
+                }
+                _ => Step::Nothing,
+            },
+            Sym::Left
             | Sym::Right
             | Sym::Up
             | Sym::Down
@@ -192,6 +312,17 @@ impl Line {
         self.text.push_str(&line);
         Step::Changed
     }
+}
+
+/// Whether this key PASTES into a line of text: `C-v`, everybody's paste,
+/// and `C-y`, Emacs's yank — the notation this system's keys are written in.
+///
+/// ONE ANSWER for every text input — this line, the command finder, the
+/// launcher's query, the file manager's filter — so a paste key is never a
+/// key one input knows and the next one does not (`every-text-input-pastes`).
+#[must_use]
+pub fn pastes(key: Key) -> bool {
+    key.mods.ctrl && !key.mods.alt && !key.mods.logo && matches!(key.sym, Sym::Char('v' | 'y'))
 }
 
 /// Text as ONE line takes it: the ends trimmed, and every control character —
@@ -340,6 +471,78 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a zone question stops offering, `TAB` stops taking the
+    /// first offer, or a line that has no completer starts offering.
+    #[test]
+    fn a_zone_question_offers_and_tab_takes_the_first() {
+        let mut l = Line::new("x", false, None);
+        l.completes = Some(Completer::Fixed(&[
+            "America/Lima",
+            "Europe/Lisbon",
+            "Europe/London",
+        ]));
+        typed(&mut l, "Lis");
+        assert_eq!(l.offered(), ["Europe/Lisbon"]);
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        assert!(
+            l.drawn(&texts).contains("Europe/Lisbon"),
+            "{}",
+            l.drawn(&texts)
+        );
+        assert_eq!(l.key(plain(Sym::Tab)), Step::Changed);
+        assert_eq!(l.text, "Europe/Lisbon");
+        // TAKEN, IT OFFERS ITSELF NO MORE, and `TAB` again does nothing.
+        assert!(l.offers_drawn(&texts).is_none());
+        assert_eq!(l.key(plain(Sym::Tab)), Step::Nothing);
+        // A LINE WITH NO COMPLETER offers nothing, and a secret never does.
+        let mut plain_line = Line::new("software-web-new", false, None);
+        typed(&mut plain_line, "Lis");
+        assert!(plain_line.offered().is_empty());
+        assert!(Line::new("locale-zone", true, None).completes.is_none());
+        assert!(Line::new("locale-zone", false, None).completes.is_some());
+    }
+
+    /// FAILS IF: the offer takes the room of the keys after it — the
+    /// header's clickable `RET answer` cut at the edge — at any width, in
+    /// either language.
+    #[test]
+    fn the_offer_gives_way_to_the_keys() {
+        use ronoctua_render::layout::width;
+        let mut l = Line::new("locale-zone", false, None);
+        l.completes = Some(Completer::Fixed(&["Europe/Lisbon"]));
+        typed(&mut l, "Lis");
+        for lang in ["en-GB", "pt-BR"] {
+            let texts = ronoctua_i18n::Texts::fresh(lang).expect("language");
+            let keys = crate::chrome::hint_of(OF_THE_LINE, &texts);
+            for columns in [60_u16, 90, 110, 140, 200] {
+                let pieces = crate::door::list::question_pieces(&l, &texts, columns);
+                let offered = pieces.iter().any(|p| p.id == Some("line-offer"));
+                if !offered {
+                    continue;
+                }
+                let drawn: u16 = pieces.iter().map(|p| width(&p.text)).sum();
+                assert!(
+                    drawn + crate::fold::WIDTH <= columns,
+                    "{lang} at {columns}: {drawn} cells drawn with the offer"
+                );
+                for k in &keys {
+                    assert!(
+                        pieces.iter().any(|p| p.text == k.text),
+                        "{lang} at {columns}: the key {:?} is gone",
+                        k.text
+                    );
+                }
+            }
+            // AND A WIDE LINE DOES OFFER.
+            assert!(
+                crate::door::list::question_pieces(&l, &texts, 240)
+                    .iter()
+                    .any(|p| p.id == Some("line-offer")),
+                "{lang}: no offer on a wide line"
+            );
+        }
+    }
+
     /// THE QUESTION IS A SENTENCE: `ask-<id>` when it exists, the command's
     /// label otherwise — never the id, in any language.
     #[test]
@@ -349,6 +552,26 @@ mod tests {
             let l = Line::new("software-web-new", false, None);
             assert_eq!(l.question(&texts), texts.t("ask-software-web-new"));
             assert!(l.drawn(&texts).starts_with(&l.question(&texts)));
+        }
+    }
+
+    /// FAILS IF: a question whose key was DECLARED — a brain module's action
+    /// names its own — is drawn in any words but that key's, or answers under
+    /// anything but the id it was asked under.
+    #[test]
+    fn a_declared_question_is_asked_in_its_own_words() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+            // A key spelt nothing like `ask-<id>`, and an id with no
+            // `ask-` or `cmd-` key at all.
+            let mut l = Line::asking("fixture-when", "line-answer");
+            assert_eq!(l.question(&texts), texts.t("line-answer"));
+            assert!(!l.secret);
+            typed(&mut l, "at nine");
+            assert_eq!(
+                l.key(plain(Sym::Enter)),
+                Step::Answer("fixture-when", "at nine".into())
+            );
         }
     }
 }

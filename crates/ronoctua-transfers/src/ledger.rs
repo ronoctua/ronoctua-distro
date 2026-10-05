@@ -53,13 +53,33 @@ struct State {
 pub struct Shared {
     state: Mutex<State>,
     bell: Condvar,
+    /// Where the jobs' passwords wait (`crate::secrets`): the one folder a
+    /// job's end removes a secret from. A PARAMETER, like every root here, so
+    /// a test hands a folder of its own and never the session's.
+    secrets: Option<std::path::PathBuf>,
 }
 
 impl Shared {
-    /// An empty one.
+    /// An empty one, whose jobs' passwords wait in the session's folder.
     #[must_use]
     pub fn fresh_one() -> Self {
-        Self::default()
+        Self {
+            secrets: crate::secrets::dir(),
+            ..Self::default()
+        }
+    }
+
+    /// The same, with the passwords in `dir`.
+    #[must_use]
+    pub fn with_secrets(mut self, dir: std::path::PathBuf) -> Self {
+        self.secrets = Some(dir);
+        self
+    }
+
+    /// Where the jobs' passwords wait, if anywhere.
+    #[must_use]
+    pub fn secrets(&self) -> Option<&std::path::Path> {
+        self.secrets.as_deref()
     }
 
     /// Adds a job and gives back its number and its switch.
@@ -188,6 +208,36 @@ impl Shared {
         for switch in state.switches.values() {
             switch.set(Flow::Stop);
         }
+    }
+
+    /// Stops everything and WAITS for the work to unwind, up to `patience`:
+    /// what a daemon told to stop (`SIGTERM`, `systemctl --user stop`) does
+    /// before it exits. Answers whether every job ended in time.
+    ///
+    /// # Why it waits
+    ///
+    /// Because a switch is read at the next BITE, and the process that
+    /// returns from `main` right after flipping it kills the threads before
+    /// they get there: the copy stops mid-file and the piece stays in the
+    /// destination — what this waits for is the unwinding that removes it.
+    /// The patience is the unit's own (`TimeoutStopSec`), less a margin, so
+    /// systemd never has to send the `SIGKILL` that would leave the piece.
+    pub fn wind_down(&self, patience: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + patience;
+        let mut state = self.locked();
+        for switch in state.switches.values() {
+            switch.set(Flow::Stop);
+        }
+        while !state.switches.is_empty() {
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            state = self
+                .bell
+                .wait_timeout(state, left)
+                .map_or_else(|poisoned| poisoned.into_inner().0, |(state, _)| state);
+        }
+        true
     }
 
     /// The lock, with a poisoned one taken anyway.

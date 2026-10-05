@@ -29,6 +29,7 @@
   lib,
   scroll,
   ronoctua-shell,
+  player,
   fonts,
 }:
 
@@ -46,6 +47,15 @@ let
   # the only requirement that matters here. Its `app_id` is `foot`, which is
   # what the modeline has to show in the `major-mode`.
   client = pkgs.foot;
+
+  # THE PLAYER'S PAIR (`player_mark`): the daemon, the media it plays, the
+  # programs it runs by path, and the client that asks it from outside.
+  space = import ../assets/tokens/space.nix;
+  cellPx = typography.size.base * typography.cellWidthEm;
+  tools = import ../nix/player-tools.nix { inherit pkgs; };
+  setenv = lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "--setenv=${n}=${v}") tools);
+  media = import ./player-media.nix { inherit pkgs; };
+  playerClient = ./player-client.py;
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-modeline";
@@ -60,6 +70,7 @@ pkgs.testers.runNixOSTest {
       client
       pkgs.imagemagick
       pkgs.tesseract
+      pkgs.python3
     ]
     ++ xvfb.packages;
 
@@ -71,6 +82,7 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    import json
     ${xvfb.prelude}
 
 
@@ -229,15 +241,139 @@ pkgs.testers.runNixOSTest {
         # one already has the setup for.
         journal = machine.succeed("journalctl -u footer --no-pager")
         lines = journal.splitlines()
-        last_layout = max(
+        resolved_at = max(
             i for i, l in enumerate(lines) if "footer layout resolved" in l
         )
-        block = lines[last_layout:]
+        block = lines[resolved_at:]
         assert not any('id="state"' in l for l in block), (
             "a foreign window got a state: the compositor does not tell us what\n"
             "state `vim` is in, and writing `normal` would be asserting what\n"
             "nobody checked.\n" + "\n".join(block[:10])
         )
+
+    # THE PLAYER'S PAIR, clicked where it is drawn (`player_mark::zone_at`,
+    # the one answer the painter, the click and the hover read): the left
+    # button on play/pause toggles, the right one opens the column — and
+    # closes it when it is open; the left button on next skips, the right one
+    # opens the player in the footer. Each read back from OUTSIDE: the
+    # daemon's state over its socket, the column's slot, the footer's height.
+    import re as _re
+
+    def player(what):
+        return json.loads(machine.succeed(
+            f"XDG_RUNTIME_DIR=/run/user/0 python3 ${playerClient} '{json.dumps(what)}'"
+        ))
+
+    def footer_log():
+        # `--all`: a segment's line carries its glyphs, and journalctl
+        # abbreviates a message it does not call printable to "[… blob data]".
+        return _re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed("journalctl -u footer --no-pager -o cat --all"))
+
+    def last_layout():
+        """The last layout the footer resolved, and the segments placed in it."""
+        lines = footer_log().splitlines()
+        at = max(i for i, l in enumerate(lines) if "footer layout resolved" in l)
+        head = lines[at]
+
+        def field(name):
+            m = _re.search(rf"\b{name}=(\d+)", head)
+            assert m is not None, f"no {name}= in the resolved layout: {head}"
+            return int(m.group(1))
+
+        width = field("width")
+        height = field("height")
+        columns = field("columns")
+        placed = {}
+        # THE FOOTER'S OWN LINES: a column the footer started lives in its
+        # unit and logs into the same journal, between the segments.
+        for l in lines[at + 1:]:
+            if "ronoctua_shell::surface:" not in l:
+                continue
+            m = _re.search(r'id="([a-z-]+)" column=(\d+)', l)
+            if not m:
+                break
+            placed[m.group(1)] = int(m.group(2))
+        return width, height, columns, placed
+
+    CELL = ${toString cellPx}
+    LINE = ${toString linePx}
+    ZONE = {"toggle": 0, "next": 1 + ${toString space.modeline.bondGap}}
+
+    def click(zone, button):
+        """A click on a glyph of the pair, at the middle of its cell — counted
+        from the right border, as the modeline places its segments
+        (`chrome::at_the_edge`)."""
+        width, _, columns, placed = last_layout()
+        assert "player" in placed, f"the pair is not on the modeline: {placed}"
+        cell = placed["player"] + ZONE[zone]
+        w, h, x0, y0 = compositor_geometry()
+        x = x0 + width - (columns - cell) * CELL + CELL / 2
+        # THE MODELINE IS THE UPPER OF THE TWO LINES AT THE BOTTOM, whatever
+        # grew above them.
+        y = y0 + h - 2 * LINE + LINE / 2
+        machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {int(x)} {int(y)} click {button}")
+        machine.sleep(2)
+
+    def settles(what, want, why, seconds=20):
+        for _ in range(seconds):
+            if what() == want:
+                return
+            machine.sleep(1)
+        assert what() == want, f"{why}: {what()!r}, not {want!r}"
+
+    with subtest("the player's pair is on the modeline while something plays"):
+        focus_compositor()
+        machine.succeed(
+            "systemd-run --unit=player --setenv=XDG_RUNTIME_DIR=/run/user/0 "
+            "--setenv=HOME=/root ${setenv} ${player}/bin/ronoctua-player"
+        )
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        said = player({"ask": "put", "what": ["${media}/tone.flac", "${media}/film.mp4"], "replace": True})
+        assert said["say"] == "done", said
+        # READ AS `last_layout` READS IT — the colours stripped, every field in
+        # full — and not with a `grep` of its own, which a coloured field name
+        # or an abbreviated line would never answer.
+        settles(lambda: "player" in last_layout()[3], True, "the pair never came to the modeline", seconds=60)
+
+    with subtest("the left button on play/pause pauses, and plays again"):
+        playing = lambda: player({"ask": "look"})["playing"]
+        settles(playing, True, "the queue does not play")
+        click("toggle", 1)
+        settles(playing, False, "a click on pause did not pause")
+        click("toggle", 1)
+        settles(playing, True, "a click on play did not play")
+
+    with subtest("the left button on next skips to the next one"):
+        current = lambda: player({"ask": "look"})["location"]
+        before = current()
+        click("next", 1)
+        settles(lambda: current() != before, True, f"a click on next left {before} playing")
+
+    with subtest("the right button on play/pause opens the column, and closes it"):
+        # A LIVE COLUMN, and not a file: a column ended by the toggle (TERM)
+        # can leave its record behind, and every reader of the slot believes
+        # a record only when its pid is a column still running
+        # (`right_column::believed`) — so this asks the same of `/proc`.
+        opened = lambda: machine.execute(
+            "p=$(cut -d' ' -f1 /run/user/0/ronoctua-column-player.pid) && "
+            "tr '\\0' ' ' < /proc/$p/cmdline | grep -q ' column'"
+        )[0] == 0
+        click("toggle", 3)
+        settles(opened, True, "a right click on play/pause opened no column")
+        click("toggle", 3)
+        settles(opened, False, "a second right click left the column open")
+
+    with subtest("the right button on next opens the player in the footer"):
+        rest = last_layout()[1]
+        click("next", 3)
+        settles(lambda: last_layout()[1] > rest, True, "the footer did not grow to show the player")
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
+        settles(lambda: last_layout()[1], rest, "Esc did not give the footer back its two lines")
+
+    with subtest("with the player closed, the pair leaves the modeline"):
+        heard = json.loads(machine.succeed("XDG_RUNTIME_DIR=/run/user/0 python3 ${playerClient} quit"))
+        assert heard["last"] == "farewell", heard
+        settles(lambda: "player" in last_layout()[3], False, "the pair stayed on the modeline of a closed player")
 
     with subtest("closing the window gives the modeline back to the empty state"):
         # Proof that the daemon's state SHRINKS, and does not only grow: an

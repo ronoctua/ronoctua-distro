@@ -410,7 +410,18 @@ pub enum Refusal {
     NotWritable,
     /// There is nowhere to write a preference.
     NoPlaceToWrite,
-    /// Anything else, with its own words alongside.
+    /// The compositor was there and refused: a re-read or a preview it
+    /// answered with an error.
+    CompositorRefused,
+    /// `display.json` will not parse, and writing would replace it.
+    UnreadableFile,
+    /// The panel's brightness file would not take the value.
+    PanelRefused,
+    /// The monitor did not answer over DDC/CI.
+    MonitorSilent,
+    /// Anything else. Its words go to the log and NOT to the screen: they are
+    /// English (invariant 18), and the message line is in the person's
+    /// language (invariant 8).
     Other,
 }
 
@@ -764,6 +775,7 @@ fn one_of_each(
         transform: mine_if_moved!(transform),
         position: mine_if_moved!(position),
         vary: mine_if_moved!(vary),
+        depth: mine_if_moved!(depth),
     }
 }
 
@@ -1017,7 +1029,7 @@ impl Eyes {
         }
         let mut wm = open_the_compositor()?;
         wm.reread()
-            .map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
+            .map_err(|e| Refused::of(Refusal::CompositorRefused, format!("{e:#}")))?;
         for at in screens {
             self.previewed.remove(at);
         }
@@ -1062,7 +1074,7 @@ impl Eyes {
         // not give whole pixels is snapped — both answer success. What
         // confirms a change is the READING that follows it, never the answer.
         wm.ask(at, ask)
-            .map_err(|e| Refused::of(Refusal::NoCompositor, format!("{e:#}")))?;
+            .map_err(|e| Refused::of(Refusal::CompositorRefused, format!("{e:#}")))?;
         Ok(())
     }
 
@@ -1100,7 +1112,8 @@ impl Eyes {
                 if want == p.now {
                     return Ok(());
                 }
-                backlight::write_in(&dir, want)?;
+                backlight::write_in(&dir, want)
+                    .map_err(|e| Refused::of(Refusal::PanelRefused, format!("{e:#}")))?;
             }
             Some(Light::Monitor(_)) => {
                 let bus = screen.wiring.bus.clone().ok_or_else(|| gone("bus"))?;
@@ -1122,7 +1135,9 @@ impl Eyes {
                 if raw == was.now {
                     return Ok(());
                 }
-                ddc::Bus::open(&bus)?.set(ddc::LUMINANCE, raw)?;
+                ddc::Bus::open(&bus)
+                    .and_then(|mut b| b.set(ddc::LUMINANCE, raw))
+                    .map_err(|e| Refused::of(Refusal::MonitorSilent, format!("{e:#}")))?;
                 // A monitor takes up to a second to move its own backlight,
                 // so what it would answer right now is the old number. The
                 // remembered value is the one just asked for; the next deep
@@ -1188,7 +1203,7 @@ impl Eyes {
         // store's promise names: one feature, not the contents.
         let Some(on_disk) = prefs::store().parsed() else {
             return Err(Refused::of(
-                Refusal::NoPlaceToWrite,
+                Refusal::UnreadableFile,
                 format!(
                     "{} will not parse, and writing would replace it. Fix or \
                      remove the file.",
@@ -1715,5 +1730,29 @@ mod tests {
             "`finish` came back after the first beat instead of waiting for the \
              queue to drain: {waited:?}",
         );
+    }
+
+    /// FAILS IF: a render depth chosen in one door is dropped by the merge —
+    /// `one_of_each` names every field, and a new one left out of it is lost
+    /// on every write.
+    #[test]
+    fn the_merge_carries_the_render_depth() {
+        let base = fragment::Wanted::default();
+        let mine = fragment::Wanted {
+            depth: Some(10),
+            ..fragment::Wanted::default()
+        };
+        let theirs = fragment::Wanted {
+            vary: true,
+            ..fragment::Wanted::default()
+        };
+        let got = one_of_each(&base, &mine, &theirs);
+        assert_eq!((got.depth, got.vary), (Some(10), true));
+        // AND A DEPTH THIS DOOR DID NOT MOVE IS THE DISK'S.
+        let theirs = fragment::Wanted {
+            depth: Some(6),
+            ..fragment::Wanted::default()
+        };
+        assert_eq!(one_of_each(&base, &base, &theirs).depth, Some(6));
     }
 }

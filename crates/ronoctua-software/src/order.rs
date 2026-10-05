@@ -504,6 +504,12 @@ pub enum IconChoice {
     Site {
         /// The icon's URL.
         url: String,
+        /// The page that NAMED it, when it was found on one — the address
+        /// the person typed, on the host they let. An icon on another host
+        /// is asked bare on that page's pass (`net::get_named`); without a
+        /// page it is asked on a pass of its own host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page: Option<String>,
     },
     /// Dashboard Icons (dashboardicons.com): one DRAWING of one icon.
     Dashboard {
@@ -559,6 +565,7 @@ mod tests {
             profile: "Default".into(),
             icon: IconChoice::Site {
                 url: "https://mail.example.org/icon.png".into(),
+                page: None,
             },
             prepared: None,
             category: None,

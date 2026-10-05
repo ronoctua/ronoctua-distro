@@ -33,6 +33,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 pub mod act;
+pub mod archive;
 pub mod listing;
 pub mod menu;
 pub mod mime;
@@ -154,15 +155,25 @@ impl Entry {
     /// reserves.
     pub const PARENT: &'static str = "..";
 
-    /// Hidden by the only rule Unix has: the name starts with a dot.
+    /// The name a listing DRAWS: the name itself — or, for an entry the
+    /// merged trash brought in from a volume's own bin, whose name is its
+    /// whole path (so that `folder.join(name)` still lands on it), the last
+    /// component of that path.
     ///
-    /// **Except the way out.** `..` starts with a dot and is not a hidden
-    /// file: it is not a file at all, it is the row that goes up. Hiding it
-    /// with `C-h` would take the way back out of the listing for exactly the
-    /// people who turned the hidden files off.
+    /// A path and not a second field: every place that turns an entry into a
+    /// path already writes `folder.join(&entry.name)`, and `join` with an
+    /// absolute path IS that path. Only what is drawn and what is sorted by
+    /// needs to know, and they ask here.
     #[must_use]
-    pub fn hidden(&self) -> bool {
-        !self.is_parent() && self.name.starts_with('.')
+    pub fn shown(&self) -> &str {
+        if self.name.starts_with('/') {
+            Path::new(&self.name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&self.name)
+        } else {
+            &self.name
+        }
     }
 
     /// Is this the row that goes back up a level?

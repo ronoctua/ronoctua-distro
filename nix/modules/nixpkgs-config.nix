@@ -29,7 +29,11 @@ in
   # overlay reaching the SYSTEM's pkgs, `rust-bin` is undefined in dev.nix and
   # the alternative would be nixpkgs' `rustc` — a second, different compiler on
   # the same machine.
-  nixpkgs.overlays = [ inputs.rust-overlay.overlays.default ];
+  nixpkgs.overlays = [
+    inputs.rust-overlay.overlays.default
+    # THE SAME yt-dlp AS THE FLAKE'S — see nix/yt-dlp.nix.
+    (import ../yt-dlp.nix)
+  ];
   # `nixpkgs.config` IS ONE DEFINITION, and has to be: a VM test hands `pkgs`
   # in from outside, and in that shape the option takes a single definition.
   # See the note in nix/modules/dev.nix.
@@ -60,6 +64,7 @@ in
         "unrar" # the only thing that opens .rar properly
         "google-chrome" # asked for by name
         "android-studio"
+        "claude-code" # asked for by name; prebuilt, unfree
       ]
       # The SDK is not one package: it is dozens of them, and the inner ones are
       # named after the ZIP they came from (`platform-tools_r37.0.0-linux.zip`),

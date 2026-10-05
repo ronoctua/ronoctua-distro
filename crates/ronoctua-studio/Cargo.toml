@@ -26,6 +26,10 @@ rustix = { workspace = true, features = [ "event", "fs", "net", "pipe" ] }
 image.workspace = true
 wayland-client.workspace = true
 wayland-protocols = { version = "0.32", features = [ "client", "staging" ] }
+# THE FALLBACK for a compositor that does not announce
+# `ext-image-copy-capture-v1`: `zwlr_screencopy_v1`, a monitor at a time —
+# the older protocol wlroots compositors all speak (`screen.rs`).
+wayland-protocols-wlr = { workspace = true, features = [ "client" ] }
 ronoctua-camera = { path = "../ronoctua-camera" }
 ronoctua-effects = { path = "../ronoctua-effects" }
 ronoctua-segment = { path = "../ronoctua-segment" }
@@ -37,6 +41,9 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 ronoctua-memory = { path = "../ronoctua-memory" }
 # Local time from `/etc/localtime`, for a photo's file name.
 ronoctua-files = { path = "../ronoctua-files" }
+# WORDS AS A SOURCE: the scene's text, shaped and rasterised by the same
+# library the screen uses (`swash` underneath), with the distro's own face.
+cosmic-text.workspace = true
 
 [dependencies.tracing-subscriber]
 workspace = true

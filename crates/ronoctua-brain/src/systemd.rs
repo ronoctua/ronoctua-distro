@@ -80,9 +80,10 @@ pub fn start(unit: &str) -> Result<(), Trouble> {
 /// and `systemd-is-not-in-a-test` is what keeps it that way.
 /// # `--user`, and it is not decoration
 ///
-/// Both units this crate names — the update and its rehearsal — are declared
-/// in `nix/modules/update.nix` as `systemd.user.services`. Without the flag,
-/// `systemctl` talks to the SYSTEM bus, where neither of them exists.
+/// Every unit a module starts through this — the update and its rehearsal
+/// first among them — is declared by that module's NixOS half as
+/// `systemd.user.services`. Without the flag, `systemctl` talks to the SYSTEM
+/// bus, where none of them exists.
 ///
 /// It would not merely fail. On the system bus `systemctl start` is authorised
 /// by polkit BEFORE systemd looks the unit up, and there is no polkit agent in
@@ -90,8 +91,8 @@ pub fn start(unit: &str) -> Result<(), Trouble> {
 /// authentication request nobody asked for. The owner reported exactly that
 /// shape of prompt, from a unit test in this file doing the same thing; this
 /// one would have fired every time an update came due, on a machine he might
-/// not be sitting at. `updates-never-ask` guards the runner's side of that
-/// promise, and this flag is the brain's side of it.
+/// not be sitting at. The update's own "never asks" check guards the
+/// runners' side of that promise, and this flag is the brain's side of it.
 #[must_use]
 pub fn argv<'a>(verb: &'a str, unit: &'a str) -> [&'a str; 4] {
     ["--user", "--no-block", verb, unit]

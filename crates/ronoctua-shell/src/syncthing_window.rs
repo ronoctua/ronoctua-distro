@@ -81,8 +81,11 @@ pub fn host_it() -> Result<()> {
             )
             .map_err(|e| anyhow::anyhow!("could not hang the syncthing channel: {e}"))?;
 
+        // THE FILE PICKER'S FOLDER, watched through the door's wake.
+        let mut view = crate::syncthing::View::fresh(ronoctua_syncthing::prefs::store().read());
+        view.watch_with(w.wake());
         Ok(SyncthingWindow {
-            view: crate::syncthing::View::fresh(ronoctua_syncthing::prefs::store().read()),
+            view,
             snapshot: None,
             syncthing,
             _watch: watch,
@@ -111,7 +114,7 @@ impl SyncthingWindow {
             }
             ronoctua_syncthing::Event::Done { refused, .. } => {
                 let Some(why) = refused else { return };
-                ui.message = Some(ui.texts.t(crate::syncthing::refusal_key(why)));
+                ui.say(ui.texts.t(crate::syncthing::refusal_key(why)));
                 ui.ask_paint();
             }
         }
@@ -127,10 +130,13 @@ impl SyncthingWindow {
             // its keep here more than anywhere: a machine id is 63 characters
             // nobody types twice.
             Errand::Copy(text) => {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             Errand::Speak(key) => {
-                ui.message = Some(ui.texts.t(key));
+                ui.say(ui.texts.t(key));
             }
             Errand::Close => {
                 ui.quit = true;
@@ -139,7 +145,7 @@ impl SyncthingWindow {
             Errand::Order(order) => match &self.syncthing {
                 Some(h) => h.send(*order),
                 None => {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_NOT_RUNNING));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_NOT_RUNNING));
                 }
             },
             // THE FILE IS WRITTEN HERE, and the footer watches it. Both doors
@@ -151,13 +157,17 @@ impl SyncthingWindow {
                 let store = ronoctua_syncthing::prefs::store();
                 if let Err(e) = ronoctua_syncthing::prefs::keep(&store, prefs) {
                     tracing::warn!(error = %e, "could not write syncthing.json");
-                    ui.message = Some(
+                    ui.say_for(
                         ui.texts
                             .t(ronoctua_i18n::key::ECHO_SYNCTHING_WILL_NOT_PARSE),
+                        crate::echo::Echo::Long,
                     );
                 }
             }
             Errand::Web(address) => Self::open_the_page(ui, &address),
+            Errand::Said(said) => ui.say(said),
+            // THE CLIPBOARD, off the loop, for the file picker (`pasted`).
+            Errand::Paste => ui.paste(),
             // ON THIS WINDOW'S OWN LINE, and the view is told WHAT it is being
             // asked, so that the answer knows what it answers.
             Errand::Ask(ask) => {
@@ -173,11 +183,11 @@ impl SyncthingWindow {
     fn open_the_page(ui: &mut Ui, address: &str) {
         let Some(opener) = option_env!("RONOCTUA_XDG_OPEN").filter(|p| !p.is_empty()) else {
             tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
-            ui.message = Some(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED));
+            ui.say(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED));
             return;
         };
         if address.is_empty() {
-            ui.message = Some(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED));
+            ui.say(ui.texts.t(ronoctua_i18n::key::ECHO_SYNCTHING_STOPPED));
             return;
         }
         // IN A SCOPE OF ITS OWN, off the loop, by the path every door opens
@@ -190,6 +200,7 @@ impl SyncthingWindow {
     /// on the row the cursor is already on (invariant 19).
     fn pressed(&mut self, ui: &mut Ui, press: crate::syncthing::Press) {
         ui.message = None;
+        self.view.page_is(ui.room_for_rows());
         let errand = self
             .view
             .key(press, self.snapshot.as_ref(), ui.columns, &ui.texts);
@@ -203,6 +214,13 @@ impl SyncthingWindow {
 }
 
 impl Content for SyncthingWindow {
+    /// A thread of the window's woke the loop — the file picker's folder
+    /// moved, or its devices were read: its rows again, when they changed.
+    fn woken(&mut self, ui: &mut Ui) {
+        if self.view.look() {
+            ui.ask_paint();
+        }
+    }
     type Hand = ();
 
     fn app_id(&self) -> &'static str {
@@ -216,11 +234,31 @@ impl Content for SyncthingWindow {
     /// The key read whole — the door's one reader, then the view's
     /// (`syncthing::press_of_key`), which the footer calls too.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        if let Some(press) =
-            crate::door::keys::key_of(event, mods).and_then(crate::syncthing::press_of_key)
-        {
+        let Some(key) = crate::door::keys::key_of(event, mods) else {
+            return;
+        };
+        // THE FILE PICKER, while it is up over the view, takes what it reads
+        // — every letter, and its own keys.
+        if self.view.picker_takes(key) {
+            ui.message = None;
+            self.view.page_is(ui.room_for_rows());
+            let errand = self
+                .view
+                .pick_key(key, self.snapshot.as_ref(), ui.columns, &ui.texts);
+            self.apply(ui, errand);
+            return;
+        }
+        if let Some(press) = crate::syncthing::press_of_key(key) {
             self.pressed(ui, press);
         }
+    }
+
+    /// The clipboard's text, read off the loop for the file picker's `C-v`.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        self.view.picker_pasted(text);
+        self.view
+            .settle_in(self.snapshot.as_ref(), ui.columns, &ui.texts);
+        ui.ask_paint();
     }
 
     /// What was typed on this window's line: the same `View::answered` the
@@ -368,15 +406,8 @@ mod tests {
     /// setting — and none is sent to the footer or answered with a sentence.
     #[test]
     fn every_question_is_asked_on_the_windows_own_line() {
-        let cases: [(Spot, Press, Ask); 3] = [
-            (Spot::Device("THEM".to_owned()), Press::Add, Ask::NewDevice),
-            (
-                Spot::Folder("papers".to_owned()),
-                Press::Add,
-                Ask::NewFolder,
-            ),
-            (Spot::Invitation(0), Press::Enter, Ask::Invited(0)),
-        ];
+        let cases: [(Spot, Press, Ask); 1] =
+            [(Spot::Device("THEM".to_owned()), Press::Add, Ask::NewDevice)];
         for (spot, press, ask) in cases {
             let (mut w, mut ui) = a_window(offered());
             stand_on(&mut w, &mut ui, &spot);
@@ -406,6 +437,32 @@ mod tests {
         }
     }
 
+    /// A FOLDER ON THIS DISK IS CHOSEN IN THE PICKER, here — a new one to
+    /// share, and where an offered one goes — never typed on a line, and the
+    /// order goes from here.
+    #[test]
+    fn a_folder_is_chosen_in_the_picker_here() {
+        use crate::syncthing::Target;
+        for (spot, press) in [
+            (Spot::Folder("papers".to_owned()), Press::Add),
+            (Spot::Invitation(0), Press::Enter),
+        ] {
+            let (mut w, mut ui) = a_window(offered());
+            stand_on(&mut w, &mut ui, &spot);
+            w.pressed(&mut ui, press);
+            assert!(ui.asking.is_none(), "{spot:?}: a line was opened");
+            let rows = w.view_rows(&ui);
+            let here = rows
+                .iter()
+                .position(|r| r.target == Target::Pick(crate::file_picker::Target::Here))
+                .unwrap_or_else(|| panic!("{spot:?}: no picker"));
+            w.clicked(&mut ui, here);
+            w.clicked(&mut ui, here);
+            assert!(ordered(&ui), "{spot:?}: {:?}", ui.message);
+            assert!(ui.orders().is_empty(), "the order went to the footer");
+        }
+    }
+
     /// WHAT IS TYPED HERE IS ORDERED FROM HERE — a pasted machine id
     /// included, which is how an id arrives — and nothing typed is never
     /// mind.
@@ -425,16 +482,9 @@ mod tests {
         assert!(ui.orders().is_empty(), "the order went to the footer");
         assert_eq!(w.view.asking(), None);
 
-        // THE OFFERED FOLDER, taken where the person says.
-        let (mut w, mut ui) = a_window(offered());
-        stand_on(&mut w, &mut ui, &Spot::Invitation(0));
-        w.pressed(&mut ui, Press::Enter);
-        answer(&mut w, &mut ui, "/home/somebody/shared");
-        assert!(ordered(&ui), "{:?}", ui.message);
-
         // NOTHING TYPED orders nothing.
         let (mut w, mut ui) = a_window(offered());
-        stand_on(&mut w, &mut ui, &Spot::Folder("papers".to_owned()));
+        stand_on(&mut w, &mut ui, &Spot::Device("THEM".to_owned()));
         w.pressed(&mut ui, Press::Add);
         answer(&mut w, &mut ui, "  ");
         assert!(ui.message.is_none(), "{:?}", ui.message);
@@ -446,8 +496,8 @@ mod tests {
     #[test]
     fn a_question_let_go_in_the_window_is_let_go_by_the_view() {
         let (mut w, mut ui) = a_window(offered());
-        stand_on(&mut w, &mut ui, &Spot::Invitation(0));
-        w.pressed(&mut ui, Press::Enter);
+        stand_on(&mut w, &mut ui, &Spot::Device("THEM".to_owned()));
+        w.pressed(&mut ui, Press::Add);
         let line = ui.asking.take().expect("the path is asked here");
         w.unanswered(&mut ui, line.id);
         assert_eq!(w.view.asking(), None);

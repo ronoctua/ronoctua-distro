@@ -303,7 +303,7 @@ mod tests {
         // yt-dlp keys `--extractor-args` by extractor. The minter writes
         // `youtubepot-bgutilscript:` and the hand-pasted token writes
         // `youtube:`, so both survive; two flags for one key would not.
-        let minter = ronoctua_ytdlp::pot_flags_of(Some("/x"), Some("/y"));
+        let minter = ronoctua_ytdlp::pot_flags_of(Some("/x"), Some("/y"), Some("/z"));
         let manual = extractor_args(&tokens_in("web.gvs+ABC\n"));
         let key = |v: &[String]| {
             v.iter()

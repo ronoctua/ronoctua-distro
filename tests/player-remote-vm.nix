@@ -213,7 +213,16 @@ pkgs.testers.runNixOSTest {
         assert s["location"].startswith("http://100.64.0.1:45517/media/"), s["location"]
         assert s["current"] is None, s["current"]
         assert s["playing"], s
-        assert max(abs(d) for d in drifts) < 80, f"out of step: {drifts}"
+        # STAYING IN STEP, under a battery that runs several VMs at once: a
+        # reading is a whole number of frames (40 ms at 25 fps), and one
+        # scheduler hiccup lands a single reading one frame late — measured,
+        # [40, 40, 40, 40, 40, 80, 40, 40] beside two other VMs, all 40 alone.
+        # So one reading may touch two frames; none may pass them, two may
+        # not, and the last is back under one.
+        late = [d for d in drifts if abs(d) >= 80]
+        assert all(abs(d) <= 80 for d in drifts), f"out of step: {drifts}"
+        assert len(late) <= 1, f"out of step more than once: {drifts}"
+        assert abs(drifts[-1]) < 80, f"did not come back in step: {drifts}"
         # A LANE OF WHAT DOES NOT PLAY is not served, key or no key.
         key = json.loads(guest.succeed("cat /root/.local/state/ronoctua/player-peers.json"))["hosts"][0]["key"]
         code = guest.succeed(

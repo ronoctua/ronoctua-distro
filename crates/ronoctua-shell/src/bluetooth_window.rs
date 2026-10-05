@@ -145,6 +145,54 @@ struct BluetoothWindow {
     _question_watch: Option<ronoctua_files::notice::Notice>,
 }
 
+/// The window over a PLANTED radio, for the photograph
+/// (`system_photograph`): `phone` is a paired phone's page whose internet is
+/// in use, through `bnep0` — the switch the network's view agrees with.
+///
+/// # Errors
+///
+/// A scene this door does not know.
+pub fn photographed(scene: &str) -> anyhow::Result<(impl Content, Option<Line>)> {
+    use ronoctua_bluetooth::{Adapter, Device, Kind, Pan, Scene};
+    anyhow::ensure!(
+        scene == "phone",
+        "`{scene}` is not a scene of the Bluetooth window; the scene is phone"
+    );
+    let mut me = BluetoothWindow::of(None);
+    me.scene = Scene {
+        adapters: vec![Adapter {
+            at: "/org/bluez/hci0".to_owned(),
+            alias: "noctua".to_owned(),
+            powered: true,
+            power_state: "on".to_owned(),
+            pairable: true,
+            ..Adapter::default()
+        }],
+        devices: vec![Device {
+            at: "/org/bluez/hci0/dev_02_00_00_00_00_09".to_owned(),
+            address: "02:00:00:00:00:09".to_owned(),
+            address_type: "public".to_owned(),
+            label: "Ana's phone".to_owned(),
+            name: "Ana's phone".to_owned(),
+            kind: Kind::Phone,
+            connected: true,
+            paired: true,
+            bonded: true,
+            trusted: true,
+            services_resolved: true,
+            uuids: vec![ronoctua_bluetooth::NAP.to_owned()],
+            pan: Some(Pan {
+                connected: true,
+                interface: "bnep0".to_owned(),
+            }),
+            ..Device::default()
+        }],
+        daemon: true,
+    };
+    me.view = crate::bluetooth::View::fresh_at("/org/bluez/hci0/dev_02_00_00_00_00_09");
+    Ok((me, None))
+}
+
 impl BluetoothWindow {
     /// A window on the list, with the radio's orders thread when there is one.
     fn of(radio: Option<ronoctua_bluetooth::Hand>) -> Self {
@@ -173,7 +221,7 @@ impl BluetoothWindow {
             }
             Event::Done { ask, refused } => {
                 if let Some((why, words)) = refused {
-                    ui.message = Some(crate::bluetooth_words::refused(
+                    ui.say(crate::bluetooth_words::refused(
                         &ask, why, &words, &ui.texts,
                     ));
                     ui.ask_paint();
@@ -223,7 +271,10 @@ impl BluetoothWindow {
             // `chrome::information_of`, and `chrome::copied` for the
             // one place the six doors share.
             Errand::Copy(text) => {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             Errand::Close => {
                 ui.quit = true;
@@ -253,6 +304,11 @@ impl BluetoothWindow {
             // that is not there is a sentence here.
             Errand::Run(id, about) => {
                 ui.tell_the_footer(id, (!about.is_empty()).then_some(about.as_str()));
+            }
+            // A PHONE'S INTERNET, through NetworkManager — the sentence is
+            // the one the footer says (`bluetooth::tethered`).
+            Errand::Tether { address, name, on } => {
+                ui.say(crate::bluetooth::tethered(&address, &name, on, &ui.texts));
             }
             Errand::Volume(node, percent) => {
                 if let Err(e) = ronoctua_bluetooth::audio::set_volume(node, percent) {
@@ -288,7 +344,7 @@ impl BluetoothWindow {
             Errand::Order(ask) => match &self.radio {
                 Some(h) => h.send(ask),
                 None => {
-                    ui.message = Some(ui.texts.t(ronoctua_i18n::key::BLUETOOTH_NO_DAEMON));
+                    ui.say(ui.texts.t(ronoctua_i18n::key::BLUETOOTH_NO_DAEMON));
                 }
             },
             // A NAME IS TYPED HERE, starting from the one it has — the same

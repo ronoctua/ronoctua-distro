@@ -195,7 +195,7 @@ pub(crate) fn rows_of(kind: TrackKind, s: &State, b: &mut Builder<'_>) {
             Target::Also { kind, id: t.id },
         ));
         b.pair_with_control(
-            track_name(t, &kin),
+            track_name(t, &kin, b.texts),
             value,
             Target::Track {
                 kind,
@@ -233,7 +233,7 @@ pub fn also(kind: TrackKind, id: i64, s: &State, texts: &ronoctua_i18n::Texts) -
         },
         texts.t_with(
             key::PLAYER_ALSO_ADDED,
-            &[("name", track_name(t, &kin).as_str())],
+            &[("name", track_name(t, &kin, texts).as_str())],
         ),
     )
 }
@@ -246,7 +246,7 @@ pub(crate) fn in_use_of(kind: TrackKind, s: &State, texts: &ronoctua_i18n::Texts
         .and_then(|lane| kin.iter().find(|t| plays(t, lane)))
         .map_or_else(
             || texts.t(key::PLAYER_SUBTITLES_OFF),
-            |t| track_name(t, &kin),
+            |t| track_name(t, &kin, texts),
         )
 }
 

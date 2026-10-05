@@ -54,6 +54,21 @@ ronoctua-xml = { path = "../ronoctua-xml", optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
+# THE PROGRAM THE FOOTER RUNS INSTEAD OF LINKING THIS: `sheet <path>` and
+# `apply <path> --stamp <json>` (edits as JSON on stdin), one `Answer` as JSON
+# on stdout. It needs the engine, so a build without it has no program.
+[[bin]]
+name = "ronoctua-tags"
+path = "src/bin/tags.rs"
+required-features = [ "engine" ]
+
+# AND THE PROGRAM, RUN AS A CHILD against a real FLAC — the binary cargo builds
+# for this package (`CARGO_BIN_EXE_ronoctua-tags`), so it needs the engine too.
+[[test]]
+name = "program"
+path = "tests/program.rs"
+required-features = [ "engine" ]
+
 [dev-dependencies]
 # The schema's own tests serialise a refusal, with or without `engine`.
 serde_json.workspace = true

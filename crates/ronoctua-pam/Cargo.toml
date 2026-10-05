@@ -1,0 +1,25 @@
+[package]
+name = "ronoctua-pam"
+description = "The one boundary with PAM: the person's system password checked against the declared ronoctua-unlock service."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# LIBPAM, BY HAND, AND NOTHING ELSE OF C. Five functions and three structs
+# (`src/ffi.rs`), linked against the system's `libpam` (`linux-pam` is in the
+# build and devshell inputs of `nix/rust.nix`). No bindgen: it would bring
+# clang into the build for five prototypes, and what keeps the hand-written
+# half honest is `pam-layout-matches-c`, which measures every size and number
+# the Rust declares against the pinned headers. `malloc`, `calloc` and `free`
+# come from the C library every process already links.
+[dependencies]
+# The password arrives as a `Secret`, zeroed when dropped.
+ronoctua-consent = { path = "../ronoctua-consent" }
+# The answers a conversation allocated and could not hand over are zeroed
+# before they are freed, with writes the optimiser may not drop.
+zeroize.workspace = true
+
+[lints]
+workspace = true

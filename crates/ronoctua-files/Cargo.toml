@@ -21,6 +21,10 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 ronoctua-apps = { path = "../ronoctua-apps" }
 ronoctua-i18n = { path = "../ronoctua-i18n" }
 ronoctua-tokens = { path = "../ronoctua-tokens" }
+# AN ARCHIVE, WALKED INTO LIKE A FOLDER: its members, as `ronoctua-archive`
+# lists them, become rows (`archive.rs`). The programs are that crate's, run
+# by the shell's threads — nothing here starts one.
+ronoctua-archive = { path = "../ronoctua-archive" }
 anyhow.workspace = true
 tracing.workspace = true
 # `chown`, `getgroups` and `statfs`. `rustix` and not `libc` for the reason the

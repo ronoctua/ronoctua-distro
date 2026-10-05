@@ -68,7 +68,7 @@ pub fn pixmap_key(portrait: &Portrait, side: u32) -> String {
         Portrait::Program(Picture::Url { url }) => ("url", url.clone()),
         Portrait::Program(Picture::File { path }) => ("file", path.display().to_string()),
         Portrait::Program(Picture::Named { name }) => ("named", name.clone()),
-        Portrait::Candidate(IconChoice::Site { url }) => ("site", url.clone()),
+        Portrait::Candidate(IconChoice::Site { url, .. }) => ("site", url.clone()),
         Portrait::Candidate(IconChoice::Dashboard { name, variant }) => {
             ("dashboard", format!("{name}\u{1}{variant}"))
         }

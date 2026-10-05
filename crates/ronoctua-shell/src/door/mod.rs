@@ -102,7 +102,17 @@ pub struct Ui {
     /// The margin inside the window, in cells.
     pub margin: u16,
     /// What the last order said, on line 0 instead of the keys.
+    ///
+    /// A sentence the window SAYS goes through [`Ui::say`], which takes it
+    /// off again after `ECHO_SECONDS`; one written here directly is a state
+    /// that stays until something replaces it (the player not running).
     pub message: Option<String>,
+    /// How many sentences [`Ui::say`] has put on the line — the number of
+    /// the one there, so a timer takes off ITS sentence and never a newer one.
+    said: u64,
+    /// A sentence said whose timer is still to be hung — by `Door::settle`,
+    /// which holds the loop: its number, its words and its class.
+    echo_owed: Option<(u64, String, crate::echo::Echo)>,
     /// The window is to close when the queue empties.
     pub quit: bool,
     /// Whether a frame is owed. A frame is drawn when the event queue empties
@@ -260,6 +270,9 @@ enum Back {
     Launched(crate::foreign::Launch),
     /// The launcher has no entry by the id this window asked to open.
     NotInLauncher,
+    /// A thread the window left something for woke the loop
+    /// ([`Wiring::wake`]): [`Content::woken`].
+    Woken,
 }
 
 impl Ui {
@@ -292,6 +305,66 @@ impl Ui {
         self.asking = Some(line);
         self.message = None;
         self.ask_paint();
+    }
+
+    /// SAYS a sentence on the message line, and takes it off again after
+    /// `ECHO_SECONDS` — the footer's three seconds, from the same constant:
+    /// a message that lingered in a window and not in the footer would be
+    /// two answers to "how long is a message on screen". A message of
+    /// another class is [`Ui::say_for`].
+    ///
+    /// # Why a one-shot timer, and not a clock
+    ///
+    /// A window has no tick, deliberately: with several open, a clock would
+    /// be a wake-up a second per window for ever. A one-shot is hung only
+    /// after something was said (by `Door::settle`, which holds the loop),
+    /// and fires once. Lifted from the file manager's window, where the
+    /// owner found the message that never went away.
+    ///
+    /// ONLY ITS OWN: between saying and firing the line may have been
+    /// replaced — by another sentence, a question, or a state written into
+    /// [`Ui::message`] directly — and the timer takes off nothing but the
+    /// sentence it was hung for ([`Ui::expire`]).
+    pub fn say(&mut self, text: String) {
+        self.say_for(text, crate::echo::Echo::Normal);
+    }
+
+    /// HOLDS a state on the message line — something true until it changes,
+    /// and not a sentence about a gesture: the window whose footer is gone.
+    /// No timer takes it off (nothing would put it back while it is still
+    /// true); the next message, question or key replaces it. Every other
+    /// message is [`Ui::say`], and `door-messages-expire` refuses a write
+    /// to [`Ui::message`] anywhere else.
+    pub fn hold(&mut self, text: String) {
+        tracing::info!(echo = %text, "message line, held");
+        // A TIMER STILL OWED for an earlier sentence is not hung for this one.
+        self.said = self.said.wrapping_add(1);
+        self.echo_owed = None;
+        self.message = Some(text);
+        self.ask_paint();
+    }
+
+    /// [`Ui::say`], for a message of its own class ([`crate::echo::Echo`]):
+    /// a word that confirms a gesture goes sooner, a refusal that has to be
+    /// read to the end stays longer — the footer's classes, from the same
+    /// tokens, so the two doors keep a message for as long as each other.
+    pub fn say_for(&mut self, text: String, class: crate::echo::Echo) {
+        tracing::info!(echo = %text, ?class, "message line");
+        self.said = self.said.wrapping_add(1);
+        self.echo_owed = Some((self.said, text.clone(), class));
+        self.message = Some(text);
+        self.ask_paint();
+    }
+
+    /// The timer of sentence `mine` fired: it is taken off the line if it is
+    /// still the one there — `true` when it was, and a frame is owed.
+    pub fn expire(&mut self, mine: u64, text: &str) -> bool {
+        if self.said != mine || self.message.as_deref() != Some(text) {
+            return false;
+        }
+        self.message = None;
+        self.ask_paint();
+        true
     }
 
     /// Starts `program` with `args` in a scope of its own, OFF THE LOOP — the
@@ -405,6 +478,15 @@ impl Ui {
         self.paste_owed.is_some()
     }
 
+    /// Whether a frame was asked for since the last time this was asked —
+    /// for a test of what a window repaints.
+    #[cfg(test)]
+    pub const fn take_the_paint(&mut self) -> bool {
+        let owed = self.owed;
+        self.owed = false;
+        owed
+    }
+
     /// The orders waiting for the footer — for a test of a window's, and
     /// for a photograph to say what a click would have told it.
     #[must_use]
@@ -453,6 +535,8 @@ impl Ui {
             lines: 24,
             margin: 1,
             message: None,
+            said: 0,
+            echo_owed: None,
             quit: false,
             owed: false,
             offset: 0,
@@ -513,6 +597,18 @@ impl Ui {
         self.orders.push(order);
     }
 
+    /// A whole order line for the footer, as it is — for an order that is
+    /// not a command (`clipboard_wire::Act`'s). ONE LINE IS ONE ORDER, so a
+    /// line with a break in it is not sent; it is never logged, because an
+    /// act may carry a password.
+    pub fn tell_the_footer_line(&mut self, line: String) {
+        if line.chars().any(char::is_control) {
+            tracing::warn!("an order for the footer that is not one line; not sent");
+            return;
+        }
+        self.orders.push(line);
+    }
+
     /// THIS WINDOW FOR ANOTHER DOOR: `id` (with `argument`) for the footer,
     /// which opens the other door, and this one closes — ONLY WHEN THE
     /// FOOTER TOOK THE ORDER. A footer that is not there (the lifeline up,
@@ -548,8 +644,7 @@ impl Ui {
     pub(crate) fn last_orders_sent(&mut self, taken: bool) {
         if std::mem::take(&mut self.handing_over) && !taken {
             self.quit = false;
-            self.message = Some(self.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
-            self.ask_paint();
+            self.hold(self.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
         }
     }
 
@@ -666,6 +761,11 @@ pub struct Hand<H> {
     pub lines_owed: f64,
     /// The row of the list under this pointer.
     pub row_under_pointer: Option<usize>,
+    /// Where across the surface this pointer is, in logical pixels, while it
+    /// is on a row — what lights ONE cell of a grid row under it
+    /// (`chrome::hover_cells`), where a band across the row would light them
+    /// all.
+    pub x_under_pointer: Option<f32>,
     /// Whether a button of this pointer is down — a drag in progress, which a
     /// bar's column does not interrupt.
     pub held: bool,
@@ -677,6 +777,10 @@ pub struct Hand<H> {
     /// What the window keeps of its own for this pointer.
     pub extra: H,
 }
+
+/// Every pointer's row in its cursor's colour, and where across the surface
+/// each one is, in the same order ([`Canvas::lit`], [`Canvas::lit_x`]).
+type Lit = (Vec<(tokens::Color, Option<usize>)>, Vec<Option<f32>>);
 
 /// One frame, as a window describes it.
 ///
@@ -696,6 +800,10 @@ pub struct Canvas<'a> {
     pub pictures: Vec<(String, ronoctua_render::image::Area)>,
     /// Every pointer's row, in its cursor's colour — for the hover bands.
     pub lit: &'a [(tokens::Color, Option<usize>)],
+    /// Where across the surface each of [`Canvas::lit`]'s pointers is, in the
+    /// same order — for the ONE cell of a grid row a hover lights
+    /// (`chrome::hover_cells`).
+    pub lit_x: &'a [Option<f32>],
     /// The device, for a window that uploads a picture.
     ///
     /// THE DEVICE AND THE QUEUE, and not the `Gpu` they came from: a `Gpu`
@@ -802,6 +910,8 @@ impl Composed {
 pub struct Easel<'a> {
     /// Every pointer's row, in its cursor's colour.
     pub lit: &'a [(tokens::Color, Option<usize>)],
+    /// Where across the surface each of them is ([`Canvas::lit_x`]).
+    pub lit_x: &'a [Option<f32>],
     /// The device.
     pub device: &'a wgpu::Device,
     /// The queue.
@@ -820,6 +930,7 @@ pub struct Easel<'a> {
 pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Composed {
     let Easel {
         lit,
+        lit_x,
         device,
         queue,
         images,
@@ -833,6 +944,7 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
         over: Vec::new(),
         pictures: Vec::new(),
         lit,
+        lit_x,
         device,
         queue,
         images,
@@ -933,6 +1045,24 @@ pub struct Wiring<'a, C: Content> {
     pub globals: &'a GlobalList,
     /// The queue.
     pub qh: &'a QueueHandle<Door<C>>,
+    /// The door's own channel, which [`Wiring::wake`] wakes.
+    back: channel::Sender<Back>,
+}
+
+impl<C: Content> Wiring<'_, C> {
+    /// A wake for a thread of the window's — a folder watched, a read done
+    /// off the loop: called, the loop wakes and the window hears
+    /// [`Content::woken`]. Behind a lock, because every thread holds the
+    /// same one.
+    #[must_use]
+    pub fn wake(&self) -> crate::player_subtitles::Wake {
+        let back = std::sync::Mutex::new(self.back.clone());
+        crate::player_subtitles::Wake::new(move || {
+            if let Ok(b) = back.lock() {
+                let _ = b.send(Back::Woken);
+            }
+        })
+    }
 }
 
 /// A WINDOW: what it draws, and what its keys and rows do.
@@ -1005,7 +1135,10 @@ pub trait Content: Sized + 'static {
     /// The size before the compositor has said one — and the fallback for an
     /// axis it leaves to the window.
     fn default_size(&self) -> (u32, u32) {
-        (900, 600)
+        (
+            u32::from(ronoctua_tokens::space::WINDOW_WIDTHPX),
+            u32::from(ronoctua_tokens::space::WINDOW_HEIGHTPX),
+        )
     }
 
     /// A size the window OWNS, over what the compositor configured.
@@ -1114,6 +1247,22 @@ pub trait Content: Sized + 'static {
         })
     }
 
+    /// What the pointer looks like at `at`, in the surface's logical pixels:
+    /// the arrow everywhere, unless a control there resizes something — then
+    /// the resize arrow says so under the hand, as a border does.
+    fn cursor_at(&self, ui: &Ui, at: (f64, f64)) -> crate::cursor_shape::Look {
+        let _ = (ui, at);
+        crate::cursor_shape::Look::Arrow
+    }
+
+    /// The state this window is in, for the modeline: an id with a
+    /// `state-<id>` key, and the tone it is drawn in — a question waiting on
+    /// the person in `Warning`. `None`, the default, is a window with no
+    /// states, and the modeline then says none.
+    fn state(&self) -> Option<(&'static str, ronoctua_protocol::Tone)> {
+        None
+    }
+
     /// Draws one frame. The default is the standard window: the header, the
     /// list under it, the hover of every cursor, and the list's bar.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
@@ -1190,6 +1339,12 @@ pub trait Content: Sized + 'static {
         let _ = ui;
     }
 
+    /// A thread of the window's woke the loop through [`Wiring::wake`]: take
+    /// what it left.
+    fn woken(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+
     /// The compositor's frame callback for this surface.
     fn frame_done(&mut self, ui: &mut Ui) {
         let _ = ui;
@@ -1256,11 +1411,21 @@ pub struct Door<C: Content> {
     /// The text swept with the pointer, which `Ctrl+C` copies.
     selection: Option<crate::text_select::Selection>,
     _watches: Vec<ronoctua_files::notice::Notice>,
+    /// The state last told to the footer (`Content::state`), so it is told
+    /// once per change and not once per turn.
+    state_told: Option<(&'static str, ronoctua_protocol::Tone)>,
     /// The queue, for a window that makes Wayland objects of its own.
     pub qh: QueueHandle<Self>,
     /// What the door's own threads hand back — a paste, a footer that did
     /// not answer.
     back: channel::Sender<Back>,
+}
+
+/// The report a window's state is told to the footer as — the line a
+/// buffer sends (`buffer::Host::tell_the_footer`) and `leader` parses.
+#[must_use]
+pub fn state_order(pid: u32, id: &str, tone: ronoctua_protocol::Tone) -> String {
+    format!("state {pid} {id} {}", crate::leader::tone_word(tone))
 }
 
 /// Opens a window and runs it until it closes.
@@ -1271,6 +1436,38 @@ pub struct Door<C: Content> {
 /// # Errors
 ///
 /// When there is no Wayland compositor, or it offers no shell for the window.
+/// THE ONE-SHOT TIMER OF A SENTENCE SAID ([`Ui::say`]), hung on the door's
+/// loop once the turn is over (`Door::settle`): after `lasts` of its class,
+/// it takes that sentence off the line — only if it is still the one there
+/// ([`Ui::expire`]) — and drops itself. `ui_of` reaches the line from what
+/// the loop holds. Nothing owed, nothing hung.
+///
+/// A function of the loop and not of the door, so a test hangs it on a loop
+/// of its own and sees it fire.
+pub(crate) fn hang_the_echo<D: 'static>(
+    ui: &mut Ui,
+    handle: &calloop::LoopHandle<'static, D>,
+    lasts: impl Fn(crate::echo::Echo) -> std::time::Duration,
+    ui_of: fn(&mut D) -> &mut Ui,
+) {
+    let Some((mine, text, class)) = ui.echo_owed.take() else {
+        return;
+    };
+    let armed = handle.insert_source(
+        calloop::timer::Timer::from_duration(lasts(class)),
+        move |_, (), held: &mut D| {
+            ui_of(held).expire(mine, &text);
+            calloop::timer::TimeoutAction::Drop
+        },
+    );
+    if let Err(e) = armed {
+        // NOT SILENT, and the message STAYS: a line that outstays its
+        // welcome is a smaller failure than one that vanishes because a
+        // timer could not be hung, and the log says which happened.
+        tracing::warn!(error = %e, "no timer for the message line; it will stay");
+    }
+}
+
 pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result<()> {
     let conn = Connection::connect_to_env()
         .context("there is no reachable Wayland compositor (is WAYLAND_DISPLAY set?)")?;
@@ -1282,21 +1479,8 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
     let handle = cycle.handle();
     let texts = std::rc::Rc::new(crate::language::texts());
 
-    let wiring = Wiring {
-        handle: handle.clone(),
-        texts: texts.clone(),
-        globals: &globals,
-        qh: &qh,
-    };
-    let content = make(&wiring)?;
-    let surface = compositor.create_surface(&qh);
-    let shell = content.open(&wiring, surface)?;
-    let header_line = content.header_line();
-
-    let watches = hang_the_watches(&handle)?;
-
     // THE DOOR'S OWN THREADS answer here: a paste, an order the footer did
-    // not take.
+    // not take, a wake the window handed a thread of its own.
     let (back, came_back) = channel::channel::<Back>();
     handle
         .insert_source(came_back, |event, (), door: &mut Door<C>| {
@@ -1305,6 +1489,20 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the door's channel: {e}"))?;
+
+    let wiring = Wiring {
+        handle: handle.clone(),
+        texts: texts.clone(),
+        globals: &globals,
+        qh: &qh,
+        back: back.clone(),
+    };
+    let content = make(&wiring)?;
+    let surface = compositor.create_surface(&qh);
+    let shell = content.open(&wiring, surface)?;
+    let header_line = content.header_line();
+
+    let watches = hang_the_watches(&handle)?;
 
     let margin = content.margin();
     let mut door = Door {
@@ -1319,6 +1517,8 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             lines: 24,
             margin,
             message: None,
+            said: 0,
+            echo_owed: None,
             quit: false,
             owed: false,
             offset: 0,
@@ -1367,6 +1567,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         painted: Vec::new(),
         selection: None,
         _watches: watches,
+        state_told: None,
         qh: qh.clone(),
         back,
     };
@@ -1641,8 +1842,29 @@ impl<C: Content> Door<C> {
         if let Some(to) = self.ui.paste_owed.take() {
             self.read_the_clipboard(to);
         }
+        hang_the_echo(
+            &mut self.ui,
+            &self.handle,
+            crate::echo::Echo::lasts,
+            |door: &mut Self| &mut door.ui,
+        );
         for launching in std::mem::take(&mut self.ui.launches) {
             self.start(launching);
+        }
+        // THE STATE, told to the footer when it CHANGES — the report a
+        // buffer sends (`state <pid> <id> <tone>`), so the modeline says which
+        // of the window's screens is up, in the tone it declared.
+        //
+        // QUIETLY, as the buffer's host tells it: a report nobody asked for
+        // is not an order the person gave, so a footer that is not there —
+        // the lifeline is up — is a line in the log and not "the footer could
+        // not be reached to run this" on a window where nothing was run.
+        let state = self.content.state();
+        if state != self.state_told {
+            if let Some((id, tone)) = state {
+                Self::report_to_the_footer(state_order(std::process::id(), id, tone));
+            }
+            self.state_told = state;
         }
         let mut untaken = false;
         for order in std::mem::take(&mut self.ui.orders) {
@@ -1674,17 +1896,20 @@ impl<C: Content> Door<C> {
         }
     }
 
-    /// Every pointer's row, in its cursor's colour — and the finger's.
-    fn lit(&self) -> Vec<(tokens::Color, Option<usize>)> {
-        let mut lit: Vec<(tokens::Color, Option<usize>)> = self
+    /// Every pointer's row, in its cursor's colour — and the finger's — and
+    /// where across the surface each one is, in the same order.
+    fn lit(&self) -> Lit {
+        let (mut lit, mut xs): Lit = self
             .pointers
             .lit(&self.here)
-            .map(|(color, s)| (color, s.row_under_pointer))
-            .collect();
-        if let Some(row) = self.fingers.hand().row_under_pointer {
+            .map(|(color, s)| ((color, s.row_under_pointer), s.x_under_pointer))
+            .unzip();
+        let finger = self.fingers.hand();
+        if let Some(row) = finger.row_under_pointer {
             lit.push((tokens::color::SURFACE_HOVER, Some(row)));
+            xs.push(finger.x_under_pointer);
         }
-        lit
+        (lit, xs)
     }
 
     fn paint(&mut self) {
@@ -1698,7 +1923,7 @@ impl<C: Content> Door<C> {
         if self.gpu.is_none() {
             self.assemble_gpu();
         }
-        let lit = self.lit();
+        let (lit, lit_x) = self.lit();
         // THE PAGE THIS DOOR WEARS, worn for the frame: every colour below
         // resolves through it, and its chrome is the ground.
         tokens::theme::set_ground(self.content.page());
@@ -1720,6 +1945,7 @@ impl<C: Content> Door<C> {
             &mut self.ui,
             Easel {
                 lit: &lit,
+                lit_x: &lit_x,
                 device: &gpu.device,
                 queue: &gpu.queue,
                 images,
@@ -1828,9 +2054,8 @@ impl<C: Content> Door<C> {
                     Ok(text) => text,
                     Err(e) => {
                         tracing::warn!(error = %e, "the clipboard could not be read");
-                        self.ui.message =
-                            Some(self.ui.texts.t(ronoctua_i18n::key::DOOR_PASTE_FAILED));
-                        self.ui.ask_paint();
+                        self.ui
+                            .say(self.ui.texts.t(ronoctua_i18n::key::DOOR_PASTE_FAILED));
                         return;
                     }
                 };
@@ -1841,22 +2066,21 @@ impl<C: Content> Door<C> {
                 }
             }
             Back::Unheard => {
-                self.ui.message = Some(self.ui.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
-                self.ui.ask_paint();
+                self.ui
+                    .hold(self.ui.texts.t(ronoctua_i18n::key::DOOR_NO_FOOTER));
             }
             Back::Launched(verdict) => {
                 if let Some(said) = launch_said(&verdict, &self.ui.texts) {
-                    self.ui.message = Some(said);
-                    self.ui.ask_paint();
+                    self.ui.say(said);
                 }
             }
+            Back::Woken => self.content.woken(&mut self.ui),
             Back::NotInLauncher => {
-                self.ui.message = Some(
+                self.ui.say(
                     self.ui
                         .texts
                         .t(ronoctua_i18n::key::SOFTWARE_NOT_IN_LAUNCHER),
                 );
-                self.ui.ask_paint();
             }
         }
     }
@@ -1882,8 +2106,9 @@ impl<C: Content> Door<C> {
                         program,
                         error: e.to_string(),
                     };
-                    self.ui.message = launch_said(&failed, &self.ui.texts);
-                    self.ui.ask_paint();
+                    if let Some(said) = launch_said(&failed, &self.ui.texts) {
+                        self.ui.say(said);
+                    }
                 }
             }
             Launching::Entry(desktop_id) => {
@@ -1921,6 +2146,21 @@ impl<C: Content> Door<C> {
             });
         if let Err(e) = born {
             tracing::error!(error = %e, "could not start the thread that tells the footer");
+        }
+    }
+
+    /// A report down the footer's control socket, from a thread, that
+    /// nobody answers for: a footer that is not there is logged, never said.
+    fn report_to_the_footer(report: String) {
+        let born = std::thread::Builder::new()
+            .name("door-report".to_owned())
+            .spawn(move || {
+                if let Err(e) = crate::leader::send_it(&report) {
+                    tracing::debug!(error = %e, "no footer to tell the state to");
+                }
+            });
+        if let Err(e) = born {
+            tracing::debug!(error = %e, "could not start the thread that reports the state");
         }
     }
 
@@ -1991,7 +2231,10 @@ fn typed_into<C: Content>(
         if mods.ctrl && !mods.alt && matches!(event.keysym, Keysym::c | Keysym::C) {
             let text = sel.extract(painted);
             if !text.is_empty() {
-                ui.message = Some(crate::chrome::copied(&text, &ui.texts));
+                ui.say_for(
+                    crate::chrome::copied(&text, &ui.texts),
+                    crate::echo::Echo::Brief,
+                );
             }
             ui.ask_paint();
             return;
@@ -2387,11 +2630,13 @@ impl<C: Content> Detached<C> {
             crate::seats::band_colour(false, 0),
             self.here.row_under_pointer,
         )];
+        let lit_x = [self.here.x_under_pointer];
         let mut composed = compose(
             &mut self.content,
             &mut self.ui,
             Easel {
                 lit: &lit,
+                lit_x: &lit_x,
                 device,
                 queue,
                 images: &mut *images,
@@ -2409,6 +2654,7 @@ impl<C: Content> Detached<C> {
                 &mut self.ui,
                 Easel {
                     lit: &lit,
+                    lit_x: &lit_x,
                     device,
                     queue,
                     images,
@@ -2467,6 +2713,81 @@ mod tests {
         assert!(ui.asking.is_none());
         // AND WITH NO QUESTION UP, nothing is the line's.
         assert_eq!(ui.line_key(key("x")), Routed::Kept);
+    }
+
+    /// FAILS IF: a sentence said stays for ever — or its timer takes off a
+    /// NEWER sentence, a question's line or a state written after it.
+    #[test]
+    fn the_timer_clears_only_its_own_message() {
+        let mut ui = ui();
+        ui.say("added".into());
+        let (first, text, _) = ui.echo_owed.take().expect("a timer is owed");
+        assert_eq!(ui.message.as_deref(), Some("added"));
+        assert!(ui.expire(first, &text), "its own sentence goes");
+        assert_eq!(ui.message, None);
+
+        ui.say("one".into());
+        let (one, one_text, _) = ui.echo_owed.take().expect("owed");
+        ui.say("two".into());
+        let (two, two_text, _) = ui.echo_owed.take().expect("owed");
+        assert!(!ui.expire(one, &one_text), "a newer sentence stays");
+        assert_eq!(ui.message.as_deref(), Some("two"));
+        assert!(ui.expire(two, &two_text));
+
+        ui.say("three".into());
+        let (three, three_text, _) = ui.echo_owed.take().expect("owed");
+        ui.message = Some("the player is not running".into());
+        assert!(
+            !ui.expire(three, &three_text),
+            "a state written after it stays"
+        );
+        assert_eq!(ui.message.as_deref(), Some("the player is not running"));
+    }
+
+    /// FAILS IF: the timer a sentence owes is not hung on the loop, does not
+    /// fire, or takes off a sentence said after it — the loop's own path,
+    /// with a loop of the test's.
+    #[test]
+    fn the_hung_timer_fires_and_takes_off_only_its_own() {
+        let mut event_loop: calloop::EventLoop<'static, Ui> =
+            calloop::EventLoop::try_new().expect("a loop");
+        let handle = event_loop.handle();
+        let after = std::time::Duration::from_millis(5);
+        let mut held = ui();
+        held.say("added".into());
+        hang_the_echo(&mut held, &handle, |_| after, |u| u);
+        assert!(held.echo_owed.is_none(), "the owed timer is taken");
+        hang_the_echo(&mut held, &handle, |_| after, |u| u);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while held.message.is_some() && std::time::Instant::now() < until {
+            event_loop
+                .dispatch(Some(std::time::Duration::from_millis(20)), &mut held)
+                .expect("dispatched");
+        }
+        assert_eq!(held.message, None, "the sentence went");
+
+        // A NEWER SENTENCE, said before the first timer fires, stays.
+        held.say("first".into());
+        hang_the_echo(&mut held, &handle, |_| after, |u| u);
+        held.say("second".into());
+        let (second, second_text, class) = held.echo_owed.take().expect("owed");
+        assert_eq!(
+            class,
+            crate::echo::Echo::Normal,
+            "`say` is the normal class"
+        );
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        while std::time::Instant::now() < until {
+            event_loop
+                .dispatch(Some(std::time::Duration::from_millis(20)), &mut held)
+                .expect("dispatched");
+        }
+        assert_eq!(
+            held.message.as_deref(),
+            Some("second"),
+            "not the first's to take"
+        );
+        assert!(held.expire(second, &second_text));
     }
 
     #[test]

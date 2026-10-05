@@ -175,6 +175,9 @@ fn readings(snapshot: Option<Snapshot>) -> Readings {
     r.snapshot = snapshot;
     r.now = 1_000 + 7 * 60;
     r.home = Some("/home/somebody".into());
+    // NOBODY'S CONSENTS, whatever this machine's file says: the rows a test
+    // reads do not depend on the developer's `consent.json`.
+    r.consents = ronoctua_consent::Consents::default();
     r
 }
 
@@ -1406,6 +1409,7 @@ fn a_new_web_app_is_named_by_its_page_and_saved_as_one_order() {
     // THE PAGE ANSWERS: its name and its best icon fill what nobody typed.
     let icon = IconChoice::Site {
         url: "https://mail.example.org/icon.png".into(),
+        page: None,
     };
     r.site = Some((
         "https://mail.example.org/".into(),
@@ -1694,6 +1698,45 @@ fn maintenance_updates_by_source_and_frees_space_after_a_question() {
     );
     // AUTOMATICALLY is the brain's page, and the sentence names its keys.
     assert!(drawn(&rows).contains("LEADER-b"));
+}
+
+/// FAILS IF: a catalogue that is on and whose hosts nobody let draws no
+/// consent row — and asks nothing, so a search finds nothing with no word on
+/// why — or the row stays once its hosts are let, or pressing it does not
+/// let them, or a catalogue switched off asks for a consent it would not use.
+#[test]
+fn a_catalogue_not_let_draws_its_consent_row() {
+    let mut r = readings(Some(full()));
+    let (mut v, _) = View::fresh(Opening::Advanced, &r, &en());
+    let rows = rows_of(&v, &r, &en());
+    for s in [
+        OnlineSource::Flathub,
+        OnlineSource::Fdroid,
+        OnlineSource::AppImageHub,
+    ] {
+        let row = rows
+            .iter()
+            .find(|x| x.spot == Spot::Let(s.id()))
+            .unwrap_or_else(|| panic!("{s:?} has no consent row"));
+        assert!(drawn(std::slice::from_ref(row)).contains(s.hosts()[0]));
+    }
+    v.at = Spot::Let(OnlineSource::Fdroid.id());
+    assert_eq!(
+        press(&mut v, Press::Enter, &r),
+        Errand::Let(OnlineSource::Fdroid)
+    );
+    r.consents = r.consents.clone().with(OnlineSource::Fdroid.hosts(), true);
+    r.prefs.sources.flathub = false;
+    let rows = rows_of(&v, &r, &en());
+    assert!(
+        !rows.iter().any(|x| x.spot == Spot::Let("fdroid")),
+        "let, and still asking"
+    );
+    assert!(
+        !rows.iter().any(|x| x.spot == Spot::Let("flathub")),
+        "off, and asking"
+    );
+    assert!(rows.iter().any(|x| x.spot == Spot::Let("appimagehub")));
 }
 
 #[test]

@@ -10,7 +10,7 @@
 //!
 //! The view is a STACK OF PAGES (`crate::player_page`): the home at the bottom
 //! (`crate::player_home`) — what plays and a row for every other page — and
-//! the pages above it, the files (`f`, `LEADER p l`), playing together, the
+//! the pages above it, the files (`LEADER p l`), playing together, the
 //! internet (`crate::player_internet`), the other machines
 //! (`crate::player_machines`, `LEADER p m`), the media in the file — its
 //! sounds and pictures (`crate::player_tracks`, `k`) — the subtitles over the
@@ -30,13 +30,15 @@
 //! arrows still turn the one in use — and on an item of the queue it plays
 //! it.
 //!
-//! # The files, from the player itself
+//! # The files, through the one picker
 //!
-//! A PAGE of the view: the music, videos and music videos folders as a ring,
-//! the folders under the one that is open, and the files in it the player
-//! plays (`player_browse::glyph_if_played`). `RET` enters a folder or plays a
-//! file alone, `a` puts one in the queue — a folder whole — `DEL` goes up, and
-//! `Esc` goes back to the page that opened them.
+//! A PAGE of the view for each purpose (`PageId::Pick`): the system's file
+//! picker (`crate::file_picker`) with the kinds of file the purpose takes
+//! (`crate::player_kinds`) — into the queue, played together, a set or a
+//! queue to open, a subtitle, a cover, where a set or the queue is saved. The
+//! picker takes every key while its page is up and answers with a
+//! [`crate::file_picker::Picked`], which the view carries out
+//! ([`View::picked`]); `Esc` goes back to the page that opened it.
 //!
 //! # Every door types
 //!
@@ -55,9 +57,10 @@
 //! `player_rows::slider_at` and `player_rows::slid`, the one arithmetic both
 //! doors ask, beside the window's own time bar and volume track.
 
+use crate::player_catalog::ListingKey;
 use crate::player_page::{Level, Subject};
 pub use crate::player_page::{PageId, TrackKind};
-use crate::player_question::{ENQUEUE, OPEN_SAVED, Question, SUBTITLE_FILE, TOGETHER};
+use crate::player_question::Question;
 use crate::player_rows::{Builder, Row};
 use crate::player_transport::{button_errand, stepped_volume, volume_step};
 use ronoctua_player::{
@@ -81,11 +84,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("n", "player-next", Where::Anywhere),
     ("p", "player-previous", Where::Anywhere),
     ("d", "player-remove", Where::OnRemovable),
-    ("f", "player-browse", Where::OutOfTheFiles),
-    ("a", "player-add", Where::OnAFile),
-    ("DEL", "player-parent", Where::InTheFiles),
-    ("P", "player-play-now", Where::OnAFile),
-    ("c", "player-clear", Where::OutOfTheFiles),
+    // A ROW THAT PLAYS from a directory is added to the queue with `a`, and
+    // played now with `P`. The files have their own keys, the picker's.
+    ("a", "player-add", Where::OnAPlayable),
+    ("P", "player-play-now", Where::OnAPlayable),
+    ("c", "player-clear", Where::Opening),
     ("-", "player-quieter", Where::Anywhere),
     ("=", "player-louder", Where::Anywhere),
     ("o", "player-only", Where::Anywhere),
@@ -135,6 +138,46 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("C-k", "player-nearer", Where::OnTheGlobe),
     ("C-j", "player-further", Where::OnTheGlobe),
     ("C-r", "player-world", Where::OnTheGlobe),
+    // THE SEEKS BESIDE THE CLOCK — `j` ten seconds back, `l` ten ahead —
+    // while what plays has a position: the glyphs around the transport's
+    // clock, pressed by a key (`player_media::clock_group`).
+    ("j", "player-rewind", Where::WithAPosition),
+    ("l", "player-forward", Where::WithAPosition),
+    // `z` FOLDS THE PICTURE away, and back — the glyph on the "Now" title,
+    // in the door that shows one ([`View::picture_foldable`]).
+    ("z", "player-picture-fold", Where::WithAPictureShown),
+    // `C-s` SAVES THE QUEUE AGAIN into the file it was opened from or saved
+    // as, once it is no longer what that file says — the glyph on the
+    // Queue's title.
+    ("C-s", "player-save-queue-again", Where::WithAQueueFile),
+    // `O` TURNS THE COUNTRIES' ORDER on a world page: the most first, or A
+    // to Z by the name in the person's language — the glyph on their title.
+    ("O", "player-countries-order", Where::OnTheCountries),
+    // `T` TRANSLATES THE LYRICS under their verses, or stops — the glyph on
+    // their title.
+    ("T", "player-lyrics-translate", Where::WithLyrics),
+    // A LISTING OF THE CATALOGUE (`crate::player_catalog`): its pages — the
+    // one before, the one after, the first and the last — the whole screen,
+    // the next layout, a letter typed and the next order; and `S` turns the
+    // source on its page and on channels by theme.
+    ("<prior>", "player-listing-earlier", Where::OnAListing),
+    ("<next>", "player-listing-later", Where::OnAListing),
+    ("<home>", "player-listing-first", Where::OnAListing),
+    ("<end>", "player-listing-last", Where::OnAListing),
+    ("F", "player-listing-full", Where::OnAListing),
+    ("L", "player-listing-layout", Where::OnAListing),
+    ("S", "player-listing-source", Where::OnTheCatalog),
+    ("C-l", "player-listing-letter", Where::OnAListing),
+    ("O", "player-listing-order", Where::OnAListing),
+    // THE RANKING of the video catalogue (`crate::player_ranking`): its
+    // pages, the other layout — and `e`, the `⋯` at the end of a video's row,
+    // its own page.
+    ("<prior>", "player-ranking-earlier", Where::OnTheRanking),
+    ("<next>", "player-ranking-later", Where::OnTheRanking),
+    ("<home>", "player-ranking-first", Where::OnTheRanking),
+    ("<end>", "player-ranking-last", Where::OnTheRanking),
+    ("L", "player-ranking-layout", Where::OnTheRanking),
+    ("e", "player-ranking-more", Where::OnARanked),
 ];
 
 /// Where a key applies.
@@ -154,12 +197,9 @@ pub enum Where {
     OnAGroup,
     /// On one of the file's media, on its kind's page.
     OnATrack,
-    /// Anywhere but among the files.
-    OutOfTheFiles,
-    /// Among the files.
-    InTheFiles,
-    /// On a folder or a file of the listing, or the folder that is open.
-    OnAFile,
+    /// Anywhere, a key that OPENS what it shows — a question — which a door
+    /// that draws no rows shows them for first (`Press::unseen`).
+    Opening,
     /// While the file offers a choice of its media that can be made here —
     /// two sounds, a subtitle (`TrackKind::with_a_choice`).
     WithAChoice,
@@ -176,14 +216,102 @@ pub enum Where {
     /// On a row that plays from a directory — a station, a channel, a film,
     /// a live.
     OnAPick,
+    /// On a row that plays: [`Where::OnAPick`]'s, or a website's address
+    /// ([`crate::player_website`]) — what `a` queues and `P` plays now.
+    OnAPlayable,
     /// On a page that draws a globe.
     OnTheGlobe,
+    /// While what plays has a position to seek in.
+    WithAPosition,
+    /// While the door shows a picture it can fold away, or has folded one
+    /// ([`View::picture_foldable`]).
+    WithAPictureShown,
+    /// While the queue is no longer what the file it came from says
+    /// (`QueueKept::Changed`).
+    WithAQueueFile,
+    /// On a world page, whose countries have an order to turn.
+    OnTheCountries,
+    /// While what plays has lyrics.
+    WithLyrics,
+    /// On a listing of the catalogue.
+    OnAListing,
+    /// On channels by theme, or a listing of them: the catalogue's source
+    /// turns there.
+    OnTheCatalog,
+    /// On the ranking of the video catalogue (`crate::player_ranking`).
+    OnTheRanking,
+    /// On a video of the ranking.
+    OnARanked,
 }
 
 impl Where {
-    fn shown(self, target: &Target, state: Option<&State>, page: PageId) -> bool {
+    /// Whether its keys act on WHAT PLAYS and not on the row under the
+    /// cursor — so they act where no row is drawn (the window's stage, the
+    /// footer's picture alone, the column's bar: [`Press::unseen`]): always,
+    /// or while what plays has what they act on.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn of_no_row(self) -> bool {
+        matches!(
+            self,
+            Self::Anywhere
+                | Self::WithAPosition
+                | Self::WithAPictureShown
+                | Self::WithAQueueFile
+                | Self::WithLyrics
+        )
+    }
+
+    /// Whether it holds on the page on screen, WHEN THE PAGE ALONE SAYS —
+    /// `None` when the row under the cursor, or what plays, decides. What
+    /// tells two entries of [`OF_THE_VIEW`] that share a key apart
+    /// ([`pressed_where`]): `O` sorts the countries on a world page and
+    /// something else on another. A new `Where` is placed here by the
+    /// compiler: the match names every one.
+    fn on_the_page(self, view: &View) -> Option<bool> {
+        match self {
+            Self::OnTheCountries
+            | Self::OnADirectory
+            | Self::OnTheGlobe
+            | Self::OnAListing
+            | Self::OnTheCatalog
+            | Self::OnTheRanking
+            | Self::WithAPictureShown => Some(self.shown(&Target::Nothing, None, view)),
+            Self::Anywhere
+            | Self::OnAValue
+            | Self::OnARow
+            | Self::OnRemovable
+            | Self::OnAnEntry
+            | Self::OnAGroup
+            | Self::OnATrack
+            | Self::Opening
+            | Self::OnAPlayable
+            | Self::OnARanked
+            | Self::WithAChoice
+            | Self::WithAPicture
+            | Self::OnALane
+            | Self::WithLanes
+            | Self::OnAPick
+            | Self::WithAPosition
+            | Self::WithAQueueFile
+            | Self::WithLyrics => None,
+        }
+    }
+
+    fn shown(self, target: &Target, state: Option<&State>, view: &View) -> bool {
+        let page = view.page();
         match self {
             Self::Anywhere => true,
+            Self::WithAPosition => state.is_some_and(loaded),
+            Self::WithAPictureShown => view.picture_fold.is_some(),
+            Self::WithAQueueFile => state.is_some_and(|s| {
+                matches!(
+                    s.queue_file,
+                    ronoctua_player::queue::QueueKept::Changed { .. }
+                )
+            }),
+            Self::OnTheCountries => matches!(page, PageId::Radio | PageId::Tv),
+            Self::WithLyrics => state.is_some_and(|s| !s.lyrics.is_empty()),
             Self::OnADirectory => match page {
                 PageId::Radio
                 | PageId::Stations
@@ -191,9 +319,15 @@ impl Where {
                 | PageId::RadioLanguages
                 | PageId::Tv
                 | PageId::TvChannels => true,
-                PageId::Theme(c) => !c.archive.is_empty(),
+                // THE CATALOGUE is searched from channels by theme and from a
+                // listing (`crate::player_catalog`).
+                PageId::Channels | PageId::Catalog => true,
                 _ => false,
             },
+            Self::OnAListing => page == PageId::Catalog,
+            Self::OnTheCatalog => matches!(page, PageId::Channels | PageId::Catalog),
+            Self::OnTheRanking => page == PageId::Ranking,
+            Self::OnARanked => matches!(target, Target::Ranked(_)),
             Self::OnAPick => matches!(target, Target::Pick(..)),
             Self::OnTheGlobe => crate::player_globe::on(page) && crate::globe::present(),
             Self::WithAChoice => {
@@ -219,21 +353,18 @@ impl Where {
                     | Target::Guest(_)
                     | Target::Language(_)
                     | Target::Key(_)
+                    | Target::Website(_)
             ),
             Self::OnAnEntry => matches!(target, Target::Entry(_) | Target::Group(_)),
             Self::OnAGroup => matches!(target, Target::Group(_)),
             Self::OnATrack => matches!(target, Target::Track { id: Some(_), .. }),
-            Self::OutOfTheFiles => !target.among_the_files(),
-            Self::InTheFiles => target.among_the_files(),
-            // A ROW THAT PLAYS from a directory is added and played as a
-            // file is.
-            Self::OnAFile => matches!(
+            Self::Opening => true,
+            // A ROW THAT PLAYS — from a directory, or a website's address —
+            // is added and played as a file is.
+            // AND A VIDEO OF THE RANKING (`crate::player_ranking`).
+            Self::OnAPlayable => matches!(
                 target,
-                Target::Folder(_)
-                    | Target::File(_)
-                    | Target::PlayFolder
-                    | Target::EnqueueFolder
-                    | Target::Pick(..)
+                Target::Pick(..) | Target::Website(_) | Target::Ranked(_)
             ),
         }
     }
@@ -267,11 +398,11 @@ pub enum Press {
     /// Open a page over the one on screen — a command that names one
     /// (`LEADER p m`).
     Go(PageId),
-    /// Put the file, or the folder whole, in the queue.
+    /// Put the row that plays from a directory in the queue — or, on one of
+    /// the file's media, play it too.
     Add,
-    /// The folder above.
-    Parent,
-    /// The file (or folder), now: right after what plays, the queue kept.
+    /// The row that plays from a directory, now: right after what plays, the
+    /// queue kept.
     PlayNow,
     /// Empty the queue, after a question.
     Clear,
@@ -323,6 +454,31 @@ pub enum Press {
     Globe(crate::player_globe::Turn),
     /// Back one page, or leave the view from the home.
     Escape,
+    /// A key typed into the TEXT being edited ([`View::edit_text`]) — what
+    /// every key is while one is open ([`View::press_of_key`]).
+    Text(ronoctua_keymap::Key),
+    /// A key the FILE PICKER on screen takes — every letter while its page is
+    /// up ([`View::press_of_key`], `FilePicker::claims`).
+    Pick(ronoctua_keymap::Key),
+    /// Ten seconds back (`j`, the seek before the clock).
+    Rewind,
+    /// Ten seconds ahead (`l`, the seek after the clock).
+    Forward,
+    /// The picture folded away, or back (`z`) — the door's to do
+    /// ([`Errand::FoldPicture`]).
+    FoldPicture,
+    /// The queue saved again into the file it came from (`C-s`).
+    SaveQueueAgain,
+    /// The countries of a world page by how many, or by name (`O`).
+    CountriesOrder,
+    /// The lyrics translated under their verses, or no longer (`T`).
+    Translate,
+    /// A key of a LISTING of the catalogue — a page, the whole screen, the
+    /// layout, the source, a letter, the order (`crate::player_catalog`).
+    Listing(crate::player_catalog::ListingKey),
+    /// A key of the RANKING — a page, the layout, a video's own page
+    /// (`crate::player_ranking`).
+    Ranking(crate::player_ranking::RankingKey),
 }
 
 /// What a door that is NOT DRAWING THE ROWS does with a press — the window's
@@ -365,6 +521,10 @@ impl Press {
             | Self::Mute
             | Self::Swap
             | Self::EveryScreen
+            | Self::Rewind
+            | Self::Forward
+            | Self::FoldPicture
+            | Self::Translate
             | Self::Escape => Unseen::Acts,
             Self::Up
             | Self::Down
@@ -373,14 +533,18 @@ impl Press {
             | Self::Enter
             | Self::Remove
             | Self::Add
-            | Self::Parent
             | Self::PlayNow
             | Self::Fold
             | Self::Earlier
             | Self::Later
             | Self::Shown
             | Self::Favourite
-            | Self::Globe(_) => Unseen::ShowsTheRows,
+            | Self::Globe(_)
+            | Self::CountriesOrder
+            | Self::Text(_)
+            | Self::Pick(_)
+            | Self::Listing(_)
+            | Self::Ranking(_) => Unseen::ShowsTheRows,
             Self::Browse
             | Self::Go(_)
             | Self::Tracks
@@ -388,6 +552,10 @@ impl Press {
             | Self::Rename
             | Self::SaveSet
             | Self::SaveQueue
+            // SAVING AGAIN may ask — a name for a queue never saved, or
+            // whether to write over a file changed on the disk — and a
+            // question is drawn on the rows: they come back first.
+            | Self::SaveQueueAgain
             | Self::Metadata
             | Self::Search => Unseen::OpensThere,
         }
@@ -484,6 +652,21 @@ pub enum Target {
     /// A lane's page: which picture a subtitle lane sits over — a ring of the
     /// films of what plays.
     LaneOver(LaneId),
+    /// The Streams page: a stream's language, by ffprobe's index — `RET`
+    /// asks its code typed (`Edit::Stream`).
+    StreamLanguage(u32),
+    /// A stream's own name — `RET` asks it typed, `d` takes it out.
+    StreamTitle(u32),
+    /// Whether a stream is marked the default — a switch.
+    StreamDefault(u32),
+    /// Whether a stream is marked forced — a switch.
+    StreamForced(u32),
+    /// The Chapters page: a chapter's title, the chapter by where it starts
+    /// — `RET` asks it typed (`Edit::Chapter`).
+    ChapterTitle(u64),
+    /// A lane's page: which of its file's languages a subtitle lane shows —
+    /// a ring of the ones the file carries (a SAMI's classes).
+    LaneLanguage(LaneId),
     /// A lane's page: its own volume — a bar; `←`/`→` turn it, `RET` mutes.
     LaneVolume(LaneId),
     /// A lane's page: its own mute — a switch.
@@ -619,20 +802,9 @@ pub enum Target {
     /// A page, opened over this one: the row is labelled by the page's own
     /// key (`PageId::key`), the one the page is titled by.
     Go(PageId),
-    /// Which of the three places the files start from: a ring.
-    Place,
-    /// The folder above the one that is open.
-    Up,
-    /// Play the open folder, every file under it.
-    PlayFolder,
-    /// Put the open folder in the queue, every file under it.
-    EnqueueFolder,
-    /// A folder of the listing: `RET` enters it, `a` queues it whole.
-    Folder(std::path::PathBuf),
-    /// A file of the listing: `RET` puts it in the queue, `P` plays it alone.
-    File(std::path::PathBuf),
-    /// A path or an address, typed: a question the door asks.
-    Typed,
+    /// A row or a cell of the FILE PICKER on screen (`crate::file_picker`):
+    /// a click chooses it there, and `RET` is the picker's.
+    Picker(crate::file_picker::Target),
     /// Empty the queue: the glyph beside its title, and `c`.
     ClearQueue,
     /// This door for the other: the glyph beside the "Now" title, in the
@@ -656,8 +828,6 @@ pub enum Target {
     SearchDirectory(ronoctua_player::wire::DeskKind),
     /// Every row back, where a group of the globe's marks narrowed them.
     EveryRow,
-    /// Another page of a theme's films, by its number.
-    FilmsPage(u32),
     /// Another page of a list of stations, by its number.
     StationsPage(u32),
     /// Something that plays from a directory — a station, a channel, a film,
@@ -667,6 +837,115 @@ pub enum Target {
     /// The star at the head of such a row: a click keeps it among the
     /// favourites, or takes it off.
     Star(ronoctua_broadcast::picks::Kind, String),
+    /// The glyph on the "Now" title that folds the picture away, or shows it
+    /// again, and `z`.
+    FoldPicture,
+    /// The glyph on the Queue's title that saves it again into the file it
+    /// came from, and `C-s`.
+    SaveQueueAgain,
+    /// The glyph on a world page's "Countries" that turns their order, and
+    /// `O`.
+    CountriesOrder,
+    /// The glyph on the Lyrics' title that translates them, or stops, and
+    /// `T`.
+    Translate,
+    /// Which language the lyrics are translated into: a ring over the
+    /// tongues (`ronoctua_player::tongues`).
+    TranslateTo,
+    /// The host the lyrics' translation was refused for, not being let:
+    /// `RET` lets it, and asks the translation again.
+    LetTranslator(String),
+    /// A host the queue was refused for, not being let (`Trouble::Off` in
+    /// the state's troubles): `RET` lets it.
+    LetHost(String),
+    /// The Internet page's switch of the lyrics' translator: whether its
+    /// host is let (`ronoctua_consent`).
+    Translator,
+    /// The Internet page's ring of WHO translates the lyrics: MyMemory, DeepL
+    /// or a LibreTranslate server (`crate::player_translator`).
+    TranslatorWho,
+    /// The LibreTranslate server's address — `RET` asks it typed.
+    TranslatorAddress,
+    /// A translation key of the person's — `RET` asks it masked, `d`
+    /// forgets it after a question.
+    WordsKey(ronoctua_words::keys::Key),
+    /// A several-line field's page: `RET` opens its words here, over the
+    /// page, to be changed in this door (`crate::text_area`).
+    EditHere(ronoctua_tags::Field),
+    /// The website page's two questions: play now (`true`), or add to the
+    /// queue (`crate::player_website`).
+    WebsiteAsk(bool),
+    /// An address played lately: `RET` plays it now, `a` puts it in the
+    /// queue, `d` forgets it.
+    Website(String),
+    /// CHANNELS BY THEME's source — a ring (`crate::player_catalog`).
+    CatalogSource,
+    /// A source read again (`Ask::Ingest`), by its id.
+    CatalogRead(String),
+    /// A default source's hosts let — the press is the consent — and read.
+    CatalogLet(String),
+    /// A listing opened: everything of the source, a theme, a category — in
+    /// one of the two files.
+    CatalogScope(
+        ronoctua_broadcast::catalog::Store,
+        ronoctua_broadcast::catalog::Scope,
+    ),
+    /// The catalogue's search, typed — `/` too.
+    CatalogSearch,
+    /// The adult catalogue, asked open: the person's password, masked.
+    CatalogUnlock,
+    /// The adult catalogue shut again.
+    CatalogLock,
+    /// An item of the catalogue, in its file, by its id: `RET` plays it now,
+    /// `a` adds it to the queue.
+    CatalogItem(ronoctua_broadcast::catalog::Store, i64),
+    /// The listing's letter — a ring the arrows turn, `RET` types one.
+    CatalogLetter(Option<char>),
+    /// One letter's cell on that row: a click takes it.
+    CatalogLetterCell(Option<char>),
+    /// The listing's page: the arrows turn it, `RET` types one.
+    CatalogPage,
+    /// Whether the words search every category's.
+    CatalogEveryCategory,
+    /// Whether the listing takes every source's.
+    CatalogEverySource,
+    /// The listing's order — a ring.
+    CatalogSort,
+    /// How many rows its page holds — a ring.
+    CatalogPerPage,
+    /// Its country — a ring of the countries it has.
+    CatalogCountry,
+    /// Its language — a ring of the languages it has.
+    CatalogLanguage,
+    /// The least height of its pictures — a ring.
+    CatalogQuality,
+    /// How it is drawn — a ring, and the title's glyph.
+    CatalogLayout,
+    /// The listing alone on the whole screen — the title's glyph, and `F`.
+    CatalogFull,
+    /// The whole archive searched for the words, past the catalogue.
+    CatalogSearchArchive,
+    /// A source added: its link pasted (`crate::player_sources`).
+    SourceAdd,
+    /// A source added straight to the adult catalogue, while it is open.
+    SourceAddAdult,
+    /// A source's posters, fetched or not — a switch.
+    SourcePosters(String),
+    /// A person's source kept in the adult catalogue, or not — a switch.
+    SourceAdult(String),
+    /// A person's source forgotten, after a question.
+    SourceRemove(String),
+    /// A VIDEO OF THE RANKING, by its id: `RET` puts it at the queue's end,
+    /// once, `P` plays it now (`crate::player_ranking`).
+    Ranked(ronoctua_video_metrics::VideoId),
+    /// The `⋯` at the end of its row: its own page.
+    RankedMore(ronoctua_video_metrics::VideoId),
+    /// How the ranking is drawn — a ring, and the title's glyph.
+    RankingLayout,
+    /// Its page — a ring.
+    RankingPage,
+    /// A row of a video's own page.
+    RankedDo(crate::player_ranking::RankedAct),
 }
 
 impl Target {
@@ -695,6 +974,10 @@ impl Target {
                 | Self::LaneStart(_)
                 | Self::LaneUntil(_)
                 | Self::LaneOver(_)
+                | Self::LaneLanguage(_)
+                | Self::TranslatorWho
+                | Self::StreamDefault(_)
+                | Self::StreamForced(_)
                 | Self::LaneVolume(_)
                 | Self::LaneMute(_)
                 | Self::LaneShown(_)
@@ -720,20 +1003,25 @@ impl Target {
                 | Self::Sponsors
                 | Self::Skip(_)
                 | Self::Host(_)
-                | Self::Place
-        )
-    }
-
-    const fn among_the_files(&self) -> bool {
-        matches!(
-            self,
-            Self::Place
-                | Self::Up
-                | Self::PlayFolder
-                | Self::EnqueueFolder
-                | Self::Folder(_)
-                | Self::File(_)
-                | Self::Typed
+                | Self::TranslateTo
+                | Self::Translator
+                // THE CATALOGUE'S RINGS (`crate::player_catalog`).
+                | Self::CatalogSource
+                | Self::CatalogLetter(_)
+                | Self::CatalogPage
+                | Self::CatalogEveryCategory
+                | Self::CatalogEverySource
+                | Self::CatalogSort
+                | Self::CatalogPerPage
+                | Self::CatalogCountry
+                | Self::CatalogLanguage
+                | Self::CatalogQuality
+                | Self::CatalogLayout
+                | Self::SourcePosters(_)
+                | Self::SourceAdult(_)
+                // THE RANKING'S TWO RINGS (`crate::player_ranking`).
+                | Self::RankingLayout
+                | Self::RankingPage
         )
     }
 
@@ -747,10 +1035,12 @@ impl Target {
     }
 }
 
-/// What a choice of the files is for.
+/// What a choice of the files is for — each a page of the file picker
+/// (`PageId::Pick`) and the request it opens with ([`Purpose::request`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Purpose {
-    /// Into the queue: `RET` adds, `P` plays alone.
+    /// Into the queue: `RET` adds, `C-RET` plays now; several marked go in
+    /// together, and a folder whole is an extra of the page.
     #[default]
     Queue,
     /// Something played together with what plays: a LANE of it — a picture,
@@ -766,19 +1056,86 @@ pub enum Purpose {
     /// A picture for the cover of the file the Metadata section shows
     /// (`crate::player_metadata`).
     Cover,
+    /// Where what plays is saved as a set, and under what name.
+    SaveSet,
+    /// Where the queue is saved, and under what name.
+    SaveQueue,
 }
 
 impl Purpose {
-    /// What its page lists besides the folders.
+    /// The request its page opens the picker with, starting at `start` —
+    /// the folder it was left in, else the user directory it is about — and
+    /// a save's first name.
     #[must_use]
-    pub const fn wanted(self) -> crate::player_browse::Wanted {
-        use crate::player_browse::Wanted;
-        match self {
-            Self::Queue => Wanted::Media,
-            Self::Lane => Wanted::Lanes,
-            Self::Open => Wanted::Saved,
-            Self::Subtitle => Wanted::Subtitles,
-            Self::Cover => Wanted::Images,
+    pub fn request(
+        self,
+        start: Option<std::path::PathBuf>,
+        name: String,
+    ) -> crate::file_picker::Request {
+        use crate::file_picker::{
+            Alternate, ENQUEUE_FOLDER, Mode, PLAY_FOLDER, Request, Start, Xdg,
+        };
+        use crate::player_kinds as kinds;
+        let (purpose, mode, filters, place) = match self {
+            Self::Queue => (
+                "player-queue",
+                Mode::Open { many: true },
+                kinds::FOR_THE_QUEUE,
+                Xdg::MUSIC,
+            ),
+            Self::Lane => (
+                "player-lane",
+                Mode::Open { many: false },
+                kinds::FOR_A_LANE,
+                Xdg::VIDEOS,
+            ),
+            Self::Open => (
+                "player-open",
+                Mode::Open { many: false },
+                kinds::FOR_OPENING,
+                Xdg::MUSIC,
+            ),
+            Self::Subtitle => (
+                "player-subtitle",
+                Mode::Open { many: false },
+                kinds::FOR_A_SUBTITLE,
+                Xdg::VIDEOS,
+            ),
+            Self::Cover => (
+                "player-cover",
+                Mode::Open { many: false },
+                kinds::FOR_A_COVER,
+                Xdg::PICTURES,
+            ),
+            // ONE PURPOSE FOR BOTH SAVES: a set and a queue are kept in the
+            // same folder, which is where the other is looked for.
+            Self::SaveSet | Self::SaveQueue => (
+                "player-save",
+                Mode::Save {
+                    name,
+                    extension: Some(if self == Self::SaveSet {
+                        Saved::Set.extension()
+                    } else {
+                        Saved::Queue.extension()
+                    }),
+                },
+                kinds::FOR_SAVING,
+                Xdg::MUSIC,
+            ),
+        };
+        Request {
+            purpose,
+            mode,
+            filters,
+            start: start.map_or(Start::Place(place), Start::At),
+            // AN ADDRESS PLAYS as a file does, in the queue and together.
+            addresses: matches!(self, Self::Queue | Self::Lane),
+            extras: if self == Self::Queue {
+                &[PLAY_FOLDER, ENQUEUE_FOLDER]
+            } else {
+                &[]
+            },
+            alternate: (self == Self::Queue).then_some(Alternate::PlayNow),
         }
     }
 }
@@ -816,6 +1173,9 @@ pub enum Switch {
         /// Skipped.
         on: bool,
     },
+    /// Who translates the lyrics — a LibreTranslate server's address kept
+    /// with it (`crate::player_translator`).
+    Translator(ronoctua_words::Provider),
 }
 
 impl Errand {
@@ -824,7 +1184,7 @@ impl Errand {
     #[must_use]
     pub fn writes_prefs(&self) -> bool {
         match self {
-            Self::Let { .. } | Self::Keep(_) => true,
+            Self::Let { .. } | Self::Keep(_) | Self::LetHosts { .. } => true,
             Self::Then(first, then) => first.writes_prefs() || then.writes_prefs(),
             _ => false,
         }
@@ -842,6 +1202,12 @@ impl Switch {
                 if *on {
                     prefs.skipped.push(category.clone());
                 }
+            }
+            Self::Translator(provider) => {
+                if let ronoctua_words::Provider::LibreTranslate { url } = provider {
+                    prefs.lyrics_translation.address = Some(url.clone());
+                }
+                prefs.lyrics_translation.by = provider.clone();
             }
         }
     }
@@ -937,6 +1303,50 @@ pub enum Errand {
     /// (`player_stage::everywhere`). The door's to do: only a door knows the
     /// screens by name.
     EveryScreen,
+    /// THE CLIPBOARD'S TEXT, for the text being edited (`C-v`): the door's
+    /// to do — it reads the clipboard off its loop and hands what was
+    /// copied to [`View::text_pasted`].
+    Paste,
+    /// THE PICTURE FOLDED AWAY, or shown again (`z`, the glyph on "Now"):
+    /// the door's to do — only a door has a picture, and each keeps its own
+    /// fold, never written anywhere.
+    FoldPicture,
+    /// An address of the website page kept among the ones played lately,
+    /// or forgotten — MERGED into its file as it is on disk
+    /// (`player_website::keep`).
+    Websites(crate::player_website::Change),
+    /// LET these hosts, or no longer — in the person's consent file, merged
+    /// by host (`ronoctua_consent::let_hosts`) — and then `then`: the
+    /// lyrics' translator, from its switch and from the row under a refusal.
+    LetHosts {
+        /// The hosts, by name.
+        hosts: Vec<String>,
+        /// Let, or no longer.
+        on: bool,
+        /// What is done once it is written.
+        then: Box<Errand>,
+    },
+    /// THE PERSON'S SYSTEM PASSWORD, checked for the adult catalogue — the
+    /// door's to do, OFF ITS LOOP (PAM waits seconds on a wrong one): how it
+    /// ended comes back as [`Told::Unlock`].
+    Unlock(ronoctua_consent::keys::Secret),
+    /// A TRANSLATION KEY of the person's, kept private from its first byte,
+    /// off the loop (`ronoctua_words::keys`).
+    KeepWordsKey {
+        /// Which.
+        key: ronoctua_words::keys::Key,
+        /// What was typed.
+        secret: ronoctua_consent::keys::Secret,
+    },
+    /// A translation key forgotten, off the loop.
+    ForgetWordsKey(ronoctua_words::keys::Key),
+    /// A VIDEO IN THE CHROME KIOSK — the door's to do: the kiosk is the
+    /// footer's (`kiosk-open`), which a window and the column ask down its
+    /// socket (`crate::player_ranking`).
+    Kiosk(String),
+    /// A video of the ranking hidden, deleted or downloaded — OFF THE LOOP,
+    /// and said when it is done (`Told::Ranking`).
+    Ranking(crate::player_ranking::Act),
 }
 
 /// What a door does with what the player's watch heard — the ONE answer for
@@ -1009,6 +1419,76 @@ pub enum Told {
         /// How the ask ended.
         answer: Box<Told>,
     },
+    /// A REFUSAL THAT IS THE PERSON'S TO OVERRULE — already in the queue,
+    /// the queue's file changed on the disk — handed to the view with the
+    /// ask that says yes: the view asks, "no" first ([`View::told`]), and
+    /// its "yes" sends `again`.
+    Asks {
+        /// The same ask, the refusal overruled: `once` off, `force` on.
+        again: Box<Ask>,
+        /// Why it was refused.
+        trouble: Trouble,
+    },
+    /// How the person's system password was checked for the adult
+    /// catalogue ([`Errand::Unlock`]).
+    Unlock(Result<(), ronoctua_pam::Refusal>),
+    /// What a video of the ranking hidden, deleted or downloaded came to
+    /// ([`Errand::Ranking`]).
+    Ranking(crate::player_ranking::Outcome),
+}
+
+impl Told {
+    /// Whether it is a question for the view ([`Told::Asks`]).
+    #[must_use]
+    pub const fn asks(&self) -> bool {
+        matches!(self, Self::Asks { .. })
+    }
+}
+
+/// The ask that overrules `trouble` for `ask`, when it is one a person can
+/// overrule: a `Put` refused for being queued already, sent again without
+/// `once`; saving the queue again over a file that changed, with `force`.
+#[must_use]
+pub fn overruled(ask: &Ask, trouble: &Trouble) -> Option<Ask> {
+    match (ask, trouble) {
+        (Ask::Put { once: true, .. }, Trouble::AlreadyQueued { .. }) => {
+            let mut again = ask.clone();
+            if let Ask::Put { once, .. } = &mut again {
+                *once = false;
+            }
+            Some(again)
+        }
+        (Ask::SaveQueueAgain { force: false }, Trouble::ChangedOnDisk { .. }) => {
+            Some(Ask::SaveQueueAgain { force: true })
+        }
+        _ => None,
+    }
+}
+
+/// What a door does with an answer of the thread once its view took its
+/// share ([`View::told`]) — one decision, read by the window, the column and
+/// the footer alike ([`heard`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Heard {
+    /// The view asks a question on its rows, "no" first: what the order said
+    /// it did ("added…", "saved again") is taken off the door's line — it
+    /// was not done — and a door that hid its rows (the window's stage, the
+    /// footer's picture alone) brings them back, for the question is drawn
+    /// there.
+    Asked,
+    /// Said on the door's line, or nothing.
+    Said(Option<String>),
+}
+
+/// What a door does with `told`, `took` being whether its view took it
+/// ([`Heard`]).
+#[must_use]
+pub fn heard(took: bool, told: &Told, older: bool, texts: &ronoctua_i18n::Texts) -> Heard {
+    if took && told.asks() {
+        Heard::Asked
+    } else {
+        Heard::Said(told_sentence(told, older, texts))
+    }
 }
 
 /// What a door says of `told`: the refusal, in a sentence, or nothing when it
@@ -1021,7 +1501,13 @@ pub fn told_sentence(told: &Told, older: bool, texts: &ronoctua_i18n::Texts) -> 
     match told {
         Told::Taken | Told::Working | Told::Draft(_) => None,
         Told::Listing { answer, .. } => told_sentence(answer, older, texts),
+        // A QUESTION THE VIEW ASKS; said as the refusal only where no view
+        // took it ([`Told::asks`]).
+        Told::Asks { trouble, .. } => Some(trouble_sentence(trouble, texts)),
         Told::KeyTrouble(t) => Some(crate::player_internet::key_trouble(*t, texts)),
+        Told::Unlock(Ok(())) => Some(texts.t(key::PLAYER_ADULT_OPEN)),
+        Told::Unlock(Err(r)) => Some(texts.t(crate::player_catalog::unlock_refused_key(*r))),
+        Told::Ranking(outcome) => Some(crate::player_ranking::said(outcome, texts)),
         Told::KeyTaken(service) => Some(texts.t_with(
             key::PLAYER_KEY_ACCEPTED,
             &[("service", &texts.t(service_key(*service)))],
@@ -1099,6 +1585,10 @@ pub enum Show {
     /// Alone, in a small window floating in the bottom-right corner —
     /// picture-in-picture.
     Small,
+    /// A LISTING of the catalogue alone on the whole screen — its rows and
+    /// nothing else (`crate::player_catalog`): the window's stage, opened by
+    /// the footer and the column already that way.
+    Listing,
 }
 
 /// How far `←`/`→` move the position, in seconds.
@@ -1123,16 +1613,12 @@ pub struct View {
     /// `player.json`, read when the view opens and kept in step with what
     /// this door writes.
     pub(crate) prefs: ronoctua_player::prefs::Preferences,
-    /// Where the files were left: opening them again goes back there.
-    left_at: Option<(usize, std::path::PathBuf)>,
-    /// The folder just left by going up, for the cursor to land on.
-    came_from: Option<std::path::PathBuf>,
     /// The yes-or-no question on screen, when one is.
     asking: Option<Choice>,
     /// A control on a title's line, clicked: what the next `RET` does.
     clicked_control: Option<Target>,
-    /// The home the places are in, instead of this machine's own folders —
-    /// a photograph's ([`View::blank`]).
+    /// The home the picker's places are in, instead of this machine's own
+    /// folders — a photograph's ([`View::blank`]).
     home: Option<std::path::PathBuf>,
     /// The swap's glyph is on the "Now" title — the footer's view, while it
     /// has no transport to carry it ([`View::in_the_footer`]).
@@ -1156,6 +1642,12 @@ pub struct View {
     /// The entry that was current when the rows last settled: a new one
     /// opens the groups it is in.
     pub(crate) last_current: Option<EntryId>,
+    /// The entry a person last moved on the home (`C-↑`/`C-↓`, the arrows at
+    /// the end of its row): the home's queue windows keep it in sight beside
+    /// what plays, so the next move takes the same entry and the cursor is
+    /// never left on another by its place (`player_queue::home_window`). Let
+    /// go when what plays moves on.
+    pub(crate) home_held: Option<EntryId>,
     /// A question of the view's own on the door's line, and what its answer
     /// is about ([`View::answered`]).
     pub(crate) typing: Option<Typing>,
@@ -1207,6 +1699,35 @@ pub struct View {
     /// The preferences are read from this machine's file — a door on a
     /// screen; a photograph's and a test's view keeps what it was given.
     reads_prefs: bool,
+    /// A TEXT OF SEVERAL LINES being edited over the page, in either door
+    /// ([`View::edit_text`]): every key is its (`Press::Text`), and the page
+    /// draws it until it is left (`crate::text_area`).
+    pub(crate) editing: Option<crate::text_area::TextArea>,
+    /// THE DOOR'S PICTURE, as the door says it ([`View::picture_foldable`]):
+    /// `None` while it shows none it could fold away — the "Now" title
+    /// carries no fold glyph then — else whether it is folded.
+    pub(crate) picture_fold: Option<bool>,
+    /// Whether the person let the lyrics' translator's host
+    /// (`ronoctua_consent`): read with the preferences, and turned by the
+    /// Internet page's switch.
+    pub(crate) translator_let: bool,
+    /// THE TRANSLATION KEYS KEPT, by whether their files are there — read
+    /// with the preferences (`crate::player_translator`).
+    pub(crate) words_kept: Vec<ronoctua_words::keys::Key>,
+    /// THE LANGUAGE THE LYRICS WERE LAST TRANSLATED INTO, as the state said
+    /// it: while translation is off the state says none, and turning it on
+    /// again sends this one — the person's choice, not the interface's
+    /// (`View::translate`).
+    pub(crate) lyrics_tongue: Option<String>,
+    /// The addresses of the website page played lately
+    /// (`crate::player_website`).
+    pub(crate) websites: crate::player_website::Websites,
+    /// THE LOCAL CATALOGUE: channels by theme, the listing, the sources, the
+    /// posters and the adult lock (`crate::player_catalog`).
+    pub(crate) catalog: crate::player_catalog::Catalog,
+    /// THE RANKING of the video catalogue: its page, its layout, the video
+    /// whose own page is open and the thumbnails (`crate::player_ranking`).
+    pub(crate) ranking: crate::player_ranking::Ranking,
 }
 
 /// Which of the player's own files is being saved.
@@ -1230,10 +1751,6 @@ pub enum Typing {
         /// changes.
         was: String,
     },
-    /// The name a set or the queue is saved under.
-    SaveName(Saved),
-    /// The folder it is saved in, the name already typed.
-    SaveFolder(Saved, String),
     /// When lane `0` begins, typed on its page.
     LaneStart(LaneId),
     /// Where in its file lane `0` stops, typed on its page.
@@ -1261,13 +1778,22 @@ pub enum Typing {
         /// changes.
         was: String,
     },
-}
-
-/// A page of the files: which place, and the folder that is open.
-#[derive(Debug, Clone)]
-pub struct Files {
-    place: usize,
-    listing: crate::player_browse::Listing,
+    /// A letter of the catalogue's listing (`C-l`).
+    CatalogLetter,
+    /// A page of it.
+    CatalogPage,
+    /// The words it is searched by.
+    CatalogSearch,
+    /// A link pasted to add a source.
+    SourceUrl,
+    /// A link pasted to add a source straight to the adult catalogue.
+    AdultSourceUrl,
+    /// The person's system password, masked, for the adult catalogue.
+    AdultPassword,
+    /// A LibreTranslate server's address, for the lyrics' translation.
+    TranslatorAddress,
+    /// A translation key, masked.
+    WordsKey(ronoctua_words::keys::Key),
 }
 
 /// `m:ss`, or `h:mm:ss` from an hour on.
@@ -1373,6 +1899,11 @@ fn number(n: usize) -> ronoctua_i18n::Arg<'static> {
     ronoctua_i18n::Arg::Number(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
+/// Who said what [`Trouble::Unplayable`] quotes: the `ERROR:` line it keeps
+/// is yt-dlp's, the program behind mpv's addresses — a program's NAME, data
+/// like a host's, framed by `player-trouble-said`.
+const SAID_BY: &str = "yt-dlp";
+
 /// A trouble, in a sentence — one for every variant the player can say.
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -1380,7 +1911,37 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
     use ronoctua_i18n::{Arg, key};
     let with = |k: &str, args: &[(&str, &str)]| texts.t_with(k, args);
     match t {
-        Trouble::Unplayable { why } => with(key::PLAYER_TROUBLE_UNPLAYABLE, &[("why", why)]),
+        // WHAT THE PROGRAM SAID is data, framed by a key of ours and never
+        // taken for a sentence (`Trouble::Unplayable::said`).
+        Trouble::Unplayable { why, said } => {
+            let unplayable = with(key::PLAYER_TROUBLE_UNPLAYABLE, &[("why", why)]);
+            match said {
+                Some(text) => format!(
+                    "{unplayable} {}",
+                    with(
+                        key::PLAYER_TROUBLE_SAID,
+                        &[("program", SAID_BY), ("text", text)]
+                    )
+                ),
+                None => unplayable,
+            }
+        }
+        Trouble::AlreadyQueued { name, .. } => with(
+            key::PLAYER_TROUBLE_ALREADY_QUEUED,
+            &[("name", &name_of(name, texts, u16::MAX))],
+        ),
+        Trouble::ChangedOnDisk { path } => {
+            with(key::PLAYER_TROUBLE_CHANGED_ON_DISK, &[("path", path)])
+        }
+        Trouble::NoOrigin => texts.t(key::PLAYER_TROUBLE_NO_ORIGIN),
+        Trouble::NoSound { .. } => texts.t(key::PLAYER_TROUBLE_NO_SOUND),
+        Trouble::Translation(r) => with(
+            key::PLAYER_TROUBLE_TRANSLATION,
+            &[("why", &translation_refusal(r.why, texts))],
+        ),
+        // WHICH ASK is the log's (the engine's `not_yet`), never the screen's: a
+        // kebab-case name is no sentence in any language.
+        Trouble::NotYet { .. } => texts.t(key::PLAYER_TROUBLE_NOT_YET),
         Trouble::NoDecoder { program } => {
             with(key::PLAYER_TROUBLE_NO_DECODER, &[("program", program)])
         }
@@ -1435,6 +1996,9 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
             key::PLAYER_TROUBLE_SINK_GONE,
             &[("device", &sink_label(device, &[], texts))],
         ),
+        Trouble::NotAnAddress { address } => {
+            with(key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS, &[("typed", address)])
+        }
         Trouble::Unreachable { what, why } => with(
             key::PLAYER_TROUBLE_UNREACHABLE,
             &[("what", what), ("why", why)],
@@ -1498,6 +2062,20 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
                 Why::Unwritable => key::PLAYER_TROUBLE_PICKS_UNWRITABLE,
             }
         }),
+        // THE CATALOGUE'S: a source's refusal, the files', the person's
+        // sources' file — one sentence per reason (`crate::player_catalog`).
+        Trouble::Source { why } => texts.t(crate::player_catalog::source_trouble_key(*why)),
+        Trouble::Catalog { why } => texts.t(crate::player_catalog::catalog_trouble_key(*why)),
+        Trouble::Sources { why } => texts.t({
+            use ronoctua_player::wire::SourcesTrouble as Why;
+            match why {
+                Why::NoHome => key::PLAYER_TROUBLE_SOURCES_NO_HOME,
+                Why::Unreadable => key::PLAYER_TROUBLE_SOURCES_UNREADABLE,
+                Why::Unparseable => key::PLAYER_TROUBLE_SOURCES_UNPARSEABLE,
+                Why::Unwritable => key::PLAYER_TROUBLE_SOURCES_UNWRITABLE,
+            }
+        }),
+        Trouble::NoSuchSource { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_SOURCE),
     }
 }
 
@@ -1530,7 +2108,32 @@ pub fn tags_refusal(why: &ronoctua_tags::Why, texts: &ronoctua_i18n::Texts) -> S
             key::PLAYER_TROUBLE_TAG_NO_WRITER,
             &[("container", &texts.t(container_key(*container)))],
         ),
-        Why::NoPlace => texts.t(key::PLAYER_TROUBLE_TAG_NO_PLACE),
+        Why::NoFieldIn { field, format } => texts.t_with(
+            key::PLAYER_TROUBLE_TAG_NO_FIELD_IN,
+            &[
+                ("format", &texts.t(tag_format_key(*format))),
+                ("field", &texts.t(crate::player_metadata::field_key(*field))),
+            ],
+        ),
+        Why::NoPicturesIn { format } => texts.t_with(
+            key::PLAYER_TROUBLE_TAG_NO_PICTURES_IN,
+            &[("format", &texts.t(tag_format_key(*format)))],
+        ),
+        Why::StreamsOnlyInMatroska { container } => texts.t_with(
+            key::PLAYER_TROUBLE_TAG_STREAMS_ONLY_MATROSKA,
+            &[("container", &texts.t(container_key(*container)))],
+        ),
+        Why::ChaptersOnlyInMatroska { container } => texts.t_with(
+            key::PLAYER_TROUBLE_TAG_CHAPTERS_ONLY_MATROSKA,
+            &[("container", &texts.t(container_key(*container)))],
+        ),
+        Why::AttachmentIsNotAStream => texts.t(key::PLAYER_TROUBLE_TAG_ATTACHMENT),
+        Why::RemuxWouldDrop => texts.t(key::PLAYER_TROUBLE_TAG_REMUX_WOULD_DROP),
+        Why::TagReadOnly { format } => texts.t_with(
+            key::PLAYER_TROUBLE_TAG_READ_ONLY,
+            &[("format", &texts.t(tag_format_key(*format)))],
+        ),
+        Why::OnlyTheFrontCover => texts.t(key::PLAYER_TROUBLE_TAG_ONLY_THE_FRONT_COVER),
         Why::Missing { program } => texts.t_with(
             key::PLAYER_TROUBLE_TAG_MISSING,
             &[("program", program.name())],
@@ -1560,6 +2163,48 @@ pub fn tags_refusal(why: &ronoctua_tags::Why, texts: &ronoctua_i18n::Texts) -> S
         Why::Taken => texts.t(key::PLAYER_TROUBLE_TAG_TAKEN),
         Why::Cancelled => texts.t(key::PLAYER_TROUBLE_TAG_CANCELLED),
     }
+}
+
+/// A kind of tag, as a sentence names it — its key.
+#[must_use]
+pub const fn tag_format_key(format: ronoctua_tags::TagFormat) -> &'static str {
+    use ronoctua_i18n::key;
+    use ronoctua_tags::TagFormat as F;
+    match format {
+        F::Id3v2 => key::PLAYER_TAG_FORMAT_ID3V2,
+        F::Id3v1 => key::PLAYER_TAG_FORMAT_ID3V1,
+        F::Ape => key::PLAYER_TAG_FORMAT_APE,
+        F::Vorbis => key::PLAYER_TAG_FORMAT_VORBIS,
+        F::Mp4 => key::PLAYER_TAG_FORMAT_MP4,
+        F::RiffInfo => key::PLAYER_TAG_FORMAT_RIFF_INFO,
+        F::AiffText => key::PLAYER_TAG_FORMAT_AIFF_TEXT,
+    }
+}
+
+/// Why the lyrics were not translated, in a sentence — one for every reason
+/// the translating crate gives.
+#[must_use]
+pub fn translation_refusal(
+    why: ronoctua_player::TranslationWhy,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    use ronoctua_i18n::key;
+    use ronoctua_player::TranslationWhy as Why;
+    texts.t(match why {
+        Why::Empty => key::PLAYER_TROUBLE_TRANSLATION_EMPTY,
+        Why::TooLong => key::PLAYER_TROUBLE_TRANSLATION_TOO_LONG,
+        Why::UnknownTongue => key::PLAYER_TROUBLE_TRANSLATION_UNKNOWN_TONGUE,
+        Why::WrongPass => key::PLAYER_TROUBLE_TRANSLATION_WRONG_PASS,
+        Why::NoKey => key::PLAYER_TROUBLE_TRANSLATION_NO_KEY,
+        Why::KeyRefused => key::PLAYER_TROUBLE_TRANSLATION_KEY_REFUSED,
+        Why::Quota => key::PLAYER_TROUBLE_TRANSLATION_QUOTA,
+        Why::Paced => key::PLAYER_TROUBLE_TRANSLATION_PACED,
+        Why::NotFound => key::PLAYER_TROUBLE_TRANSLATION_NOT_FOUND,
+        Why::NoDictionary => key::PLAYER_TROUBLE_TRANSLATION_NO_DICTIONARY,
+        Why::Unreachable => key::PLAYER_TROUBLE_TRANSLATION_UNREACHABLE,
+        Why::Failed => key::PLAYER_TROUBLE_TRANSLATION_FAILED,
+        Why::Garbled => key::PLAYER_TROUBLE_TRANSLATION_GARBLED,
+    })
 }
 
 /// A container, by the name a person knows it by — its key.
@@ -1607,6 +2252,10 @@ pub const fn service_key(service: ronoctua_lookup::Service) -> &'static str {
         S::OpenSubtitles => key::PLAYER_SERVICE_OPENSUBTITLES,
         S::SubDl => key::PLAYER_SERVICE_SUBDL,
         S::Podnapisi => key::PLAYER_SERVICE_PODNAPISI,
+        // THE SECURITY CENTRE'S, named in its own words (`Service::scope`).
+        S::VirusTotal | S::XposedOrNot | S::PwnedPasswords => {
+            crate::security_words::service_key(service)
+        }
     }
 }
 
@@ -1630,6 +2279,7 @@ pub fn lookup_refusal(r: ronoctua_lookup::Refusal, texts: &ronoctua_i18n::Texts)
         Why::Unreadable => key::PLAYER_TROUBLE_LOOKUP_UNREADABLE,
         Why::TooSmall => key::PLAYER_TROUBLE_LOOKUP_TOO_SMALL,
         Why::Dormant => key::PLAYER_TROUBLE_LOOKUP_DORMANT,
+        Why::NotLet => key::PLAYER_TROUBLE_LOOKUP_NOT_LET,
     };
     texts.t_with(k, &[("service", &texts.t(service_key(r.service)))])
 }
@@ -1654,6 +2304,7 @@ pub fn directory_refusal(r: ronoctua_broadcast::Refusal, texts: &ronoctua_i18n::
         Why::NothingPlayable => key::PLAYER_TROUBLE_DIRECTORY_NOTHING_PLAYABLE,
         Why::NothingToAsk => key::PLAYER_TROUBLE_DIRECTORY_NOTHING_TO_ASK,
         Why::NotAName => key::PLAYER_TROUBLE_DIRECTORY_NOT_A_NAME,
+        Why::NotLet => key::PLAYER_TROUBLE_DIRECTORY_NOT_LET,
     };
     texts.t_with(k, &[("source", &source)])
 }
@@ -1798,24 +2449,59 @@ pub fn ambience_group(group: &str, texts: &ronoctua_i18n::Texts) -> String {
     }
 }
 
+/// How long lane `id`'s source runs, in seconds, once the player said it:
+/// what its voice reads while it is on (`LaneState::duration_seconds`), what
+/// the player knows of it while it is off (`State::lengths_off`). The ONE
+/// answer the deck's bands, a lane's page and its "switched off" read.
+#[must_use]
+pub(crate) fn lane_length(s: &State, id: LaneId) -> Option<f64> {
+    s.lane_states
+        .iter()
+        .find(|l| l.lane == id)
+        .and_then(|l| l.duration_seconds)
+        .or_else(|| {
+            s.lengths_off
+                .iter()
+                .find(|l| l.lane == id)
+                .map(|l| l.seconds)
+        })
+        .filter(|d| d.is_finite() && *d > 0.0)
+}
+
+/// What a lane that is OFF says it is doing: switched off — and, once the
+/// player knows how long it runs, how long ([`lane_length`]).
+#[must_use]
+pub(crate) fn switched_off(s: &State, id: LaneId, texts: &ronoctua_i18n::Texts) -> String {
+    match lane_length(s, id) {
+        Some(seconds) => texts.t_with(
+            ronoctua_i18n::key::PLAYER_LANE_SWITCHED_OFF_LENGTH,
+            &[("length", clock(seconds).as_str())],
+        ),
+        None => texts.t(ronoctua_i18n::key::PLAYER_LANE_SWITCHED_OFF),
+    }
+}
+
 /// A track's name among `kin`, the others of its kind: its title, its
-/// language, its codec — whichever it has — and, where two of them would read
-/// the same, its codec after it, and then its number.
+/// language (by its name in the person's language), its codec — whichever
+/// it has — and, where two of them would read the same, its codec after it,
+/// and then its number.
 ///
 /// ONE AT A TIME the old ring could say `eng` for three English sounds; side
 /// by side on a page, three rows reading `eng` were three choices nobody can
 /// tell apart — and the census of labels cannot see it, because these labels
 /// are the file's.
-pub(crate) fn track_name(t: &Track, kin: &[&Track]) -> String {
+#[must_use]
+pub(crate) fn track_name(t: &Track, kin: &[&Track], texts: &ronoctua_i18n::Texts) -> String {
+    let own = |o: &Track| own_name(o, texts);
     let twins = |name: &dyn Fn(&Track) -> String| {
         let mine = name(t);
         kin.iter().filter(|o| name(o) == mine).count() > 1
     };
-    if !twins(&own_name) {
-        return own_name(t);
+    if !twins(&own) {
+        return own(t);
     }
     let with_codec = |o: &Track| {
-        let name = own_name(o);
+        let name = own(o);
         match o
             .codec
             .as_deref()
@@ -1832,15 +2518,20 @@ pub(crate) fn track_name(t: &Track, kin: &[&Track]) -> String {
     }
 }
 
-/// A track's own name, alone: its title, its language, its codec — whichever
+/// A track's own name, alone: its title, its language — BY ITS NAME, from
+/// the table of languages the searches bring (`eng` reads "English"), the
+/// code as the file says it when the table has none — its codec; whichever
 /// it has.
-fn own_name(t: &Track) -> String {
+fn own_name(t: &Track, texts: &ronoctua_i18n::Texts) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(title) = t.title.as_deref().filter(|s| !s.is_empty()) {
         parts.push(title.to_owned());
     }
-    if let Some(lang) = t.lang.as_deref().filter(|s| !s.is_empty()) {
-        parts.push(lang.to_owned());
+    if let Some(lang) = t.lang.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let name = crate::player_find::tongue_name(lang, texts);
+        if !parts.iter().any(|p| p.eq_ignore_ascii_case(&name)) {
+            parts.push(name);
+        }
     }
     if parts.is_empty()
         && let Some(codec) = t.codec.as_deref()
@@ -1919,18 +2610,23 @@ impl View {
     #[must_use]
     pub fn fresh() -> Self {
         Self {
+            translator_let: crate::player_translator::let_now(&ronoctua_player::prefs::read()),
+            words_kept: crate::player_translator::kept_keys(),
+            lyrics_tongue: None,
             kept: crate::player_internet::Kept::read(),
             directories: crate::player_directory::Directories::of_this_machine(),
+            catalog: crate::player_catalog::Catalog::of_this_machine(),
+            ranking: crate::player_ranking::Ranking::of_this_machine(),
             reads_prefs: true,
-            ..Self::with_prefs(ronoctua_player::prefs::store().read())
+            ..Self::with_prefs(ronoctua_player::prefs::read())
         }
     }
 
     /// A fresh view on the preferences' DEFAULTS, whatever the person chose
     /// — a photograph's (`crate::photograph`), which is the same picture on
-    /// every machine. Its file browser's places are in `home` as a machine
-    /// that declares none has them (`player_browse::places_in`), and this
-    /// machine's own when `home` is `None`.
+    /// every machine. Its picker's places are in `home`, as a home that is
+    /// not this machine's has them (`file_picker::Context::in_home`), and
+    /// this machine's own when `home` is `None`.
     #[must_use]
     pub fn blank(home: Option<std::path::PathBuf>) -> Self {
         Self {
@@ -1939,18 +2635,76 @@ impl View {
         }
     }
 
-    /// Whether a page of the files is on screen.
+    /// Whether a question of the view's waits for an answer on its rows —
+    /// one it asked, "no" first, or a text open to be edited — which a door
+    /// too narrow to draw rows must make room for.
     #[must_use]
-    pub fn browsing(&self) -> bool {
-        self.top().files.is_some()
+    pub fn waits_for_an_answer(&self) -> bool {
+        self.asking.is_some() || self.editing.is_some()
     }
 
-    /// The places the file browser starts from.
-    fn places(&self) -> [(&'static str, std::path::PathBuf); 3] {
+    /// THE DOOR'S PICTURE: `None` while it shows none it could fold away,
+    /// else whether it is folded — what the "Now" title's glyph and `z` stand
+    /// for. The door's to say: only it has a picture. `true` when that
+    /// changed, and with it the rows.
+    pub fn picture_foldable(&mut self, fold: Option<bool>) -> bool {
+        let changed = self.picture_fold != fold;
+        self.picture_fold = fold;
+        changed
+    }
+
+    /// `z` and the glyph on "Now": the picture folded away, or back — the
+    /// door's to do. With no picture in this door there is nothing to fold,
+    /// and that is said.
+    fn fold_picture(&self, texts: &ronoctua_i18n::Texts) -> Errand {
+        if self.picture_fold.is_none() {
+            return Errand::Said(texts.t(ronoctua_i18n::key::PLAYER_NO_PICTURE_TO_FOLD));
+        }
+        Errand::FoldPicture
+    }
+
+    /// Whether a page of the file picker is on screen.
+    #[must_use]
+    pub fn browsing(&self) -> bool {
+        self.top().picker.is_some()
+    }
+
+    /// How many lines of rows the door shows — told before a key is handed
+    /// over, so the picker's `PgUp` and `PgDn` walk half a screen
+    /// (`FilePicker::page_is`).
+    pub fn page_is(&self, lines: usize) {
+        if let Some(p) = self.top().picker.as_ref() {
+            p.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// What the picker knows of this door's machine: its home — a
+    /// photograph's, or this machine's — and its places. The player's doors
+    /// light one cell of a grid (`chrome::hover_cells`), so the folder is a
+    /// grid.
+    fn pick_context(&self) -> crate::file_picker::Context {
         self.home.as_deref().map_or_else(
-            crate::player_browse::places,
-            crate::player_browse::places_in,
+            || crate::file_picker::Context::of_this_machine(true),
+            |home| crate::file_picker::Context::in_home(home, true),
         )
+    }
+
+    /// The picker of a page for `purpose`, at `start` when it has one.
+    pub(crate) fn picker_for(
+        &self,
+        purpose: Purpose,
+        start: Option<std::path::PathBuf>,
+        name: String,
+    ) -> crate::file_picker::FilePicker {
+        let mut picker = crate::file_picker::FilePicker::open(
+            purpose.request(start, name),
+            &self.pick_context(),
+        );
+        // THE FOLDER IS WATCHED while the page is up, by a door with a loop.
+        if let Some(wake) = self.wake.as_ref() {
+            picker.watch_with(wake);
+        }
+        picker
     }
 
     /// A fresh view on `prefs`.
@@ -1958,8 +2712,6 @@ impl View {
         Self {
             levels: vec![Level::home()],
             prefs,
-            left_at: None,
-            came_from: None,
             asking: None,
             clicked_control: None,
             home: None,
@@ -1969,6 +2721,7 @@ impl View {
             outline: None,
             folds: std::collections::BTreeMap::new(),
             last_current: None,
+            home_held: None,
             typing: None,
             beside: crate::player_subtitles::Beside::default(),
             wake: None,
@@ -1984,6 +2737,14 @@ impl View {
             globe: crate::player_globe::Seen::default(),
             prefs_on_disk: crate::player_internet::Watched::default(),
             reads_prefs: false,
+            editing: None,
+            picture_fold: None,
+            translator_let: false,
+            words_kept: Vec::new(),
+            lyrics_tongue: None,
+            websites: crate::player_website::Websites::default(),
+            catalog: crate::player_catalog::Catalog::default(),
+            ranking: crate::player_ranking::Ranking::default(),
         }
     }
 
@@ -2007,13 +2768,24 @@ impl View {
                 let dir = store
                     .path()
                     .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
-                self.prefs_on_disk
-                    .look(&[(dir, ronoctua_player::prefs::FILE)], wake)
+                // AND THE CONSENT FILE beside it, where a press keeps the
+                // hosts it lets (`prefs::let_merged`) and the translator's
+                // switch keeps its host.
+                // AND THE TRANSLATION KEYS, whose rows say whether each is
+                // kept.
+                let mut files = vec![
+                    (dir.clone(), ronoctua_player::prefs::FILE),
+                    (dir, ronoctua_player::prefs::CONSENT_FILE),
+                ];
+                files.extend(crate::player_translator::key_files());
+                self.prefs_on_disk.look(&files, wake)
             }
             None => self.prefs_on_disk.take_stir(),
         };
         if read {
-            self.prefs = store.read();
+            self.prefs = ronoctua_player::prefs::read();
+            self.translator_let = crate::player_translator::let_now(&self.prefs);
+            self.words_kept = crate::player_translator::kept_keys();
         }
     }
 
@@ -2038,16 +2810,32 @@ impl View {
     /// How an ask told off the loop ended, for the view: a directory's list
     /// refused at once is its page's to say; a key that could not be kept is
     /// read again from its files. `true` when that changed the rows.
-    pub fn told(&mut self, answer: &Told) -> bool {
+    pub fn told(&mut self, answer: &Told, texts: &ronoctua_i18n::Texts) -> bool {
         match answer {
             Told::Listing { query, answer } => {
                 self.listing_told(query, answer);
+                true
+            }
+            // A REFUSAL THE PERSON MAY OVERRULE: asked on the page, "no"
+            // first, and "yes" sends the ask that overrules it.
+            Told::Asks { again, trouble } => {
+                let Some((sentence, yes)) = self.overrule(again, trouble, texts) else {
+                    return false;
+                };
+                self.ask(sentence, yes, Errand::Nothing);
                 true
             }
             Told::KeyTrouble(_) => {
                 self.kept.stir();
                 true
             }
+            Told::Unlock(answer) => {
+                self.unlocked(*answer);
+                true
+            }
+            // A VIDEO HIDDEN OR DELETED: its own page closes, and the
+            // ranking is read again.
+            Told::Ranking(outcome) => self.ranking_told(outcome),
             _ => false,
         }
     }
@@ -2117,38 +2905,6 @@ impl View {
         }
     }
 
-    /// The files where they were left, or the music folder the first time —
-    /// what a page of the files opens on (`View::push`), listing what
-    /// `purpose` is for.
-    pub(crate) fn files_where_left(&self, purpose: Purpose) -> Files {
-        let (place, at) = self.left_at.clone().unwrap_or_else(|| {
-            let places = self.places();
-            (0, places[0].1.clone())
-        });
-        Files {
-            place,
-            listing: crate::player_browse::list_for(&at, purpose.wanted()),
-        }
-    }
-
-    /// Another folder, the cursor on `on` when it is one of its rows.
-    fn go_to(&mut self, at: &std::path::Path, on: Option<&std::path::Path>) {
-        let wanted = match self.page() {
-            PageId::Files(purpose) => purpose.wanted(),
-            _ => crate::player_browse::Wanted::Media,
-        };
-        let top = self.top_mut();
-        if let Some(f) = top.files.as_mut() {
-            f.listing = crate::player_browse::list_for(at, wanted);
-            let place = f.place;
-            top.cursor = 0;
-            top.cell = 0;
-            top.moved = false;
-            self.left_at = Some((place, at.to_path_buf()));
-        }
-        self.came_from = on.map(std::path::Path::to_path_buf);
-    }
-
     /// The spot of the row the cursor is on — what a page opened from it
     /// remembers, to put the cursor back there.
     pub(crate) fn spot_here(
@@ -2189,32 +2945,45 @@ impl View {
         } else {
             self.spot_here(state, columns, texts)
         };
-        self.push(page, from);
-        // A SUBTITLE IS LOOKED FOR BESIDE ITS FILM: the files open on the
-        // film's own folder, when it has one here.
-        if page == PageId::Files(Purpose::Subtitle)
-            && let Some(folder) = state
+        // A SUBTITLE IS LOOKED FOR BESIDE ITS FILM, and a cover beside its
+        // file, where a scan of it lives: the picker opens on that folder
+        // when it is here.
+        let beside = match page {
+            PageId::Pick(Purpose::Subtitle) => state
                 .and_then(crate::player_subtitles::film)
-                .filter(|l| !l.source.contains("://"))
-                .and_then(|l| std::path::Path::new(&l.source).parent())
-                .filter(|f| f.is_dir())
-        {
-            let folder = folder.to_path_buf();
-            self.go_to(&folder, None);
+                .map(|l| l.source.clone()),
+            PageId::Pick(Purpose::Cover) => state.and_then(|s| self.meta.location(s)),
+            _ => None,
         }
-        // A COVER IS LOOKED FOR BESIDE ITS FILE, where a scan of it lives.
-        if page == PageId::Files(Purpose::Cover)
-            && let Some(folder) = state
-                .and_then(|s| self.meta.location(s))
-                .filter(|l| !l.contains("://"))
-                .and_then(|l| {
-                    std::path::Path::new(&l)
-                        .parent()
-                        .map(std::path::Path::to_path_buf)
-                })
-                .filter(|f| f.is_dir())
+        .filter(|l| !l.contains("://"))
+        .and_then(|l| {
+            std::path::Path::new(&l)
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        })
+        .filter(|f| f.is_dir());
+        self.push(page, from);
+        // THE WHOLE QUEUE opens on what plays, which its window was around.
+        if page == PageId::Queue
+            && self.page() == page
+            && let Some(current) = state.and_then(|s| s.current)
         {
-            self.go_to(&folder, None);
+            self.follow(
+                &crate::player_queue::spot_of(current),
+                state,
+                columns,
+                texts,
+            );
+            self.top_mut().moved = true;
+        }
+        if let (PageId::Pick(purpose), Some(folder)) = (page, beside)
+            && self.page() == page
+        {
+            self.top_mut().picker = Some(Box::new(self.picker_for(
+                purpose,
+                Some(folder),
+                String::new(),
+            )));
         }
         self.settle_in(state, columns, texts);
     }
@@ -2222,7 +2991,141 @@ impl View {
     /// Which row the cursor is on.
     #[must_use]
     pub fn cursor(&self) -> usize {
+        // A TEXT BEING EDITED keeps its caret in sight — or the answer its
+        // question's cursor is on — where it was last placed.
+        if self.asking.is_none()
+            && let Some(area) = &self.editing
+        {
+            return area.cursor_row();
+        }
         self.top().cursor
+    }
+
+    /// Opens a TEXT OF SEVERAL LINES over the page — a field's words, a
+    /// description — in whichever door this view is: every key is its until
+    /// it is left, `C-s` hands its words to [`View::keep_text`], and `Esc`
+    /// asks before a change is thrown away (`crate::text_area`).
+    pub fn edit_text(&mut self, area: crate::text_area::TextArea) {
+        self.clicked_control = None;
+        self.editing = Some(area);
+    }
+
+    /// Whether a text is being edited — a door that types capitals follows
+    /// Caps Lock while one is.
+    #[must_use]
+    pub const fn editing_text(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    /// A key, as this view reads it: EVERY KEY IS THE TEXT'S while one is
+    /// being edited (as a question takes every key), else [`press_of_key`]
+    /// — the one reader both doors call.
+    #[must_use]
+    pub fn press_of_key(&self, key: ronoctua_keymap::Key) -> Option<Press> {
+        if self.asking.is_none() && self.editing.is_some() {
+            return Some(Press::Text(key));
+        }
+        // THE PICKER ON SCREEN takes what it reads — every letter is what is
+        // typed there — and leaves the door the rest.
+        if self.asking.is_none()
+            && let Some(picker) = self.top().picker.as_ref()
+            && picker.claims(key)
+        {
+            return Some(Press::Pick(key));
+        }
+        // A KEY TWO ENTRIES SHARE is the one whose page this is.
+        press_of_key_where(key, |w| w.on_the_page(self))
+    }
+
+    /// What was copied, read by the door for [`Errand::Paste`] — typed into
+    /// the text being edited, lines and all. `true` when it changed; a paste
+    /// that arrives after the text was left is nobody's.
+    pub fn text_pasted(&mut self, text: &str) -> bool {
+        if self.editing.is_none()
+            && let Some(picker) = self.top_mut().picker.as_mut()
+        {
+            let changed = picker.pasted(text) != crate::file_picker::Step::Nothing;
+            if changed {
+                self.top_mut().moved = false;
+            }
+            return changed;
+        }
+        self.editing
+            .as_mut()
+            .is_some_and(|area| area.paste(text) != crate::text_area::Step::Nothing)
+    }
+
+    /// The text being edited was WRITTEN where it belongs, as `text`: the
+    /// area measures "changed" from it again. Called by what keeps it, once
+    /// the write went through — never for a refused one.
+    pub fn text_kept_as(&mut self, text: &str) {
+        if let Some(area) = self.editing.as_mut() {
+            area.kept_as(text);
+        }
+    }
+
+    /// The text being edited was LEFT — thrown away, or left as kept: the
+    /// page comes back, and nothing of it is waited for.
+    fn text_left(&mut self) {
+        self.editing = None;
+        crate::player_metadata::edit_left(&mut self.meta);
+    }
+
+    /// A key typed into the text being edited, or `Esc` from a door.
+    fn text_key(
+        &mut self,
+        press: Press,
+        state: Option<&State>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::text_area::Step;
+        let key = match press {
+            Press::Text(key) => key,
+            Press::Escape => ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Esc),
+            _ => return Errand::Nothing,
+        };
+        let Some(area) = self.editing.as_mut() else {
+            return Errand::Nothing;
+        };
+        match area.key(key, area.drawn_width()) {
+            Step::Nothing | Step::Moved | Step::Changed | Step::Asking => Errand::Nothing,
+            Step::WantsPaste => Errand::Paste,
+            Step::Keep(text) => {
+                let id = area.id;
+                self.keep_text(id, text, state, texts)
+            }
+            Step::Discard => {
+                self.text_left();
+                Errand::Nothing
+            }
+        }
+    }
+
+    /// `C-s` on the text opened as `id`: its words, written where they
+    /// belong — by the view that opened it, which calls
+    /// [`View::text_kept_as`] once the write went through.
+    ///
+    /// The metadata's "Edit here" (`player_metadata::EDIT_HERE`) sends the
+    /// field's `Retag`, and the text is marked kept once the file read back
+    /// says the words (`player_metadata::kept_back`, at the next settle). A
+    /// text of anybody else — a photograph's — SAYS it keeps nothing, and
+    /// stays open, changed, so `Esc` still asks.
+    fn keep_text(
+        &mut self,
+        id: &'static str,
+        text: String,
+        state: Option<&State>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        if id == crate::player_metadata::EDIT_HERE {
+            return crate::player_metadata::edit_kept(&mut self.meta, text, state, texts);
+        }
+        tracing::info!(
+            id,
+            bytes = text.len(),
+            "a text asked to be kept, and nothing keeps it"
+        );
+        Errand::Said(texts.t(ronoctua_i18n::key::TEXT_AREA_NOT_KEPT))
     }
 
     /// The hint line.
@@ -2233,6 +3136,16 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
+        // A TEXT BEING EDITED teaches its own keys, clickable.
+        if self.asking.is_none() && self.editing.is_some() {
+            return crate::text_area::hint(texts);
+        }
+        // THE PICKER teaches its own keys: every letter is typed there.
+        if self.asking.is_none()
+            && let Some(picker) = self.top().picker.as_ref()
+        {
+            return picker.hint(texts);
+        }
         let rows = self.rows(state, columns, texts);
         let target = rows
             .get(self.cursor())
@@ -2240,33 +3153,111 @@ impl View {
         // A KEY THAT IS ONLY HERE BECAUSE OF THE ROW UNDER THE CURSOR reads as
         // one (`Register::Contextual`): the owner asked for the passing guests to
         // look apart from the keys that are always on the line.
-        // A PAGE OF THE FILES FOR ANOTHER PURPOSE — a lane, a file to open —
-        // takes its pick with `RET`: "add to the queue" and "play now" taught
-        // there would be keys saying what they do not do.
-        let queueing = !matches!(self.page(), PageId::Files(p) if p != Purpose::Queue);
         let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
-            .filter(|(_, _, w)| w.shown(&target, state, self.page()))
-            .filter(|(_, id, _)| queueing || !matches!(*id, "player-add" | "player-play-now"))
+            .filter(|(_, _, w)| w.shown(&target, state, self))
             .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
         crate::chrome::hint_of_marked(&here, |_| None, texts)
+    }
+
+    /// A click on row `n` at pixel `x`, where the door's rows are `across`
+    /// — the door's ONE answer, which its hover lights a grid's cell with
+    /// too: on a grid row the cell under `x` ([`chrome::Across::cell`]), and
+    /// nothing where no cell is lit; elsewhere, what [`Self::clicked_at`]
+    /// takes at the column under `x`.
+    ///
+    /// [`chrome::Across::cell`]: crate::chrome::Across::cell
+    pub fn clicked_px(
+        &mut self,
+        n: usize,
+        x: f32,
+        across: crate::chrome::Across,
+        rows: &[Row],
+    ) -> bool {
+        match self.column_px(n, x, across, rows) {
+            Some(column) => self.clicked_at(n, column, rows),
+            None => false,
+        }
+    }
+
+    /// [`Self::mark_clicked_at`] at pixel `x`, by the same answer as
+    /// [`Self::clicked_px`].
+    pub fn mark_clicked_px(
+        &mut self,
+        n: usize,
+        x: f32,
+        across: crate::chrome::Across,
+        rows: &[Row],
+        range: bool,
+    ) -> bool {
+        match self.column_px(n, x, across, rows) {
+            Some(column) => self.mark_clicked_at(n, column, rows, range),
+            None => false,
+        }
+    }
+
+    /// The column a click at pixel `x` on row `n` takes: on a GRID row the
+    /// first column of the cell under `x` — `None` where the hover lights
+    /// none — and elsewhere the column under `x`, the row's left margin its
+    /// first.
+    fn column_px(
+        &self,
+        n: usize,
+        x: f32,
+        across: crate::chrome::Across,
+        rows: &[Row],
+    ) -> Option<u16> {
+        let cells = crate::player_rows::grid_cells(rows, Row::owner(rows, n));
+        if cells.is_empty() || self.editing.is_some() {
+            return Some(across.column(x).unwrap_or(0));
+        }
+        across.cell(&cells, x).map(|c| cells[c].0)
     }
 
     /// A click on row `n`, at `column` (a field's `at`); `true` when the
     /// door should run what `RET` does — the second click on the same place,
     /// or a click on a control beside a title, which acts at once.
     pub fn clicked_at(&mut self, n: usize, column: u16, rows: &[Row]) -> bool {
+        self.catalog_touched();
+        // A TEXT BEING EDITED takes the click: the caret where it lands, or
+        // an answer of its question chosen, then given (`text_area::hit`,
+        // the cells it drew). Nothing else on its page is a place to click.
+        if self.asking.is_none()
+            && let Some(area) = self.editing.as_mut()
+        {
+            if let Some(hit) = crate::text_area::hit(rows, n, column)
+                && area.clicked(hit) == crate::text_area::Step::Discard
+            {
+                self.text_left();
+            }
+            return false;
+        }
         // THE REST OF A WRAPPED LABEL is its row: a click there is a click
         // on the row it continues.
+        let line = n;
         let n = Row::owner(rows, n);
         let Some(row) = rows.get(n) else {
             return false;
         };
-        let cell = row
-            .cells
-            .iter()
-            .position(|c| column >= c.from && column < c.from + c.width);
+        // THE PICKER'S ROWS: what is under the click is chosen there — a
+        // cell of its grid by the same arithmetic its hover lights
+        // (`chrome::cell_under`) — and the second click is its `RET`.
+        if self.asking.is_none()
+            && let Some(target) = picked_under(row, column)
+            && let Some(picker) = self.top_mut().picker.as_mut()
+        {
+            let again = picker.click_target(target);
+            self.top_mut().cursor = n;
+            self.top_mut().moved = true;
+            return again;
+        }
+        // A CONTROL IS TAKEN ON THE LINE IT IS DRAWN ON, its row's first:
+        // under it, on the rest of the row, the click is the row's
+        // (`player_rows::controls_under`).
+        let cell = row.cells.iter().position(|c| {
+            (line == n || !c.control) && crate::chrome::in_cell(column, c.from, c.width)
+        });
         // A CONTROL ON A TITLE'S LINE acts on the click: a title is not a
         // place the cursor stops, so there is no first click to spend on it.
         if row.heading {
@@ -2320,12 +3311,41 @@ impl View {
         top.moved = true;
     }
 
-    /// The files, open on `at` for `purpose` — what a test of a door stands
-    /// on, with no folder of the machine's read.
+    /// A click with `Ctrl` held on row `n` at `column` — the file there
+    /// marked, or no longer — or with `Shift` — every file from the cursor to
+    /// it: the picker's own pointer marking (`FilePicker::mark_target`).
+    /// `true` when that changed the rows.
+    pub fn mark_clicked_at(&mut self, n: usize, column: u16, rows: &[Row], range: bool) -> bool {
+        let n = Row::owner(rows, n);
+        let Some(target) = rows.get(n).and_then(|r| picked_under(r, column)) else {
+            return false;
+        };
+        let changed = self
+            .top_mut()
+            .picker
+            .as_mut()
+            .is_some_and(|p| p.mark_target(target, range));
+        if changed {
+            let top = self.top_mut();
+            top.cursor = n;
+            top.moved = true;
+        }
+        changed
+    }
+
+    /// The picker, open on `at` for `purpose`, in a home that is `at` — what a
+    /// test of a door stands on, with no folder of the machine's read.
     #[cfg(test)]
-    pub fn files_at(&mut self, at: &std::path::Path, purpose: Purpose) {
-        self.left_at = Some((0, at.to_path_buf()));
-        self.push(PageId::Files(purpose), None);
+    pub fn pick_at(&mut self, at: &std::path::Path, purpose: Purpose) {
+        if self.home.is_none() {
+            self.home = Some(at.to_path_buf());
+        }
+        self.push(PageId::Pick(purpose), None);
+        self.top_mut().picker = Some(Box::new(self.picker_for(
+            purpose,
+            Some(at.to_path_buf()),
+            String::new(),
+        )));
     }
 
     /// A click on row `n` — on the entry of a grid the cursor is on, else at
@@ -2348,8 +3368,28 @@ impl View {
     /// The cursor back on a real row after the rows changed.
     pub fn settle_in(&mut self, state: Option<&State>, columns: u16, texts: &ronoctua_i18n::Texts) {
         self.remember_the_folds(state, columns, texts);
+        // THE LYRICS' LANGUAGE, remembered past a translation turned off.
+        if let Some(t) = state.and_then(|s| s.lyrics_translation.as_ref()) {
+            self.lyrics_tongue = Some(t.to.clone());
+        }
         if self.page() == PageId::Tracks(TrackKind::Subtitles) {
             self.beside.look(state, self.wake.as_ref());
+        }
+        // THE ADDRESSES PLAYED LATELY, while their page is on screen.
+        // ANOTHER DOOR'S play reorders it under the cursor, which stays on
+        // its address.
+        if self.page() == PageId::Website {
+            let here = self.spot_here(state, columns, texts);
+            if self.websites.look(self.wake.as_ref())
+                && let Some(here) = here
+            {
+                self.follow(&here, state, columns, texts);
+            }
+        }
+        // A FIELD EDITED HERE whose words the file now says: kept, and
+        // leaving it asks nothing.
+        if let Some(kept) = crate::player_metadata::kept_back(&mut self.meta, state) {
+            self.text_kept_as(&kept);
         }
         // THE SHEET OF THE FILE SHOWN, while a page shows it: asked again
         // when the file or its generation moved, off the loop.
@@ -2360,7 +3400,7 @@ impl View {
                 | PageId::Streams
                 | PageId::Chapters
                 | PageId::EveryTag
-                | PageId::Files(Purpose::Cover)
+                | PageId::Pick(Purpose::Cover)
                 | PageId::Suggestions
                 | PageId::Candidate(_)
                 | PageId::FindLyrics
@@ -2394,9 +3434,26 @@ impl View {
                 | PageId::Tv
                 | PageId::Stations
                 | PageId::TvChannels
-                | PageId::Theme(_)
         ) {
             self.directories.picks.look(self.wake.as_ref());
+        }
+        // THE RANKING'S PAGES read the video catalogue, off the loop in a
+        // door that has one (`crate::player_ranking`).
+        self.ranking_look(state, columns, texts);
+        // THE CATALOGUE'S PAGES read the catalogue — off the loop in a door
+        // that has one — and what a stale source shown here owes the player
+        // is told it, off the loop too; a door with no loop keeps it.
+        let owed = self.catalog_look(state);
+        if self.wake.is_some() {
+            for ask in owed {
+                tell_then(ask, |answer| {
+                    if answer != Told::Taken {
+                        tracing::debug!(?answer, "the catalogue's ask was not taken");
+                    }
+                });
+            }
+        } else {
+            self.catalog.owed.extend(owed);
         }
         self.prefs_look();
         if matches!(
@@ -2424,33 +3481,22 @@ impl View {
         {
             self.ask_about_the_draft(crate::player_metadata::draft_question(&d, texts));
         }
+        // THE PICKER'S FOLDER, read again when it moved on disk — the watch
+        // woke the door (`FilePicker::look`).
+        if let Some(picker) = self.top_mut().picker.as_mut() {
+            picker.look();
+        }
         let rows = self.rows(state, columns, texts);
         self.clamp(&rows);
-        // AMONG THE FILES the cursor lands on the folder just left, or on the
-        // first entry: the rows above them are the same in every folder, and
-        // the entries are what a person came to walk.
-        if !self.top().moved && self.browsing() {
-            let came = self.came_from.take();
-            // THE FOLDER JUST LEFT, or else the first real entry — `..` is
-            // the way back, not what a person opened the folder for, and it
-            // is landed on only when there is nothing else.
-            let wanted: [&dyn Fn(&Target) -> bool; 3] = [
-                &|t| matches!((t, came.as_deref()), (Target::Folder(p), Some(c)) if p == c),
-                &|t| came.is_none() && matches!(t, Target::Folder(_) | Target::File(_)),
-                &|t| matches!(t, Target::Up),
-            ];
-            // THE ENTRIES ARE CELLS of a grid now: they are looked for in
-            // each, and the cursor lands on the row AND the column.
-            for is_it in wanted {
-                for (i, r) in rows.iter().enumerate().filter(|(_, r)| !r.heading) {
-                    if let Some(c) = r.cells.iter().position(|c| is_it(&c.target)) {
-                        let top = self.top_mut();
-                        top.cursor = i;
-                        top.cell = c;
-                        return;
-                    }
-                }
-            }
+        // THE PICKER KEEPS ITS OWN CURSOR, by identity: the view's is the row
+        // it is on, for the doors to follow.
+        if self.asking.is_none()
+            && self.editing.is_none()
+            && self.browsing()
+            && let Some(i) = rows.iter().position(|r| r.focused)
+        {
+            self.top_mut().cursor = i;
+            return;
         }
         let top = self.top();
         if !top.moved
@@ -2577,6 +3623,8 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let asked_before = self.asking.is_some();
+        // A KEY is the person here: the adult catalogue's time starts again.
+        self.catalog_touched();
         let errand = self.keyed(press, state, columns, texts);
         // WHAT THIS VIEW SHOWS of `player.json` it changed at once; the file,
         // once the door wrote it, is read back — a write that was refused is
@@ -2609,6 +3657,26 @@ impl View {
         if self.asking.is_some() {
             return self.answering(press, state, columns, texts);
         }
+        // A TEXT BEING EDITED takes every key typed, and `Esc` — which asks
+        // before a change is lost. A press that acts wherever the cursor is
+        // (play, the volume, the stages) still acts; one that would open a
+        // page or move among rows the text hides does nothing.
+        if self.editing.is_some() {
+            if matches!(press, Press::Text(_) | Press::Escape) {
+                return self.text_key(press, state, texts);
+            }
+            if press.unseen() != Unseen::Acts {
+                return Errand::Nothing;
+            }
+        }
+        // THE PICKER'S PAGE takes its keys, and the view's own that walk and
+        // answer — a door's `RET` after a second click, a command's arrows,
+        // the pointer's way back — as the picker's.
+        if self.browsing()
+            && let Some(key) = picker_key(press)
+        {
+            return self.pick_key(key, state, columns, texts);
+        }
         self.settle_in(state, columns, texts);
         let rows = self.rows(state, columns, texts);
         // A CONTROL BESIDE A TITLE, clicked: what it does, now.
@@ -2618,6 +3686,9 @@ impl View {
             return self.act(&target, press, state, columns, texts);
         }
         match press {
+            // A KEY FOR A TEXT with none open — one left while the key was
+            // on its way — types nothing anywhere.
+            Press::Text(_) | Press::Pick(_) => return Errand::Nothing,
             // `Esc` GIVES EVERY ROW BACK first, where a group of the globe's
             // marks narrowed them — and then goes back one page.
             Press::Escape if self.top().only.is_some() => {
@@ -2635,7 +3706,7 @@ impl View {
             }
             Press::Browse => {
                 if !self.browsing() {
-                    self.open(PageId::Files(Purpose::Queue), true, state, columns, texts);
+                    self.open(PageId::Pick(Purpose::Queue), true, state, columns, texts);
                 }
                 return Errand::Nothing;
             }
@@ -2647,26 +3718,23 @@ impl View {
             }
             Press::Tracks => return self.walk_the_media(state, columns, texts),
             Press::Clear => return self.ask_to_clear(state, texts),
-            Press::SaveSet => return self.save(Saved::Set, state, texts),
-            Press::SaveQueue => return self.save(Saved::Queue, state, texts),
+            Press::SaveSet => return self.save(Saved::Set, state, columns, texts),
+            Press::SaveQueue => return self.save(Saved::Queue, state, columns, texts),
             Press::Quieter | Press::Louder => {
                 return volume_step(state, press == Press::Louder, texts);
             }
             Press::Swap => return button_errand("player-swap", state, texts),
             Press::EveryScreen => return Errand::EveryScreen,
             Press::Metadata => return self.show_the_metadata(state, columns, texts),
+            // THE CATALOGUE'S PAGES search the catalogue.
+            Press::Search if matches!(self.page(), PageId::Channels | PageId::Catalog) => {
+                return self.search_the_catalogue();
+            }
             Press::Search => return self.search_here(),
+            Press::Listing(key) => return self.listing_pressed(key, state, columns, texts),
+            Press::Ranking(key) => return self.ranking_pressed(key, state, columns, texts),
             Press::Globe(turn) => {
                 self.globe_turned(turn);
-                return Errand::Nothing;
-            }
-            Press::Parent => {
-                if let Some(at) = self.top().files.as_ref().map(|f| f.listing.at.clone())
-                    && let Some(up) = at.parent()
-                {
-                    self.go_to(up, Some(&at));
-                    self.settle_in(state, columns, texts);
-                }
                 return Errand::Nothing;
             }
             Press::Up | Press::Down => {
@@ -2686,6 +3754,18 @@ impl View {
             Press::Mute => return Errand::Tell(Ask::Mute),
             Press::Next => return Errand::Tell(Ask::Next),
             Press::Previous => return Errand::Tell(Ask::Previous),
+            // TEN SECONDS BACK OR AHEAD, the seeks beside the clock.
+            Press::Rewind | Press::Forward => {
+                if !state.is_some_and(loaded) {
+                    return Errand::Said(texts.t(ronoctua_i18n::key::PLAYER_NOTHING));
+                }
+                return crate::player_transport::seek_errand(press == Press::Forward, texts);
+            }
+            // THE PICTURE FOLDED AWAY, or back: the door's, which has one.
+            Press::FoldPicture => return self.fold_picture(texts),
+            Press::SaveQueueAgain => return self.save_again(state, columns, texts),
+            Press::Translate => return self.translate(state, texts),
+            Press::CountriesOrder => return self.countries_order(state, columns, texts),
             Press::Less
             | Press::More
             | Press::Enter
@@ -2716,15 +3796,6 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let target = target.clone();
-        // A NEW FOLDER PUTS THE CURSOR BACK ON ZERO, which is its heading;
-        // settling it here is what lands it on an entry. The doors never
-        // settle after a key, and a cursor on a heading teaches no key of
-        // the level — the photograph showed exactly that.
-        if target.among_the_files() {
-            let errand = self.among_the_files(&target, press, state, columns, texts);
-            self.settle_in(state, columns, texts);
-            return errand;
-        }
         if press == Press::Enter {
             match target {
                 // A PAGE, over this one.
@@ -2734,11 +3805,17 @@ impl View {
                 }
                 Target::ClearQueue => return self.ask_to_clear(state, texts),
                 Target::Swap => return button_errand("player-swap", state, texts),
+                // THE TITLES' GLYPHS: the picture folded, the queue saved
+                // again, the countries' order, the lyrics translated.
+                Target::FoldPicture => return self.fold_picture(texts),
+                Target::SaveQueueAgain => return self.save_again(state, columns, texts),
+                Target::CountriesOrder => return self.countries_order(state, columns, texts),
+                Target::Translate => return self.translate(state, texts),
                 Target::Quit => return self.ask_to_quit(texts),
                 Target::Restart => return self.ask_to_restart(texts),
                 Target::Rename => return self.ask_a_name(&Target::Nothing, state, texts),
-                Target::SaveSet => return self.save(Saved::Set, state, texts),
-                Target::SaveQueue => return self.save(Saved::Queue, state, texts),
+                Target::SaveSet => return self.save(Saved::Set, state, columns, texts),
+                Target::SaveQueue => return self.save(Saved::Queue, state, columns, texts),
                 // A LANE'S OWN PAGE, from its row — a subtitle's, a lane
                 // playing together, one under a set in the queue.
                 Target::Subtitle(id) | Target::Lane(id) => {
@@ -2792,9 +3869,32 @@ impl View {
                 _ => {}
             }
         }
+        // THE RANKING'S rows: a video, its `⋯`, the page and the layout, and
+        // what a video's own page does (`crate::player_ranking`).
+        if let Some(errand) = self.ranking_turned(&target, press, state, columns, texts) {
+            return errand;
+        }
+        // THE LYRICS' LANGUAGE, and the host a translation was refused for.
+        if let Some(errand) = self.translation_turned(&target, press, state, texts) {
+            return errand;
+        }
+        // THE WEBSITE PAGE'S rows: its two questions and the addresses
+        // played lately (`crate::player_website`).
+        if let Some(errand) = self.website_turned(&target, press, state, columns, texts) {
+            return errand;
+        }
         // THE DIRECTORIES' rows: a list asked or opened, the search, a row
         // that plays and its star (`crate::player_directory`).
         if let Some(errand) = self.directory_turned(&target, press, state, columns, texts) {
+            return errand;
+        }
+        // THE CATALOGUE'S rows: its source, a listing's rings, an item, the
+        // adult lock (`crate::player_catalog`) — and its sources' switches
+        // (`crate::player_sources`).
+        if let Some(errand) = self.catalog_turned(&target, press, state, columns, texts) {
+            return errand;
+        }
+        if let Some(errand) = self.sources_turned(&target, press, state, texts) {
             return errand;
         }
         // A SUBTITLE FILE BESIDE THE FILM, laid over its picture — `RET`, and
@@ -2853,6 +3953,10 @@ impl View {
         if let Some(errand) = self.internet_turned(&target, press, texts) {
             return errand;
         }
+        // AND ITS TRANSLATOR: who, the server's address, the keys.
+        if let Some(errand) = self.translator_turned(&target, press, texts) {
+            return errand;
+        }
         // THE LOOKUPS' rows: who is asked, the searches, what they found.
         if let Some(s) = state {
             if let Some(errand) = crate::player_suggest::turn(self, &target, press, s, texts) {
@@ -2894,162 +3998,20 @@ impl View {
             self.prefs_written();
             return Errand::Keep(switch);
         }
-        turn(&target, press, state, self.outline.as_deref())
-    }
-
-    /// A press on a row of the files.
-    #[allow(clippy::too_many_lines)]
-    fn among_the_files(
-        &mut self,
-        target: &Target,
-        press: Press,
-        state: Option<&State>,
-        columns: u16,
-        texts: &ronoctua_i18n::Texts,
-    ) -> Errand {
-        use ronoctua_i18n::key;
-        let purpose = match self.page() {
-            PageId::Files(purpose) => purpose,
-            _ => return Errand::Nothing,
-        };
-        let Some(open) = self.top().files.as_ref().map(|f| f.listing.at.clone()) else {
-            return Errand::Nothing;
-        };
-        let named = |p: &std::path::Path| file_name(p);
-        match (target, press) {
-            (Target::Place, Press::Less | Press::More | Press::Enter) => {
-                let places = self.places();
-                let n = places.len();
-                let now = self.top().files.as_ref().map_or(0, |f| f.place);
-                let to = if press == Press::Less {
-                    (now + n - 1) % n
-                } else {
-                    (now + 1) % n
-                };
-                if let Some(f) = self.top_mut().files.as_mut() {
-                    f.place = to;
-                }
-                self.go_to(&places[to].1, None);
-                Errand::Nothing
+        // AN ENTRY MOVED ON THE HOME stays in its window's sight — the
+        // window may grow by it, and the cursor stays on the row it was on.
+        if let (Target::Entry(id) | Target::Group(id), Press::Earlier | Press::Later)
+        | (Target::EntryMove { id, .. }, Press::Enter) = (&target, press)
+            && self.page() == PageId::Home
+            && self.home_held != Some(*id)
+        {
+            let here = self.spot_here(state, columns, texts);
+            self.home_held = Some(*id);
+            if let Some(here) = here {
+                self.follow(&here, state, columns, texts);
             }
-            (Target::Up, Press::Enter) => {
-                if let Some(up) = open.parent() {
-                    self.go_to(up, Some(&open));
-                }
-                Errand::Nothing
-            }
-            // THE TYPED PATH OR ADDRESS is a question of the door's own line,
-            // for the same purpose the files are open for — and the files stay
-            // open under it.
-            (Target::Typed, Press::Enter) => Errand::Ask(Question::plain(
-                match purpose {
-                    Purpose::Queue => ENQUEUE,
-                    Purpose::Lane => TOGETHER,
-                    Purpose::Open => OPEN_SAVED,
-                    Purpose::Subtitle => SUBTITLE_FILE,
-                    Purpose::Cover => crate::player_question::COVER_FILE,
-                },
-                false,
-            )),
-            (Target::Folder(p), Press::Enter) => {
-                self.go_to(&p.clone(), None);
-                Errand::Nothing
-            }
-            // TOGETHER, a file is a lane of what plays: chosen, it plays with
-            // it on one clock, and the files close — the choice was made, and
-            // the page that asked for it is back, on the row that asked.
-            (Target::File(p), Press::Enter | Press::Add | Press::PlayNow)
-                if purpose == Purpose::Lane =>
-            {
-                self.back(state, columns, texts);
-                let source = p.to_string_lossy().into_owned();
-                Errand::TellSaying(
-                    crate::player_question::together(source),
-                    texts.t_with(key::PLAYER_TOGETHER_ADDED, &[("name", &named(p))]),
-                )
-            }
-            // A SUBTITLE FILE, over the picture: a lane of its own — the
-            // subtitles' page is back, on the row that asked for it.
-            (Target::File(p), Press::Enter | Press::Add | Press::PlayNow)
-                if purpose == Purpose::Subtitle =>
-            {
-                let path = p.to_string_lossy().into_owned();
-                let said = state.map_or(Errand::Nothing, |s| {
-                    crate::player_subtitles::lay_over(&path, s, texts)
-                });
-                if matches!(said, Errand::TellSaying(..)) {
-                    self.back(state, columns, texts);
-                }
-                said
-            }
-            // A PICTURE FOR THE COVER, put in the file shown: the cover's
-            // page is back, on the row that asked for it.
-            (Target::File(p), Press::Enter | Press::Add | Press::PlayNow)
-                if purpose == Purpose::Cover =>
-            {
-                let said = state
-                    .and_then(|s| crate::player_metadata::cover_picked(&self.meta, s, p, texts));
-                if matches!(said, Some(Errand::TellSaying(..))) {
-                    self.back(state, columns, texts);
-                }
-                said.unwrap_or(Errand::Nothing)
-            }
-            // ONE OF THE PLAYER'S OWN FILES, opened: a set plays, a queue
-            // takes the queue's place after a question.
-            (Target::File(p), Press::Enter | Press::Add | Press::PlayNow)
-                if purpose == Purpose::Open =>
-            {
-                let p = p.clone();
-                self.open_saved(&p, state, columns, texts)
-            }
-            (Target::Folder(_) | Target::PlayFolder | Target::EnqueueFolder, _)
-                if purpose != Purpose::Queue =>
-            {
-                Errand::Nothing
-            }
-            // A FILE, INTO THE QUEUE — `RET` and a double click — at its end.
-            (Target::File(p), Press::Enter | Press::Add) => Errand::TellSaying(
-                put(p.to_string_lossy().into_owned(), false),
-                texts.t_with(key::PLAYER_ADDED, &[("name", &named(p))]),
-            ),
-            // `P`: THE FILE NOW, right after what plays — the queue kept, as
-            // a file opened from outside the player is (the owner's rule).
-            (Target::File(p), Press::PlayNow) => Errand::TellSaying(
-                put(p.to_string_lossy().into_owned(), true),
-                texts.t_with(key::PLAYER_PLAYING_NOW, &[("name", &named(p))]),
-            ),
-            // A FOLDER WHOLE, played now or added: ONE location, which the
-            // player makes a playlist named after the folder. What it plays
-            // of it is the player's walk; a folder with nothing to play is
-            // said here, before it is sent.
-            (Target::Folder(_), Press::PlayNow)
-            | (Target::PlayFolder, Press::Enter | Press::PlayNow)
-            | (Target::Folder(_), Press::Add)
-            | (Target::EnqueueFolder | Target::PlayFolder, Press::Add)
-            | (Target::EnqueueFolder, Press::Enter) => {
-                let folder = match target {
-                    Target::Folder(f) => f.clone(),
-                    _ => open.clone(),
-                };
-                if crate::player_browse::gather(&folder).is_empty() {
-                    return Errand::Said(texts.t(key::PLAYER_BROWSE_NOTHING_TO_PLAY));
-                }
-                let play = press == Press::PlayNow
-                    || matches!((target, press), (Target::PlayFolder, Press::Enter));
-                Errand::TellSaying(
-                    put(folder.to_string_lossy().into_owned(), play),
-                    texts.t_with(
-                        if play {
-                            key::PLAYER_PLAYING_NOW
-                        } else {
-                            key::PLAYER_ADDED
-                        },
-                        &[("name", &named(&folder))],
-                    ),
-                )
-            }
-            _ => Errand::Nothing,
         }
+        turn(&target, press, state, self.outline.as_deref())
     }
 
     /// What a press on a row of the metadata or the lookups turned into: an
@@ -3066,6 +4028,14 @@ impl View {
             Turned::Question(sentence, yes) => self.ask(sentence, yes, Errand::Nothing),
             // A PAGE is opened where the rows are at hand ([`View::keyed`]).
             Turned::Page(_) => Errand::Nothing,
+            // A FIELD'S WORDS, opened over the page to be changed here.
+            Turned::Edit { title, text } => {
+                self.edit_text(
+                    crate::text_area::TextArea::new(crate::player_metadata::EDIT_HERE, &text)
+                        .titled(title),
+                );
+                Errand::Nothing
+            }
         }
     }
 
@@ -3079,10 +4049,17 @@ impl View {
     /// Metadata shows, or a suggested one: what a door draws over a line of
     /// a cover (`player_rows::CoverRow`).
     #[must_use]
-    pub fn picture(&self, s: &State, key: &str) -> Option<&crate::player_find::Picture> {
-        self.meta
-            .cover(s)
-            .filter(|(k, _)| k == key)
+    pub fn picture(&self, s: Option<&State>, key: &str) -> Option<&crate::player_find::Picture> {
+        // A POSTER OF THE CATALOGUE's listing (`crate::player_posters`) first:
+        // channels by theme are there with no player running, and so are
+        // their posters.
+        self.catalog
+            .posters
+            .picture(key)
+            // AND A THUMBNAIL OF THE RANKING (`crate::player_ranking`), there
+            // with no player running too.
+            .or_else(|| self.ranking.posters.picture(key))
+            .or_else(|| s.and_then(|s| self.meta.cover(s)).filter(|(k, _)| k == key))
             .or_else(|| self.found.picture_by_key(key))
     }
 
@@ -3204,10 +4181,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) {
         if matches!(errand, Errand::TellSaying(Ask::AddLane { .. }, _))
-            && matches!(
-                self.page(),
-                PageId::Files(Purpose::Lane | Purpose::Subtitle)
-            )
+            && matches!(self.page(), PageId::Pick(Purpose::Lane | Purpose::Subtitle))
         {
             self.back(state, columns, texts);
         }
@@ -3293,52 +4267,258 @@ impl View {
         Errand::Ask(Question::holding(crate::player_question::RENAME, was))
     }
 
-    /// SAVING, its first question: the name — for what plays, the name it has
-    /// now; for the queue, none. With nothing to save it says so.
-    fn save(
+    /// SAVING: the picker, where a folder is chosen and the name is typed —
+    /// holding, for what plays, the name it has now; for the queue, none.
+    /// With nothing to save it says so.
+    pub(crate) fn save(
         &mut self,
         saved: Saved,
         state: Option<&State>,
+        columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        use crate::player_question::{SAVE_QUEUE, SAVE_SET};
         use ronoctua_i18n::key;
-        let question = match saved {
+        let name = match saved {
             Saved::Set => {
                 let Some(s) = state.filter(|s| loaded(s)) else {
                     return Errand::Said(texts.t(key::PLAYER_NOTHING));
                 };
-                let named = s
-                    .current
+                s.current
                     .zip(self.outline.as_deref())
                     .and_then(|(id, o)| node_of(o, id))
                     .map(|n| name_of(&n.name, texts, NAME_IN_A_SENTENCE))
                     .or_else(|| s.title.clone())
-                    .filter(|n| !n.trim().is_empty());
-                named.map_or_else(
-                    || Question::plain(SAVE_SET, false),
-                    |n| Question::holding(SAVE_SET, n),
-                )
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_default()
             }
             Saved::Queue => {
                 if self.outline.as_ref().is_none_or(|o| o.entries.is_empty()) {
                     return Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY));
                 }
-                Question::plain(SAVE_QUEUE, false)
+                String::new()
             }
         };
-        self.typing = Some(Typing::SaveName(saved));
-        Errand::Ask(question)
+        self.open_saving(saved, name, state, columns, texts);
+        Errand::Nothing
+    }
+
+    /// The save's picker, holding `name`.
+    fn open_saving(
+        &mut self,
+        saved: Saved,
+        name: String,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        let purpose = match saved {
+            Saved::Set => Purpose::SaveSet,
+            Saved::Queue => Purpose::SaveQueue,
+        };
+        let page = PageId::Pick(purpose);
+        self.open(page, true, state, columns, texts);
+        if self.page() == page {
+            self.top_mut().picker = Some(Box::new(self.picker_for(purpose, None, name)));
+            self.settle_in(state, columns, texts);
+        }
+    }
+
+    /// A key for the picker on screen.
+    fn pick_key(
+        &mut self,
+        key: ronoctua_keymap::Key,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let Some(picker) = self.top_mut().picker.as_mut() else {
+            return Errand::Nothing;
+        };
+        let step = picker.key(key);
+        let errand = self.stepped(step, state, columns, texts);
+        self.settle_in(state, columns, texts);
+        errand
+    }
+
+    /// What the picker's step is to this view.
+    fn stepped(
+        &mut self,
+        step: crate::file_picker::Step,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::file_picker::Step;
+        match step {
+            Step::Nothing | Step::Changed => Errand::Nothing,
+            Step::Back => {
+                self.back(state, columns, texts);
+                Errand::Nothing
+            }
+            Step::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            Step::Paste => Errand::Paste,
+            Step::Picked(picked) => match self.page() {
+                PageId::Pick(purpose) => self.picked(purpose, picked, state, columns, texts),
+                _ => Errand::Nothing,
+            },
+        }
+    }
+
+    /// What the picker answered, for `purpose`: into the queue — and the page
+    /// stays, for the next — or played together, laid over the picture, the
+    /// cover, a set or a queue opened, where a file is saved: the page goes,
+    /// back on the row that asked, once the choice was taken.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn picked(
+        &mut self,
+        purpose: Purpose,
+        picked: crate::file_picker::Picked,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        use crate::file_picker::{How, PLAY_FOLDER, Picked};
+        use ronoctua_i18n::key;
+        let location = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        match (purpose, picked) {
+            (Purpose::Queue, Picked::Paths { paths, how }) => {
+                let play = how == How::Alternate;
+                let said = match paths.as_slice() {
+                    [one] => texts.t_with(
+                        if play {
+                            key::PLAYER_PLAYING_NOW
+                        } else {
+                            key::PLAYER_ADDED
+                        },
+                        &[("name", &file_name(one))],
+                    ),
+                    several => texts.t_args(
+                        if play {
+                            key::PLAYER_PLAYING_SEVERAL
+                        } else {
+                            key::PLAYER_ADDED_SEVERAL
+                        },
+                        &[("count", number(several.len()))],
+                    ),
+                };
+                // THROUGH `put_all`, where the rule of what goes in ONCE is
+                // — the one a single location follows too.
+                Errand::TellSaying(
+                    put_all(paths.iter().map(|p| location(p)).collect(), play),
+                    said,
+                )
+            }
+            (Purpose::Queue, Picked::Address(url)) => Errand::TellSaying(
+                put(url.clone(), false),
+                texts.t_with(key::PLAYER_ADDED, &[("name", &url)]),
+            ),
+            // A FOLDER WHOLE, played now or added: ONE location, which the
+            // player makes a playlist named after the folder. What it plays
+            // of it is the player's walk; a folder with nothing to play is
+            // said here, before it is sent.
+            (Purpose::Queue, Picked::Extra { id, folder }) => {
+                if crate::player_kinds::gather(&folder).is_empty() {
+                    return Errand::Said(texts.t(key::PLAYER_BROWSE_NOTHING_TO_PLAY));
+                }
+                let play = id == PLAY_FOLDER.id;
+                Errand::TellSaying(
+                    put(location(&folder), play),
+                    texts.t_with(
+                        if play {
+                            key::PLAYER_PLAYING_NOW
+                        } else {
+                            key::PLAYER_ADDED
+                        },
+                        &[("name", &file_name(&folder))],
+                    ),
+                )
+            }
+            // TOGETHER, a file is a lane of what plays: chosen, it plays with
+            // it on one clock, and the page that asked for it is back.
+            (Purpose::Lane, Picked::Paths { paths, .. }) if !paths.is_empty() => {
+                self.back(state, columns, texts);
+                let source = location(&paths[0]);
+                Errand::TellSaying(
+                    crate::player_question::together(source),
+                    texts.t_with(
+                        key::PLAYER_TOGETHER_ADDED,
+                        &[("name", &file_name(&paths[0]))],
+                    ),
+                )
+            }
+            (Purpose::Lane, Picked::Address(url)) => {
+                self.back(state, columns, texts);
+                Errand::TellSaying(
+                    crate::player_question::together(url.clone()),
+                    texts.t_with(key::PLAYER_TOGETHER_ADDED, &[("name", &url)]),
+                )
+            }
+            // A SUBTITLE FILE, over the picture: a lane of its own.
+            (Purpose::Subtitle, Picked::Paths { paths, .. }) if !paths.is_empty() => {
+                let said = state.map_or(Errand::Nothing, |s| {
+                    crate::player_subtitles::lay_over(&location(&paths[0]), s, texts)
+                });
+                if matches!(said, Errand::TellSaying(..)) {
+                    self.back(state, columns, texts);
+                }
+                said
+            }
+            // A PICTURE FOR THE COVER, put in the file shown.
+            (Purpose::Cover, Picked::Paths { paths, .. }) if !paths.is_empty() => {
+                let said = state.and_then(|s| {
+                    crate::player_metadata::cover_picked(&self.meta, s, &paths[0], texts)
+                });
+                if matches!(said, Some(Errand::TellSaying(..))) {
+                    self.back(state, columns, texts);
+                }
+                said.unwrap_or(Errand::Nothing)
+            }
+            // ONE OF THE PLAYER'S OWN FILES, opened: a set plays, a queue
+            // takes the queue's place after a question.
+            (Purpose::Open, Picked::Paths { paths, .. }) if !paths.is_empty() => {
+                self.open_saved(&paths[0], state, columns, texts)
+            }
+            // WHERE A SET OR THE QUEUE IS SAVED — the picker asked already,
+            // "no" first, when a file of that name was there.
+            (Purpose::SaveSet | Purpose::SaveQueue, Picked::Paths { paths, .. })
+                if !paths.is_empty() =>
+            {
+                let at = &paths[0];
+                let stem = at
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|n| !n.is_empty());
+                let to = location(at);
+                let ask = if purpose == Purpose::SaveSet {
+                    Ask::SaveSet { to, name: stem }
+                } else {
+                    Ask::SaveQueue { to, name: stem }
+                };
+                self.back(state, columns, texts);
+                Errand::TellSaying(
+                    ask,
+                    texts.t_with(
+                        key::PLAYER_SAVING,
+                        &[
+                            ("name", &file_name(at)),
+                            ("folder", &shown_path(at.parent().unwrap_or(at))),
+                        ],
+                    ),
+                )
+            }
+            _ => Errand::Nothing,
+        }
     }
 
     /// What was typed for one of the player's questions, IN THIS VIEW — the
     /// ONE function both doors hand every answer to while the view is open.
     ///
-    /// The view's own questions — a new name, the name and the folder a file
-    /// is saved under, a set or a queue typed to open — are answered here,
-    /// where it is known what they were about ([`Typing`]); every other one
-    /// is `player_question::answered_saying`'s. An empty answer is never
-    /// mind, as it is for every question.
+    /// The view's own questions — a new name, when a lane begins — are
+    /// answered here, where it is known what they were about ([`Typing`]);
+    /// every other one is `player_question::answered_saying`'s. An empty
+    /// answer is never mind, as it is for every question. A save's name
+    /// typed from no question (`LEADER :` with an argument) opens the save's
+    /// picker holding it.
     pub fn answered(
         &mut self,
         id: &str,
@@ -3348,14 +4528,20 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        use crate::player_question::{
-            RENAME, SAVE_QUEUE, SAVE_QUEUE_FOLDER, SAVE_SET, SAVE_SET_FOLDER,
-        };
+        use crate::player_question::{RENAME, SAVE_QUEUE, SAVE_SET};
         let asked_before = self.asking.is_some();
         let errand = match id {
             RENAME => self.renamed(said, texts),
-            SAVE_SET | SAVE_QUEUE => self.named(said, texts),
-            SAVE_SET_FOLDER | SAVE_QUEUE_FOLDER => self.foldered(said, texts),
+            SAVE_SET | SAVE_QUEUE => {
+                let saved = if id == SAVE_SET {
+                    Saved::Set
+                } else {
+                    Saved::Queue
+                };
+                let name = file_stem_of(said, saved).unwrap_or_default();
+                self.open_saving(saved, name, state, columns, texts);
+                Errand::Nothing
+            }
             crate::player_question::LANE_START => self.started(said, state, texts),
             crate::player_question::LANE_UNTIL => self.ended_at(said, state, texts),
             crate::player_question::LANE_TITLE => self.lane_titled(said, texts),
@@ -3377,9 +4563,16 @@ impl View {
                 self.typing = None;
                 crate::player_find::language_typed(&mut self.finding, said, texts)
             }
+            // AN ADDRESS OF A WEBSITE, played now or queued.
+            id if crate::player_website::asks(id) => self.website_typed(id, said, texts),
             // A DIRECTORY'S SEARCH: the list of what it names, opened.
             id if crate::player_directory::asks(id) => {
                 self.searched(id, said, state, columns, texts)
+            }
+            // THE CATALOGUE'S: a letter, a page, words, a pasted source, the
+            // password.
+            id if crate::player_catalog::asks(id) => {
+                self.catalog_answered(id, said, state, columns, texts)
             }
             crate::player_question::KEY_OPENSUBTITLES
             | crate::player_question::KEY_TMDB
@@ -3387,6 +4580,17 @@ impl View {
                 Some(Typing::Key(k)) => self.key_typed(k, said),
                 _ => Errand::Nothing,
             },
+            // THE LYRICS' TRANSLATOR: a server's address, a key.
+            // THE ROW UNDER THE CURSOR, BY ITS SPOT: an address takes room
+            // in the value column, and a label above may wrap into two rows.
+            id if crate::player_translator::asks(id) => {
+                let here = self.spot_here(state, columns, texts);
+                let errand = self.translator_answered(said, texts);
+                if let Some(here) = here {
+                    self.follow(&here, state, columns, texts);
+                }
+                errand
+            }
             crate::player_question::ACCOUNT_USER => match self.typing.take() {
                 Some(Typing::AccountUser) => self.account_user_typed(said),
                 _ => Errand::Nothing,
@@ -3407,37 +4611,6 @@ impl View {
                     Errand::Nothing
                 }
             },
-            // A PICTURE FOR THE COVER, typed on the page that picks one.
-            crate::player_question::COVER_FILE => match (said.trim(), state) {
-                ("", _) | (_, None) => Errand::Nothing,
-                (typed, Some(s)) => {
-                    let picture = std::path::PathBuf::from(crate::player_question::expand(typed));
-                    let said = crate::player_metadata::cover_picked(&self.meta, s, &picture, texts);
-                    if matches!(said, Some(Errand::TellSaying(..)))
-                        && self.page() == PageId::Files(Purpose::Cover)
-                    {
-                        self.back(state, columns, texts);
-                    }
-                    said.unwrap_or(Errand::Nothing)
-                }
-            },
-            OPEN_SAVED => match said.trim() {
-                "" => Errand::Nothing,
-                typed => {
-                    let path = std::path::PathBuf::from(crate::player_question::expand(typed));
-                    self.open_saved(&path, state, columns, texts)
-                }
-            },
-            // A SUBTITLE FILE TYPED on the page that picks one: laid over the
-            // picture whatever its name says — the person said it is one.
-            SUBTITLE_FILE => match (said.trim(), state) {
-                ("", _) | (_, None) => Errand::Nothing,
-                (typed, Some(s)) => crate::player_subtitles::lay_over(
-                    &crate::player_question::expand(typed),
-                    s,
-                    texts,
-                ),
-            },
             _ => crate::player_question::answered_saying(id, said, pairing, texts),
         };
         self.answer_came(&errand, state, columns, texts);
@@ -3452,6 +4625,11 @@ impl View {
 
     /// The door's line was let go: the view's question with it.
     pub fn let_go(&mut self) {
+        // AN ADULT LISTING HANDED OVER whose password was let go is let go
+        // with it (`crate::player_catalog`).
+        if self.typing == Some(Typing::AdultPassword) {
+            self.catalog.waiting = None;
+        }
         self.typing = None;
     }
 
@@ -3491,9 +4669,14 @@ impl View {
             return Errand::Said(texts.t(ronoctua_i18n::key::PLAYER_PAGE_GONE));
         };
         match parse_start(said, lane.start_seconds) {
+            // TYPED ON A LANE'S ROW, it moves that lane alone: the sound's
+            // start typed is how it is put back in step with its picture.
             Ok(seconds) => Errand::Tell(Ask::Lane {
                 lane: id,
-                change: LaneChange::Start { seconds },
+                change: LaneChange::Start {
+                    seconds,
+                    voice: false,
+                },
             }),
             Err(Refusal::Empty) => Errand::Nothing,
             Err(Refusal::NotATime) => Errand::Said(texts.t_with(
@@ -3549,6 +4732,7 @@ impl View {
                 change: LaneChange::Trim {
                     from_seconds: lane.from_seconds,
                     until_seconds: Some(until),
+                    voice: false,
                 },
             }),
             Ok(_) => Errand::Said(texts.t_with(
@@ -3650,80 +4834,6 @@ impl View {
         )
     }
 
-    /// The name a file is saved under, typed: the folder is asked next,
-    /// holding the music folder's path. A name that cannot be one file's is
-    /// refused in a sentence.
-    fn named(&mut self, said: &str, texts: &ronoctua_i18n::Texts) -> Errand {
-        use crate::player_question::{SAVE_QUEUE_FOLDER, SAVE_SET_FOLDER};
-        let Some(Typing::SaveName(saved)) = self.typing.take() else {
-            return Errand::Nothing;
-        };
-        let Some(name) = file_stem_of(said, saved) else {
-            return Errand::Nothing;
-        };
-        if name.contains(['/', '\0']) || name == "." || name == ".." {
-            return Errand::Said(texts.t(ronoctua_i18n::key::PLAYER_SAVE_BAD_NAME));
-        }
-        self.typing = Some(Typing::SaveFolder(saved, name));
-        let music = self.places()[0].1.clone();
-        Errand::Ask(Question::holding(
-            match saved {
-                Saved::Set => SAVE_SET_FOLDER,
-                Saved::Queue => SAVE_QUEUE_FOLDER,
-            },
-            shown_path(&music),
-        ))
-    }
-
-    /// The folder, typed: the file is written there — after a question, "no"
-    /// first, when one of that name is already there. A folder that is not
-    /// one is refused in a sentence.
-    fn foldered(&mut self, said: &str, texts: &ronoctua_i18n::Texts) -> Errand {
-        use ronoctua_i18n::key;
-        let Some(Typing::SaveFolder(saved, name)) = self.typing.take() else {
-            return Errand::Nothing;
-        };
-        let said = said.trim();
-        if said.is_empty() {
-            return Errand::Nothing;
-        }
-        let folder = std::path::PathBuf::from(crate::player_question::expand(said));
-        let shown = shown_path(&folder);
-        if !folder.is_dir() {
-            return Errand::Said(texts.t_with(key::PLAYER_SAVE_NO_FOLDER, &[("folder", &shown)]));
-        }
-        let file = format!("{name}.{}", saved.extension());
-        let at = folder.join(&file);
-        let to = at.to_string_lossy().into_owned();
-        let ask = match saved {
-            Saved::Set => Ask::SaveSet {
-                to,
-                name: Some(name),
-            },
-            Saved::Queue => Ask::SaveQueue {
-                to,
-                name: Some(name),
-            },
-        };
-        let go = Errand::TellSaying(
-            ask,
-            texts.t_with(key::PLAYER_SAVING, &[("name", &file), ("folder", &shown)]),
-        );
-        // A FILE THAT IS THERE is written over only after a question — it
-        // cannot be undone, and it is born on its "no".
-        if at.exists() {
-            return self.ask(
-                texts.t_with(
-                    key::PLAYER_ASK_OVERWRITE,
-                    &[("name", &file), ("folder", &shown)],
-                ),
-                go,
-                Errand::Nothing,
-            );
-        }
-        go
-    }
-
     /// One of the player's own files, opened — picked on its page, or typed:
     /// a SET plays now, right after what plays, the queue kept; a QUEUE takes
     /// the queue's place, after a question ("no" first) while the queue holds
@@ -3739,7 +4849,7 @@ impl View {
         use ronoctua_i18n::key;
         use ronoctua_player::own::{OwnKind, kind_by_name};
         let name = file_name(path);
-        if self.page() == PageId::Files(Purpose::Open) {
+        if self.page() == PageId::Pick(Purpose::Open) {
             self.back(state, columns, texts);
         }
         let location = path.to_string_lossy().into_owned();
@@ -3756,6 +4866,7 @@ impl View {
                         into: None,
                         play: false,
                         replace: true,
+                        once: false,
                     },
                     texts.t_with(key::PLAYER_QUEUE_OPENED, &[("name", &name)]),
                 );
@@ -3773,85 +4884,6 @@ impl View {
         }
     }
 
-    /// The rows of a page of the files: the folder (its place a ring on
-    /// `←`/`→`), a path or an address to type, the folder whole, and the
-    /// entries — `..` first — in columns.
-    fn files_rows(files: &Files, purpose: Purpose, b: &mut Builder<'_>) {
-        use ronoctua_i18n::key;
-        let l = &files.listing;
-        b.path_pair(
-            b.t(key::PLAYER_BROWSE_FOLDER),
-            shown_path(&l.at),
-            Target::Place,
-            "browse-folder",
-        );
-        b.pair(
-            b.t(key::PLAYER_BROWSE_TYPE),
-            String::new(),
-            Target::Typed,
-            "browse-type",
-        );
-        if purpose == Purpose::Queue {
-            b.pair(
-                b.t(key::PLAYER_BROWSE_PLAY_FOLDER),
-                String::new(),
-                Target::PlayFolder,
-                "browse-play-folder",
-            );
-            b.pair(
-                b.t(key::PLAYER_BROWSE_ENQUEUE_FOLDER),
-                String::new(),
-                Target::EnqueueFolder,
-                "browse-enqueue-folder",
-            );
-        }
-        if purpose == Purpose::Open {
-            b.inert(crate::chrome::AIR);
-            b.note(key::PLAYER_ABOUT_OPEN);
-        }
-        b.inert(crate::chrome::AIR);
-        if let Some(why) = &l.refused {
-            let said = b
-                .texts
-                .t_with(key::PLAYER_BROWSE_REFUSED, &[("why", why.as_str())]);
-            b.warning(&said);
-        }
-        // `..` FIRST, and always — the way back is where the eye starts.
-        let mut entries: Vec<(char, String, Target, String)> = Vec::new();
-        if l.at.parent().is_some() {
-            entries.push((
-                tokens::icon::FOLDER,
-                "..".to_owned(),
-                Target::Up,
-                "browse-..".to_owned(),
-            ));
-        }
-        for f in &l.folders {
-            entries.push((
-                tokens::icon::FOLDER,
-                file_name(f),
-                Target::Folder(f.clone()),
-                format!("browse-{}", f.display()),
-            ));
-        }
-        for (f, glyph) in l.files.iter().zip(&l.glyphs) {
-            entries.push((
-                *glyph,
-                file_name(f),
-                Target::File(f.clone()),
-                format!("browse-{}", f.display()),
-            ));
-        }
-        b.grid(&entries);
-        if l.refused.is_none() && l.folders.is_empty() && l.files.is_empty() {
-            b.note(match purpose {
-                Purpose::Open => key::PLAYER_BROWSE_EMPTY_SAVED,
-                Purpose::Cover => key::PLAYER_BROWSE_EMPTY_PICTURES,
-                Purpose::Queue | Purpose::Lane | Purpose::Subtitle => key::PLAYER_BROWSE_EMPTY,
-            });
-        }
-    }
-
     /// Every row of the page on screen, in reading order — a page above the
     /// home under its title, the page's own key.
     #[must_use]
@@ -3863,6 +4895,30 @@ impl View {
     ) -> Vec<Row> {
         let (left, room) = crate::power::extent(columns);
         let top = self.top();
+        // THE PICKER'S PAGE: its title, and the picker's own rows — its
+        // cells the cells of a grid, each lit alone under the pointer
+        // (`chrome::hover_cells`). A question of the view's, or a text being
+        // edited, is drawn over it as over any page.
+        if self.asking.is_none()
+            && self.editing.is_none()
+            && let Some(picker) = top.picker.as_ref()
+        {
+            let mut rows = Builder::build(left, room, usize::MAX, 0, texts, |b| {
+                b.heading(top.page.key());
+                // WHAT OPENING DOES, before a file is chosen: a set plays, a
+                // queue takes the queue's place.
+                if top.page == PageId::Pick(Purpose::Open) {
+                    b.note(ronoctua_i18n::key::PLAYER_ABOUT_OPEN);
+                }
+            });
+            rows.extend(
+                picker
+                    .rows(columns, texts)
+                    .into_iter()
+                    .map(crate::player_rows::of_the_picker),
+            );
+            return rows;
+        }
         Builder::build(left, room, top.cursor, top.cell, texts, |b| {
             self.page_rows(state, b);
         })
@@ -3912,12 +4968,45 @@ impl View {
             }
             return;
         }
+        // A TEXT BEING EDITED is the page while it is open.
+        if let Some(area) = &self.editing {
+            b.text_area(area);
+            return;
+        }
         let page = top.page;
         // A LIST'S PAGE is titled by what it lists — a country, a genre, what
-        // was searched for — and by its own key while it lists nothing.
-        if let Some(title) = self.listing_title(b.texts) {
+        // was searched for — and by its own key while it lists nothing. A
+        // LISTING OF THE CATALOGUE carries its layout and its whole screen
+        // beside its title.
+        if let Some(title) = self.catalog_title(b.texts) {
+            let layout = self
+                .catalog
+                .listing
+                .as_ref()
+                .map_or(crate::player_catalog::Layout::List, |l| l.layout);
+            b.heading_controls_said(
+                title,
+                &[
+                    (
+                        layout.glyph(),
+                        Target::CatalogLayout,
+                        "player-listing-layout",
+                    ),
+                    (
+                        tokens::icon::CATALOG_FULLSCREEN,
+                        Target::CatalogFull,
+                        "player-listing-full",
+                    ),
+                ],
+            );
+        } else if let Some(title) = self.listing_title(b.texts) {
             b.heading_said(title);
-        } else if page != PageId::Home {
+        } else if page == PageId::Ranking {
+            // THE RANKING carries its layout beside its title.
+            self.ranking_title(b);
+        } else if page != PageId::Home && !(page == PageId::Queue && state.is_some()) {
+            // THE WHOLE QUEUE titles itself, with the queue's controls on its
+            // title (`player_queue::queue`).
             b.heading(page.key());
         }
         // A PAGE WHOSE SUBJECT IS GONE stays, and says so — never blank.
@@ -3934,12 +5023,13 @@ impl View {
         }
         match (page, state) {
             (PageId::Home, _) => self.home(state, b),
-            (PageId::Files(purpose), _) => {
-                if let Some(files) = &top.files {
-                    Self::files_rows(files, purpose, b);
-                }
-            }
+            // THE PICKER'S PAGE is drawn by [`View::rows`], its own rows.
+            (PageId::Pick(_), _) => {}
             (PageId::Internet, _) => self.internet(b),
+            (PageId::Website, _) => self.website(b),
+            (PageId::Queue, Some(s)) => {
+                crate::player_queue::queue(self, s, self.outline.as_deref(), true, b);
+            }
             (PageId::Together, Some(s)) => crate::player_home::together(s, b),
             (PageId::Machines, Some(s)) => crate::player_machines::machines(b, s),
             (PageId::Tracks(TrackKind::Subtitles), Some(s)) => {
@@ -3980,12 +5070,19 @@ impl View {
                 | PageId::Stations
                 | PageId::Tv
                 | PageId::TvChannels
-                | PageId::Theme(_)
                 | PageId::Favourites
                 | PageId::Recent,
                 Some(s),
             ) => self.directory_rows(page, s, b),
-            (PageId::Channels, _) => self.directory_rows(page, &State::default(), b),
+            // CHANNELS BY THEME, ITS LISTING AND ITS SOURCES: the local
+            // catalogue's, read by this door itself (`crate::player_catalog`).
+            (PageId::Channels | PageId::Catalog | PageId::Sources, _) => {
+                self.catalog_rows(page, state, b);
+            }
+            // THE RANKING AND A VIDEO'S OWN PAGE: the video catalogue's,
+            // read by this door itself (`crate::player_ranking`).
+            (PageId::Ranking, _) => self.ranking_rows(b),
+            (PageId::RankedVideo, _) => self.ranked_video_rows(b),
             (
                 PageId::Together
                 | PageId::Machines
@@ -4010,9 +5107,9 @@ impl View {
                 | PageId::Stations
                 | PageId::Tv
                 | PageId::TvChannels
-                | PageId::Theme(_)
                 | PageId::Favourites
-                | PageId::Recent,
+                | PageId::Recent
+                | PageId::Queue,
                 None,
             ) => {}
         }
@@ -4024,12 +5121,24 @@ impl View {
 /// does; starting the queue over is only the player's own "open queue").
 #[must_use]
 pub(crate) fn put(location: String, play: bool) -> Ask {
+    put_all(vec![location], play)
+}
+
+/// Puts several locations in the queue, as [`put`] puts one — the ONE place
+/// an `Ask::Put` of what a person chose is written, so what a single file
+/// and a marked set go in under is one rule.
+#[must_use]
+pub(crate) fn put_all(locations: Vec<String>, play: bool) -> Ask {
     Ask::Put {
-        what: vec![Thing::Location(location)],
+        what: locations.into_iter().map(Thing::Location).collect(),
         after: None,
         into: None,
         play,
         replace: false,
+        // PUT AT THE QUEUE'S END, it is asked ONCE: one already there is
+        // refused, and the person asked whether to add it again (`Told::Asks`,
+        // decision A5). Played now it plays, wherever else it is.
+        once: !play,
     }
 }
 
@@ -4113,6 +5222,7 @@ fn turn(target: &Target, press: Press, state: Option<&State>, outline: Option<&O
                     lane: lane.id,
                     change: LaneChange::Start {
                         seconds: (lane.start_seconds + by).max(0.0),
+                        voice: false,
                     },
                 })
             }),
@@ -4131,12 +5241,17 @@ fn turn(target: &Target, press: Press, state: Option<&State>, outline: Option<&O
                 change: LaneChange::Trim {
                     from_seconds: lane.from_seconds,
                     until_seconds: None,
+                    voice: false,
                 },
             })
         }),
         // WHICH PICTURE A SUBTITLE SITS OVER: a ring, any key turns it.
         (Target::LaneOver(id), Press::Enter | Press::Less | Press::More) => {
             crate::player_lane::over_turned(s, *id, forward)
+        }
+        // WHICH OF ITS FILE'S LANGUAGES A SUBTITLE SHOWS: a ring, any key.
+        (Target::LaneLanguage(id), Press::Enter | Press::Less | Press::More) => {
+            crate::player_lane::language_turned(s, *id, forward)
         }
         // ITS OWN VOLUME: the arrows a step, `RET` its mute — the home's
         // volume row's rule.
@@ -4289,13 +5404,27 @@ pub fn carry_out(
             Ask::Find { query } if query.directory().is_some() => Some(query.clone()),
             _ => None,
         };
+        // AN ASK A PERSON MAY OVERRULE comes back with the ask that does:
+        // its refusal is a question of the view's, "no" first (`Told::Asks`).
+        let asked = matches!(
+            ask,
+            Ask::Put { once: true, .. } | Ask::SaveQueueAgain { force: false }
+        )
+        .then(|| ask.clone());
         tell_then(ask, move |answer| {
-            let answer = match listing {
-                Some(query) => Told::Listing {
+            let answer = match (listing, &answer, asked) {
+                (Some(query), _, _) => Told::Listing {
                     query,
                     answer: Box::new(answer),
                 },
-                None => answer,
+                (None, Told::Refused(trouble), Some(asked)) => match overruled(&asked, trouble) {
+                    Some(again) => Told::Asks {
+                        again: Box::new(again),
+                        trouble: trouble.clone(),
+                    },
+                    None => answer,
+                },
+                (None, ..) => answer,
             };
             if let Some(told) = told {
                 let _ = told.send(answer);
@@ -4320,9 +5449,88 @@ pub fn carry_out(
         | Errand::Swap
         | Errand::QuitEverywhere
         | Errand::EveryScreen
+        | Errand::Paste
+        | Errand::FoldPicture
         | Errand::Ask(_)
+        | Errand::Kiosk(_)
         | Errand::Pair { .. } => Err(errand),
+        // A VIDEO OF THE RANKING hidden, deleted or downloaded, OFF THE LOOP —
+        // a write waits for a scan that holds the catalogue — and said when
+        // it is done (`Told::Ranking`).
+        Errand::Ranking(act) => {
+            crate::daemon::about_to_act("a video of the ranking, hidden, deleted or downloaded");
+            let told = told.cloned();
+            let born = std::thread::Builder::new()
+                .name("player-ranking-act".to_owned())
+                .spawn(move || {
+                    let outcome = crate::player_ranking::carry(act);
+                    match told {
+                        Some(told) => {
+                            let _ = told.send(Told::Ranking(outcome));
+                        }
+                        None => {
+                            tracing::info!(?outcome, "the ranking's act, with no door to say it")
+                        }
+                    }
+                });
+            if let Err(e) = born {
+                tracing::error!(error = %e, "could not start the thread that acts on a video");
+            }
+            Ok(None)
+        }
+        // THE PERSON'S PASSWORD, checked OFF THE LOOP — PAM waits seconds on
+        // a wrong one — and how it ended told back (`Told::Unlock`): the
+        // view opens the adult catalogue, or says why not.
+        Errand::Unlock(secret) => {
+            crate::daemon::about_to_act("the person's system password, checked");
+            let told = told.cloned();
+            let born = std::thread::Builder::new()
+                .name("player-unlock".to_owned())
+                .spawn(move || {
+                    let answer = crate::player_catalog::unlock(&secret);
+                    drop(secret);
+                    if let Some(told) = told {
+                        let _ = told.send(Told::Unlock(answer));
+                    }
+                });
+            if let Err(e) = born {
+                tracing::error!(error = %e, "could not start the thread that checks the password");
+                return Ok(Some(texts.t(ronoctua_i18n::key::PLAYER_ADULT_UNAVAILABLE)));
+            }
+            Ok(None)
+        }
         Errand::Said(sentence) => Ok(Some(sentence)),
+        // AN ADDRESS OF THE WEBSITE PAGE, kept or forgotten — merged with the
+        // file as it is on disk; a list that could not be written says so.
+        Errand::Websites(change) => {
+            crate::daemon::about_to_act("the addresses played lately, written");
+            Ok(crate::player_website::keep(&change)
+                .err()
+                .map(|why| why.sentence(texts)))
+        }
+        // HOSTS LET — the lyrics' translator, a default source of the
+        // catalogue — in the person's consent file, merged by host; and what
+        // the press asked, after it: the daemon reads the file when it asks.
+        Errand::LetHosts { hosts, on, then } => {
+            crate::daemon::about_to_act("the person's consents, written");
+            let hosts: Vec<&str> = hosts.iter().map(String::as_str).collect();
+            match ronoctua_consent::let_hosts(&hosts, on) {
+                Ok(()) => carry_out(*then, texts, told),
+                Err(why) => {
+                    use ronoctua_consent::Unkept;
+                    use ronoctua_i18n::key;
+                    let why = texts.t(match why {
+                        Unkept::NoHome => key::PLAYER_FILE_NO_HOME,
+                        Unkept::Unparseable => key::PLAYER_FILE_UNPARSEABLE,
+                        Unkept::Unwritable => key::PLAYER_FILE_UNWRITABLE,
+                    });
+                    Ok(Some(texts.t_with(
+                        key::ECHO_SETTING_NOT_WRITTEN,
+                        &[("file", ronoctua_consent::FILE), ("why", &why)],
+                    )))
+                }
+            }
+        }
         // THE SENTENCE NOW; a refusal, when it comes, is said in its place.
         Errand::TellSaying(ask, sentence) => {
             tell_off_the_loop(ask);
@@ -4375,6 +5583,27 @@ pub fn carry_out(
                 texts,
             )))
         }
+        // A TRANSLATION KEY, kept or forgotten OFF THE LOOP — synced to the
+        // disk before it is renamed into place; a trouble is said when the
+        // thread says it.
+        Errand::KeepWordsKey { key, secret } => {
+            crate::daemon::about_to_act("a translation key of the person's, kept");
+            words_key_off_the_loop(
+                move || ronoctua_words::keys::keep(key, &secret),
+                told.cloned(),
+                true,
+            );
+            Ok(Some(crate::player_translator::kept_said(key, texts)))
+        }
+        Errand::ForgetWordsKey(key) => {
+            crate::daemon::about_to_act("a translation key of the person's, forgotten");
+            words_key_off_the_loop(
+                move || ronoctua_words::keys::forget(key),
+                told.cloned(),
+                false,
+            );
+            Ok(Some(texts.t(ronoctua_i18n::key::PLAYER_KEY_FORGOTTEN)))
+        }
         Errand::ForgetKey(key) => {
             crate::daemon::about_to_act("a key of the person's, forgotten");
             let told = told.cloned();
@@ -4411,10 +5640,52 @@ pub fn carry_out(
     }
 }
 
+/// `write` — a translation key kept or forgotten — on a thread of its own,
+/// and a trouble it met said down `told`.
+fn words_key_off_the_loop(
+    write: impl FnOnce() -> Result<(), ronoctua_words::keys::KeyTrouble> + Send + 'static,
+    told: Option<ToldSender>,
+    reread: bool,
+) {
+    let born = std::thread::Builder::new()
+        .name("player-words-key".to_owned())
+        .spawn(move || match write() {
+            // A KEY KEPT: a player that runs reads its preferences again, and
+            // asks again the translation it was refused for want of one.
+            Ok(()) if reread => tell_if_running(&Ask::Reload),
+            Ok(()) => {}
+            Err(t) => {
+                if let Some(told) = told {
+                    let _ = told.send(Told::KeyTrouble(crate::player_translator::trouble_of(t)));
+                }
+            }
+        });
+    if let Err(e) = born {
+        tracing::error!(error = %e, "could not start the thread that keeps a translation key");
+    }
+}
+
 /// `switch` written into `player.json` MERGED with what is on disk: read as
 /// it is there, changed only in what was pressed, and written back whole. A
 /// file that will not parse is refused, never written over.
 fn kept_merged(switch: &Switch) -> Result<(), NotLet> {
+    // A SWITCH THAT ASKS ON ITS OWN lets the host it asks: turned on, it is
+    // the person's consent to that host, and without it in the consent file
+    // the first lookup it starts would come back refused, as a row asking
+    // for what the switch already said.
+    let asks = match switch {
+        Switch::LyricsOnline(true) => Some(ronoctua_lookup::Service::Lrclib),
+        Switch::Sponsors(true) => Some(ronoctua_lookup::Service::SponsorBlock),
+        _ => None,
+    };
+    if let Some(service) = asks {
+        ronoctua_player::prefs::let_hosts(&ronoctua_player::prefs::hosts_of(&[service]), true)
+            .map_err(|why| match why {
+                ronoctua_player::prefs::Unlet::Consent(unkept) => NotLet::Consent(unkept),
+                ronoctua_player::prefs::Unlet::WillNotParse => NotLet::WillNotParse,
+                ronoctua_player::prefs::Unlet::Unwritable(e) => NotLet::Unwritable(e),
+            })?;
+    }
     let store = ronoctua_player::prefs::store();
     let mut p = store.parsed().ok_or(NotLet::WillNotParse)?;
     switch.apply(&mut p);
@@ -4429,6 +5700,8 @@ enum NotLet {
     WillNotParse,
     /// It could not be written.
     Unwritable(std::io::Error),
+    /// The consent file would not take it.
+    Consent(ronoctua_player::prefs::ConsentUnkept),
 }
 
 impl NotLet {
@@ -4440,23 +5713,35 @@ impl NotLet {
                 ronoctua_i18n::key::PLAYER_TROUBLE_WRITE,
                 &[("why", &e.to_string())],
             ),
+            Self::Consent(unkept) => texts.t({
+                use ronoctua_i18n::key;
+                use ronoctua_player::prefs::ConsentUnkept as Unkept;
+                match unkept {
+                    Unkept::NoHome => key::PLAYER_CONSENT_UNKEPT_NO_HOME,
+                    Unkept::Unparseable => key::PLAYER_CONSENT_UNKEPT_UNPARSEABLE,
+                    Unkept::Unwritable => key::PLAYER_CONSENT_UNKEPT_UNWRITABLE,
+                }
+            }),
         }
     }
 }
 
-/// The services and directories let — or no longer — written into
-/// `player.json` MERGED with what is on disk: read as it is there, changed
-/// only in what was pressed, and written back whole. A file that will not
-/// parse is refused, never written over.
+/// The services and directories let — or no longer — KEPT where their
+/// consent lives: their hosts in the consent file, merged by host, and the
+/// player's older lists losing their word for one taken off
+/// (`ronoctua_player::prefs::let_merged`). A file that will not parse is
+/// refused, never written over.
 fn let_merged(
     services: &[ronoctua_lookup::Service],
     directories: &[ronoctua_player::find::Directory],
     on: bool,
 ) -> Result<(), NotLet> {
-    let store = ronoctua_player::prefs::store();
-    let mut p = store.parsed().ok_or(NotLet::WillNotParse)?;
-    p.let_all(services, directories, on);
-    store.write(&p).map_err(NotLet::Unwritable)
+    use ronoctua_player::prefs::Unlet;
+    ronoctua_player::prefs::let_merged(services, directories, on).map_err(|why| match why {
+        Unlet::WillNotParse => NotLet::WillNotParse,
+        Unlet::Unwritable(e) => NotLet::Unwritable(e),
+        Unlet::Consent(unkept) => NotLet::Consent(unkept),
+    })
 }
 
 /// Keeps a key (`keep`) and has the player try it for `service`, off the
@@ -4897,6 +6182,40 @@ fn shown_path(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// What the file picker on screen takes of a press of the view: its own
+/// keys, and the view's that walk, answer and go back — a door's `RET` after a
+/// second click, a command's arrows, the pointer's way back. `None` for the
+/// rest, which stay the view's: play, the volume, the stages.
+fn picker_key(press: Press) -> Option<ronoctua_keymap::Key> {
+    use ronoctua_keymap::{Key, Sym};
+    Some(match press {
+        Press::Pick(key) => key,
+        Press::Up => Key::simple(Sym::Up),
+        Press::Down => Key::simple(Sym::Down),
+        Press::Less => Key::simple(Sym::Left),
+        Press::More => Key::simple(Sym::Right),
+        Press::Enter => Key::simple(Sym::Enter),
+        Press::Escape => Key::simple(Sym::Esc),
+        _ => return None,
+    })
+}
+
+/// The picker's target under `column` of `row` — a cell of its grid, found
+/// by the arithmetic its hover lights with (`chrome::cell_under`), else the
+/// row's own. `None` off the picker's rows.
+fn picked_under(row: &Row, column: u16) -> Option<crate::file_picker::Target> {
+    let of = |t: &Target| match t {
+        Target::Picker(t) if *t != crate::file_picker::Target::Nothing => Some(t.clone()),
+        _ => None,
+    };
+    let grid: Vec<&crate::player_rows::Cell> = row.cells.iter().filter(|c| !c.control).collect();
+    if grid.is_empty() {
+        return of(&row.target);
+    }
+    let n = crate::chrome::cell_under(grid.iter().map(|c| (c.from, c.width)), column)?;
+    of(&grid[n].target)
+}
+
 /// Which press a command id is — the one map every door reaches.
 #[must_use]
 pub fn press_of(id: &str) -> Option<Press> {
@@ -4917,7 +6236,6 @@ pub fn press_of(id: &str) -> Option<Press> {
         "player-browse" => Press::Browse,
         "player-machines" => Press::Go(PageId::Machines),
         "player-add" => Press::Add,
-        "player-parent" => Press::Parent,
         "player-play-now" => Press::PlayNow,
         "player-clear" => Press::Clear,
         "player-quieter" => Press::Quieter,
@@ -4956,6 +6274,31 @@ pub fn press_of(id: &str) -> Option<Press> {
         "player-nearer" => Press::Globe(crate::player_globe::Turn::Nearer),
         "player-further" => Press::Globe(crate::player_globe::Turn::Further),
         "player-world" => Press::Globe(crate::player_globe::Turn::Whole),
+        // THE SEEKS BESIDE THE CLOCK, the picture folded, the queue saved
+        // again, the countries' order, the lyrics translated — and THE
+        // WEBSITE PAGE, `LEADER p h`.
+        "player-rewind" => Press::Rewind,
+        "player-forward" => Press::Forward,
+        "player-picture-fold" => Press::FoldPicture,
+        "player-save-queue-again" => Press::SaveQueueAgain,
+        "player-countries-order" => Press::CountriesOrder,
+        "player-lyrics-translate" => Press::Translate,
+        "player-website" => Press::Go(PageId::Website),
+        // A LISTING OF THE CATALOGUE's keys (`crate::player_catalog`).
+        "player-listing-earlier" => Press::Listing(ListingKey::Earlier),
+        "player-listing-later" => Press::Listing(ListingKey::Later),
+        "player-listing-first" => Press::Listing(ListingKey::First),
+        "player-listing-last" => Press::Listing(ListingKey::Last),
+        "player-listing-full" => Press::Listing(ListingKey::Full),
+        "player-listing-layout" => Press::Listing(ListingKey::Layout),
+        "player-listing-source" => Press::Listing(ListingKey::Source),
+        "player-listing-letter" => Press::Listing(ListingKey::Letter),
+        "player-listing-order" => Press::Listing(ListingKey::Order),
+        // THE RANKING — `LEADER p k` — and its keys (`crate::player_ranking`).
+        "player-ranking" => Press::Go(PageId::Ranking),
+        id if crate::player_ranking::RankingKey::of_command(id).is_some() => {
+            Press::Ranking(crate::player_ranking::RankingKey::of_command(id)?)
+        }
         _ => return None,
     })
 }
@@ -4976,20 +6319,55 @@ pub fn press_of(id: &str) -> Option<Press> {
 /// modifier the table does not name is still the arrow.
 #[must_use]
 pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
+    press_of_key_where(key, |_| None)
+}
+
+/// [`press_of_key`], with a key two entries share read by `page`
+/// ([`pressed_where`]).
+fn press_of_key_where(
+    key: ronoctua_keymap::Key,
+    page: impl Fn(Where) -> Option<bool>,
+) -> Option<Press> {
     use ronoctua_keymap::{Key, Sym};
     match key.sym {
         Sym::Esc => Some(Press::Escape),
-        Sym::Char(_) => pressed(&key.notation()),
-        other => pressed(&key.notation()).or_else(|| pressed(&Key::simple(other).notation())),
+        Sym::Char(_) => pressed_where(&key.notation(), &page),
+        other => pressed_where(&key.notation(), &page)
+            .or_else(|| pressed_where(&Key::simple(other).notation(), &page)),
     }
 }
 
-/// Which press a notation is, through [`OF_THE_VIEW`].
+/// Which press a notation is, through [`OF_THE_VIEW`] — the first entry of
+/// the key. The tests' reader: a door reads a key through the view
+/// ([`View::press_of_key`]), which knows the page.
+#[cfg(test)]
 #[must_use]
 pub fn pressed(notation: &str) -> Option<Press> {
-    OF_THE_VIEW
+    pressed_where(notation, |_| None)
+}
+
+/// Which press a notation is ON THE PAGE `page` answers for
+/// ([`Where::on_the_page`]): among the entries that share the key, the
+/// first whose page this is, else the first the page does not rule out —
+/// the row decides that one in [`View::key`] — else the first. With one
+/// entry, that entry.
+fn pressed_where(notation: &str, page: impl Fn(Where) -> Option<bool>) -> Option<Press> {
+    pressed_in(OF_THE_VIEW, notation, page)
+}
+
+/// [`pressed_where`], over `table`.
+fn pressed_in(
+    table: &[(&str, &str, Where)],
+    notation: &str,
+    page: impl Fn(Where) -> Option<bool>,
+) -> Option<Press> {
+    let sharing: Vec<&(&str, &str, Where)> =
+        table.iter().filter(|(k, _, _)| *k == notation).collect();
+    sharing
         .iter()
-        .find(|(k, _, _)| *k == notation)
+        .find(|(_, _, w)| page(*w) == Some(true))
+        .or_else(|| sharing.iter().find(|(_, _, w)| page(*w).is_none()))
+        .or_else(|| sharing.first())
         .and_then(|(_, id, _)| press_of(id))
 }
 
@@ -5053,6 +6431,7 @@ pub(crate) mod fixture {
                     master: kind == TrackKind::Audio,
                     size: (kind == TrackKind::Video).then_some((1920, 1080)),
                     cover: false,
+                    languages: Vec::new(),
                 });
             }
             lanes.push(lane);
@@ -5099,6 +6478,7 @@ pub(crate) mod fixture {
                 master: lane.kind == LaneKind::Audio,
                 size: (lane.kind == LaneKind::Video).then_some((1920, 1080)),
                 cover: false,
+                languages: Vec::new(),
             })
             .collect();
         let count = u16::try_from(lanes.len()).unwrap_or(u16::MAX);
@@ -5215,6 +6595,47 @@ mod tests {
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").expect("the base language")
+    }
+
+    /// FAILS IF: a reason a file's tags are refused, or the lyrics'
+    /// translation is, has no sentence of its own in either language — the
+    /// screen would show a key in brackets, or two reasons one sentence.
+    #[test]
+    fn every_tag_and_translation_refusal_has_its_sentence() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a declared language");
+            let tags: Vec<String> = ronoctua_tags::Why::every()
+                .iter()
+                .map(|why| tags_refusal(why, &t))
+                .collect();
+            let words: Vec<String> = ronoctua_player::TranslationWhy::ALL
+                .iter()
+                .map(|why| {
+                    trouble_sentence(
+                        &Trouble::Translation(ronoctua_player::TranslationRefusal::new(*why)),
+                        &t,
+                    )
+                })
+                .collect();
+            for said in tags.iter().chain(&words) {
+                assert!(
+                    !said.trim().is_empty() && !said.contains('['),
+                    "{language}: {said:?}"
+                );
+            }
+            let distinct =
+                |all: &[String]| all.iter().collect::<std::collections::HashSet<_>>().len();
+            assert_eq!(
+                distinct(&tags),
+                tags.len(),
+                "{language}: two reasons, one sentence"
+            );
+            assert_eq!(
+                distinct(&words),
+                words.len(),
+                "{language}: two reasons, one sentence"
+            );
+        }
     }
 
     /// FAILS IF: the swap's glyph stops sitting on the "Now" title in the
@@ -5460,10 +6881,10 @@ mod tests {
         );
     }
 
-    /// A view with the files open on `at`, the cursor where it lands.
+    /// A view with the queue's picker open on `at`, the cursor where it lands.
     fn among(at: &std::path::Path) -> View {
         let mut v = View::blank(None);
-        v.files_at(at, Purpose::Queue);
+        v.pick_at(at, Purpose::Queue);
         v.settle_in(None, 80, &texts());
         v
     }
@@ -5486,40 +6907,169 @@ mod tests {
         root
     }
 
+    /// FAILS IF: the pointer lights a cell of a grid that is not the one a
+    /// click at that pixel takes — or lights more than one, or the whole row
+    /// — or a click where nothing is lit takes something.
+    ///
+    /// `a-grid-cell-is-lit-alone`: for every pixel across a grid row of the
+    /// picker's page, the band `chrome::hover_cells` paints with a door's
+    /// `chrome::Across` is the band of the cell the VIEW'S OWN click path
+    /// (`View::clicked_px`, what the window and the footer call with the
+    /// same `Across`) takes at that pixel.
+    #[test]
+    fn a_grid_cell_is_lit_alone() {
+        let root = a_library("lit-alone");
+        for n in 0..9 {
+            std::fs::write(root.join(format!("track {n}.flac")), b"").unwrap();
+        }
+        let t = texts();
+        let columns = 90;
+        let fresh = || {
+            let mut v = View::blank(None);
+            v.pick_at(&root, Purpose::Queue);
+            v.settle_in(None, columns, &t);
+            v
+        };
+        let taken = |v: &View| v.rows(None, columns, &t)[v.cursor()].target.clone();
+        let v = fresh();
+        let rows = v.rows(None, columns, &t);
+        let cells_of = |r: usize| crate::player_rows::grid_cells(&rows, r);
+        let n = (0..rows.len())
+            .find(|&r| {
+                cells_of(r).len() == 3
+                    && rows[r].cells.iter().all(|c| {
+                        matches!(
+                            c.target,
+                            Target::Picker(crate::file_picker::Target::File(_))
+                        )
+                    })
+            })
+            .expect("a grid row of three files");
+        let across = crate::chrome::Across {
+            lead: 2,
+            cell_px: 9.0,
+        };
+        let colour = tokens::color::SURFACE_HOVER;
+        let (mut lit, mut dark) = (0, 0);
+        for third in 0..(columns + 4) * 3 {
+            let x = f32::from(third) * across.cell_px / 3.0;
+            let bands = crate::chrome::hover_cells(
+                std::iter::once((colour, Some(n), Some(x))),
+                cells_of,
+                0,
+                rows.len(),
+                rows.len(),
+                0,
+                10_000.0,
+                across,
+            );
+            assert!(bands.len() <= 1, "one band at most, at {x}");
+            let mut clicked = fresh();
+            let before = taken(&clicked);
+            let _ = clicked.clicked_px(n, x, across, &rows);
+            let after = taken(&clicked);
+            match bands.first() {
+                Some(b) => {
+                    lit += 1;
+                    assert!(b.width < 10_000.0, "a cell, never the whole row");
+                    assert!(x >= b.x && x < b.x + b.width, "the band holds the pointer");
+                    let cell = rows[n]
+                        .cells
+                        .iter()
+                        .find(|c| {
+                            let (bx, bw) = across.band_of(c.from, c.width);
+                            (bx - b.x).abs() < f32::EPSILON && (bw - b.width).abs() < f32::EPSILON
+                        })
+                        .expect("the band is a cell's");
+                    assert_eq!(after, cell.target, "the click takes the lit cell, at {x}");
+                }
+                None => {
+                    dark += 1;
+                    assert_eq!(
+                        after, before,
+                        "a click where nothing is lit takes nothing, at {x}"
+                    );
+                }
+            }
+        }
+        assert!(lit > 0 && dark > 0, "{lit} lit, {dark} dark");
+        // AND THE SECOND CLICK on the lit cell is its `RET`.
+        let (bx, bw) = across.band_of(rows[n].cells[1].from, rows[n].cells[1].width);
+        let mut v = fresh();
+        assert!(!v.clicked_px(n, bx + bw / 2.0, across, &rows));
+        assert!(v.clicked_px(n, bx + bw / 2.0, across, &rows));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A key of the picker, by its notation.
+    fn picking(v: &mut View, notation: &str) -> Errand {
+        let key = ronoctua_keymap::Key::parse(notation).expect("a key");
+        let press = v.press_of_key(key).expect("the picker reads it");
+        v.key(press, None, 80, &texts())
+    }
+
+    /// Text typed on the picker, a key a letter.
+    fn typing(v: &mut View, text: &str) {
+        for c in text.chars() {
+            let key = ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Char(c));
+            assert_eq!(v.press_of_key(key), Some(Press::Pick(key)), "{c} is typed");
+            v.key(Press::Pick(key), None, 80, &texts());
+        }
+    }
+
+    /// The picker's target, as a row of the view carries it.
+    fn picked(t: crate::file_picker::Target) -> Target {
+        Target::Picker(t)
+    }
+
     fn on(v: &View) -> Target {
         v.rows(None, 80, &texts())[v.cursor()].target.clone()
     }
 
-    /// FAILS IF: the files stop being walked the way a person walks them —
-    /// into a folder, back up onto it, a file added or played alone, and a
-    /// folder queued whole.
+    /// FAILS IF: the files stop being walked the way a person walks them in
+    /// the picker — into a folder, back up onto it, a file added or played
+    /// now, a folder queued whole — or `Esc` stops going back a page before it
+    /// closes the door.
     #[test]
     fn the_files_are_walked_played_and_queued() {
+        use crate::file_picker::Target as P;
         let t = texts();
         let root = a_library("walked");
         let album = root.join("Album");
         let song = album.join("01.ogg").to_string_lossy().into_owned();
         let mut v = among(&root);
         // THE CURSOR LANDS ON THE FIRST ENTRY, the folder — not on `..`.
-        assert_eq!(on(&v), Target::Folder(album.clone()));
-        // `a` QUEUES IT WHOLE — ONE location, which the player makes a
-        // playlist named after it — and says so, by its name.
-        let Errand::TellSaying(ask, said) = v.key(Press::Add, None, 80, &t) else {
-            panic!("a folder was not queued");
+        assert_eq!(on(&v), picked(P::Folder(album.clone())));
+        // `RET` ENTERS IT, and the cursor is on its first file.
+        assert_eq!(v.key(Press::Enter, None, 80, &t), Errand::Nothing);
+        assert_eq!(on(&v), picked(P::File(album.join("01.ogg"))));
+        // THE FOLDER WHOLE, into the queue: ONE location, which the player
+        // makes a playlist named after it — and says so, by its name.
+        let Errand::TellSaying(ask, said) = picking(&mut v, "C-e") else {
+            panic!("the folder was not queued");
         };
         assert_eq!(ask, put(album.to_string_lossy().into_owned(), false));
         assert!(said.contains("Album"), "{said}");
-        // `RET` ENTERS IT, and the cursor is on its first file.
-        assert_eq!(v.key(Press::Enter, None, 80, &t), Errand::Nothing);
-        assert_eq!(on(&v), Target::File(album.join("01.ogg")));
-        // `RET` ON A FILE ADDS IT at the end; `P` PLAYS IT NOW, right after
-        // what plays — the queue kept.
+        // `RET` ON A FILE ADDS IT at the end, ONCE (one already there is a
+        // question, decision A5) — and the page stays, for the next; `C-RET`
+        // PLAYS IT NOW, right after what plays, the queue kept.
         let Errand::TellSaying(ask, _) = v.key(Press::Enter, None, 80, &t) else {
             panic!("RET did not add");
         };
-        assert_eq!(ask, put(song.clone(), false));
-        let Errand::TellSaying(ask, _) = v.key(Press::PlayNow, None, 80, &t) else {
-            panic!("P did not play");
+        assert_eq!(
+            ask,
+            Ask::Put {
+                what: vec![Thing::Location(song.clone())],
+                after: None,
+                into: None,
+                play: false,
+                replace: false,
+                once: true,
+            }
+        );
+        assert!(v.browsing(), "the queue's picker stays for the next");
+        let Errand::TellSaying(ask, _) = picking(&mut v, "C-RET") else {
+            panic!("C-RET did not play");
         };
         assert_eq!(
             ask,
@@ -5529,12 +7079,22 @@ mod tests {
                 into: None,
                 play: true,
                 replace: false,
+                once: false,
             },
             "playing now must never start the queue over"
         );
+        // SEVERAL MARKED go in together.
+        picking(&mut v, "C-SPC");
+        picking(&mut v, "C-SPC");
+        let Errand::TellSaying(Ask::Put { what, .. }, said) = v.key(Press::Enter, None, 80, &t)
+        else {
+            panic!("the marked were not taken");
+        };
+        assert_eq!(what.len(), 2, "{what:?}");
+        assert!(said.contains('2'), "{said}");
         // `DEL` GOES UP, and lands on the folder it came from.
-        v.key(Press::Parent, None, 80, &t);
-        assert_eq!(on(&v), Target::Folder(album));
+        picking(&mut v, "DEL");
+        assert_eq!(on(&v), picked(P::Folder(album)));
         // `Esc` GOES BACK ONE LEVEL, and only the second one closes.
         assert_eq!(v.key(Press::Escape, None, 80, &t), Errand::Nothing);
         assert!(!v.browsing());
@@ -5542,19 +7102,40 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// FAILS IF: every letter is not the picker's while its page is up — `s`
+    /// stopped the player while a name was typed — or typing does not narrow
+    /// the folder, or a path typed does not walk to where it names.
+    #[test]
+    fn a_letter_is_typed_into_the_picker() {
+        use crate::file_picker::Target as P;
+        let root = a_library("letters");
+        let mut v = among(&root);
+        typing(&mut v, "one");
+        assert_eq!(on(&v), picked(P::File(root.join("one.flac"))));
+        picking(&mut v, "ESC");
+        assert!(
+            v.browsing(),
+            "Esc clears what was typed before it goes back"
+        );
+        typing(&mut v, &format!("{}/Album/02", root.display()));
+        assert_eq!(on(&v), picked(P::File(root.join("Album/02.ogg"))));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// FAILS IF: the entries stop being laid out in columns where there is
     /// room, or `..` stops being the first of them, or `→` stops crossing.
     #[test]
     fn the_entries_are_a_grid_with_the_way_back_first() {
+        use crate::file_picker::Target as P;
         let t = texts();
         let root = a_library("grid");
         let mut v = among(&root);
         let rows = v.rows(None, 200, &t);
         let first = rows
             .iter()
-            .find(|r| !r.cells.is_empty() && !r.heading)
+            .find(|r| r.cells.iter().any(|c| c.target == picked(P::Up)))
             .unwrap();
-        assert_eq!(first.cells[0].target, Target::Up);
+        assert_eq!(first.cells[0].target, picked(P::Up));
         assert!(first.cells.len() > 1, "a wide door gave one column");
         // NARROW, one column.
         let rows = v.rows(None, 30, &t);
@@ -5595,15 +7176,15 @@ mod tests {
     /// that opened them.
     #[test]
     fn the_files_open_with_the_cursor_on_an_entry() {
+        use crate::file_picker::Target as P;
         let t = texts();
         let root = a_library("open");
-        let mut v = View::blank(None);
-        v.left_at = Some((0, root.clone()));
+        let mut v = View::blank(Some(root.clone()));
         v.key(Press::Browse, None, 80, &t);
-        assert_eq!(on(&v), Target::Folder(root.join("Album")));
+        assert_eq!(on(&v), picked(P::Folder(root.join("Album"))));
         // AND `Esc` LANDS BACK ON THE ROW THAT OPENED THEM.
         v.key(Press::Escape, None, 80, &t);
-        assert_eq!(on(&v), Target::Go(PageId::Files(Purpose::Queue)));
+        assert_eq!(on(&v), Target::Go(PageId::Pick(Purpose::Queue)));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -5616,14 +7197,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("notes.txt"), b"").unwrap();
         let mut v = among(&root);
-        let rows = v.rows(None, 80, &t);
-        let at = rows
-            .iter()
-            .position(|r| r.target == Target::PlayFolder)
-            .unwrap();
-        v.clicked(at, &rows);
         assert_eq!(
-            v.key(Press::Enter, None, 80, &t),
+            picking(&mut v, "C-p"),
             Errand::Said(t.t(ronoctua_i18n::key::PLAYER_BROWSE_NOTHING_TO_PLAY))
         );
         std::fs::remove_dir_all(&root).unwrap();
@@ -5639,7 +7214,7 @@ mod tests {
         // something to play is what the view is opened for.
         assert_eq!(
             rows[v.cursor()].target,
-            Target::Go(PageId::Files(Purpose::Queue))
+            Target::Go(PageId::Pick(Purpose::Queue))
         );
     }
 
@@ -5693,6 +7268,20 @@ mod tests {
         assert_eq!(v.key(Press::Escape, Some(&moved), 80, &t), Errand::Close);
     }
 
+    /// FAILS IF: two pages share a key, or a page's key does not name it back
+    /// — `photograph --open` would open the wrong page, or none.
+    #[test]
+    fn every_page_is_named_by_its_own_key() {
+        let mut keys: Vec<&str> = PageId::PAGES.iter().map(|p| p.key()).collect();
+        for page in PageId::PAGES {
+            assert_eq!(PageId::by_key(page.key()), Some(page), "{page:?}");
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), PageId::PAGES.len(), "two pages share a key");
+        assert_eq!(PageId::by_key("player-page-nothing"), None);
+    }
+
     /// FAILS IF: a page exists that no row opens — a page reachable only by
     /// a command is one the pointer never reaches (invariant 19) — or a row
     /// that opens a page is labelled by another key than the one the page
@@ -5726,10 +7315,30 @@ mod tests {
         };
         // NO FOLDER OF THIS MACHINE'S is read for the pages of the files.
         let nowhere = std::env::temp_dir().join(format!("ronoctua-no-home-{}", std::process::id()));
+        // AND A CATALOGUE OF ITS OWN: a listing is reached from a row of
+        // channels by theme (`crate::player_catalog`).
+        let catalogue =
+            std::env::temp_dir().join(format!("ronoctua-pages-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&catalogue);
+        crate::player_catalog::write_fixture(&catalogue).expect("a catalogue");
         let mut reached = vec![PageId::Home];
         let mut queue = vec![PageId::Home];
         while let Some(page) = queue.pop() {
+            // A QUEUE, which the row that saves it needs — LONG: the home
+            // shows a window of it, and the row that opens the whole.
             let mut v = View::blank(Some(nowhere.clone()));
+            v.outline_arrived(Some(outline(
+                (1..=12)
+                    .map(|i| Name::Titled(format!("Track {i}")))
+                    .collect(),
+            )));
+            v.catalogue_at(catalogue.clone());
+            v.catalog.source = Some("archive".into());
+            // AND A RANKING HANDED ITS VIDEOS: a video's own page is reached
+            // from the `⋯` of its row (`crate::player_ranking`).
+            v.ranking
+                .given(vec![crate::player_ranking::tests::video(1)], 1);
+            v.ranking.chosen = Some(crate::player_ranking::tests::video(1).id);
             // AND WHAT THE FILE SAYS OF ITSELF, as a door's thread leaves it:
             // the Metadata's pages are reached from its rows.
             v.meta.given(
@@ -5743,15 +7352,30 @@ mod tests {
             // reached from its row.
             v.found
                 .given(crate::player_suggest::tests::desk_for("/v/film.mkv", None));
-            // AND THE WORLD'S RADIO AND TV, their countries listed: a
-            // country's page is reached from its row.
+            // AND THE WORLD'S RADIO AND TV, their countries listed — and
+            // allowed: a list kept from before a permission was taken back is
+            // not shown — a country's page is reached from its row.
+            for d in ronoctua_player::find::Directory::ALL {
+                v.prefs.let_directory(d);
+            }
             v.found.given(crate::player_globe::tests::countries_desk());
             v.found
                 .given(crate::player_globe::tests::tv_countries_desk());
             if page != PageId::Home {
                 v.push(page, None);
             }
+            v.settle_in(Some(&s), 80, &t);
             for r in v.rows(Some(&s), 80, &t) {
+                // A VIDEO'S OWN PAGE, by the `⋯` CELL at the end of a video's
+                // row — a control of the row, not its `RET`, which queues it.
+                if r.cells
+                    .iter()
+                    .any(|c| matches!(c.target, Target::RankedMore(_)))
+                    && !reached.contains(&PageId::RankedVideo)
+                {
+                    reached.push(PageId::RankedVideo);
+                    queue.push(PageId::RankedVideo);
+                }
                 // A LANE'S PAGE, by `RET` on the lane's own row — whose label
                 // is the lane's name, not the page's.
                 let to = match r.target {
@@ -5768,6 +7392,13 @@ mod tests {
                     // A SUGGESTION'S PAGE, by `RET` on its row — whose label
                     // is the suggestion's name.
                     Target::Candidate(id) => PageId::Candidate(id),
+                    // A SAVE'S PICKER, by `RET` on the row that saves —
+                    // whose label says what is saved.
+                    Target::SaveSet => PageId::Pick(Purpose::SaveSet),
+                    Target::SaveQueue => PageId::Pick(Purpose::SaveQueue),
+                    // A LISTING OF THE CATALOGUE, by `RET` on a theme's or a
+                    // category's row — whose label is its name.
+                    Target::CatalogScope(..) => PageId::Catalog,
                     // A LIST OF A DIRECTORY'S, by `RET` on its row — whose
                     // label is what it lists: a country, a genre.
                     Target::Opens(ronoctua_player::find::Query::Tv(_)) => PageId::TvChannels,
@@ -5865,13 +7496,17 @@ mod tests {
     fn a_key_that_needs_the_rows_is_classed_for_a_door_without_them() {
         for (notation, id, at) in OF_THE_VIEW {
             let press = pressed(notation).expect(notation);
-            let everywhere = *at == Where::Anywhere && !matches!(*id, "player-up" | "player-down");
+            // SAVING AGAIN ACTS ON NO ROW but may ask on them
+            // (`Unseen::OpensThere`).
+            let everywhere = at.of_no_row()
+                && !matches!(*id, "player-up" | "player-down" | "player-save-queue-again");
             assert_eq!(press.unseen() == Unseen::Acts, everywhere, "{notation}");
         }
         for press in [
             Press::Tracks,
             Press::Browse,
             Press::Clear,
+            Press::SaveQueueAgain,
             Press::Go(PageId::Machines),
         ] {
             assert_eq!(press.unseen(), Unseen::OpensThere, "{press:?}");
@@ -5880,6 +7515,32 @@ mod tests {
             assert_eq!(press.unseen(), Unseen::ShowsTheRows, "{press:?}");
         }
         assert_eq!(Press::Escape.unseen(), Unseen::Acts);
+    }
+
+    /// FAILS IF: a question the view took stops taking the order's sentence
+    /// off the door's line ("added…" while it asks whether to add it again)
+    /// — in any door, for all three read this one answer — or a refusal no
+    /// view took stops being said, or a taken ask starts saying something.
+    #[test]
+    fn a_question_asked_takes_back_what_the_order_said() {
+        use ronoctua_player::queue::{EntryId, Name};
+        let t = texts();
+        let asks = Told::Asks {
+            again: Box::new(Ask::SaveQueueAgain { force: true }),
+            trouble: Trouble::AlreadyQueued {
+                entry: EntryId(2),
+                name: Name::Titled("Two".into()),
+            },
+        };
+        assert_eq!(heard(true, &asks, false, &t), Heard::Asked);
+        assert!(
+            matches!(heard(false, &asks, false, &t), Heard::Said(Some(said)) if said.contains("Two"))
+        );
+        assert_eq!(heard(true, &Told::Taken, false, &t), Heard::Said(None));
+        assert_eq!(
+            heard(false, &Told::NotRunning, false, &t),
+            Heard::Said(Some(t.t(ronoctua_i18n::key::PLAYER_NOT_RUNNING)))
+        );
     }
 
     /// FAILS IF: a key the service took stops being said in the door that
@@ -5986,6 +7647,31 @@ mod tests {
         assert!(v.cursor() < rest);
     }
 
+    /// FAILS IF: a click in the empty room under the last row chooses the
+    /// last row (the line past the list was held to it), or a second click
+    /// there does what `RET` does on it.
+    #[test]
+    fn a_click_under_the_last_row_takes_nothing() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let s = playing();
+        let mut v = View::blank(None);
+        let rows = v.rows(Some(&s), 80, &t);
+        let first = v.cursor();
+        assert_eq!(Row::owner(&rows, rows.len() + 3), rows.len() + 3);
+        for past in [rows.len(), rows.len() + 4] {
+            assert!(!v.clicked_at(past, 2, &rows), "nothing to act on");
+            assert!(!v.clicked_at(past, 2, &rows), "not even the second time");
+            assert_eq!(v.cursor(), first, "the cursor did not come down");
+        }
+        // THE LAST ROW ITSELF is still a row.
+        let last = (0..rows.len())
+            .rev()
+            .find(|&n| rows[n].stops())
+            .expect("a row");
+        v.clicked_at(last, 2, &rows);
+        assert_eq!(v.cursor(), last);
+    }
+
     /// FAILS IF: the position's time is cut in a narrow door — `12:…` reads
     /// as a wrong time — instead of the bar before it giving way.
     #[test]
@@ -6021,25 +7707,27 @@ mod tests {
         };
         let three = [english(1, "dts"), english(2, "ac3"), english(3, "ac3")];
         let kin: Vec<&Track> = three.iter().collect();
-        let names: Vec<String> = three.iter().map(|x| track_name(x, &kin)).collect();
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let names: Vec<String> = three.iter().map(|x| track_name(x, &kin, &t)).collect();
         let unique: std::collections::BTreeSet<&String> = names.iter().collect();
         assert_eq!(unique.len(), 3, "{names:?}");
-        assert_eq!(names[0], "en · dts");
+        assert_eq!(names[0], "English · dts");
         let one = english(1, "dts");
-        assert_eq!(track_name(&one, &[&one]), "en");
+        assert_eq!(track_name(&one, &[&one], &t), "English");
     }
 
-    /// FAILS IF: something typed on the page that picks what to play
-    /// together plays and leaves that page open, where a pick closes it and
-    /// goes back to the page that asked.
+    /// FAILS IF: something typed on the leader's question to play together
+    /// plays and leaves the picker open, where a pick closes it and goes back
+    /// to the page that asked.
     #[test]
     fn what_is_typed_to_play_together_closes_the_picker_as_a_pick_does() {
         let t = texts();
         let s = playing();
+        let root = a_library("together");
         let mut v = View::blank(None);
         v.key(Press::Go(PageId::Together), Some(&s), 80, &t);
-        v.files_at(std::path::Path::new("/nowhere"), Purpose::Lane);
-        assert_eq!(v.page(), PageId::Files(Purpose::Lane));
+        v.pick_at(&root, Purpose::Lane);
+        assert_eq!(v.page(), PageId::Pick(Purpose::Lane));
         let mut pairing = crate::player_machines::Pairing::default();
         let errand = crate::player_question::answered_saying(
             crate::player_question::TOGETHER,
@@ -6049,58 +7737,49 @@ mod tests {
         );
         v.answer_came(&errand, Some(&s), 80, &t);
         assert_eq!(v.page(), PageId::Together);
-        // NEVER MIND keeps the files open.
-        v.files_at(std::path::Path::new("/nowhere"), Purpose::Lane);
+        // NEVER MIND keeps the picker open.
+        v.pick_at(&root, Purpose::Lane);
         v.answer_came(&Errand::Nothing, Some(&s), 80, &t);
-        assert_eq!(v.page(), PageId::Files(Purpose::Lane));
+        assert_eq!(v.page(), PageId::Pick(Purpose::Lane));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// FAILS IF: the typed path or address row stops being a question of the
-    /// door's own line — for the purpose the files are open for — or closes
-    /// the files under it, or an answer stops becoming the same order in
-    /// whichever door typed it.
+    /// FAILS IF: an address typed in the picker stops being an answer where
+    /// the player plays one — into the queue, and together, which closes the
+    /// page — or the leader's questions stop giving the same orders.
     #[test]
-    fn a_typed_path_is_asked_with_the_files_still_open() {
+    fn an_address_typed_is_an_answer() {
         use crate::player_machines::Pairing;
-        use crate::player_question::answered;
+        use crate::player_question::{ENQUEUE, answered};
         let t = texts();
+        let s = playing();
         let root = a_library("typed");
         let mut v = among(&root);
-        let rows = v.rows(None, 80, &t);
-        let at = rows
-            .iter()
-            .position(|r| r.target == Target::Typed)
-            .expect("the typed row");
-        v.clicked(at, &rows);
-        assert_eq!(
-            v.key(Press::Enter, None, 80, &t),
-            Errand::Ask(Question::plain(ENQUEUE, false))
-        );
-        assert!(v.browsing(), "the files closed under the question");
+        typing(&mut v, "https://example.org/a");
+        let Errand::TellSaying(ask, _) = v.key(Press::Enter, None, 80, &t) else {
+            panic!("the address was not taken");
+        };
+        assert_eq!(ask, put("https://example.org/a".into(), false));
+        assert!(v.browsing(), "the queue's picker stays");
         let mut pairing = Pairing::default();
         assert_eq!(
             answered(ENQUEUE, "https://example.org/a", &mut pairing),
             Errand::Tell(put("https://example.org/a".into(), false))
         );
         assert_eq!(answered(ENQUEUE, "   ", &mut pairing), Errand::Nothing);
-        assert_eq!(
-            answered(TOGETHER, "/v/b.mkv", &mut pairing),
-            Errand::Tell(crate::player_question::together("/v/b.mkv".into()))
-        );
-        // TOGETHER, the same row asks the other question.
+        // TOGETHER: the address is a lane, and the page closes.
         v.back(None, 80, &t);
-        v.files_at(&root, Purpose::Lane);
-        v.settle_in(None, 80, &t);
-        let rows = v.rows(None, 80, &t);
-        let at = rows
-            .iter()
-            .position(|r| r.target == Target::Typed)
-            .expect("the typed row");
-        v.clicked(at, &rows);
-        assert!(matches!(
-            v.key(Press::Enter, None, 80, &t),
-            Errand::Ask(Question { id: TOGETHER, .. })
-        ));
+        v.key(Press::Go(PageId::Together), Some(&s), 80, &t);
+        v.pick_at(&root, Purpose::Lane);
+        typing(&mut v, "https://example.org/b.mkv");
+        let Errand::TellSaying(ask, _) = v.key(Press::Enter, Some(&s), 80, &t) else {
+            panic!("the address was not played together");
+        };
+        assert_eq!(
+            ask,
+            crate::player_question::together("https://example.org/b.mkv".into())
+        );
+        assert_eq!(v.page(), PageId::Together);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -6181,8 +7860,43 @@ mod tests {
                 ..Mods::default()
             },
         };
-        assert_eq!(press_of_key(chord), None, "C-s was read as s");
+        // `C-s` IS A KEY OF ITS OWN — the queue saved again — and never the
+        // `s` it is written with.
+        assert_eq!(
+            press_of_key(chord),
+            Some(Press::SaveQueueAgain),
+            "C-s was read as s"
+        );
         assert_eq!(press_of_key(Key::simple(Sym::Esc)), Some(Press::Escape));
+    }
+
+    /// FAILS IF: of two entries that share a key, the one whose page this
+    /// is stops being the one read — `O` on a world page sorting something
+    /// else once another page takes `O` too — or a key the page does not
+    /// decide stops being read by its first entry.
+    #[test]
+    fn a_shared_key_is_the_one_of_the_page() {
+        let table = [
+            ("O", "player-rewind", Where::WithAPosition),
+            ("O", "player-countries-order", Where::OnTheCountries),
+            ("O", "player-forward", Where::OnTheGlobe),
+        ];
+        let on_the_countries = |w: Where| match w {
+            Where::OnTheCountries => Some(true),
+            Where::OnTheGlobe => Some(false),
+            _ => None,
+        };
+        assert_eq!(
+            pressed_in(&table, "O", on_the_countries),
+            Some(Press::CountriesOrder)
+        );
+        let elsewhere = |w: Where| match w {
+            Where::OnTheCountries | Where::OnTheGlobe => Some(false),
+            _ => None,
+        };
+        assert_eq!(pressed_in(&table, "O", elsewhere), Some(Press::Rewind));
+        assert_eq!(pressed_in(&table, "O", |_| None), Some(Press::Rewind));
+        assert_eq!(pressed_in(&table, "x", |_| None), None);
     }
 
     #[test]
@@ -6278,15 +7992,15 @@ mod tests {
     }
 
     /// FAILS IF: saving what plays or the queue stops going through the
-    /// door's line — the name first (holding what plays' name), then the
-    /// folder (holding the music folder) — or writes over a file that is
-    /// there without a question born on its "no"; or the file stops opening
-    /// again from its page: a set plays after what plays, the queue kept, and
-    /// a queue takes the queue's place only after a question of its own.
+    /// picker — a folder and a name typed there, holding what plays' name —
+    /// or writes over a file that is there without a question
+    /// born on its "no"; or the file stops opening again from its page: a
+    /// set plays after what plays, the queue kept, and a queue takes the
+    /// queue's place only after a question of its own.
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn saving_and_opening_go_through_the_ask() {
-        use crate::player_question::{SAVE_QUEUE, SAVE_QUEUE_FOLDER, SAVE_SET, SAVE_SET_FOLDER};
+    fn saving_and_opening_go_through_the_picker() {
+        use crate::file_picker::Target as P;
         use ronoctua_i18n::key;
         let t = texts();
         let s = playing();
@@ -6294,22 +8008,26 @@ mod tests {
         let music = root.join("Music");
         std::fs::create_dir_all(&music).unwrap();
         let mut v = queued(View::blank(Some(root.clone())));
-        let mut pairing = crate::player_machines::Pairing::default();
-        let mut answer = |v: &mut View, id: &str, said: &str| {
-            v.answered(id, said, &mut pairing, Some(&s), 80, &t)
-        };
-        // THE ROW: the name, holding what plays' own.
+        // THE ROW: the save's picker, on the music folder, holding what
+        // plays' own name.
         chosen(&mut v, Some(&s), &Target::SaveSet);
-        assert_eq!(
-            v.key(Press::Enter, Some(&s), 80, &t),
-            Errand::Ask(Question::holding(SAVE_SET, "one.flac".into()))
+        assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), Errand::Nothing);
+        assert_eq!(v.page(), PageId::Pick(Purpose::SaveSet));
+        let rows = v.rows(Some(&s), 80, &t);
+        assert_eq!(rows[v.cursor()].target, picked(P::Name), "born on the name");
+        assert!(
+            rows[v.cursor()]
+                .fields
+                .iter()
+                .any(|f| f.text.contains("one.flac.rset")),
+            "{:?}",
+            rows[v.cursor()].fields
         );
-        // THE NAME, its extension typed too: the folder next, holding the
-        // music folder.
-        assert_eq!(
-            answer(&mut v, SAVE_SET, " Film night.RSET "),
-            Errand::Ask(Question::holding(SAVE_SET_FOLDER, shown_path(&music)))
-        );
+        // ANOTHER NAME, typed: every letter is the name's.
+        for _ in 0.."one.flac".len() {
+            picking(&mut v, "DEL");
+        }
+        typing(&mut v, "Film night");
         let to = music.join("Film night.rset");
         let saving = Errand::TellSaying(
             Ask::SaveSet {
@@ -6321,74 +8039,64 @@ mod tests {
                 &[("name", "Film night.rset"), ("folder", &shown_path(&music))],
             ),
         );
-        assert_eq!(answer(&mut v, SAVE_SET_FOLDER, &shown_path(&music)), saving);
+        assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), saving);
+        assert_eq!(v.page(), PageId::Home, "the picker closes on the save");
         // A FILE ALREADY THERE: a question, born on its "no" — and "yes"
         // writes over it.
         std::fs::write(&to, b"{}").unwrap();
-        assert!(matches!(
-            v.key(Press::SaveSet, Some(&s), 80, &t),
-            Errand::Ask(Question { id: SAVE_SET, .. })
-        ));
-        answer(&mut v, SAVE_SET, "Film night");
-        assert_eq!(
-            answer(&mut v, SAVE_SET_FOLDER, &shown_path(&music)),
-            Errand::Nothing
-        );
+        v.key(Press::SaveSet, Some(&s), 80, &t);
+        for _ in 0.."one.flac".len() {
+            picking(&mut v, "DEL");
+        }
+        typing(&mut v, "Film night");
+        assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), Errand::Nothing);
         let rows = v.rows(Some(&s), 80, &t);
         assert_eq!(
             rows[v.cursor()].target,
-            Target::Answer(false),
+            picked(P::Answer(false)),
             "born on its no"
         );
         v.key(Press::Down, Some(&s), 80, &t);
         assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), saving);
-        // A NAME NO FILE CAN HAVE, and a folder that is not one: said.
+        // A NAME NO FILE CAN HAVE: said.
         v.key(Press::SaveSet, Some(&s), 80, &t);
-        assert_eq!(
-            answer(&mut v, SAVE_SET, "a/b"),
-            Errand::Said(t.t(key::PLAYER_SAVE_BAD_NAME))
-        );
-        v.key(Press::SaveSet, Some(&s), 80, &t);
-        answer(&mut v, SAVE_SET, "Film night");
-        let nowhere = root.join("nowhere");
-        assert_eq!(
-            answer(&mut v, SAVE_SET_FOLDER, &nowhere.to_string_lossy()),
-            Errand::Said(t.t_with(
-                key::PLAYER_SAVE_NO_FOLDER,
-                &[("folder", &shown_path(&nowhere))]
-            ))
-        );
-        // THE QUEUE: no name to start from.
-        chosen(&mut v, Some(&s), &Target::SaveQueue);
-        assert_eq!(
+        for _ in 0.."one.flac".len() {
+            picking(&mut v, "DEL");
+        }
+        assert!(matches!(
             v.key(Press::Enter, Some(&s), 80, &t),
-            Errand::Ask(Question::plain(SAVE_QUEUE, false))
-        );
-        answer(&mut v, SAVE_QUEUE, "Week");
+            Errand::Said(_)
+        ));
+        picking(&mut v, "ESC");
+        // THE QUEUE: no name to start from, and its own extension.
+        chosen(&mut v, Some(&s), &Target::SaveQueue);
+        v.key(Press::Enter, Some(&s), 80, &t);
+        assert_eq!(v.page(), PageId::Pick(Purpose::SaveQueue));
+        typing(&mut v, "Week");
         let week = music.join("Week.rqueue");
         assert!(matches!(
-            answer(&mut v, SAVE_QUEUE_FOLDER, &music.to_string_lossy()),
+            v.key(Press::Enter, Some(&s), 80, &t),
             Errand::TellSaying(Ask::SaveQueue { ref to, .. }, _)
                 if *to == week.to_string_lossy()
         ));
         std::fs::write(&week, b"{}").unwrap();
         // OPENED AGAIN, from the page that lists them: the set plays now,
         // after what plays, and the page closes.
-        chosen(&mut v, Some(&s), &Target::Go(PageId::Files(Purpose::Open)));
+        chosen(&mut v, Some(&s), &Target::Go(PageId::Pick(Purpose::Open)));
         v.key(Press::Enter, Some(&s), 80, &t);
-        assert_eq!(v.page(), PageId::Files(Purpose::Open));
+        assert_eq!(v.page(), PageId::Pick(Purpose::Open));
         let listed: Vec<Target> = v
             .rows(Some(&s), 80, &t)
             .iter()
             .flat_map(|r| r.cells.iter().map(|c| c.target.clone()))
-            .filter(|t| matches!(t, Target::File(_)))
+            .filter(|t| matches!(t, Target::Picker(P::File(_))))
             .collect();
         assert_eq!(
             listed,
-            [Target::File(to.clone()), Target::File(week.clone())],
+            [picked(P::File(to.clone())), picked(P::File(week.clone()))],
             "the page lists the player's own files, and nothing else"
         );
-        chosen(&mut v, Some(&s), &Target::File(to.clone()));
+        chosen(&mut v, Some(&s), &picked(P::File(to.clone())));
         assert_eq!(
             v.key(Press::Enter, Some(&s), 80, &t),
             Errand::TellSaying(
@@ -6398,8 +8106,8 @@ mod tests {
         );
         assert_eq!(v.page(), PageId::Home, "the page closes on the choice");
         // THE QUEUE: its own question first, born on its "no".
-        v.key(Press::Go(PageId::Files(Purpose::Open)), Some(&s), 80, &t);
-        chosen(&mut v, Some(&s), &Target::File(week.clone()));
+        v.key(Press::Go(PageId::Pick(Purpose::Open)), Some(&s), 80, &t);
+        chosen(&mut v, Some(&s), &picked(P::File(week.clone())));
         assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), Errand::Nothing);
         let rows = v.rows(Some(&s), 80, &t);
         assert_eq!(rows[v.cursor()].target, Target::Answer(false));
@@ -6413,19 +8121,27 @@ mod tests {
                     into: None,
                     play: false,
                     replace: true,
+                    once: false,
                 },
                 t.t_with(key::PLAYER_QUEUE_OPENED, &[("name", "Week.rqueue")])
             )
         );
-        // TYPED, on the same page: the same answer.
-        v.key(Press::Go(PageId::Files(Purpose::Open)), Some(&s), 80, &t);
-        assert!(matches!(
-            answer(&mut v, OPEN_SAVED, &to.to_string_lossy()),
-            Errand::TellSaying(Ask::Put { play: true, .. }, _)
-        ));
-        assert_eq!(
-            answer(&mut v, OPEN_SAVED, &root.join("one.flac").to_string_lossy()),
-            Errand::Said(t.t_with(key::PLAYER_OPEN_NOT_OURS, &[("name", "one.flac")]))
+        // A NAME TYPED FROM NO QUESTION (`LEADER :` with an argument) opens
+        // the save's picker holding it.
+        let mut pairing = crate::player_machines::Pairing::default();
+        v.answered(
+            crate::player_question::SAVE_SET,
+            "Sunday.rset",
+            &mut pairing,
+            Some(&s),
+            80,
+            &t,
+        );
+        assert_eq!(v.page(), PageId::Pick(Purpose::SaveSet));
+        let rows = v.rows(Some(&s), 80, &t);
+        assert!(
+            rows.iter()
+                .any(|r| r.fields.iter().any(|f| f.text == "Sunday.rset"))
         );
         std::fs::remove_dir_all(&root).unwrap();
     }

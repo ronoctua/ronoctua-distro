@@ -69,8 +69,11 @@ pub fn host_it() -> Result<()> {
             )
             .map_err(|e| anyhow::anyhow!("could not hang the studio channel: {e}"))?;
 
+        // THE FILE PICKER'S FOLDER, watched through the door's wake.
+        let mut view = crate::camera_settings::View::fresh();
+        view.watch_with(w.wake());
         Ok(CameraSettingsWindow {
-            view: crate::camera_settings::View::fresh(),
+            view,
             snapshot: crate::camera_settings::Snapshot::default(),
             cameras: Vec::new(),
             studio: None,
@@ -81,6 +84,46 @@ pub fn host_it() -> Result<()> {
 }
 
 /// The window: the view, and what it reads.
+/// The window over a PLANTED studio, for the photograph
+/// (`system_photograph`): `virtual` is the virtual camera on, sending the
+/// camera alone, through an effect of its own.
+///
+/// # Errors
+///
+/// A scene this door does not know.
+pub fn photographed(scene: &str) -> anyhow::Result<(impl Content, Option<crate::line::Line>)> {
+    anyhow::ensure!(
+        scene == "virtual",
+        "`{scene}` is not a scene of the camera's settings; the scene is virtual"
+    );
+    let studio = ronoctua_studio::wire::State {
+        scenes: vec!["camera".into(), "screen".into()],
+        scene: "camera".into(),
+        virtual_node: Some("/dev/video9".into()),
+        ..ronoctua_studio::wire::State::default()
+    };
+    let prefs = ronoctua_studio::prefs::Preferences {
+        virtual_sends: ronoctua_studio::prefs::Sends::Camera,
+        virtual_effect: ronoctua_studio::prefs::VirtualEffect::Own("background-blur".into()),
+        ..ronoctua_studio::prefs::Preferences::default()
+    };
+    Ok((
+        CameraSettingsWindow {
+            view: crate::camera_settings::View::fresh(),
+            snapshot: crate::camera_settings::Snapshot {
+                state: Some(studio.clone()),
+                prefs,
+                ..crate::camera_settings::Snapshot::default()
+            },
+            cameras: Vec::new(),
+            studio: Some(studio),
+            _cameras: None,
+            _studio: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        },
+        None,
+    ))
+}
+
 struct CameraSettingsWindow {
     view: crate::camera_settings::View,
     /// What the rows read, rebuilt whenever a thread brings news.
@@ -116,7 +159,9 @@ impl CameraSettingsWindow {
     /// Carries out what the view asked for.
     fn apply(&mut self, ui: &mut Ui, errand: crate::camera_settings::Errand) {
         match crate::camera_settings::carry_out(errand, &self.snapshot, &ui.texts) {
-            Ok(said) => ui.message = said,
+            Ok(Some(said)) => ui.say(said),
+            // NOTHING TO SAY clears the line, as a gesture always has here.
+            Ok(None) => ui.message = None,
             Err(crate::camera_settings::Errand::Close) => {
                 ui.quit = true;
                 return;
@@ -131,6 +176,11 @@ impl CameraSettingsWindow {
             // THE APP'S DOOR is the footer's to open, as the leader's `m c`
             // is: told off the loop, and a footer that is not there is said.
             Err(crate::camera_settings::Errand::Run(id)) => ui.tell_the_footer(id, None),
+            // THE CLIPBOARD, off the loop, for the file picker (`pasted`).
+            Err(crate::camera_settings::Errand::Paste) => {
+                ui.paste();
+                return;
+            }
             Err(_) => {}
         }
         self.reread(ui);
@@ -140,6 +190,7 @@ impl CameraSettingsWindow {
     /// on the row the cursor is already on (invariant 19).
     fn pressed(&mut self, ui: &mut Ui, press: crate::camera_settings::Press) {
         ui.message = None;
+        self.view.page_is(ui.room_for_rows());
         let errand = self.view.key(press, &self.snapshot, ui.columns, &ui.texts);
         self.apply(ui, errand);
     }
@@ -150,6 +201,13 @@ impl CameraSettingsWindow {
 }
 
 impl Content for CameraSettingsWindow {
+    /// A thread of the window's woke the loop — the file picker's folder
+    /// moved, or its devices were read: its rows again, when they changed.
+    fn woken(&mut self, ui: &mut Ui) {
+        if self.view.look() {
+            ui.ask_paint();
+        }
+    }
     type Hand = ();
 
     fn app_id(&self) -> &'static str {
@@ -164,11 +222,25 @@ impl Content for CameraSettingsWindow {
     /// calls too (`camera_settings::press_of_key`): a letter held with `Ctrl` or `Alt`
     /// is not the letter, in either door.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        if let Some(press) =
-            crate::door::keys::key_of(event, mods).and_then(crate::camera_settings::press_of_key)
-        {
+        let Some(key) = crate::door::keys::key_of(event, mods) else {
+            return;
+        };
+        // THE FILE PICKER, while it is up over the view, takes what it reads
+        // — every letter, and its own keys.
+        if self.view.picker_takes(key) {
+            self.pressed(ui, crate::camera_settings::Press::Pick(key));
+            return;
+        }
+        if let Some(press) = crate::camera_settings::press_of_key(key) {
             self.pressed(ui, press);
         }
+    }
+
+    /// The clipboard's text, read off the loop for the file picker's `C-v`.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        self.view.picker_pasted(text);
+        self.view.settle_in(&self.snapshot, ui.columns, &ui.texts);
+        ui.ask_paint();
     }
 
     /// WHAT WAS TYPED on this window's line — the call the footer's

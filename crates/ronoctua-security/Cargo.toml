@@ -1,0 +1,48 @@
+[package]
+name = "ronoctua-security"
+description = "The security centre's boundaries: the sudo door (the one caller of sudo), the person's firewall table, the passwordless-sudo window, fingerprints and the device's facts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# `authority` IS THE SUDO DOOR, and only the shell turns it on: a person's
+# gesture types the password, and `authority::run` is the one code in the
+# tree that spawns `sudo`. The brain and the daemons never link it (a check
+# refuses it). Everything else here is pure (the firewall script, the
+# sudoers line, the verbs) or reads facts (fingerprint readers, Secure Boot,
+# the TPM, fwupd).
+[features]
+default = [ ]
+authority = [ ]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The typed password is a `Secret`, zeroed when dropped.
+ronoctua-consent = { path = "../ronoctua-consent" }
+# fprintd (readers, enrolled fingers, enrolment) and fwupd (HSI, updates)
+# answer on D-Bus; the blocking API, on a thread.
+zbus.workspace = true
+# The root helper's syscalls: who it runs as (`geteuid`, and the tests'
+# `getuid`), the lock on the table (`flock`), and `O_NOFOLLOW` for the staged
+# wish — `unsafe_code` is forbidden here, and these are the safe spellings.
+rustix = { workspace = true, features = [ "fs", "process" ] }
+# NetworkManager's stored connections, asked by the root helper: which exist
+# (the first time, every one becomes a home network) and which this machine
+# serves (a hotspot, never public). Through the one crate that talks to
+# NetworkManager, never by reading its files.
+ronoctua-network = { path = "../ronoctua-network" }
+
+# THE ROOT HELPER, as its own binary, so `nix/rust.nix` can extract JUST this
+# (`securityRoot`): the units that run it as root must not carry the renderer,
+# wgpu and the wasm runtime the whole workspace would bring. It links this
+# crate, serde, zbus and rustix, and cites four store paths (`visudo`, `nft`,
+# `systemctl`, `systemd-run`), baked from `nix/rust.nix`.
+[[bin]]
+name = "ronoctua-security-root"
+path = "src/bin/root.rs"
+
+[lints]
+workspace = true

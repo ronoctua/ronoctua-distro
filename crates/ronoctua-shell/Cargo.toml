@@ -23,6 +23,13 @@ ronoctua-tokens = { path = "../ronoctua-tokens" }
 ronoctua-xdg = { path = "../ronoctua-xdg" }
 ronoctua-render = { path = "../ronoctua-render" }
 ronoctua-compositor = { path = "../ronoctua-compositor" }
+# The calculator's engine (`LEADER =`).
+ronoctua-calc = { path = "../ronoctua-calc" }
+# THE PERSON'S CONSENT, host by host (`consent.json`): what the calculator's
+# currency rates, a default source of the catalogue, the lyrics' translator,
+# a video channel and a security check let — and the `Secret` a password or
+# a passphrase crosses a door in.
+ronoctua-consent = { path = "../ronoctua-consent" }
 ronoctua-scroll = { path = "../ronoctua-scroll" }
 # The ONLY border with NetworkManager. The shell does not speak network D-Bus
 # directly, for the same reason it does not speak the compositor's IPC directly.
@@ -66,6 +73,10 @@ ronoctua-files = { path = "../ronoctua-files" }
 # that runs as root is exactly what that split exists to prevent, and
 # `files-vm` asserts the closure.
 ronoctua-inspect = { path = "../ronoctua-inspect" }
+# THE BORDER WITH GIT, for the file manager's git line and the history `C-h`
+# opens (`git_line.rs`, `git_browser.rs`): the CLI by its store path, every
+# call hardened, nothing written. No dependency of its own.
+ronoctua-git = { path = "../ronoctua-git" }
 # THE POLL THE PLAYER READS ITS PIPE WITH — `rustix` and not `libc` because its
 # API is SAFE, which is the same argument the terminal's pty makes one table
 # down. The `event` feature is what `ronoctua-inspect` already enables for
@@ -86,7 +97,7 @@ ronoctua-power = { path = "../ronoctua-power" }
 # THE MACHINE'S OWN CLOCK — `systemd-timedated`. `LEADER s l` is where somebody
 # looks for the time zone and for whether anything is keeping the clock right,
 # and for a whole release that screen could change only what the interface
-# draws. One crate, because the brain's `clock-sync` watch asks the same
+# draws. One crate, because the brain's clock watch asks the same
 # daemon and two readers would be two answers about one clock.
 ronoctua-clock = { path = "../ronoctua-clock" }
 # The screens: what they can do, how bright they are, and how big the text is.
@@ -115,8 +126,24 @@ ronoctua-player = { path = "../ronoctua-player" }
 # without its default features — lofty, the programs, TLS and the caches are
 # the daemon's, and a door never reads a tag nor asks a host itself.
 ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
-ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
-ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false }
+# EXCEPT THE SECURITY CENTRE'S THREE CHECKS (`crate::security`): a file's
+# hash to VirusTotal, an address to XposedOrNot, five digits of a password's
+# hash to Pwned Passwords — asked by the door the person pressed, on its
+# thread, with the person's pass for the host (`internet::Internet`), since there
+# is no daemon of the centre's to ask. Hence `net`.
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false, features = [ "net" ] }
+# AND THE LOCAL CATALOGUE, which a door READS itself (`player_catalog`):
+# `catalog` brings SQLite over the system's libsqlite3, without TLS.
+ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false, features = [ "catalog" ] }
+# The adult catalogue's lock: the person's system password, checked through
+# the one crate that speaks PAM, on a thread of the door's.
+ronoctua-pam = { path = "../ronoctua-pam" }
+# THE LYRICS' TRANSLATOR, for the player's doors: the host the daemon asks
+# (`MYMEMORY_HOST`), named where it is decided — and fast-access's
+# dictionary, synonyms and translations (`/d`, `/s`, `/t`), which the door
+# asks itself, on its own threads, with the person's pass for the host, as
+# the security centre asks its three checks: hence `net`.
+ronoctua-words = { path = "../ronoctua-words", default-features = false, features = [ "net" ] }
 ronoctua-effects = { path = "../ronoctua-effects" }
 ronoctua-syncthing = { path = "../ronoctua-syncthing" }
 ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
@@ -148,6 +175,9 @@ ronoctua-world = { path = "../ronoctua-world" }
 # WHO ELSE IS ON THIS NETWORK: the unprivileged ICMP sweep and the vendor
 # behind a hardware address. No daemon and no privilege — see the crate.
 ronoctua-lan = { path = "../ronoctua-lan" }
+# AND WHAT EACH OF THEM IS CALLED: systemd-resolved's `ResolveAddress`, asked
+# on a thread for the rows the view shows — the one crate that talks to it.
+ronoctua-resolve = { path = "../ronoctua-resolve" }
 # The queue. The shell asks it for work and listens for the list; it never
 # copies anything itself.
 ronoctua-transfers = { path = "../ronoctua-transfers" }
@@ -167,6 +197,49 @@ ronoctua-software = { path = "../ronoctua-software", features = [ "net", "draw" 
 # kiosk's command line and which addresses a kiosk may take are written; the
 # host binary Chrome starts is the same crate's, and nothing of it links here.
 ronoctua-browser = { path = "../ronoctua-browser" }
+# A PERSON'S ARCHIVES, walked into like folders and opened from — through the
+# one crate that runs 7zz, bsdtar and unrar (`files_archive.rs`) — and a
+# password or a passphrase held as a `Secret`: printed as nothing, wiped when
+# dropped, handed to a program's stdin or to udisks and nowhere else.
+ronoctua-archive = { path = "../ronoctua-archive" }
+# THE ICONS APP (`LEADER m i`): the three tables, read at RUN time from
+# `RONOCTUA_ICONSET`, the one search and the copy formats.
+ronoctua-iconset = { path = "../ronoctua-iconset" }
+# THE VIDEO CATALOGUE (`LEADER v`): read through `Catalog::open_ro` and
+# written through `Person` — the two openers this shell may use
+# (`video-metrics-readers-are-read-only`); `net` for adding a channel, which
+# asks yt-dlp who it is and lets the hosts a scan asks.
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "net" ] }
+# The names of what yt-dlp answers, which the view says — and fast-access's
+# search of YouTube (`/y`, `ronoctua_ytdlp::search`).
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+# FAST-ACCESS'S SUPER INDEX, READ (`crate::fast_access_search`): the reader
+# and nothing else — `engine` without `write`, so the crawlers and the unit
+# stay the unit's, and a door opens the index read-only while a view shows it;
+# `man` for a manual page's first lines in the detail.
+ronoctua-index = { path = "../ronoctua-index", default-features = false, features = [ "engine", "man" ] }
+# FAST-ACCESS'S `/w`: Wikipedia, DuckDuckGo, the person's SearXNG or Brave
+# key, asked on a thread of the door's with the person's pass for the host.
+ronoctua-websearch = { path = "../ronoctua-websearch" }
+# THE STOP OF A REQUEST IN FLIGHT (`web::Abort`), and nothing else: fast-access
+# pulls every stop of the last key's requests on the next one. The requests are
+# made by the crates that own their hosts (`ronoctua-websearch`,
+# `ronoctua-words`, `ronoctua-video-metrics`), which turn `tls` on already —
+# named here because `web::Abort` lives under it.
+ronoctua-http = { path = "../ronoctua-http", default-features = false, features = [ "tls" ] }
+# THE SECURITY CENTRE (`crate::security`): the sudo door (`authority`, which
+# only this crate turns on — `sudo-door-is-one`), the firewall's settings and
+# status, fingerprints and the device's facts — and, read as the person, the
+# firewall's verdict on a container's published port.
+ronoctua-security = { path = "../ronoctua-security", features = [ "authority" ] }
+# THE PERSON'S CONTAINERS (`LEADER s o`). The one crate that runs podman —
+# the listing, the actions, the log and the stats as children only while
+# shown; pulls, builds and compose go to the queue.
+ronoctua-containers = { path = "../ronoctua-containers" }
+# THE PERSON'S BELONGINGS (`LEADER s v`): their SHAPES only — the settings,
+# what is kept, the plan and its decisions, the orders. `age` is the CLI's,
+# behind `crypt`, which the queue runs as a child; the footer never links it.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
 
 # Integration with the compositor through wlr-layer-shell and IPC (invariant 3),
 # and the virtual keyboard and pointer the owner approved as its exceptions —
@@ -185,6 +258,7 @@ anyhow.workspace = true
 # size can be applied again and again without compounding.
 serde = { workspace = true }
 serde_json.workspace = true
+base64.workspace = true
 resvg.workspace = true
 image.workspace = true
 pollster.workspace = true

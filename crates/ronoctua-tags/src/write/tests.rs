@@ -1,10 +1,12 @@
 //! Writes, end to end: a file made here, a change, the sheet read back.
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use super::{Watch, apply, apply_watched, save_cover};
 use crate::fixture::{self, Dir};
+use crate::native;
 use crate::read::sheet;
 use crate::run::Tools;
 use crate::sheet::{
@@ -353,11 +355,20 @@ fn a_draft_lofty_broke_is_refused_and_the_file_stays() {
     let stamp = apply(
         &file,
         stamp_of(&file),
-        &[Edit::SetTag {
-            origin: vorbis.clone(),
-            name: "RIPPER".to_owned(),
-            value: "a long value that the next write takes away".to_owned(),
-        }],
+        &[
+            Edit::SetTag {
+                origin: vorbis.clone(),
+                name: "RIPPER".to_owned(),
+                value: "a long value that the next write takes away".to_owned(),
+            },
+            // ONE THAT STAYS: the comment is not emptied — that is the
+            // block writer's (`a_flac_s_last_field_is_taken_out_and_its_blocks_kept`).
+            Edit::SetTag {
+                origin: vorbis.clone(),
+                name: "KEPT".to_owned(),
+                value: "x".to_owned(),
+            },
+        ],
         &tools,
     )
     .expect("growing is fine");
@@ -424,9 +435,10 @@ fn a_flac_takes_a_tag_by_its_own_name_and_never_asks_matroska() {
         s.adding.as_ref().map(|a| (a.origin.clone(), a.can.clone())),
         Some((Some(vorbis.clone()), Can::Yes(Writer::Lofty)))
     );
-    // A TITLE BESIDE IT: lofty 0.25.4 cannot write a FLAC's comments EMPTY
-    // (the draft reads back short and is refused, the file as it was —
-    // PENDING), so the tag taken out below is not the last one.
+    // A TITLE BESIDE IT: lofty 0.25.4 cannot write a FLAC's comments EMPTY,
+    // which is written block by block (`a_flac_s_last_field_is_taken_out_
+    // and_its_blocks_kept`); here the tag taken out below is not the last one, and
+    // lofty writes every step.
     let stamp = apply(
         &file,
         s.stamp,
@@ -599,13 +611,15 @@ fn a_tag_goes_only_where_its_row_came_from() {
     };
     let global = Origin::Matroska {
         target: crate::sheet::Target::Global,
+        track: None,
     };
     let track = Origin::Matroska {
         target: crate::sheet::Target::Track,
+        track: None,
     };
     for (origin, why) in [
         (Origin::Ffprobe { stream: None }, Why::ReadOnlyView),
-        (global, Why::NoPlace),
+        (global, Why::ReadOnlyView),
         (track, Why::NotGlobal),
         (Origin::Stream, Why::NotAFile),
     ] {
@@ -718,6 +732,7 @@ done"#,
     let film = dir.file("a.mkv", &ebml);
     let global = Origin::Matroska {
         target: crate::sheet::Target::Global,
+        track: None,
     };
     let edits = [
         Edit::SetTag {
@@ -942,7 +957,10 @@ fn a_field_the_tag_has_no_place_for_is_refused_before_a_draft() {
     }];
     assert_eq!(
         apply(&file, s.stamp, &edit, &Tools::none()),
-        Err(Why::NoPlace)
+        Err(Why::NoFieldIn {
+            field: Field::Season,
+            format: TagFormat::Id3v2
+        })
     );
     assert_eq!(dir.names(), ["song.mp3"]);
     let bad = [Edit::Set {
@@ -953,6 +971,77 @@ fn a_field_the_tag_has_no_place_for_is_refused_before_a_draft() {
         apply(&file, s.stamp, &bad, &Tools::none()),
         Err(Why::BadDate)
     );
+}
+
+/// FAILS IF: an MP3 has no place for a description again, it is kept
+/// anywhere but a user text frame `TXXX:DESCRIPTION`, a second spelling of
+/// that frame is left beside the new one, or it does not read back — the
+/// write reads its draft back (`native::verify`) and refuses one whose
+/// description is not what was written, so a write that is taken here is one
+/// that `verify` read.
+#[test]
+fn an_mp3_keeps_its_description_in_a_user_text_frame() {
+    let dir = Dir::new("description");
+    let file = dir.file("film.mp3", &fixture::mp3());
+    let tools = Tools::none();
+    assert!(crate::native::has_place(
+        TagFormat::Id3v2,
+        Field::Description
+    ));
+    let text = "What it is about.\nA second line, with ç and ☃.";
+    let set = |value: &str| {
+        [Edit::Set {
+            field: Field::Description,
+            value: value.to_owned(),
+        }]
+    };
+    let s = sheet(&file, &tools).expect("read");
+    apply(&file, s.stamp, &set(text), &tools).expect("written, and read back as written");
+    let s = sheet(&file, &tools).expect("read again");
+    assert_eq!(
+        s.field(Field::Description).and_then(|r| r.value.as_deref()),
+        Some(text)
+    );
+    let id3 = Origin::Lofty {
+        format: TagFormat::Id3v2,
+    };
+    let frames = |s: &crate::sheet::Sheet| -> Vec<String> {
+        s.other
+            .iter()
+            .filter(|t| t.origin == id3 && t.name.eq_ignore_ascii_case("TXXX:DESCRIPTION"))
+            .map(|t| t.name.clone())
+            .collect()
+    };
+    assert_eq!(frames(&s), ["TXXX:DESCRIPTION"], "{:?}", s.other);
+    // A SECOND SPELLING a tagger left goes when the field is written again.
+    let s = sheet(&file, &tools).expect("read");
+    let lower = [Edit::SetTag {
+        origin: id3.clone(),
+        name: "TXXX:description".to_owned(),
+        value: "old".to_owned(),
+    }];
+    apply(&file, s.stamp, &lower, &tools).expect("a second spelling");
+    let s = sheet(&file, &tools).expect("read");
+    assert_eq!(frames(&s).len(), 2, "{:?}", s.other);
+    apply(&file, s.stamp, &set("New"), &tools).expect("written again");
+    let s = sheet(&file, &tools).expect("read");
+    assert_eq!(frames(&s), ["TXXX:DESCRIPTION"], "{:?}", s.other);
+    assert_eq!(
+        s.field(Field::Description).and_then(|r| r.value.as_deref()),
+        Some("New")
+    );
+    // AND TAKEN OUT, frame and all.
+    let clear = [Edit::Clear {
+        field: Field::Description,
+    }];
+    apply(&file, s.stamp, &clear, &tools).expect("cleared");
+    let s = sheet(&file, &tools).expect("read");
+    assert!(frames(&s).is_empty(), "{:?}", s.other);
+    assert_eq!(
+        s.field(Field::Description).and_then(|r| r.value.clone()),
+        None
+    );
+    assert_eq!(dir.names(), ["film.mp3"]);
 }
 
 #[test]
@@ -1719,4 +1808,659 @@ JSON"#
             assert_eq!(adding.can, nothing);
         }
     }
+}
+
+/// The MD5 of a file's decoded sound alone.
+fn sound_md5(ffmpeg: &Path, file: &Path) -> String {
+    let out = std::process::Command::new(ffmpeg)
+        .args(["-nostdin", "-v", "error", "-i"])
+        .arg(file)
+        .args(["-map", "0:a", "-f", "md5", "-"])
+        .output()
+        .expect("ffmpeg starts");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// `file`'s FLAC blocks as kinds and bodies.
+fn flac_blocks(file: &Path) -> Vec<(u8, Vec<u8>)> {
+    let mut f = File::open(file).expect("open");
+    native::flac_front(&mut f).expect("a FLAC").blocks
+}
+
+/// An APPLICATION block (kind 2) put in after `file`'s first block — what
+/// a tagger or a ripper leaves, and what no muxer knows.
+fn with_an_application_block(file: &Path, body: &[u8]) {
+    let bytes = std::fs::read(file).expect("read");
+    let mut f = File::open(file).expect("open");
+    let front = native::flac_front(&mut f).expect("a FLAC");
+    drop(f);
+    let at = front.before.len() + 4;
+    let first = 4 + front.blocks[0].1.len();
+    let mut out = bytes[..at].to_vec();
+    out.push(bytes[at] & 0x7F);
+    out.extend_from_slice(&bytes[at + 1..at + first]);
+    let len = u32::try_from(body.len()).expect("small");
+    let [_, a, b, c] = len.to_be_bytes();
+    let last = if front.blocks.len() == 1 { 0x80 } else { 0 };
+    out.extend_from_slice(&[last | 2, a, b, c]);
+    out.extend_from_slice(body);
+    out.extend_from_slice(&bytes[at + first..]);
+    std::fs::write(file, out).expect("write");
+}
+
+/// FAILS IF: the last field of a FLAC cannot be taken out — lofty 0.25.4
+/// does not write an EMPTY Vorbis comment, and its draft was refused, the
+/// file as it was — or taking it out loses a block the file had (an
+/// application block, the seek table: ffmpeg's FLAC muxer drops both), or
+/// changes a sample, or leaves a draft beside the file.
+#[test]
+fn a_flac_s_last_field_is_taken_out_and_its_blocks_kept() {
+    let Some(ffmpeg) = fixture::ffmpeg() else {
+        return skipped("the last field of a FLAC");
+    };
+    let tools = Tools::from_env();
+    let dir = Dir::new("flac-last-field");
+    let application = b"rnctkept by the block writer".to_vec();
+    for edit in [
+        Edit::Clear {
+            field: Field::Title,
+        },
+        Edit::RemoveTag {
+            origin: Origin::Lofty {
+                format: TagFormat::Vorbis,
+            },
+            name: "TITLE".to_owned(),
+        },
+    ] {
+        let _ = std::fs::remove_file(dir.path.join("only.flac"));
+        let file = fixture::made_by_ffmpeg(
+            &ffmpeg,
+            &dir,
+            "only.flac",
+            &[
+                "-c:a",
+                "flac",
+                "-fflags",
+                "+bitexact",
+                "-metadata",
+                "title=Only",
+            ],
+        );
+        with_an_application_block(&file, &application);
+        let blocks_before = flac_blocks(&file);
+        assert!(
+            blocks_before.iter().any(|(k, _)| *k == 2),
+            "{:?}",
+            blocks_before.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+        let before = sound_md5(&ffmpeg, &file);
+        let s = sheet(&file, &tools).expect("read");
+        assert_eq!(
+            s.field(Field::Title)
+                .and_then(|r| r.value.clone())
+                .as_deref(),
+            Some("Only")
+        );
+        apply(&file, s.stamp, std::slice::from_ref(&edit), &tools)
+            .unwrap_or_else(|w| panic!("{edit:?}: {w:?}"));
+        let s = sheet(&file, &tools).expect("read again");
+        assert_eq!(s.field(Field::Title).and_then(|r| r.value.clone()), None);
+        assert!(
+            !s.other
+                .iter()
+                .any(|t| matches!(t.origin, Origin::Lofty { .. })),
+            "nothing left in the comment: {:?}",
+            s.other
+        );
+        // EVERY BLOCK KEPT, byte for byte, but the comment itself.
+        let after = flac_blocks(&file);
+        let others = |b: &[(u8, Vec<u8>)]| -> Vec<(u8, Vec<u8>)> {
+            b.iter()
+                .filter(|(k, _)| *k != native::FLAC_VORBIS_COMMENT)
+                .cloned()
+                .collect()
+        };
+        assert_eq!(others(&after), others(&blocks_before));
+        assert!(after.iter().any(|(k, _)| *k == native::FLAC_VORBIS_COMMENT));
+        assert_eq!(sound_md5(&ffmpeg, &file), before, "every sample kept");
+        assert_eq!(dir.names(), ["only.flac"]);
+    }
+}
+
+/// FAILS IF: the comment of a FLAC emptied by the block writer keeps an
+/// item, loses its vendor string, keeps a picture, or a block other than
+/// those moves or changes; or the last block is not marked last.
+#[test]
+fn an_emptied_flac_comment_keeps_every_other_block() {
+    let mut comment = Vec::new();
+    comment.extend_from_slice(&6_u32.to_le_bytes());
+    comment.extend_from_slice(b"vendor");
+    comment.extend_from_slice(&1_u32.to_le_bytes());
+    comment.extend_from_slice(&10_u32.to_le_bytes());
+    comment.extend_from_slice(b"TITLE=Only");
+    let front = native::FlacFront {
+        before: b"ID3-in-front".to_vec(),
+        blocks: vec![
+            (0, vec![1; 34]),
+            (3, vec![2; 18]),
+            (native::FLAC_VORBIS_COMMENT, comment),
+            (native::FLAC_PICTURE, vec![3; 40]),
+            (5, vec![4; 12]),
+            (1, vec![0; 8]),
+        ],
+        frames_at: 0,
+    };
+    let out = native::flac_emptied(&front).expect("written");
+    let mut want = b"ID3-in-frontfLaC".to_vec();
+    let mut block = |kind: u8, body: &[u8]| {
+        want.extend_from_slice(&[kind, 0, 0, u8::try_from(body.len()).expect("small")]);
+        want.extend_from_slice(body);
+    };
+    block(0, &[1; 34]);
+    block(3, &[2; 18]);
+    let mut empty = Vec::new();
+    empty.extend_from_slice(&6_u32.to_le_bytes());
+    empty.extend_from_slice(b"vendor");
+    empty.extend_from_slice(&0_u32.to_le_bytes());
+    block(native::FLAC_VORBIS_COMMENT, &empty);
+    block(5, &[4; 12]);
+    block(0x80 | 1, &[0; 8]);
+    assert_eq!(out, want);
+    // A VENDOR STRING THAT RUNS PAST ITS BLOCK is no comment to empty.
+    let broken = native::FlacFront {
+        before: Vec::new(),
+        blocks: vec![(native::FLAC_VORBIS_COMMENT, 99_u32.to_le_bytes().to_vec())],
+        frames_at: 0,
+    };
+    assert_eq!(native::flac_emptied(&broken), Err(Why::Unreadable));
+}
+
+/// FAILS IF: an MP4 past what lofty holds says its fields are too big to
+/// write, instead of the remux writing them — every stream copied, the
+/// fields read back — or the remux takes what its muxer would drop (a
+/// field it has no atom for, a cover, a tag by its own name) without a
+/// sentence, or changes a frame.
+#[test]
+fn a_big_mp4_s_fields_are_written_by_the_remux() {
+    let Some(ffmpeg) = fixture::ffmpeg() else {
+        return skipped("a big MP4's remux");
+    };
+    let tools = Tools::from_env();
+    let dir = Dir::new("big-mp4");
+    let film = dir.path.join("film.mp4");
+    let target = film.to_string_lossy().into_owned();
+    let (ok, said) = fixture::ffmpeg_run(
+        &ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=25:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:duration=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-fflags",
+            "+bitexact",
+            "-metadata",
+            "title=Harbour",
+            "-metadata",
+            "artist=Someone",
+            "-metadata",
+            "comment=Kept",
+            // THE PROGRAM THAT MADE IT, `©too`: what a film from HandBrake
+            // has, and what `+bitexact` would not write back on its own.
+            "-metadata",
+            "encoding_tool=HandBrake 1.9",
+            &target,
+        ],
+    );
+    assert!(ok, "{said}");
+    let before = decoded_md5(&ffmpeg, &film);
+    let watch = Watch::default();
+    // WHAT THE SHEET OFFERS past the ceiling: the fields the remux writes.
+    let offered = super::super::read::sheet_within(&film, &tools, 0).expect("read");
+    assert_eq!(
+        offered.field(Field::Title).map(|r| r.can.clone()),
+        Some(Can::Yes(Writer::Remux))
+    );
+    // A CEILING OF NOTHING: every MP4 is past it here.
+    let stamp = super::apply_within(
+        &film,
+        stamp_of(&film),
+        &[
+            Edit::Set {
+                field: Field::Title,
+                value: "Lighthouse".to_owned(),
+            },
+            Edit::Clear {
+                field: Field::Artist,
+            },
+        ],
+        &tools,
+        &watch,
+        0,
+    )
+    .expect("written by the remux");
+    let s = sheet(&film, &tools).expect("read");
+    let value = |f: Field| s.field(f).and_then(|r| r.value.clone());
+    assert_eq!(value(Field::Title).as_deref(), Some("Lighthouse"));
+    assert_eq!(value(Field::Artist), None);
+    assert_eq!(
+        value(Field::Comment).as_deref(),
+        Some("Kept"),
+        "the rest kept"
+    );
+    let made_by = s
+        .other
+        .iter()
+        .find(|t| t.name == "\u{a9}too")
+        .map(|t| t.value.clone());
+    assert_eq!(
+        made_by,
+        Some(TagValue::Text("HandBrake 1.9".to_owned())),
+        "the program that made it kept: {:?}",
+        s.other
+    );
+    assert_eq!(decoded_md5(&ffmpeg, &film), before, "every frame kept");
+    assert_eq!(dir.names(), ["film.mp4"]);
+    // WHAT ITS MUXER WOULD DROP is refused before a byte is written.
+    let bytes = std::fs::read(&film).expect("read");
+    let refused = |edits: &[Edit]| super::apply_within(&film, stamp, edits, &tools, &watch, 0);
+    assert_eq!(
+        refused(&[Edit::Set {
+            field: Field::Isrc,
+            value: "BRABC2400001".to_owned(),
+        }]),
+        Err(Why::NoFieldIn {
+            field: Field::Isrc,
+            format: TagFormat::Mp4
+        })
+    );
+    assert!(matches!(
+        refused(&[Edit::Cover(CoverEdit::Remove)]),
+        Err(Why::TooBig { .. })
+    ));
+    assert!(matches!(
+        refused(&[Edit::SetTag {
+            origin: Origin::Lofty {
+                format: TagFormat::Mp4
+            },
+            name: "MOOD".to_owned(),
+            value: "calm".to_owned(),
+        }]),
+        Err(Why::TooBig { .. })
+    ));
+    assert_eq!(
+        std::fs::read(&film).expect("read"),
+        bytes,
+        "nothing written"
+    );
+    // AN ITEM THE MUXER DOES NOT WRITE BACK — a freeform atom, put in by
+    // lofty while the file is small — refuses the remux before the copy,
+    // and the sheet says so on every field.
+    let stamp = apply(
+        &film,
+        stamp,
+        &[Edit::SetTag {
+            origin: Origin::Lofty {
+                format: TagFormat::Mp4,
+            },
+            name: "----:com.apple.iTunes:MOOD".to_owned(),
+            value: "calm".to_owned(),
+        }],
+        &tools,
+    )
+    .expect("a freeform atom");
+    let offered = super::super::read::sheet_within(&film, &tools, 0).expect("read");
+    assert_eq!(
+        offered.field(Field::Title).map(|r| r.can.clone()),
+        Some(Can::No(Why::RemuxWouldDrop))
+    );
+    let bytes = std::fs::read(&film).expect("read");
+    assert_eq!(
+        super::apply_within(
+            &film,
+            stamp,
+            &[Edit::Set {
+                field: Field::Title,
+                value: "Lost".to_owned(),
+            }],
+            &tools,
+            &watch,
+            0,
+        ),
+        Err(Why::RemuxWouldDrop)
+    );
+    assert_eq!(std::fs::read(&film).expect("read"), bytes);
+    assert_eq!(dir.names(), ["film.mp4"]);
+}
+
+/// FAILS IF: a tag of one Matroska track is refused as not global, or is
+/// written into the global tags, or into a track found by anything but its
+/// UID — `mkvpropedit --tags track:<n>:` takes the track's ORDER, which
+/// `mkvmerge -J` gives by UID — or the global tags are handed back when
+/// only a track's changed.
+#[test]
+fn a_matroska_track_s_tag_is_written_into_its_track_by_uid() {
+    if !Path::new("/bin/sh").exists() {
+        return;
+    }
+    let dir = Dir::new("mkv-track-tag");
+    let tools_dir = Dir::new("mkv-track-tag-tools");
+    let extract = script(
+        &tools_dir,
+        "mkvextract",
+        r#"cat > "$3" <<'XML'
+<?xml version="1.0"?>
+<Tags>
+  <Tag><Targets/>
+    <Simple><Name>ARTIST</Name><String>Kept</String></Simple>
+  </Tag>
+  <Tag><Targets><TrackUID>777</TrackUID></Targets>
+    <Simple><Name>BPS</Name><String>1</String></Simple>
+  </Tag>
+</Tags>
+XML"#,
+    );
+    // THE SECOND TRACK is 777: a film's picture first, then its sound.
+    let merge = script(
+        &tools_dir,
+        "mkvmerge",
+        r#"cat <<'JSON'
+{"container":{"properties":{}},"attachments":[],
+ "tracks":[{"id":0,"type":"video","properties":{"uid":555}},
+           {"id":1,"type":"audio","properties":{"uid":777}}]}
+JSON"#,
+    );
+    let record = tools_dir.path.join("args");
+    let propedit = script(
+        &tools_dir,
+        "mkvpropedit",
+        &format!(
+            r#"printf '%s\n' "$@" > '{rec}'
+prev=''
+for a in "$@"; do
+  if [ "$prev" = '--tags' ]; then
+    case "$a" in track:2:?*) cp "${{a#track:2:}}" '{rec}.xml';; esac
+  fi
+  prev="$a"
+done"#,
+            rec = record.display()
+        ),
+    );
+    let tools = Tools::none()
+        .with(Program::Mkvextract, extract)
+        .with(Program::Mkvmerge, merge)
+        .with(Program::Mkvpropedit, propedit);
+    let film = dir.file("c.mkv", &[0x1A, 0x45, 0xDF, 0xA3, 0, 0, 0, 0]);
+    let track = Origin::Matroska {
+        target: crate::sheet::Target::Track,
+        track: Some(777),
+    };
+    let edits = [
+        Edit::SetTag {
+            origin: track.clone(),
+            name: "BPS".to_owned(),
+            value: "256000".to_owned(),
+        },
+        Edit::SetTag {
+            origin: track,
+            name: "MOOD".to_owned(),
+            value: "calm".to_owned(),
+        },
+    ];
+    apply(&film, stamp_of(&film), &edits, &tools).expect("written");
+    let args = std::fs::read_to_string(&record).expect("mkvpropedit ran");
+    let args: Vec<&str> = args.lines().skip(1).collect();
+    assert_eq!(args.len(), 2, "the track's tags only: {args:?}");
+    assert_eq!(args[0], "--tags");
+    assert!(args[1].starts_with("track:2:"), "by its order: {args:?}");
+    let xml = std::fs::read_to_string(format!("{}.xml", record.display())).expect("the tags");
+    assert!(xml.contains("256000") && xml.contains("MOOD"), "{xml}");
+    assert!(
+        !xml.contains("ARTIST"),
+        "the global tags stay global: {xml}"
+    );
+    // A TRACK THE FILE DOES NOT HAVE is refused, the file as it was.
+    let gone = [Edit::SetTag {
+        origin: Origin::Matroska {
+            target: crate::sheet::Target::Track,
+            track: Some(999),
+        },
+        name: "BPS".to_owned(),
+        value: "1".to_owned(),
+    }];
+    assert_eq!(
+        apply(&film, stamp_of(&film), &gone, &tools),
+        Err(Why::NoSuchThing)
+    );
+    assert_eq!(dir.names(), ["c.mkv"]);
+}
+
+/// FAILS IF: with Matroska's own tools, a tag written into one track does
+/// not come back on that track — and on no other — read again. Run where
+/// `RONOCTUA_MKVPROPEDIT` (and its two siblings) and `RONOCTUA_FFMPEG` name
+/// the programs; skipped, and said, elsewhere.
+#[test]
+fn a_real_matroska_track_takes_a_tag_by_its_uid() {
+    let Some(ffmpeg) = fixture::ffmpeg() else {
+        return skipped("a real Matroska track's tag");
+    };
+    let tools = Tools::from_env();
+    if ![Program::Mkvextract, Program::Mkvmerge, Program::Mkvpropedit]
+        .iter()
+        .all(|p| tools.has(*p))
+    {
+        eprintln!("skipped: Matroska's tools are not named, so a track's tag was not tried");
+        return;
+    }
+    let dir = Dir::new("real-mkv-track");
+    let film = dir.path.join("film.mkv");
+    let target = film.to_string_lossy().into_owned();
+    let (ok, said) = fixture::ffmpeg_run(
+        &ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=25:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:duration=1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "flac",
+            "-metadata:s:a:0",
+            "MOOD=old",
+            &target,
+        ],
+    );
+    assert!(ok, "{said}");
+    let s = sheet(&film, &tools).expect("read");
+    let mood = s
+        .other
+        .iter()
+        .find(|t| t.name == "MOOD")
+        .expect("the sound's MOOD");
+    let Origin::Matroska {
+        track: Some(uid), ..
+    } = mood.origin
+    else {
+        panic!("not a track's: {:?}", mood.origin);
+    };
+    assert_eq!(mood.can, Can::Yes(Writer::Matroska), "{:?}", mood.can);
+    apply(
+        &film,
+        s.stamp,
+        &[Edit::SetTag {
+            origin: mood.origin.clone(),
+            name: "MOOD".to_owned(),
+            value: "calm".to_owned(),
+        }],
+        &tools,
+    )
+    .expect("written");
+    let s = sheet(&film, &tools).expect("read again");
+    // MATROSKA'S OWN ROWS: ffprobe's mirror of the same tag says so apart.
+    let moods: Vec<&crate::sheet::Tag> = s
+        .other
+        .iter()
+        .filter(|t| t.name == "MOOD" && matches!(t.origin, Origin::Matroska { .. }))
+        .collect();
+    assert_eq!(moods.len(), 1, "{moods:?}");
+    assert_eq!(moods[0].value, TagValue::Text("calm".to_owned()));
+    assert!(matches!(
+        moods[0].origin,
+        Origin::Matroska { track: Some(u), .. } if u == uid
+    ));
+    assert_eq!(dir.names(), ["film.mkv"]);
+}
+
+/// FAILS IF: a FLAC whose every field and tag is taken out is written by
+/// lofty — which cannot write the empty comment, and whose draft was thrown
+/// away as "could not be written" — or needs a program to be emptied,
+/// instead of its blocks being written here, every frame byte as it was.
+#[test]
+fn emptying_a_flac_needs_no_program() {
+    let dir = Dir::new("flac-empty-no-ffmpeg");
+    let file = dir.file("song.flac", &fixture::flac());
+    let tools = Tools::none();
+    // ONE FIELD, which lofty writes — and then nothing.
+    apply(
+        &file,
+        stamp_of(&file),
+        &[Edit::Set {
+            field: Field::Title,
+            value: "Only".to_owned(),
+        }],
+        &tools,
+    )
+    .expect("a title");
+    let s = sheet(&file, &tools).expect("read");
+    let mut edits: Vec<Edit> = s
+        .fields
+        .iter()
+        .filter(|r| r.value.is_some())
+        .map(|r| Edit::Clear { field: r.field })
+        .collect();
+    edits.extend(
+        s.other
+            .iter()
+            .filter(|t| matches!(t.origin, Origin::Lofty { .. }) && t.can.can())
+            .map(|t| Edit::RemoveTag {
+                origin: t.origin.clone(),
+                name: t.name.clone(),
+            }),
+    );
+    assert!(!edits.is_empty(), "the fixture has something to take out");
+    let frames = |file: &Path| {
+        let bytes = std::fs::read(file).expect("read");
+        let mut f = File::open(file).expect("open");
+        let at = native::flac_front(&mut f).expect("a FLAC").frames_at;
+        bytes[usize::try_from(at).expect("small")..].to_vec()
+    };
+    let before = frames(&file);
+    apply(&file, s.stamp, &edits, &tools).expect("emptied");
+    let s = sheet(&file, &tools).expect("read again");
+    assert!(s.fields.iter().all(|r| r.value.is_none()), "{:?}", s.fields);
+    assert!(
+        !s.other
+            .iter()
+            .any(|t| matches!(t.origin, Origin::Lofty { .. })),
+        "{:?}",
+        s.other
+    );
+    assert_eq!(frames(&file), before);
+    assert_eq!(dir.names(), ["song.flac"]);
+}
+
+/// FAILS IF: with Matroska's own tools, a chapter's title written does not
+/// come back on that chapter — and on no other — read again, or another
+/// container takes a chapter's title without a sentence. Run where Matroska's
+/// tools are named; skipped, and said, elsewhere.
+#[test]
+fn a_real_matroska_chapter_is_retitled() {
+    // NOT MATROSKA: refused by name, before anything is read.
+    let dir = Dir::new("chapter-elsewhere");
+    let song = dir.file("song.flac", &fixture::flac());
+    assert_eq!(
+        apply(
+            &song,
+            stamp_of(&song),
+            &[Edit::Chapter {
+                start_ms: 0,
+                title: "x".to_owned(),
+            }],
+            &Tools::none()
+        ),
+        Err(Why::ChaptersOnlyInMatroska {
+            container: Container::Flac
+        })
+    );
+    let Some(ffmpeg) = fixture::ffmpeg() else {
+        return skipped("a real Matroska chapter");
+    };
+    let tools = Tools::from_env();
+    if ![Program::Mkvextract, Program::Mkvpropedit, Program::Ffprobe]
+        .iter()
+        .all(|p| tools.has(*p))
+    {
+        eprintln!("skipped: Matroska's tools are not named, so a chapter was not tried");
+        return;
+    }
+    let dir = Dir::new("real-mkv-chapter");
+    let meta = dir.file(
+        "chapters.txt",
+        b";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\ntitle=One\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=500\nEND=1000\ntitle=Two\n",
+    );
+    let film = dir.path.join("film.mkv");
+    let (ok, said) = fixture::ffmpeg_run(
+        &ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:duration=1",
+            "-i",
+            &meta.to_string_lossy(),
+            "-map_chapters",
+            "1",
+            "-c:a",
+            "flac",
+            &film.to_string_lossy(),
+        ],
+    );
+    assert!(ok, "{said}");
+    let s = sheet(&film, &tools).expect("read");
+    assert_eq!(s.chapters.len(), 2, "{:?}", s.chapters);
+    assert_eq!(s.chapters_can, Some(Can::Yes(Writer::Matroska)));
+    let second = s.chapters[1].start_ms;
+    apply(
+        &film,
+        s.stamp,
+        &[Edit::Chapter {
+            start_ms: second,
+            title: "The second".to_owned(),
+        }],
+        &tools,
+    )
+    .expect("retitled");
+    let s = sheet(&film, &tools).expect("read again");
+    let titles: Vec<Option<&str>> = s.chapters.iter().map(|c| c.title.as_deref()).collect();
+    assert_eq!(titles, [Some("One"), Some("The second")]);
+    assert_eq!(dir.names(), ["chapters.txt", "film.mkv"]);
 }

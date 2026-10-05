@@ -1,0 +1,33 @@
+[package]
+name = "ronoctua-archive"
+description = "The one boundary with archive programs: 7zz, bsdtar and unrar by their store paths — list, extract, create, test, add, remove and convert."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# PROGRAMS, NOT LIBRARIES. `7zz` (zip and 7z, AES-256, split volumes, hidden
+# names), `bsdtar` (the tar family) and `unrar` (the free 7zz has no RAR
+# codec) are run by their store paths (`RONOCTUA_7ZZ`, `RONOCTUA_BSDTAR`,
+# `RONOCTUA_UNRAR`). `ronoctua-zip` stays the in-process zip READER (3MF,
+# office files, the atlas packs); this crate is what a person's archive goes
+# through. A password is never an argument: the child runs under `setsid`
+# and reads it on stdin, from a `0600` file whose PATH is all that travels.
+[dependencies]
+# The password read from that file is wiped from memory when it is dropped.
+zeroize.workspace = true
+# A format, a level and a refusal cross the transfer queue's socket as words
+# (`ronoctua-transfers`): the queue carries them, this crate names them.
+serde = { workspace = true }
+# HOLDING AND STOPPING a running program: `SIGSTOP`, `SIGCONT` and `SIGKILL`
+# to the process group `setsid` made (`run::watch`). Safe calls, and this
+# crate stays `forbid(unsafe_code)`.
+rustix = { workspace = true, features = [ "process" ] }
+
+[dev-dependencies]
+# The wire words of a format, a level and a refusal, read back in a test.
+serde_json.workspace = true
+
+[lints]
+workspace = true

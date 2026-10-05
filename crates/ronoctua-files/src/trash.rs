@@ -18,8 +18,21 @@
 //!
 //! `rename` fails with `EXDEV` between mounts. Copying instead would turn "move
 //! to trash" into forty gigabytes of I/O behind a gesture that promises to be
-//! instant — so a device with no trash of its own gets a refusal that names the
-//! problem, and the person chooses.
+//! instant — so a file on another volume goes to THAT volume's own trash
+//! ([`Bin::of_volume`]), which is what the spec's `$topdir` trash is for, and a
+//! bin on the wrong device is still refused by name.
+//!
+//! # A volume's trash, and what it costs the person
+//!
+//! `$topdir/.Trash/$uid` when the volume carries a shared `.Trash` the spec
+//! trusts — a real directory, not a link, with the sticky bit — and
+//! `$topdir/.Trash-$uid`, made `0700`, otherwise. Its notes say `Path=`
+//! RELATIVE to `$topdir`, as the spec asks: the same stick mounts under another
+//! name tomorrow, and an absolute path would restore into a folder that is no
+//! longer there. The price is the one a removable drive always charged:
+//! deleting writes the file back ONTO the stick, so its space is not freed until
+//! that trash is emptied — which the manager says when it happens and again
+//! when the stick is unmounted with something still in it.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -56,6 +69,58 @@ impl Bin {
         Some(Self::at(base.join("Trash")))
     }
 
+    /// The trash a VOLUME keeps for this user, at its mount point `topdir`.
+    ///
+    /// The spec's two places, in its order: `$topdir/.Trash/$uid` when the
+    /// administrator made a shared `.Trash` there that can be trusted — a
+    /// directory and not a link, sticky, so one user cannot take another's
+    /// files out of it — and `$topdir/.Trash-$uid` otherwise. Nothing is
+    /// created here; [`Bin::ensure`] makes the directory `0700` when a file is
+    /// first put in it.
+    #[must_use]
+    pub fn of_volume(topdir: &Path, uid: u32) -> Self {
+        let shared = topdir.join(".Trash");
+        let trusted =
+            std::fs::symlink_metadata(&shared).is_ok_and(|m| m.is_dir() && m.mode() & 0o1000 != 0);
+        if trusted {
+            Self::at(shared.join(uid.to_string()))
+        } else {
+            Self::at(topdir.join(format!(".Trash-{uid}")))
+        }
+    }
+
+    /// The mount point this bin is the trash of, when it is a VOLUME's.
+    ///
+    /// Read off the bin's own name, so the queue — which receives only a root —
+    /// knows the same thing the manager knew when it chose it: `.Trash-<n>`
+    /// sits in `$topdir`, and `<n>` inside a `.Trash` sits one level lower. The
+    /// home trash (`…/Trash`) has none.
+    #[must_use]
+    pub fn top(&self) -> Option<PathBuf> {
+        let name = self.root.file_name()?.to_str()?;
+        if name
+            .strip_prefix(".Trash-")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return self.root.parent().map(Path::to_path_buf);
+        }
+        let parent = self.root.parent()?;
+        (name.bytes().all(|b| b.is_ascii_digit())
+            && !name.is_empty()
+            && parent.file_name().is_some_and(|p| p == ".Trash"))
+        .then(|| parent.parent().map(Path::to_path_buf))
+        .flatten()
+    }
+
+    /// How many things are in it — nought for a bin that was never made.
+    ///
+    /// What unmounting asks: a stick that leaves with files in its own trash
+    /// leaves with its space still taken, and the person is told so.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        std::fs::read_dir(self.files()).map_or(0, Iterator::count)
+    }
+
     /// Where the files themselves go.
     #[must_use]
     pub fn files(&self) -> PathBuf {
@@ -74,6 +139,18 @@ impl Bin {
     ///
     /// When the directories cannot be created.
     pub fn ensure(&self) -> Result<()> {
+        // A VOLUME'S BIN IS THIS USER'S ALONE, and the spec says so: `0700`,
+        // made with that mode rather than chmodded after (for the reason the
+        // secrets' files give — between the two calls it would be readable).
+        // On a filesystem with no owners (vfat) the mount's own options decide,
+        // and the mode is what is asked for anyway.
+        if self.top().is_some() && std::fs::symlink_metadata(&self.root).is_err() {
+            use std::os::unix::fs::DirBuilderExt as _;
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&self.root)
+                .with_context(|| format!("create {}", self.root.display()))?;
+        }
         std::fs::create_dir_all(self.files())
             .with_context(|| format!("create {}", self.files().display()))?;
         std::fs::create_dir_all(self.info())
@@ -125,9 +202,14 @@ impl Bin {
         let chosen = self.free_name(&name);
         // THE NOTE FIRST. A file in `files/` with no note is a file nobody can
         // put back, because where it came from is written down only there.
+        // RELATIVE TO THE VOLUME, in a volume's bin — see the module's note.
+        let written = self
+            .top()
+            .and_then(|top| absolute.strip_prefix(&top).ok().map(Path::to_path_buf))
+            .unwrap_or_else(|| absolute.clone());
         let note = format!(
             "[Trash Info]\nPath={}\nDeletionDate={}\n",
-            encoded(&absolute.to_string_lossy()),
+            encoded(&written.to_string_lossy()),
             stamp(now, zone)
         );
         let note_at = self.info().join(format!("{chosen}.trashinfo"));
@@ -159,6 +241,47 @@ impl Bin {
                 note_at.display()
             )
         })?;
+        // A NOTE IS NOT TRUSTED TO CLIMB. A volume's notes come off a stick
+        // that may have been written anywhere, and `Path=../../home/ana/.config`
+        // joined to the mount point is a folder in somebody's home — made by
+        // `create_dir_all` below before the rename's `EXDEV` could stop
+        // anything. No note this manager or the spec writes has a `..` in it.
+        if origin
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            bail!(
+                "{} says the file came from {}, which climbs out with `..`",
+                note_at.display(),
+                origin.display()
+            );
+        }
+        // A RELATIVE PATH IS THE VOLUME'S, wherever it is mounted today. One
+        // in the home trash has no volume to be relative to, and is refused
+        // rather than restored into whatever directory this process is in.
+        let origin = if origin.is_absolute() {
+            // AND AN ABSOLUTE ONE IN A VOLUME'S NOTE stays on that volume: the
+            // spec allows one, and a stick's note naming `/home/ana/...` is a
+            // stick asking to write into the home.
+            if let Some(top) = self.top()
+                && !origin.starts_with(&top)
+            {
+                bail!(
+                    "{} says the file came from {}, outside the volume at {}",
+                    note_at.display(),
+                    origin.display(),
+                    top.display()
+                );
+            }
+            origin
+        } else {
+            self.top().map(|top| top.join(&origin)).with_context(|| {
+                format!(
+                    "{} says a relative path outside a volume's trash",
+                    note_at.display()
+                )
+            })?
+        };
         if origin.exists() {
             bail!("there is already something at {}", origin.display());
         }
@@ -285,6 +408,71 @@ impl Bin {
         }
         format!("{wanted}.{}", std::process::id())
     }
+}
+
+/// The mount point `path` lives under, out of the ones given — the longest
+/// that holds it.
+///
+/// The host hands the mount points it already knows (the disk border's), and
+/// this chooses among them: no `/proc/self/mountinfo` read here and no `st_dev`
+/// walk, which does not see a bind mount of the same filesystem (`AGENTS.md`).
+/// `None` when none of them holds it.
+#[must_use]
+pub fn topdir_of<'a>(path: &Path, mounts: &'a [PathBuf]) -> Option<&'a Path> {
+    mounts
+        .iter()
+        .filter(|m| path.starts_with(m))
+        .max_by_key(|m| m.components().count())
+        .map(PathBuf::as_path)
+}
+
+/// The volumes mounted directly under `media` — the folder udisks mounts a
+/// person's drives in (`/run/media/<user>`) — for the trash's expiry, which
+/// has no disk border to ask and needs none: a directory there that is the
+/// ROOT OF A MOUNT is a volume. Asked of the kernel (`STATX_ATTR_MOUNT_ROOT`)
+/// and not by comparing devices, which a bind mount of the same filesystem
+/// would fool (`AGENTS.md`); a kernel too old to say falls back to the device.
+///
+/// Empty when `media` is not there — no drive was ever mounted.
+#[must_use]
+pub fn volumes_under(media: &Path) -> Vec<PathBuf> {
+    let Ok(here) = std::fs::metadata(media) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(media) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let Ok(meta) = std::fs::symlink_metadata(p) else {
+                return false;
+            };
+            meta.is_dir() && (mount_root(p) == Some(true) || meta.dev() != here.dev())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Whether the kernel says `path` is where a mount begins. `None` when it
+/// could not be asked; `Some(false)` from a kernel that does not know the
+/// attribute.
+fn mount_root(path: &Path) -> Option<bool> {
+    use rustix::fs::{AtFlags, StatxAttributes, StatxFlags};
+    let got = rustix::fs::statx(
+        rustix::fs::CWD,
+        path,
+        AtFlags::SYMLINK_NOFOLLOW,
+        StatxFlags::TYPE,
+    )
+    .ok()?;
+    Some(
+        got.stx_attributes_mask
+            .contains(StatxAttributes::MOUNT_ROOT)
+            && got.stx_attributes.contains(StatxAttributes::MOUNT_ROOT),
+    )
 }
 
 /// What one emptying took.
@@ -607,6 +795,165 @@ mod tests {
         // would be worse than the overwrite it refused.
         assert_eq!(std::fs::read(&file).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_volume_keeps_its_own_trash_and_writes_where_from_relative_to_itself() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // A STICK, as far as this module can tell: a directory standing for a
+        // mount point, with no `.Trash` of the administrator's in it.
+        let stick = scratch("volume");
+        std::fs::create_dir_all(stick.join("fotos")).unwrap();
+        let photo = stick.join("fotos/praia.jpg");
+        std::fs::write(&photo, b"jpeg").unwrap();
+
+        let bin = Bin::of_volume(&stick, 1000);
+        assert_eq!(bin.root, stick.join(".Trash-1000"));
+        assert_eq!(bin.top().as_deref(), Some(stick.as_path()));
+        assert_eq!(bin.count(), 0, "a bin never made holds nothing");
+
+        let name = bin.put(&photo, 1_755_000_000, &Zone::utc()).unwrap();
+        let mode = std::fs::metadata(&bin.root).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "a volume's bin is this user's alone");
+        let note = std::fs::read_to_string(bin.info().join(format!("{name}.trashinfo"))).unwrap();
+        assert!(note.contains("Path=fotos/praia.jpg\n"), "{note}");
+        assert_eq!(bin.count(), 1);
+
+        // THE SAME STICK, MOUNTED ELSEWHERE: the note is relative, so it goes
+        // back where the stick is now — which an absolute path could not do.
+        let moved = scratch("volume-moved");
+        std::fs::remove_dir_all(&moved).unwrap();
+        std::fs::rename(&stick, &moved).unwrap();
+        let again = Bin::of_volume(&moved, 1000);
+        assert_eq!(again.restore(&name).unwrap(), moved.join("fotos/praia.jpg"));
+        assert_eq!(
+            std::fs::read(moved.join("fotos/praia.jpg")).unwrap(),
+            b"jpeg"
+        );
+        let _ = std::fs::remove_dir_all(&moved);
+    }
+
+    #[test]
+    fn a_shared_trash_is_used_only_when_it_is_sticky_and_real() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let top = scratch("shared");
+        std::fs::create_dir(top.join(".Trash")).unwrap();
+        // NOT STICKY: somebody else could empty it, so the spec says no.
+        assert_eq!(Bin::of_volume(&top, 7).root, top.join(".Trash-7"));
+        std::fs::set_permissions(top.join(".Trash"), std::fs::Permissions::from_mode(0o1777))
+            .unwrap();
+        let bin = Bin::of_volume(&top, 7);
+        assert_eq!(bin.root, top.join(".Trash/7"));
+        assert_eq!(bin.top().as_deref(), Some(top.as_path()));
+        // A LINK called `.Trash` is not trusted however it is marked.
+        let linked = scratch("shared-link");
+        std::os::unix::fs::symlink(top.join(".Trash"), linked.join(".Trash")).unwrap();
+        assert_eq!(Bin::of_volume(&linked, 7).root, linked.join(".Trash-7"));
+        // And the home trash is nobody's volume.
+        assert_eq!(Bin::at(top.join("share/Trash")).top(), None);
+        let _ = std::fs::remove_dir_all(&top);
+        let _ = std::fs::remove_dir_all(&linked);
+    }
+
+    #[test]
+    fn a_path_belongs_to_the_deepest_mount_that_holds_it() {
+        let mounts = vec![
+            PathBuf::from("/run/media/ana"),
+            PathBuf::from("/run/media/ana/STICK"),
+            PathBuf::from("/run/media/ana/STICK2"),
+        ];
+        assert_eq!(
+            topdir_of(Path::new("/run/media/ana/STICK/a/b.txt"), &mounts),
+            Some(Path::new("/run/media/ana/STICK"))
+        );
+        // A NAME THAT ONLY STARTS THE SAME is another directory: components,
+        // not characters.
+        assert_eq!(
+            topdir_of(Path::new("/run/media/ana/STICK22/x"), &mounts),
+            Some(Path::new("/run/media/ana"))
+        );
+        assert_eq!(topdir_of(Path::new("/home/ana/x"), &mounts), None);
+    }
+
+    #[test]
+    fn a_relative_note_in_the_home_trash_is_refused_and_not_restored_here() {
+        let root = scratch("relative-home");
+        let bin = Bin::at(root.join("Trash"));
+        bin.ensure().unwrap();
+        std::fs::write(bin.files().join("x"), b"x").unwrap();
+        std::fs::write(
+            bin.info().join("x.trashinfo"),
+            "[Trash Info]\nPath=x\nDeletionDate=2026-01-01T00:00:00\n",
+        )
+        .unwrap();
+        assert!(bin.restore("x").is_err());
+        assert!(bin.files().join("x").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sticks_note_that_climbs_out_of_the_stick_touches_nothing() {
+        // A STICK written somewhere else, whose notes say where its files came
+        // from — and one of them says a folder in somebody's home.
+        let root = scratch("climb");
+        let stick = root.join("STICK");
+        let home = root.join("home");
+        std::fs::create_dir_all(&stick).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let bin = Bin::of_volume(&stick, 1000);
+        bin.ensure().unwrap();
+        for (name, path) in [
+            ("up", "../home/.config/evil/x".to_owned()),
+            ("inside", "a/../../home/.config/evil/y".to_owned()),
+            ("absolute", format!("{}/.config/evil/z", home.display())),
+        ] {
+            std::fs::write(bin.files().join(name), b"x").unwrap();
+            std::fs::write(
+                bin.info().join(format!("{name}.trashinfo")),
+                format!("[Trash Info]\nPath={path}\nDeletionDate=2026-01-01T00:00:00\n"),
+            )
+            .unwrap();
+            assert!(bin.restore(name).is_err(), "{path} was restored");
+            assert!(
+                bin.files().join(name).exists(),
+                "{path}: the file left the trash"
+            );
+        }
+        assert!(
+            !home.join(".config").exists(),
+            "a folder was made outside the stick before anything refused"
+        );
+        // AND AN ABSOLUTE PATH ON THE STICK ITSELF is still one the spec allows.
+        std::fs::write(bin.files().join("ok"), b"x").unwrap();
+        std::fs::write(
+            bin.info().join("ok.trashinfo"),
+            format!(
+                "[Trash Info]\nPath={}/fotos/ok\nDeletionDate=2026-01-01T00:00:00\n",
+                stick.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(bin.restore("ok").unwrap(), stick.join("fotos/ok"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_a_directory_that_is_a_mount_is_a_volume() {
+        // NOTHING MOUNTED under a scratch folder: a plain directory there is
+        // not a volume, and a folder that is not there is no volumes at all.
+        let media = scratch("media");
+        std::fs::create_dir_all(media.join("LEFTOVER")).unwrap();
+        std::fs::write(media.join("file"), b"x").unwrap();
+        assert!(volumes_under(&media).is_empty());
+        assert!(volumes_under(&media.join("nowhere")).is_empty());
+        // AND ONE THAT IS: `/proc` is a mount of its own under `/`, on every
+        // Linux this runs on, the build sandbox included.
+        assert!(
+            volumes_under(Path::new("/")).contains(&PathBuf::from("/proc")),
+            "{:?}",
+            volumes_under(Path::new("/"))
+        );
+        let _ = std::fs::remove_dir_all(&media);
     }
 
     #[test]

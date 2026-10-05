@@ -32,7 +32,14 @@ fn main() -> Result<()> {
 
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     match mode_of(&args) {
-        Mode::Unit => serve::listen_on(&wire::socket_path()?, &Arc::new(Shared::fresh_one())),
+        Mode::Unit => {
+            // NO JOB IS RUNNING YET, so no password waiting for one is still
+            // wanted: whatever a queue that died left in its folder goes now.
+            ronoctua_transfers::secrets::sweep();
+            let shared = Arc::new(Shared::fresh_one());
+            on_stop(&shared);
+            serve::listen_on(&wire::socket_path()?, &shared)
+        }
         Mode::Open => open(),
         Mode::Browser => ronoctua_transfers::browser::serve_stdio(),
         Mode::Unknown(other) => {
@@ -40,6 +47,45 @@ fn main() -> Result<()> {
                 "I do not know how to do `{other}`; use `open <address>`, `browser`, or nothing"
             )
         }
+    }
+}
+
+/// How long a stop waits for the work to unwind: the unit's
+/// `TimeoutStopSec=5` (`nix/modules/transfers.nix`), less a second, so the
+/// queue exits by itself before systemd's `SIGKILL` leaves a piece behind.
+const UNWINDING: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// What `SIGTERM` and `SIGINT` do: stop every job, wait for the copies to
+/// unwind — a cancelled copy REMOVES what it wrote — and exit.
+///
+/// Without it the signal's default ended the process mid-file, and
+/// `systemctl --user stop` with a copy in flight left half a file in the
+/// destination (PENDING 0.2, closed). The handler is `signal-hook`'s
+/// iterator, which is safe to call: the `unsafe` of installing a handler is
+/// that crate's, and this one stays `forbid(unsafe_code)`.
+fn on_stop(shared: &Arc<Shared>) {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    let mut signals = match signal_hook::iterator::Signals::new([SIGTERM, SIGINT]) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "no stop handler: a stop mid-copy leaves the piece");
+            return;
+        }
+    };
+    let shared = Arc::clone(shared);
+    let spawned = std::thread::Builder::new()
+        .name("stop".into())
+        .spawn(move || {
+            if let Some(signal) = signals.forever().next() {
+                tracing::info!(signal, "told to stop; unwinding the work");
+                if !shared.wind_down(UNWINDING) {
+                    tracing::warn!("the work did not unwind in time; leaving anyway");
+                }
+                std::process::exit(0);
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread for the stop handler");
     }
 }
 

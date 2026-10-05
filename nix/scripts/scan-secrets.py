@@ -48,6 +48,11 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # Placeholders that are NOT personal data.
 EXEMPT = re.compile(
     r"(example\.(com|org)|example\.com|<[^>]*>|foo@bar|localhost|@\{|"
+    # THE RESERVED TOP-LEVEL DOMAIN (RFC 2606): `iptv.example`, `mail.example`
+    # are nobody's, by definition — the addresses a test of a masked source
+    # URL is written with (`user:pw@iptv.example`). The LAST label only:
+    # `mail.example.com.br` is somebody's.
+    r"@[A-Za-z0-9.-]*\.example(?![A-Za-z0-9.-])|"
     r"your-user|user@|noreply@|"
     # `user@1000.service` is a systemd UNIT name, and it appears in every
     # cgroup path. Without this exemption, any test that mentions a

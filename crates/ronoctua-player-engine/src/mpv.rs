@@ -2,7 +2,7 @@
 //!
 //! # Why by hand and not bindgen
 //!
-//! Twenty functions and four structs are used, and bindgen would bring
+//! Twenty-one functions and five structs are used, and bindgen would bring
 //! clang into the build for them. What keeps the hand-written half honest is
 //! the same arrangement `ronoctua-camera::v4l2` and the torrent FFI use: the
 //! SIZES are asserted at compile time here and measured against the pinned
@@ -62,6 +62,15 @@ struct RawEndFile {
     playlist_insert_num_entries: c_int,
 }
 
+/// `mpv_event_log_message`.
+#[repr(C)]
+struct RawLogMessage {
+    prefix: *const c_char,
+    level: *const c_char,
+    text: *const c_char,
+    log_level: c_int,
+}
+
 /// `mpv_render_param`.
 #[repr(C)]
 struct RawRenderParam {
@@ -89,6 +98,7 @@ struct RawStreamInfo {
 const _: () = assert!(std::mem::size_of::<RawEvent>() == 24);
 const _: () = assert!(std::mem::size_of::<RawProperty>() == 24);
 const _: () = assert!(std::mem::size_of::<RawEndFile>() == 32);
+const _: () = assert!(std::mem::size_of::<RawLogMessage>() == 32);
 const _: () = assert!(std::mem::size_of::<RawRenderParam>() == 16);
 const _: () = assert!(std::mem::size_of::<RawStreamInfo>() == 48);
 
@@ -105,6 +115,7 @@ pub const FORMAT_DOUBLE: c_int = 5;
 
 const EVENT_NONE: c_int = 0;
 const EVENT_SHUTDOWN: c_int = 1;
+const EVENT_LOG_MESSAGE: c_int = 2;
 const EVENT_START_FILE: c_int = 6;
 const EVENT_END_FILE: c_int = 7;
 const EVENT_FILE_LOADED: c_int = 8;
@@ -166,6 +177,7 @@ unsafe extern "C" {
     -> c_int;
     fn mpv_wait_event(ctx: *mut Handle, timeout: f64) -> *mut RawEvent;
     fn mpv_error_string(error: c_int) -> *const c_char;
+    fn mpv_request_log_messages(ctx: *mut Handle, min_level: *const c_char) -> c_int;
     fn mpv_stream_cb_add_ro(
         ctx: *mut Handle,
         protocol: *const c_char,
@@ -244,6 +256,17 @@ pub enum Event {
         id: u64,
         /// Its new value.
         value: Value,
+    },
+    /// A line of mpv's own log, at the level asked for
+    /// ([`Mpv::request_log_messages`]) or worse.
+    Log {
+        /// Which part of mpv said it: `cplayer`, `ytdl_hook`, `ffmpeg/demuxer`.
+        prefix: String,
+        /// How bad: `fatal`, `error`, `warn`, …
+        level: String,
+        /// What it said: one line, its line break at the end (client.h: a
+        /// message of several lines is handed over a line per event).
+        text: String,
     },
     /// Anything else.
     Other(i32),
@@ -334,6 +357,19 @@ impl Mpv {
         (code >= 0).then_some(out)
     }
 
+    /// Asks for mpv's own log from `level` (`error`: errors and the fatal)
+    /// up, as [`Event::Log`]s on this handle's events: what the
+    /// programs behind an address said when it would not play (yt-dlp, through
+    /// the `ytdl_hook`) is only ever said there.
+    pub fn request_log_messages(&self, level: &str) -> Result<()> {
+        let l = c(level)?;
+        // SAFETY: live handle, string outlives the call.
+        check(
+            unsafe { mpv_request_log_messages(self.raw(), l.as_ptr()) },
+            "asking for mpv's log",
+        )
+    }
+
     /// Asks for `name` to be reported under `id` whenever it changes.
     pub fn observe(&self, id: u64, name: &str, format: c_int) -> Result<()> {
         let n = c(name)?;
@@ -370,6 +406,25 @@ impl Mpv {
                 Event::EndFile {
                     eof: end.reason == END_FILE_EOF,
                     error,
+                }
+            }
+            EVENT_LOG_MESSAGE => {
+                // SAFETY: a LOG_MESSAGE event's data is an
+                // `mpv_event_log_message`, whose strings live until the next
+                // wait on this handle — copied out here.
+                let m = unsafe { &*raw.data.cast::<RawLogMessage>() };
+                let text = |p: *const c_char| {
+                    if p.is_null() {
+                        String::new()
+                    } else {
+                        // SAFETY: a non-null field is a NUL-terminated string.
+                        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+                    }
+                };
+                Event::Log {
+                    prefix: text(m.prefix),
+                    level: text(m.level),
+                    text: text(m.text),
                 }
             }
             EVENT_PROPERTY_CHANGE => {

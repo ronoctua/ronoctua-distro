@@ -23,6 +23,12 @@
   spaceFile,
   trayTableFile,
   categoryTableFile,
+  # THE BRAIN MODULES' GLYPH TOKENS (brain.md §3). They are in the icon table
+  # already — `nix/glyphgen.nix` merges and measures them — and this is only
+  # which of the table's names are a module's, for `icon::brain_mark`: the
+  # modeline draws a mark from a name that crossed the brain's socket, and
+  # only a module's own glyph may answer it. The flake's one loader's `glyphs`.
+  brainGlyphs,
 }:
 
 let
@@ -39,6 +45,8 @@ let
   # order, and the order is what decides which category wins. See the header of
   # `assets/icons/category-glyphs.nix`.
   categoriesJson = toJson "category-glyphs.json" categoryTableFile;
+
+  brainMarksJson = writeText "brain-marks.json" (builtins.toJSON (builtins.attrNames brainGlyphs));
 in
 stdenvNoCC.mkDerivation {
   pname = "ronoctua-tokens-rs";
@@ -59,6 +67,7 @@ stdenvNoCC.mkDerivation {
       --icons ${glyphdb.db}/icons.json \
       --tray ${trayJson} \
       --categories ${categoriesJson} \
+      --brain-marks ${brainMarksJson} \
       --out $out/tokens.rs \
       --out-wit $out/tokens.wit
     runHook postBuild
