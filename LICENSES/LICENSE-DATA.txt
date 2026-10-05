@@ -2,9 +2,9 @@ The world data this distribution ships
 ======================================
 
 The code in this repository is MIT (see LICENSE) and the typefaces are OFL
-(see LICENSE-OFL.txt). The geographic data is neither, and this file says what
-it is — because two of the three sources REQUIRE attribution and none of that
-may be silent.
+(see LICENSES/LICENSE-OFL.txt). The geographic data is neither, and this file
+says what it is — because two of the three sources REQUIRE attribution and
+none of that may be silent.
 
 What is shipped, and under what terms
 -------------------------------------

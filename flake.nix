@@ -2096,8 +2096,8 @@
 
               {
                 echo
-                echo "Licence: SIL Open Font License 1.1 (\`LICENSE-OFL.txt\` at the"
-                echo "repository root). The ronoctua-distro code is MIT; these files are not."
+                echo "Licence: SIL Open Font License 1.1 (\`LICENSES/LICENSE-OFL.txt\` in the"
+                echo "repository). The ronoctua-distro code is MIT; these files are not."
               } >> "$notes"
 
               echo

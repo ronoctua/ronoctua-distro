@@ -227,7 +227,9 @@ por isso ficou em `docs/PENDING.md` com o número. O check refuta só a direçã
 contraria "monorepo único" e a decisão foi tomada com número na mão.
 
 As duas licenças são declaradas aqui, e não num repositório separado: `LICENSE` (MIT) para o código,
-`LICENSE-OFL.txt` para os arquivos de fonte. Um repositório só para ser dono de um Release custaria
+na raiz, e `LICENSES/LICENSE-OFL.txt` para os arquivos de fonte; `LICENSES/LICENSE-DATA.txt` diz de
+quem são os dados geográficos. O `LICENSE` fica na raiz porque é lá que o GitHub e as ferramentas de
+pacote procuram a licença de um repositório; as outras moram na pasta. Um repositório só para ser dono de um Release custaria
 dois remotos, dois clones e um input a mais, e deixaria as licenças implícitas em vez de escritas.
 
 O Nix copia a árvore inteira do flake para o store a cada avaliação, e o path é endereçado por

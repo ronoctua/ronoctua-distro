@@ -11,9 +11,10 @@
 # NATURAL EARTH is public domain, and its own terms say so in as many words.
 # GEONAMES is **CC BY 4.0**, which REQUIRES attribution; the `credits` string
 # below travels inside the baked table, so a copy of the file can never be
-# separated from its licence, and it is also in `LICENSE-DATA.txt`, in the
-# header of this file and on the screen. GEOFABRIK's catalogue and the packs it
-# points at are **ODbL**, which becomes true on a machine that installs one.
+# separated from its licence, and it is also in `LICENSES/LICENSE-DATA.txt`,
+# in the header of this file and on the screen. GEOFABRIK's catalogue and the
+# packs it points at are **ODbL**, which becomes true on a machine that
+# installs one.
 #
 # This repository is MIT + OFL (invariant 2), so none of those obligations may
 # be silent — `atlas-credits-are-carried` reads all four places.

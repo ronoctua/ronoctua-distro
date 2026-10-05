@@ -18062,7 +18062,7 @@ let
     # would take away three of the four places it lives.
     bad = []
     places = {
-        "LICENSE-DATA.txt": pathlib.Path("${../LICENSE-DATA.txt}"),
+        "LICENSE-DATA.txt": pathlib.Path("${../LICENSES/LICENSE-DATA.txt}"),
         "assets/atlas.nix": pathlib.Path("${../assets/atlas.nix}"),
         "en-GB.ftl": pathlib.Path("${texts}/en-GB.ftl"),
         "pt-BR.ftl": pathlib.Path("${texts}/pt-BR.ftl"),

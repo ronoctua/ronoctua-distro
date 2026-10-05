@@ -16,7 +16,7 @@
   # The SIL Open Font License, redistributed alongside every face. The faces are
   # a derivative of Iosevka (OFL, Reserved Font Name) — this repository's own
   # code is MIT, and the two boundaries have to stay legible.
-  oflText ? ../LICENSE-OFL.txt,
+  oflText ? ../LICENSES/LICENSE-OFL.txt,
 }:
 
 let
