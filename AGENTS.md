@@ -50,13 +50,77 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    do Android. Nada disso é padrão da distro nem entra no repositório ou em `/etc`. As únicas
    escritas fora da home são a imagem do Android que a pessoa pede (uma unidade root estreita, em
    `/var/lib/waydroid`) e o store, escrito pelo daemon do Nix. O suporte (Flatpak, nix-flatpak,
-   AppImage, Waydroid, o índice de busca) é declarado no flake, e a sequência de atualização
-   continua sem instalar nada.
+   AppImage, Waydroid, o índice de busca) é declarado no flake, e a sequência de atualização não
+   instala nada além do que está declarado (a emenda de 2026-10-05, abaixo).
    Exceção aprovada no mesmo molde (2026-09-30): **as regras e a janela de segurança da pessoa, e os
    containers dela**. O firewall base continua declarado; as regras que a pessoa cria ficam em
    `/var/lib/ronoctua-security` e uma unidade declarada as aplica numa tabela nossa (`inet
-   ronoctua`); a janela de sudo sem senha é uma linha em `/run` que expira sozinha; imagens,
-   containers e volumes do Podman ficam só na home.
+   ronoctua`); a janela de sudo sem senha é uma linha numa pasta persistida do root
+   (`/var/lib/ronoctua-sudo`), que sobrevive ao reboot e acaba no prazo dela (o `NOTAFTER` do
+   próprio sudo) ou quando a pessoa a fecha — "sem prazo" não tem `NOTAFTER` —, e uma linha vencida
+   sai no boot e no prazo (emenda aprovada pelo dono, 2026-10-11); a lista das chaves de segurança
+   em que o `pam_u2f` confia é do root (`/var/lib/ronoctua-security/u2f_keys`), escrita só pela
+   porta do sudo; imagens, containers e volumes do Podman ficam só na home.
+   Exceção no mesmo molde (2026-10-05, aprovada no plano da leva): **o `/private` da pessoa**. Só
+   pelo gesto dela, pela porta do sudo, a unidade declarada `ronoctua-private-root` cria, abre,
+   tranca e muda uma imagem LUKS esparsa em `/var/lib/ronoctua-private` (o subvolume `@private`,
+   declarado) e a monta em `/private`; antes de dormir, a `ronoctua-private-lock`, declarada, a
+   tranca. Nada disso entra no flake, em `/etc`, no `fstab` ou no `crypttab`.
+
+   <!-- anchor: L03 -->
+   Emenda aprovada pelo dono (2026-10-05): **a máquina tem o próprio flake, e a pessoa declara**.
+   `/etc/nixos` é o flake da máquina, com a distro como input que segue a branch `release`
+   (`lib.machine`, `templates/machine`), e ele usa exatamente os pins que a distro testou
+   (`machine-uses-the-distro-pins`); o nome da pasta está escrito só em `nix/machine.nix`
+   (`machine-dir-has-one-name`). O que a pessoa declara (`person/software/*.json`) é dado, nunca
+   código Nix: `nix/modules/person.nix` põe os programas no perfil DELA (Home Manager, nix-flatpak
+   `--user`, o apk listado para o reconciliador), nunca no `systemPackages`, e a entrada que não
+   avalia é pulada e dita em `/etc/ronoctua/person-applied.json`. Um módulo do brain da pessoa com
+   metade NixOS só é importado aprovado pelo hash atual (`nix/person-hash.nix`).
+
+   <!-- anchor: L06 -->
+   Emenda aprovada pelo dono (2026-10-05): **as declarações da pessoa chegam à máquina como dados**.
+   Uma unidade root estreita (`ronoctua-person-apply.service`, que a pessoa inicia por uma regra
+   polkit de um verbo, uma unidade e um usuário) valida o JSON que a pessoa preparou em
+   `/run/ronoctua-person/staged` e o troca inteiro para `person/` no diretório da máquina: cada
+   documento reescrito na forma canônica, nunca código Nix; link, arquivo especial, formato mais
+   novo e tamanho acima do teto são recusados, e os dados velhos ficam. O único código que viaja
+   junto são os módulos do brain da pessoa, e o `module.nix` de um deles só entra num build
+   aprovado pela porta do sudo, no hash que o `nix/person-hash.nix` calcula da cópia da máquina
+   (`ronoctua-person-approve.service`, sem regra polkit). O que a atualização segura de uma entrada
+   quebrada fica em `local/held.json`, escrito só por root.
+
+   <!-- anchor: L13 -->
+   Exceção aprovada no mesmo molde (2026-10-05): **o Incus da pessoa**. O daemon, a ponte
+   `incusbr0`, o pool e o perfil `default` são declarados (`nix/modules/incus.nix`, só no perfil
+   `full`); as instâncias, imagens, snapshots e volumes que a pessoa cria ficam em `/var/lib/incus`
+   (persistido, num subvolume próprio), nunca no repositório nem em `/etc`. O daemon não busca nada
+   sozinho (`images.auto_update_interval = 0`), e toda chamada que o faz alcançar um remoto leva o
+   `Pass` de cada host que o cliente do remoto pergunta (`hosts_of`: o Docker Hub são três; cobra
+   `incus-asks-with-a-pass`). Estar no grupo `incus-admin` equivale a root, e a pessoa está nele por
+   decisão do dono.
+
+   <!-- anchor: L19 -->
+   Emenda aprovada pelo dono (2026-10-05): **a atualização instala o que está declarado, e nada além
+   disso**. O que a distro declara (`ronoctua.apps`) e o que a pessoa declara (`person/software/`,
+   os apps do Android inclusive) entram pelo rebuild e pelo reconciliador (`ronoctua-software
+   reconcile`, que só mexe no próprio registro); nenhum argumento da sequência nomeia o que
+   instalar, e o gerador continua recusando todo argumento que instala. A ordem é lei do gerador
+   (`steps.nix`, `system-update-laws-refuse`): a pessoa reúne antes da metade root, a metade root
+   migra, move só o input da distro (nunca com a máquina retida), verifica e aplica
+   (`ronoctua-machine apply`, sob o lock de root dos dados da pessoa), e a pessoa reconcilia e
+   publica por último, em toda saída. O input da distro só anda quando o rebuild pode ser tentado
+   (o mesmo piso de bateria e a mesma folga no disco), para a pasta da máquina nunca nomear uma
+   distro que não roda. Uma execução agendada espera por rede tarifada ou bateria abaixo do piso e
+   nunca pergunta; uma à mão pergunta com o "não" primeiro — abaixo do piso antes de começar, numa
+   rede tarifada quando o cérebro a segura — e o "sim" vale só para aquela execução.
+   Exceção no mesmo molde (2026-10-11, decisão do dono): **o cache binário da pessoa**. A escolha
+   (nome, chave, quem lê) é dado no `options.json` dela e o token de envio só na parte cifrada; o
+   único estado fora da home é o netrc do root para um cache privado
+   (`/var/lib/ronoctua-binary-cache/netrc`, `0600`), escrito só pelo gesto dela pela porta do sudo
+   (`binary-cache-netrc`) e pelo instalador, e removido quando o token ou o cache privado saem; o
+   netrc e o token nunca entram no flake, no store nem em `/etc`.
+
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
@@ -80,7 +144,9 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
     inquilino desenhado numa faixa, nunca dock nem taskbar: não lista nem lança programas. Não
     existe barra de cima, taskbar, menu iniciar, dock, ícone de desktop nem popup flutuante; tray,
     notificação e expansão são a mesma superfície crescendo, e a barra de alerta máximo (bateria
-    fraca) toma o lugar da faixa de notificação enquanto existe. Três exceções
+    fraca) toma o lugar da faixa de notificação enquanto existe. A barra do sudo (emenda do dono,
+    2026-10-11) é a mesma superfície crescendo acima da faixa e da modeline, como a barra de alerta,
+    e só existe enquanto um gesto de root é perguntado (`sudo_bar.rs`). Três exceções
     aprovadas: a sobreposição da captura (layer `overlay` que só existe enquanto se escolhe o que
     capturar e some antes de o arquivo ser escrito — `capture.rs`, 2026-09-26); as cortinas do
     redimensionador de tela, ferramenta de desenvolvimento (`LEADER / r`): duas superfícies na
@@ -126,9 +192,48 @@ nix build .#themes           gera os temas e o report.md (~20 s)
 nix fmt                      formata a árvore (Nix e Rust); nix fmt -- --check só confere
 ```
 
+<!-- anchor: L04 -->
+
+```
+nix run .#distro-pins        move os pins dos AppImages e apps Android da distro; o commit é à mão
+```
+
+Todo programa que a distro instala para a pessoa escolher usar — com lançador ou de terminal — é
+uma entrada `ronoctua.apps.<id>` (`nix/modules/distro-apps.nix`), escrita no módulo dono e **fora de
+qualquer `mkIf`** (a presença é o `when`), e não uma linha solta em `systemPackages`, que nenhuma
+recusa alcançaria. Linha solta só para o que não é escolha da pessoa: o que o NixOS ou a base já
+instalam em toda máquina, o equipamento de uma função da distro e o que só existe para um programa
+(a lista e o porquê estão no `docs/ARCHITECTURE.md`). O que segura um programa (variável, serviço,
+passo da atualização) segue `ronoctua.distroApps.installed.<id>`, não o interruptor do grupo. Um id
+publicado entra no livro-razão de `assets/distro-apps.nix` e só sai dele por `formerly` ou
+`retired`.
+
+<!-- anchor: L16 -->
+
+```
+nix run .#release            publica: gate, branch release (só para frente), ISO; nunca commita
+nix run .#fetch-iso          baixa o ISO da versão, confere cada parte e o inteiro, junta
+nix run .#adopt-machine      máquina do layout antigo → flake próprio (migrate + apply, com sudo)
+nix run .#apply-here         a máquina com o checkout no lugar do input; o lock fica como estava
+```
+
+A branch `release` é o que toda máquina segue: só o `.#release` a move, e o `.#release` é do dono,
+como o `.#gate`. A distro não tem cache binário: o ISO leva sempre a semente. O cache é da PESSOA
+(o Cachix dela): nome, chave e visibilidade no `options.json` (parte em claro, assinada), o token de
+envio só na parte cifrada (`config/binary-cache-keys/push-token`, `0600`), e só
+`nix/modules/binary-cache.nix` declara substituter, chave e netrc — antes do `cache.nixos.org`, a
+partir da cópia validada pelo root (cobra `binary-cache-declared-once`). O token nunca vai em
+argumento, no ambiente de um processo longo nem em log (cobra `binary-cache-token-never-prints`).
+Um cache público recebe só as saídas da própria distro, nunca um caminho da pessoa, um download ou um
+não livre — e por isso um programa não livre nunca é assado no workspace (`generated`): vai no
+`atRunTime`, senão o workspace inteiro fica fora de qualquer cache público (cobra
+`release-cache-holds-only-free-builds`).
+
 Tudo é app do flake — nunca justfile nem Makefile. Um passo que precise de instrução escrita
-deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~26,7 GiB) ou
-`"minimal"` (~6,9 GiB), com a tabela em `nix/modules/profile.nix`.
+deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~29 GiB) ou
+`"minimal"` (~11,8 GiB), com a tabela em `nix/modules/profile.nix`. Os dois trazem o trabalho na
+distro: o toolchain do devshell no store (`nix/toolchain.nix`, a fonte única), o rust e os agentes no
+PATH, o KVM e o `nix-direnv`.
 
 ## Como o sistema é montado
 
@@ -146,7 +251,10 @@ deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "fu
   estado: ele leva a geração, e a porta que mostra pede, fora do laço, quando ela anda.
 - **`ronoctua-software`**: não é daemon. É a biblioteca e a CLI dos programas da pessoa
   (`LEADER i`); o rodapé a usa para ler e buscar, e toda ordem que muda algo é um
-  `Work::Software` que a fila roda como filho, num escopo próprio da `app.slice`.
+  `Work::Software` que a fila roda como filho, num escopo próprio da `app.slice`. Instalar só para
+  a pessoa é DECLARAR (`Order::Declare`): instala na hora e grava a entrada no `declared.json` dela,
+  sob a pista da declaração, que a atualização constrói em cada máquina; remover de vez, recusar e
+  trazer de volta reconstroem a máquina (`ronoctua-update-apply.service`).
 - **`ronoctua-browser`**: o host de native messaging que o Chrome sobe enquanto existe uma janela
   quiosque. Não é daemon nosso: vive e morre com a porta da extensão. Ele conecta no rodapé, que é
   o servidor (`ronoctua[-dev]-browser.sock`), e manda o estado inteiro, um JSON por linha.
@@ -362,7 +470,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | yt-dlp: toda linha de comando dele | `ronoctua-ytdlp` |
 | keyd | `ronoctua-keyboards` |
 | arquivos de preferência | `ronoctua-store`, sobre o `ronoctua-xdg` |
-| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`) | `ronoctua-software` (cobra `one-software-boundary`) |
+| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`); o espelho da declaração da pessoa (`$XDG_STATE_HOME/ronoctua/person/`), a preparação dela para o root e o razão do reconciliador (`declared-applied.json`) | `ronoctua-software` (cobram `one-software-boundary` e `reconcile-touches-only-the-ledger`) |
 | o Chrome em execução: a extensão, o native messaging, o `Preferences` de um perfil e as janelas quiosque | `ronoctua-browser` |
 | o consentimento por host (`consent.json`) e o `Pass` de toda requisição | `ronoctua-consent` (cobram `the-network-waits-for-consent` e `network-asks-with-a-pass`) |
 | MyMemory, DeepL, LibreTranslate, o WordNet offline e o Wiktionary | `ronoctua-words` (cobra `words-ask-with-a-pass`) |
@@ -374,10 +482,133 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | systemd-resolved (`resolve1`) | `ronoctua-resolve` (cobra `one-resolve-boundary`) |
 | git | `ronoctua-git` (cobra `one-git-driver`) |
 | 7zz, bsdtar e unrar | `ronoctua-archive` (cobra `one-archive-driver`) |
-| `sudo` (a porta do sudo), o firewall da pessoa e as checagens online da segurança | `ronoctua-security` (cobra `sudo-door-is-one`) |
-| o repositório cifrado da configuração da pessoa | `ronoctua-belongings` |
+| `sudo` (a porta do sudo), o firewall da pessoa, a lista de chaves em que o `pam_u2f` confia, o `pamu2fcfg` (o cadastro de uma chave) e as checagens online da segurança | `ronoctua-security` (cobra `sudo-door-is-one`) |
+| o repositório cifrado da configuração da pessoa, e a identidade dela guardada pela sessão no keyring do kernel (`@u`, só no `unlock.rs`) | `ronoctua-belongings` (cobram `belongings-ask-with-a-pass` e `one-keyring-boundary`) |
 | o YouTube por HTTP simples (feeds e miniaturas) e o catálogo SQLite | `ronoctua-video-metrics` (cobra `one-sqlite-boundary`) |
 | as taxas de câmbio do BCE | `ronoctua-calc` (`rates.rs`; cobra `rates-ask-with-a-pass`) |
+| as identidades age pós-quânticas da pessoa (`AGE-SECRET-KEY-PQ-1…`, `age1pq1…`) e as assinaturas ML-DSA da pessoa; o `age` em si só no `ronoctua-seal`, filho da fila | `ronoctua-pq` (cobra `transfers-never-link-age`) |
+| `cryptsetup`, `losetup` e a imagem do `/private` | `ronoctua-private` (cobra `one-private-boundary`) |
+| os Releases da distro no GitHub e a escrita crua num pendrive | `ronoctua-stick` (cobra `one-stick-boundary`) |
+| o Incus (a API REST pelo socket e o CLI) | `ronoctua-incus` (cobra `one-incus-boundary`) |
+| o estado do Claude Code e do Codex, e o endpoint de uso da Anthropic | `ronoctua-llm` (cobra `one-llm-boundary`) |
+| `bootctl`, as variáveis EFI e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
+| os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
+| o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
+
+<!-- anchor: L01 -->
+
+**Cifra nova da pessoa é pós-quântica** (`ronoctua-pq`, o único que conhece o X-Wing): recipiente
+`age1pq1…`, estrofe `mlkem768x25519` do C2SP, que nunca viaja com um recipiente clássico nem é
+trocada por ele — o age recusa a mistura ao selar, o `ronoctua-seal` recusa um trabalho só de
+recipientes clássicos (`corrupt`) e o `ronoctua_pq::open` recusa a mistura ao abrir (`Why::Mixed`).
+Quem decide o formato são os vetores dos três textos que o definem e o `age` do Go ≥ 1.3, nos dois
+sentidos (cobram `pq-xwing-vectors` e `pq-age-interop`). A identidade (`AGE-SECRET-KEY-PQ-1…`) só
+existe num arquivo `0600` ou na memória que se apaga, e nada a imprime: nem o `Debug`, nem resposta
+nenhuma do `ronoctua-seal` (cobra `pq-identity-never-prints`). Assinatura nova da pessoa também é
+pós-quântica: ML-DSA-65 (`ronoctua_pq::sign`), a chave nascida com o repositório dos pertences e
+guardada no `key.age` ao lado da identidade; a semente segue a mesma regra da identidade, e o `Debug`
+diz só a impressão digital (cobra o mesmo check). Ninguém confia na chave pública que o repositório
+traz: a máquina confia na que root fixou (`local/signer.json`) ou na que a senha da pessoa abriu.
+A parte em claro dos pertences viaja assinada (um manifesto com o SHA-256 de cada arquivo e um
+contador que só cresce; os registros das máquinas ficam fora): o que chega validamente assinado entra
+sozinho, módulos do brain e `options.json` inclusive, e o resto fica retido com a frase do motivo,
+um contador menor também (cobram `belongings-tampered-plain-is-held`,
+`belongings-plain-rollback-is-refused`, `person-apply-refuses-unsigned-tree` e
+`brain-unsigned-module-never-compiled`).
+
+<!-- anchor: L02 -->
+
+**Transporte pós-quântico primeiro.** O TLS é o rustls sobre o `aws-lc-rs` com `prefer-post-quantum`,
+o provedor passado ao builder e nunca instalado como padrão do processo (`ronoctua_http::tls::provider`):
+o hello oferece `X25519MLKEM768` antes do X25519, e um host que não o conhece continua alcançado
+(cobra `tls-is-post-quantum-first`). O grupo que cada host acordou fica em `tls-groups.json`
+(`ronoctua_http::groups`, teto `tlsGroupsHosts` no `assets/cache.nix`). O `aws-lc-rs` é o único
+provedor das primitivas que o nosso código chama; `age` e o GCM de nonce de 16 bytes do ClipCascade
+são as exceções escritas (cobra `one-crypto-implementation`). O `Cargo.lock` lista o `ring` sem
+compilá-lo (dependência opcional fraca do `rustls-webpki`): pergunte ao `cargo tree`, não ao lock.
+O SSH do sistema e do ISO negocia pós-quântico primeiro (`assets/ssh.nix`), e um sshd nosso aceita,
+depois dos híbridos, só a lista que o NixOS recomenda (cobra `ssh-kex-is-pq-first`); todo sshd nosso
+tem só a chave de host ed25519 (cobra `no-rsa-host-key`). O transporte dos pertences é SÓ
+pós-quântico (`pq_only`): o SSH diz `-o KexAlgorithms=` (`ronoctua_git::PQ_KEX`) e o HTTPS roda o git
+sob o `OPENSSL_CONF` do `nix/pq-tls.nix`, só com os grupos híbridos; um servidor sem troca
+pós-quântica é `NotPostQuantum` antes de qualquer envio (cobram `belongings-ssh-is-pq-only` e
+`belongings-https-is-pq-only`). O OpenSSL ignora CALADO um `OPENSSL_CONF` que não consegue usar
+(ausente, relativo, grupo desconhecido): só a prova contra um servidor clássico mostra que o
+estreitamento está lá. O sntrup761 fica nas listas enquanto o GitHub depender dele.
+
+<!-- anchor: L05 -->
+
+Quem muda o sistema é o `ronoctua-machine apply` — o rebuild de resgate, a atualização e a central
+de programas —: constrói antes, troca depois e arma o ensaio de boot. Nenhum outro crate roda
+`bootctl`, escreve `LoaderEntry*`, mexe no perfil do sistema ou chama `switch-to-configuration`
+(cobra `one-bootctl-driver`); o rollback do resgate chama o `ronoctua-machine disarm`. A pasta da
+máquina descreve o sistema em execução: o que não fez um sistema novo devolve o lock do qual ele foi
+construído, que o sistema carrega em `/etc/ronoctua/machine.lock` (cobra
+`apply-reverts-the-lock-on-build-failure`). O bless pende do alvo padrão do sistema, nunca do
+`graphical.target`, que esta distro não alcança (cobra `update-apply-rule-is-narrow`). Um ensaio é
+julgado pelo primeiro boot depois do que o armou, pela identidade do boot e nunca pelo relógio;
+depois de um bless nenhum `LoaderEntryDefault` fica apontado, o sistema que não subiu não é
+construído de novo (`did-not-boot`), e a aparagem guarda o último bom e o ensaio (cobra
+`generations-keep-the-boot-trial`).
+
+<!-- anchor: L06 -->
+
+Quem escreve o `person/` da máquina, o `local/held.json`, o `local/approved.json` e o
+`local/signer.json` é o binário `ronoctua-person`, como root, e só ele: `apply` (a unidade, que só
+aceita o que a chave fixada assinou), `verify` (a atualização), `approve` e `pin` (a porta do sudo)
+— ler é de todos (cobra `one-person-boundary`). Todo arquivo da pessoa se lê com
+`ronoctua_person::parse` (formato mais novo é recusado antes dos campos) e se escreve com
+`ronoctua_person::to_json`; o que root abre debaixo de uma pasta da pessoa é aberto relativo a ela,
+com `O_NOFOLLOW` (cobram `person-apply-refuses-links` e `person-apply-rule-is-narrow`). Quem mexe
+nesses dados, ou constrói a partir deles, segura `ronoctua_person::root::Lock` — um arquivo `0600`
+de root, nunca uma pasta que qualquer um lê e trava —, e a atualização o segura do `verify` ao
+switch.
+
+<!-- anchor: L10 -->
+
+**Os pertences levam as chaves da pessoa, nunca o acesso a eles** (emenda aprovada pelo dono,
+2026-10-05). Os alvos pré-definidos (`targets` em `assets/belongings.nix`: `~/.ssh`, a configuração
+do git com `~/.config/Yubico/u2f_keys`, `~/.gnupg`, `~/.shellrc.local`, o `local.el` do Doom) viajam
+selados para toda máquina, e os privados voltam com os bits do dono só (`kept::kept_mode`, lido igual
+no walk, no push e no pull, senão todo sync empurraria um modo). A chave de implantação nunca viaja,
+sob nome nenhum (`crate::sift`). Um alvo nunca fica sobre arquivo do Home Manager (cobra
+`belongings-targets-avoid-home-manager`). A identidade que a senha abre fica, pela sessão, só no
+keyring do kernel; as portas leem o marcador `runtime/unlocked`, nunca o keyring, e o fim da sessão
+e o sono a esquecem.
+
+**Uma chave de segurança responde ao sudo, e só a ele** (decisão do dono, 2026-10-11). O `pam_u2f`
+está sempre declarado, sempre `sufficient` (a chave é uma alternativa à senha, que sempre vale),
+só no serviço `sudo` (todo outro nasce com ele desligado), com uma porta de terminal antes, um
+`origin`/`appid` fixo (`u2f::ORIGIN`, o mesmo do cadastro, para a chave valer em toda máquina) e a
+lista do root (`u2f::AUTHFILE`) como `authfile`; nunca `nouserok`. Ligar e desligar é a própria lista: sem linha da pessoa, ele não responde nada, e
+vale na hora, sem rebuild. Só o verbo `u2f-keys` da porta do sudo escreve essa lista; o cadastro
+(`u2f::Enrolment`) roda o `pamu2fcfg` como a pessoa, e o `u2f_keys` dela, que viaja nos pertences, é
+de onde as chaves vêm, nunca o que o PAM lê. O `options.json` não diz nada disso (cobra
+`pam-u2f-is-only-sufficient`). O dedo segue o mesmo molde: só sudo, só num terminal, só para quem
+está na lista.
+
+<!-- anchor: L12 -->
+
+**`/private` não se toca num laço de eventos.** Suspenso ao dormir com algo em uso (`luksSuspend`),
+quem o tocar espera no kernel até a senha retomá-lo — e a porta que perguntaria a senha é a que
+travou. Listar, fazer `stat` ou vigiar um caminho pergunta antes `ronoctua_private::may_touch`,
+que segue os links sem entrar no cofre (`~/Private -> /private` é o cofre) e lê o `status.json`
+(reescrito pelo root antes de suspender); dentro do cofre aberto, a leitura roda numa thread que
+o laço espera por um instante só (`ronoctua_files::listing`, `Withheld`).
+
+<!-- anchor: L13 -->
+
+<!-- anchor: L14 -->
+
+O `ronoctua-llm` só EMBRULHA a statusline de uma conta do Claude Code: muda um campo do
+`settings.json` no texto, guarda ao lado o valor da pessoa e o devolve byte a byte, no `unwrap` e
+ao remover a conta; a linha dela roda atrás da nossa com o mesmo stdin (cobra `statusline-chains`).
+O token OAuth é lido só no `usage.rs`, em memória zerada, e nunca renovado; o pedido que o leva é
+montado pelo `ronoctua-http` em memória medida antes e zerada (`request_wiped`), como todo pedido
+TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos ao
+`ronoctua_llm::watched`.
+
+<!-- anchor: L17 -->
 
 ## Regras de interface
 
@@ -436,6 +667,26 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - Perigo é cor, não outro desenho. A modeline em repouso é muda: uma marca só existe quando diz
   alguma coisa.
 
+<!-- anchor: L11 -->
+- Exceção aprovada pelo dono (2026-10-05): as marcas das contas LLM, `brain:agent-accounts/claude.<n>`
+  e `brain:agent-accounts/codex.<n>`, ficam na modeline também em repouso, uma por conta, e o tom diz
+  o uso. Elas declaram `resting = true`, e só as listadas em `assets/brain-resting-marks.nix` podem
+  declarar, nunca a de um módulo da pessoa (cobra `resting-marks-are-the-approved-ones`, que mantém
+  este item e aquele arquivo iguais). O núcleo cobra só o tom: descarta a marca publicada em
+  `Tone::Quiet` (a que diz só que está tudo bem) cujo manifesto não declara `resting`. Uma marca em
+  outro tom publicada sem ter o que dizer continua proibida pela regra acima, e nenhum check a pega.
+  Uma marca pode ter instâncias (`instances = N`, de 1 a 9, porque é um dígito; cobra
+  `mark-instances-are-bounded`): cada uma é um segmento `brain:<módulo>/<marca>.<n>`, lidas de 1 a N
+  da esquerda para a direita, o dígito vai um espaço depois do glifo, onde iria a contagem, e o
+  clique entrega o número ao comando de `MarkId::opening`.
+- Módulos do brain da pessoa (`$XDG_CONFIG_HOME/ronoctua/brain-modules/<id>/`, na parte em claro dos
+  pertences): o id é `my-` mais uma palavra kebab, e `my`/`my-…` são só dela, prefixos de chave
+  inclusive (cobra `brain-person-module-ids-are-prefixed`). A pasta precisa só de `manifest.nix`,
+  `module.rs` e um `.ftl` por idioma; a metade NixOS entra só aprovada pela porta do sudo
+  (`personNixosModules`), o `checks.nix` não roda, e o `brain-modules-are-sealed` não pergunta nada a
+  elas. O carregador recusa a pasta da pessoa sozinha, com frase (`personRefused`), nunca a avaliação
+  inteira (cobra `brain-person-modules-load`); a máquina compila com `withPersonModules`.
+
 ### Barras, ponteiro e rolagem
 
 - **Um controle é pego onde é desenhado.** Uma função diz onde ele ficou, e a pintura e o acerto do
@@ -473,9 +724,17 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - Opção que ainda não faz nada diz isso na tela, em vez de parecer funcionar.
 - Nada que o sistema faça sozinho pode perguntar: não há agente polkit na sessão, toda chamada leva
   `auth.no_user_interaction`, e nenhuma ação automática usa `sudo` ou `pkexec`. Um gesto da pessoa
-  que precisa de root passa pela porta do sudo, e só por ela: a senha digitada na nossa pergunta
-  secreta vai pelo stdin a `sudo -S` com o helper do store (`ronoctua_security::authority::run`,
-  feature `authority`, só do shell; cobra `sudo-door-is-one`).
+  que precisa de root, de qualquer tela, é perguntado na barra do sudo do rodapé (`sudo_bar.rs`,
+  2026-10-11) — a senha, um toque de chave ou um dedo —, e porta nenhuma pergunta a senha de root
+  na própria linha: a janela manda o gesto pelo soquete do rodapé, espera fora do laço e diz o
+  veredito na própria porta (rodapé morto é frase, `Why::NoFooter`). Ele passa pela porta do sudo,
+  e só por ela (`ronoctua_security::authority`, feature `authority`, só do shell, chamada só pelo
+  `sudo_bar.rs`; cobra `sudo-door-is-one`): a senha vai pelo stdin a `sudo -S`
+  sem terminal (`run`), ou a porta conversa com o sudo num terminal dela (`converse`), onde uma
+  chave de segurança ou um dedo respondem antes da senha. Ali ela lê só as próprias sentinelas — o
+  `-p` do sudo, o `cue_prompt` do `pam_u2f` e a linha do `pam_echo` antes do `pam_fprintd` —,
+  nunca o texto de um terceiro, e escreve a senha só depois da sentinela da senha (cobra
+  `sudo-door-reads-its-own-sentinels`).
 - **Nada fala com a rede antes de a pessoa permitir o host.** Toda requisição leva um `Pass` que só
   o `ronoctua-consent` cunha, a partir do `consent.json`; sem ele, a porta desenha a linha de
   consentimento (`consent_rows`) e não pergunta. Uma fonte que a pessoa configurou é o próprio
@@ -491,13 +750,15 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 - Todo comando tem id `kebab-case` e chave `cmd-<id>`; o registro recusa os dois divergirem. Os
   feitos do compositor são `wm-<nome>`. Uma sequência não pode ser comando e prefixo ao mesmo tempo
   (`keymap-no-collision` derruba o build). `LEADER :` alcança qualquer comando pelo nome.
-- Grupos da leader: `s` é o sistema (`s q` as saídas, `s e` a segurança, `s o` os containers, `s v`
-  os pertences, `s r` o rodapé), `w` é janela e buffer (são a mesma coisa, inv. 4), `m` é
-  miscelânea — o que não pertence a outro grupo (`m i`, os ícones) —, `c` é o clipboard (`c c`,
-  `c w`), `d` é o acesso rápido (`LEADER SPC` o abre flutuando), `=` a calculadora, `v` o
-  video-metrics, `/` é desenvolvimento (ferramentas para quem constrói a distro; hoje só `/ r`, o
-  redimensionador de tela) e `,` é o grupo do buffer em foco. O relance (`world-glance`) é `g`.
-  Numa janela de buffer, a tecla local `, r` é o acorde `C-r`; letra sozinha é texto.
+- Grupos da leader: `s` é o sistema (`s q` as saídas, `s e` a segurança — `s e o`/`s e l` o
+  `/private`, `s e c` cifrar, `s e q` o pós-quântico —, `s o` os containers, `s x` o Incus, `s z` o
+  pendrive do instalador, `s v` os pertences, `s r` o rodapé), `w` é janela e buffer (são a mesma
+  coisa, inv. 4), `m` é miscelânea — o que não pertence a outro grupo (`m i`, os ícones; `m a`, as
+  contas LLM) —, `c` é o clipboard (`c c`, `c w`), `d` é o acesso rápido (`LEADER SPC` o abre
+  flutuando), `=` a calculadora, `v` o video-metrics, `/` é desenvolvimento (ferramentas para quem
+  constrói a distro: `/ r`, o redimensionador de tela, e `/ c`, que clona este repositório) e `,` é
+  o grupo do buffer em foco. O relance (`world-glance`) é `g`. Numa janela de buffer, a tecla local
+  `, r` é o acorde `C-r`; letra sozinha é texto.
 - **Três conjuntos**, e a LEADER repetida na raiz anda por eles: `LEADER` é o padrão, `LEADER
   LEADER` o das janelas e `LEADER LEADER LEADER` a árvore inteira, e a seguinte volta ao padrão
   (`leader::Set::next`). Um toque de `Ctrl` (apertar e soltar sozinho, `leader::Tap`) na raiz gira
@@ -726,6 +987,10 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   E o switch sai com 4 se uma unidade que ELE iniciou falhou (as falhas antigas ele reseta antes): a
   `nixos-rebuild` chama de falha uma troca que aconteceu. Unidade que o switch dispara e que não pode
   derrubá-lo leva `-` no `ExecStart`.
+- Unidade que só um gesto da pessoa parte, e que não se reinicia sozinha, leva
+  `startLimitIntervalSec = 0`: o teto padrão (cinco partidas em dez segundos) não protege de laço
+  nenhum ali e recusa o sexto gesto como `start-limit-hit` (`ronoctua-stick-write`,
+  `ronoctua-person-apply`; cobram `stick-root-is-narrow` e `person-apply-rule-is-narrow`).
 - `st_dev` não vê montagem por bind do mesmo sistema de arquivos: quem apaga por árvore pergunta ao
   kernel onde começa uma montagem (`STATX_ATTR_MOUNT_ROOT`).
 - `pkill` e `pgrep` casam o próprio comando. `git checkout <arquivo>` apaga o que não foi commitado
@@ -739,6 +1004,10 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
   mensagem que ele imprimiria, passa num marco vazio.
 - `cargo test` precisa dos programas externos: sem as variáveis `RONOCTUA_*`, os testes de ffmpeg
   saem calados e não testam nada. Elas vão na derivação `tests`, nunca em `commonArgs`.
+- O programa de mentira de um teste é escrito por um `/bin/sh` filho, nunca por este processo: um
+  arquivo que ele tem aberto para escrita quando outra thread de teste faz `fork` fica com o filho
+  até o `exec`, e rodar o arquivo nessa janela é `ETXTBSY` ao acaso (`write_executable` no
+  `ronoctua-transfers` e no `ronoctua-software`).
 - Check que lê fonte abre com o `pyPrelude` de `tests/checks.nix` (cobra
   `checks-do-not-pass-by-coincidence`): `code_of`, `uncommented`, `hashless`, `body_of`, `scope`,
   `shut_at`, `floor`/`must` e `without_tests`. E declara a pergunta que faz: `# FILE-WIDE:`,
@@ -811,6 +1080,7 @@ nix/             derivações e apps do flake; modules/ (NixOS), scripts/ (gerad
                  installer/ (o ISO), disko/ (o disco); rust.nix passa os caminhos do store ao Rust;
                  dev.nix é o laço aninhado (reload.nix observa, footer-single.nix reinicia)
 tests/           checks.nix (os checks), *-vm.nix (testes de VM), quick.nix e slow.nix (as baterias)
+templates/       o flake de uma máquina (templates/machine), com a distro como input
 docs/            ARCHITECTURE, PENDING, DEVELOPMENT, INSTALL
 ```
 

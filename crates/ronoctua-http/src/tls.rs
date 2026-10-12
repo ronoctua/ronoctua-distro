@@ -24,6 +24,25 @@
 //! and when it is not there, this says so once and connects to nothing, which
 //! is a feature not working rather than a certificate being ignored.
 //!
+//! # What it sends is wiped
+//!
+//! Every request is written from `crate::request_wiped`: built in a buffer
+//! sized before it is filled and zeroed when it is dropped, because a header
+//! may carry a bearer token or an API key. Past that buffer the bytes are
+//! rustls's, which (0.23, read at the pinned version) seals each record IN
+//! PLACE in a buffer sized for it, so the plaintext is overwritten by the
+//! ciphertext rather than left behind.
+//!
+//! # The key is agreed POST-QUANTUM first
+//!
+//! The provider is `aws-lc-rs` with rustls's `prefer-post-quantum`: the hello
+//! offers the hybrid `X25519MLKEM768` first and plain X25519 beside it
+//! ([`provider`]). A host that knows the hybrid agrees it, and a recording of
+//! the conversation stays closed to a quantum computer; a host that does not
+//! is still reached, classically — preferred, never required. What each host
+//! agreed is kept for the security view ([`crate::groups`]), written once the
+//! handshake is done ([`heard`]).
+//!
 //! # What it does NOT do
 //!
 //! Redirects, proxies, keep-alive, compression, cookies. Redirects and gzip
@@ -38,6 +57,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
+use ronoctua_store::Store;
+
+use crate::groups::Groups;
 
 /// How long a host on the internet is given.
 ///
@@ -100,6 +122,34 @@ fn roots() -> Result<rustls::RootCertStore> {
     Ok(store)
 }
 
+/// The cryptography every connection is made with: `aws-lc-rs`, whose key
+/// exchange groups put `X25519MLKEM768` FIRST (rustls's `prefer-post-quantum`)
+/// and keep X25519 and the two NIST curves after it.
+///
+/// Named here and handed to each builder, never installed as the process's
+/// default: a default is one more thing another crate in the same process
+/// could set first, and then this would agree its keys with whatever that was.
+#[must_use]
+pub fn provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::aws_lc_rs::default_provider()
+}
+
+/// The client configuration of every connection, over `store`'s roots.
+///
+/// # Errors
+///
+/// The provider refuses the protocol versions — which would be a build of
+/// rustls without TLS 1.3, and is not a thing a machine can cause.
+fn config(store: rustls::RootCertStore) -> Result<rustls::ClientConfig> {
+    Ok(
+        rustls::ClientConfig::builder_with_provider(Arc::new(provider()))
+            .with_safe_default_protocol_versions()
+            .context("the TLS provider refused the protocol versions")?
+            .with_root_certificates(store)
+            .with_no_client_auth(),
+    )
+}
+
 /// A configuration, built once and shared by every connection.
 ///
 /// Building it reads and parses the whole bundle — about a hundred and fifty
@@ -108,17 +158,8 @@ fn shared() -> Result<Arc<rustls::ClientConfig>> {
     static ONCE: std::sync::OnceLock<Option<Arc<rustls::ClientConfig>>> =
         std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
-        // THE PROVIDER IS INSTALLED HERE, and exactly once. rustls 0.23 has no
-        // default when more than one is compiled in, and the error it gives
-        // then names neither the crate nor the call — it says a process-wide
-        // default was not set, from inside a builder.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        match roots() {
-            Ok(store) => Some(Arc::new(
-                rustls::ClientConfig::builder()
-                    .with_root_certificates(store)
-                    .with_no_client_auth(),
-            )),
+        match roots().and_then(config) {
+            Ok(config) => Some(Arc::new(config)),
             Err(e) => {
                 // ONCE, and loudly. It is not per-call: a machine with no
                 // bundle would otherwise write this line every half hour for
@@ -132,23 +173,89 @@ fn shared() -> Result<Arc<rustls::ClientConfig>> {
     .context("the system's certificate bundle could not be read")
 }
 
-/// An open TLS connection to `host:port`.
+/// What a connection is made WITH: the client's configuration (the roots and
+/// the provider) and the store each host's agreed group is kept in.
 ///
-/// The caller owns the framing from here: [`over_tls`] uses it for one call
-/// and closes, [`crate::ws`] uses it for as long as the socket lives.
+/// One for the machine ([`Client::machine`]), which every public path below
+/// uses. A test makes its own — a verifier for a server of its own, a file
+/// of its own — and drives the SAME paths with it, so what it proves is that
+/// a real request keeps its group, not that a function would if called.
+struct Client {
+    config: Arc<rustls::ClientConfig>,
+    kept: Store<Groups>,
+}
+
+impl Client {
+    /// The machine's: the system's roots, and the person's file.
+    ///
+    /// # Errors
+    ///
+    /// As [`shared`].
+    fn machine() -> Result<Self> {
+        Ok(Self {
+            config: shared()?,
+            kept: crate::groups::store(),
+        })
+    }
+}
+
+/// An open TLS connection to `host:port`, its handshake DONE — so a
+/// certificate that does not verify fails here, and what the host agreed is
+/// already kept ([`heard`]).
+///
+/// The caller owns the framing from here: [`crate::ws`] uses it for as long
+/// as the socket lives.
 ///
 /// # Errors
 ///
 /// The name is not a server name, it does not resolve, the host did not answer
-/// inside `patience`, or the certificate did not verify.
+/// inside `patience`, or the handshake failed (the certificate did not verify).
 pub fn connect(host: &str, port: u16, patience: Duration) -> Result<Stream> {
-    let config = shared()?;
+    connect_with(&Client::machine()?, host, port, patience)
+}
+
+/// [`connect`], with `client`.
+fn connect_with(client: &Client, host: &str, port: u16, patience: Duration) -> Result<Stream> {
+    let mut stream = open(client, host, port, patience)?;
+    stream
+        .conn
+        .complete_io(&mut stream.sock)
+        .with_context(|| format!("the TLS handshake with {host} failed"))?;
+    heard(client, &stream, host);
+    Ok(stream)
+}
+
+/// What the handshake of `stream` agreed with `host`, kept in `client`'s
+/// store ([`crate::groups`]). Called after the handshake is done: [`connect`]
+/// runs it to the end, and the one-call paths below call this right after
+/// their first write — the write that `StreamOwned` handshakes on. (Their
+/// test, `every_request_keeps_the_group_its_host_agreed`, fails if one of them
+/// asks before.)
+fn heard(client: &Client, stream: &Stream, host: &str) {
+    if let Some(group) = stream.conn.negotiated_key_exchange_group() {
+        crate::groups::record(
+            &client.kept,
+            host,
+            crate::groups::heard_of(group.name(), crate::groups::now_s()),
+        );
+    }
+}
+
+/// A TLS connection to `host:port` whose handshake has NOT begun: it starts
+/// on the first write, which is what lets [`fetch_abortable`] put the
+/// handshake under its abort. Every one-call path below opens with this and
+/// calls [`heard`] after that write.
+///
+/// # Errors
+///
+/// As [`connect`], but for the handshake.
+fn open(client: &Client, host: &str, port: u16, patience: Duration) -> Result<Stream> {
     // THE NAME IS CHECKED BEFORE A SOCKET IS OPENED. `ServerName` refuses a
     // URL, a bare scheme and an empty string, and refusing here means a
     // mistyped address never reaches the network at all.
     let name = rustls_pki_types::ServerName::try_from(host.to_owned())
         .with_context(|| format!("`{host}` is not a server name"))?;
-    let session = rustls::ClientConnection::new(config, name)
+    let session = rustls::ClientConnection::new(Arc::clone(&client.config), name)
         .context("the TLS session could not be started")?;
 
     let socket = reach(host, port, patience, Fence::Open)?;
@@ -283,9 +390,20 @@ fn reach(host: &str, port: u16, patience: Duration, fence: Fence) -> Result<TcpS
 /// The connection failed (see [`connect`]), the host answered more than
 /// [`MOST`] bytes, or what came back is not an HTTP response.
 pub fn over_tls(host: &str, port: u16, call: &crate::Call<'_>) -> Result<crate::Answer> {
-    let mut stream = connect(host, port, call.patience)?;
-    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+    over_tls_with(&Client::machine()?, host, port, call)
+}
+
+/// [`over_tls`], with `client`.
+fn over_tls_with(
+    client: &Client,
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+) -> Result<crate::Answer> {
+    let mut stream = open(client, host, port, call.patience)?;
+    std::io::Write::write_all(&mut stream, crate::request_wiped(call).as_bytes())
         .with_context(|| format!("could not send the request to {host}"))?;
+    heard(client, &stream, host);
     std::io::Write::flush(&mut stream).ok();
 
     let mut raw = Vec::new();
@@ -445,19 +563,32 @@ pub(crate) fn fetch_abortable(
     most: u64,
     abort: Option<&Abort>,
 ) -> Result<crate::Reply> {
-    let most = most.min(MOST_EVER);
     if abort.is_some_and(Abort::is_aborted) {
         return Err(aborted()).context(format!("the request to {host} was not sent"));
     }
-    let mut stream = connect(host, port, call.patience)?;
+    fetch_with(&Client::machine()?, host, port, call, most, abort)
+}
+
+/// [`fetch_abortable`], with `client`.
+fn fetch_with(
+    client: &Client,
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    most: u64,
+    abort: Option<&Abort>,
+) -> Result<crate::Reply> {
+    let most = most.min(MOST_EVER);
+    let mut stream = open(client, host, port, call.patience)?;
     // HELD BEFORE THE FIRST BYTE: `StreamOwned` handshakes on its first write,
     // so the handshake too is under the abort.
     let _held = abort
         .map(|a| a.hold(stream.get_ref()))
         .transpose()
         .with_context(|| format!("the request to {host} was not sent"))?;
-    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+    std::io::Write::write_all(&mut stream, crate::request_wiped(call).as_bytes())
         .with_context(|| format!("could not send the request to {host}"))?;
+    heard(client, &stream, host);
     std::io::Write::flush(&mut stream).ok();
     reply_read(&mut stream, host, most, abort)
 }
@@ -491,7 +622,7 @@ pub(crate) fn fetch_plain_abortable(
         .map(|a| a.hold(&stream))
         .transpose()
         .with_context(|| format!("the request to {host} was not sent"))?;
-    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+    std::io::Write::write_all(&mut stream, crate::request_wiped(call).as_bytes())
         .with_context(|| format!("could not send the request to {host}"))?;
     std::io::Write::flush(&mut stream).ok();
     reply_read(&mut stream, host, most, abort)
@@ -518,10 +649,23 @@ pub(crate) fn upload_abortable(
     most: u64,
     abort: Option<&Abort>,
 ) -> Result<crate::Reply> {
-    let most = most.min(MOST_EVER);
     if abort.is_some_and(Abort::is_aborted) {
         return Err(aborted()).context(format!("the upload to {host} was not sent"));
     }
+    upload_with(&Client::machine()?, host, port, call, sending, most, abort)
+}
+
+/// [`upload_abortable`], with `client`.
+fn upload_with(
+    client: &Client,
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    sending: crate::multipart::Sending<'_>,
+    most: u64,
+    abort: Option<&Abort>,
+) -> Result<crate::Reply> {
+    let most = most.min(MOST_EVER);
     let boundary = crate::multipart::boundary();
     let kind = crate::multipart::content_type(&boundary);
     let head_call = crate::Call {
@@ -529,17 +673,18 @@ pub(crate) fn upload_abortable(
         body: None,
         ..*call
     };
-    let head = crate::head_of(
+    let head = crate::head_wiped(
         &head_call,
         crate::multipart::length(&boundary, &sending.part),
     );
-    let mut stream = connect(host, port, call.patience)?;
+    let mut stream = open(client, host, port, call.patience)?;
     let _held = abort
         .map(|a| a.hold(stream.get_ref()))
         .transpose()
         .with_context(|| format!("the upload to {host} was not sent"))?;
     std::io::Write::write_all(&mut stream, head.as_bytes())
         .with_context(|| format!("could not send the upload's head to {host}"))?;
+    heard(client, &stream, host);
     crate::multipart::write(&mut stream, &boundary, sending)
         .with_context(|| format!("could not send the file to {host}"))?;
     reply_read(&mut stream, host, most, abort)
@@ -641,9 +786,23 @@ pub fn download(
     to: &mut dyn std::io::Write,
     heard: &mut dyn FnMut(Option<u64>, u64) -> bool,
 ) -> Result<crate::Reply> {
-    let mut stream = connect(host, port, call.patience)?;
-    std::io::Write::write_all(&mut stream, crate::request_of(call).as_bytes())
+    download_with(&Client::machine()?, host, port, call, most, to, heard)
+}
+
+/// [`download`], with `client`.
+fn download_with(
+    client: &Client,
+    host: &str,
+    port: u16,
+    call: &crate::Call<'_>,
+    most: u64,
+    to: &mut dyn std::io::Write,
+    heard: &mut dyn FnMut(Option<u64>, u64) -> bool,
+) -> Result<crate::Reply> {
+    let mut stream = open(client, host, port, call.patience)?;
+    std::io::Write::write_all(&mut stream, crate::request_wiped(call).as_bytes())
         .with_context(|| format!("could not send the request to {host}"))?;
+    self::heard(client, &stream, host);
     std::io::Write::flush(&mut stream).ok();
 
     // THE HEAD FIRST, byte by byte up to the blank line: it is small, and
@@ -926,5 +1085,300 @@ mod tests {
         // If this ever moves, the symptom is a machine where the browser works
         // and this does not — so the path is stated once and asserted.
         assert_eq!(ROOTS, "/etc/ssl/certs/ca-certificates.crt");
+    }
+
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
+    use rustls::{DigitallySignedStruct, NamedGroup, SignatureScheme};
+
+    /// A verifier that takes any certificate. These tests are about the KEY
+    /// EXCHANGE, and the server below has no certificate an authority signed;
+    /// everything else of the client is [`config`]'s, as every connection has
+    /// it.
+    #[derive(Debug)]
+    struct AnyCertificate(rustls::crypto::WebPkiSupportedAlgorithms);
+
+    impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
+        fn verify_server_cert(
+            &self,
+            _: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &rustls_pki_types::ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.0.supported_schemes()
+        }
+    }
+
+    /// The one key the test server signs with, whatever the hello says.
+    #[derive(Debug)]
+    struct OneKey(Arc<rustls::sign::CertifiedKey>);
+
+    impl rustls::server::ResolvesServerCert for OneKey {
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(Arc::clone(&self.0))
+        }
+    }
+
+    /// The configuration every connection has, but for the certificate check.
+    fn any_certificate() -> Arc<rustls::ClientConfig> {
+        let mut config = config(rustls::RootCertStore::empty()).unwrap();
+        config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(AnyCertificate(
+                provider().signature_verification_algorithms,
+            )));
+        Arc::new(config)
+    }
+
+    /// The client every connection is, but for the certificate check.
+    fn client() -> rustls::ClientConnection {
+        let name = rustls_pki_types::ServerName::try_from("quantum.example").unwrap();
+        rustls::ClientConnection::new(any_certificate(), name).unwrap()
+    }
+
+    /// A server agreeing keys only from `groups`, in that order of its own
+    /// preference — the hosts out there, from the newest to the oldest.
+    fn server(
+        groups: Vec<&'static dyn rustls::crypto::SupportedKxGroup>,
+    ) -> rustls::ServerConnection {
+        rustls::ServerConnection::new(server_config(groups)).unwrap()
+    }
+
+    /// [`server`]'s configuration.
+    fn server_config(
+        groups: Vec<&'static dyn rustls::crypto::SupportedKxGroup>,
+    ) -> Arc<rustls::ServerConfig> {
+        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+        provider.kx_groups = groups;
+        let pkcs8 = aws_lc_rs::signature::EcdsaKeyPair::generate_pkcs8(
+            &aws_lc_rs::signature::ECDSA_P256_SHA256_ASN1_SIGNING,
+            &aws_lc_rs::rand::SystemRandom::new(),
+        )
+        .unwrap();
+        let key = provider
+            .key_provider
+            .load_private_key(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                pkcs8.as_ref().to_vec(),
+            )))
+            .unwrap();
+        let certified = rustls::sign::CertifiedKey::new(
+            vec![CertificateDer::from(b"no authority signed this".to_vec())],
+            key,
+        );
+        Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(OneKey(Arc::new(certified)))),
+        )
+    }
+
+    /// Bytes from one side to the other, until both have finished.
+    fn handshake(client: &mut rustls::ClientConnection, server: &mut rustls::ServerConnection) {
+        // A MACRO, because the two ends are two types that share their
+        // methods without sharing a trait.
+        macro_rules! carry {
+            ($from:expr, $to:expr) => {{
+                let mut wire = Vec::new();
+                while $from.wants_write() {
+                    $from.write_tls(&mut wire).unwrap();
+                }
+                let mut rest = wire.as_slice();
+                while !rest.is_empty() {
+                    $to.read_tls(&mut rest).unwrap();
+                    $to.process_new_packets().unwrap();
+                }
+            }};
+        }
+        for _ in 0..16 {
+            if !client.is_handshaking() && !server.is_handshaking() {
+                return;
+            }
+            carry!(client, server);
+            carry!(server, client);
+        }
+        panic!("the handshake did not finish");
+    }
+
+    /// FAILS IF: the hello does not offer the hybrid FIRST, a host that knows
+    /// it does not end up agreeing it, or a host that does not know it is no
+    /// longer reached — the three halves of "post-quantum first, never
+    /// required". Run on its own by the `tls-is-post-quantum-first` check.
+    #[test]
+    fn the_hello_offers_the_hybrid_first_and_a_classical_host_is_still_reached() {
+        use rustls::crypto::aws_lc_rs::kx_group;
+
+        // FIRST IN THE OFFER, before X25519 — `prefer-post-quantum`.
+        let offered: Vec<NamedGroup> = provider().kx_groups.iter().map(|g| g.name()).collect();
+        assert_eq!(
+            offered.first(),
+            Some(&NamedGroup::X25519MLKEM768),
+            "{offered:?}"
+        );
+        assert!(offered.contains(&NamedGroup::X25519), "{offered:?}");
+
+        // A HOST THAT KNOWS IT agrees it: TLS 1.3, the hybrid, kept as such.
+        let mut c = client();
+        let mut s = server(rustls::crypto::aws_lc_rs::default_provider().kx_groups);
+        handshake(&mut c, &mut s);
+        assert_eq!(c.protocol_version(), Some(rustls::ProtocolVersion::TLSv1_3));
+        let agreed = c.negotiated_key_exchange_group().map(|g| g.name());
+        assert_eq!(agreed, Some(NamedGroup::X25519MLKEM768));
+        let kept = crate::groups::heard_of(NamedGroup::X25519MLKEM768, 1);
+        assert!(kept.post_quantum && kept.group == "X25519MLKEM768");
+
+        // A HOST THAT DOES NOT is still reached, classically — and said so.
+        let mut c = client();
+        let mut s = server(vec![kx_group::X25519]);
+        handshake(&mut c, &mut s);
+        let agreed = c.negotiated_key_exchange_group().map(|g| g.name());
+        assert_eq!(agreed, Some(NamedGroup::X25519));
+        assert!(!crate::groups::heard_of(NamedGroup::X25519, 1).post_quantum);
+
+        // AND ONE THAT KNOWS NEITHER share the hello carried asks for another
+        // (a retry), and is reached too.
+        let mut c = client();
+        let mut s = server(vec![kx_group::SECP384R1]);
+        handshake(&mut c, &mut s);
+        let agreed = c.negotiated_key_exchange_group().map(|g| g.name());
+        assert_eq!(agreed, Some(NamedGroup::secp384r1));
+    }
+
+    /// A TLS server of this test's own on the loopback that knows the hybrid,
+    /// for ONE connection: it reads a request's head and the body the head
+    /// announces, answers `ok` and closes — or, for `connect`, only finishes
+    /// the handshake.
+    fn serving(answers: bool) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::Write as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let config = server_config(rustls::crypto::aws_lc_rs::default_provider().kx_groups);
+        let thread = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let session = rustls::ServerConnection::new(config).unwrap();
+            let mut tls = rustls::StreamOwned::new(session, socket);
+            if !answers {
+                let _ = tls.conn.complete_io(&mut tls.sock);
+                return;
+            }
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                if !matches!(tls.read(&mut byte), Ok(1)) {
+                    return;
+                }
+                head.push(byte[0]);
+            }
+            let length = String::from_utf8_lossy(&head)
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .map_or(0, |(_, value)| value.trim().parse::<usize>().unwrap());
+            let mut body = vec![0u8; length];
+            tls.read_exact(&mut body).unwrap();
+            tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+            tls.conn.send_close_notify();
+            let _ = tls.flush();
+        });
+        (port, thread)
+    }
+
+    /// One way of asking the test's server, with a client.
+    type Request<'a> = dyn Fn(&Client, u16) -> Result<()> + 'a;
+
+    /// FAILS IF: a request that really goes out — any of the five ways this
+    /// crate speaks TLS — does not keep the group its host agreed. The paths
+    /// are the PRODUCT's (`connect`, `over_tls`, `fetch`, `upload`,
+    /// `download`), driven with a client that trusts the test's server and
+    /// a file of the test's own; a path that asked for the group before its
+    /// handshake ran would get none, keep nothing, and say nothing — only
+    /// this sees that.
+    #[test]
+    fn every_request_keeps_the_group_its_host_agreed() {
+        let host = "127.0.0.1";
+        let call = crate::Call::new("GET", "/", host);
+        let ways: [(&str, &Request<'_>); 5] = [
+            ("connect", &|c, port| {
+                connect_with(c, host, port, PATIENCE).map(drop)
+            }),
+            ("over_tls", &|c, port| {
+                over_tls_with(c, host, port, &call).map(drop)
+            }),
+            ("fetch", &|c, port| {
+                fetch_with(c, host, port, &call, MOST, None).map(drop)
+            }),
+            ("upload", &|c, port| {
+                let bytes = b"a file";
+                let sending = crate::multipart::Sending {
+                    part: crate::multipart::Part {
+                        field: "file",
+                        filename: "a.txt",
+                        content_type: "text/plain",
+                        length: bytes.len() as u64,
+                    },
+                    file: &mut &bytes[..],
+                    sent: &mut |_, _| true,
+                };
+                upload_with(c, host, port, &call, sending, MOST, None).map(drop)
+            }),
+            ("download", &|c, port| {
+                let mut to = Vec::new();
+                download_with(c, host, port, &call, MOST, &mut to, &mut |_, _| true)?;
+                assert_eq!(to, b"ok");
+                Ok(())
+            }),
+        ];
+        for (way, request) in ways {
+            let dir = std::env::temp_dir()
+                .join(format!("ronoctua-tls-kept-{}-{way}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let client = Client {
+                config: any_certificate(),
+                kept: Store::at(Some(dir.clone()), crate::groups::FILE),
+            };
+            let (port, server) = serving(way != "connect");
+            request(&client, port).unwrap_or_else(|e| panic!("{way}: {e:#}"));
+            server.join().unwrap();
+            let kept = client.kept.parsed().unwrap();
+            let agreed = kept
+                .hosts
+                .get(host)
+                .unwrap_or_else(|| panic!("{way} kept nothing: {kept:?}"));
+            assert_eq!(agreed.group, "X25519MLKEM768", "{way}");
+            assert!(agreed.post_quantum, "{way}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

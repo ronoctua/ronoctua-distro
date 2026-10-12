@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "id": "blender",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "noctua"
+    },
+    {
+      "id": "vlc",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "noctua"
+    },
+    {
+      "id": "zsh",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop"
+    },
+    {
+      "id": "gimp",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop"
+    },
+    {
+      "id": "htop",
+      "machines": [
+        "laptop"
+      ],
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop"
+    },
+    {
+      "id": "btop",
+      "machines": null,
+      "edited-at": "2026-10-05T08:00:00Z",
+      "edited-on": "noctua"
+    }
+  ]
+}

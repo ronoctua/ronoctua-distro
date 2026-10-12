@@ -1319,6 +1319,54 @@ impl Tools {
         let _ = std::fs::remove_dir_all(&staging);
         done
     }
+
+    /// A plain tar of `folder`, STREAMED: bsdtar started with the archive on
+    /// its standard output, which the caller reads (`child.stdout`) and waits
+    /// on — encrypt-anything's `name.tar.age`, sealed as it is written, so
+    /// the folder in clear never lands on a disk as one file.
+    ///
+    /// The archive holds the folder under its own name, links as links and
+    /// owners as numbers. The name crosses on stdin, NUL-ended
+    /// ([`Tools::create`]'s reason: an argument that starts with `@` or `-C`
+    /// is read as something else), and stdin is closed before this returns.
+    /// bsdtar's complaints go where this process's go (its standard error);
+    /// a member it could not read makes it exit with a failure at the end,
+    /// which the caller's `wait` sees. The child is in the caller's process
+    /// group, so whatever stops the caller's group stops it too.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NoTool`] without bsdtar, [`Why::Unsupported`] for a path that
+    /// names no folder inside another (`/`, `..`), [`Why::Unstartable`] when
+    /// the program does not start.
+    pub fn tar_stream(&self, folder: &Path) -> Result<std::process::Child, Refusal> {
+        let program = self.program(Tool::Bsdtar)?;
+        let unsupported = refused(Why::Unsupported, Some(Tool::Bsdtar));
+        let (parent, names) = one_folder(&[folder.to_path_buf()])?;
+        if names.iter().any(|n| n == "." || n == "..") {
+            return Err(unsupported);
+        }
+        let mut args: Vec<OsString> = ["-c", "-f", "-", "--numeric-owner", "-C"]
+            .map(OsString::from)
+            .to_vec();
+        args.push(parent.clone().into_os_string());
+        args.extend(["--null", "-T", "-"].map(OsString::from));
+        let mut listing = Vec::new();
+        for name in &names {
+            listing.extend_from_slice(name.as_encoded_bytes());
+            listing.push(0);
+        }
+        run::stream(
+            program,
+            &run::Call {
+                tool: Tool::Bsdtar,
+                args,
+                cwd: Some(&parent),
+                password: None,
+                listing: Some(&listing),
+            },
+        )
+    }
 }
 
 /// Moves the `members` out of `staging` (everything extracted) into a
@@ -2390,6 +2438,40 @@ mod tests {
             "the program finished while it was held: {:?}",
             asked.elapsed()
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a folder streamed as a tar comes back other than it went —
+    /// a name read as a switch or an archive (`-Cx.txt`, `@types`), a file
+    /// lost — or under another name than the folder's own; or if a name that
+    /// is no folder inside another is streamed at all.
+    #[test]
+    fn a_folder_streams_as_a_tar_that_extracts_to_itself() {
+        let _one = one_at_a_time();
+        let tools = tools();
+        let dir = place("stream");
+        let src = tree(&dir);
+        let mut child = tools.tar_stream(&src).unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut bytes).unwrap();
+        assert!(child.wait().unwrap().success());
+        let tar = dir.join("streamed.tar");
+        std::fs::write(&tar, &bytes).unwrap();
+        let out = dir.join("out");
+        tools.extract(&tar, &out, &[], None, &mut quiet).unwrap();
+        assert_eq!(files(&out.join("src")), files(&src));
+        assert!(
+            out.join("src/sp ace/empty").is_dir(),
+            "an empty folder was lost"
+        );
+        for nowhere in [Path::new("/"), Path::new("/home/..")] {
+            assert_eq!(
+                tools.tar_stream(nowhere).unwrap_err().why,
+                Why::Unsupported,
+                "{}",
+                nowhere.display()
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 }

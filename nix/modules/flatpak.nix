@@ -77,7 +77,12 @@ let
   };
 in
 {
-  imports = [ inputs.nix-flatpak.nixosModules.nix-flatpak ];
+  imports = [
+    inputs.nix-flatpak.nixosModules.nix-flatpak
+    # The registry, whose Flatpaks are installed below (see `browser.nix`
+    # for why it is imported here too).
+    ./distro-apps.nix
+  ];
 
   config = lib.mkIf cfg.flatpak {
     # `xdg.portal.enable` is asserted by the NixOS module, and it is already on
@@ -111,7 +116,12 @@ in
       ++ map (id: {
         appId = id;
         origin = flathub.name;
-      }) cfg.declaredFlatpaks;
+      }) cfg.declaredFlatpaks
+      # AND THE DISTRO'S OWN (`assets/distro-apps.nix`), the ones this
+      # machine carries and its person did not decline. Leaving this list
+      # is what uninstalls one (see `declaredFlatpaks`), so a decline
+      # reaches an app that is already installed.
+      ++ config.ronoctua.distroApps.flatpaks;
       # The Qt variables the session exports are the HOST's plugins; inside a
       # sandbox they name nothing and turn a dark Qt app light (see the header).
       # Written as `flatpak override --user --unset-env` writes them — the file

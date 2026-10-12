@@ -38,7 +38,10 @@ pub const KEY_PREFIX_OF: &str = "files-";
 pub enum Tier {
     /// Anyone at this keyboard. Everything that acts on your own files.
     Free,
-    /// polkit asks, once, and remembers for the session.
+    /// Root's, and the person's password is asked: on the asking door's own
+    /// line for a change of owner (the sudo door,
+    /// `ronoctua_security::authority`), and by `pkexec` inside the terminal
+    /// for a root terminal. Never by a polkit agent: the session has none.
     Password,
 }
 
@@ -82,6 +85,9 @@ pub enum Applies {
     /// `open` is offered: a member is not a file on the disk to rename,
     /// trash or chmod.
     InArchive,
+    /// Only for an age file (`.age`): what can be opened (the
+    /// encrypt-and-quantum package).
+    Sealed,
 }
 
 /// One row of the menu.
@@ -390,6 +396,30 @@ pub fn all_of() -> &'static [Action] {
             tier: Tier::Free,
             confirms: false,
         },
+        // --- encrypt anything ----------------------------------------
+        //
+        // `E` seals anything — a folder becomes `name.tar.age` — and `U`
+        // opens what is sealed; neither overwrites, neither deletes the
+        // original. Both through the queue (`Work::Seal`).
+        // ── anchor: L22 ──
+        Action {
+            id: "encrypt",
+            label: key::FILES_ENCRYPT,
+            does: key::FILES_DOES_ENCRYPT,
+            key: "E",
+            applies: Applies::Always,
+            tier: Tier::Free,
+            confirms: false,
+        },
+        Action {
+            id: "decrypt",
+            label: key::FILES_DECRYPT,
+            does: key::FILES_DOES_DECRYPT,
+            key: "U",
+            applies: Applies::Sealed,
+            tier: Tier::Free,
+            confirms: false,
+        },
         // INSIDE AN ARCHIVE: what the members can be asked. Taking one out is
         // the second irreversible row this menu has after `delete` and
         // `shred`, and it is armed the same way.
@@ -511,6 +541,12 @@ pub fn offered(
         }
         // ONLY WHERE THE CALLER SAYS: see `for_entry`.
         Applies::InArchive => false,
+        Applies::Sealed => {
+            !matches!(entry.opens_as(), Kind::Directory)
+                && std::path::Path::new(&entry.name)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("age"))
+        }
     }
 }
 

@@ -299,6 +299,45 @@ mod watchdog;
 mod system_photograph;
 
 mod player_translator;
+// THE 2026-10-05 WAVE'S MODULES, each package after its anchor.
+// ── anchor: L12 ──
+// THE /private VAULT, as the doors see it: the security centre's section,
+// the sidebar's row, the work for its root unit.
+mod vault;
+// ── anchor: L15 ──
+// `LEADER / c`: the distro's own repository, cloned into a folder.
+mod dev_clone;
+// THE 2026-10-11 WAVE: the person's binary cache, a page of the update's
+// view in both doors, and root's netrc through the footer's sudo door.
+mod binary_cache;
+// ── anchor: L17 ──
+// THE INSTALLER STICK: the view both doors draw, and its window (with the
+// window's camera).
+mod stick;
+mod stick_window;
+// ── anchor: L22 ──
+// THE SUDO BAR (2026-10-11): where every root gesture of every screen is
+// asked — the footer's strip above the modeline, and the gestures the views'
+// doors make through it.
+mod sudo_bar;
+// Encrypt anything: what the file manager and the security centre ask, and
+// the `Work::Seal` they hand the queue.
+mod seal;
+// ── anchor: L23 ──
+// INCUS (`LEADER s x`): the view, its words, its threads, its window and its
+// camera.
+mod incus;
+mod incus_feed;
+mod incus_photograph;
+mod incus_window;
+mod incus_words;
+// ── anchor: L24 ──
+// THE LLM ACCOUNTS (`LEADER m a`): the view both doors draw, its window, its
+// words and its camera.
+mod agents;
+mod agents_photograph;
+mod agents_window;
+mod agents_words;
 
 /// The layer-shell surface's namespace.
 ///
@@ -1027,6 +1066,46 @@ fn main() -> Result<()> {
         // draws.
         Some("belongings") => {
             return belongings_window::host_it().context("host the belongings");
+        }
+
+        // THE 2026-10-05 WAVE'S WINDOWS AND SUBCOMMANDS, each package after
+        // its anchor (`ronoctua-shell incus`, `stick`, `agents`…).
+        // ── anchor: L12 ──
+        // ── anchor: L15 ──
+        // ── anchor: L17 ──
+        // `ronoctua-shell stick [--drive <id>]` — the installer stick in a
+        // window (`LEADER s z w`), opened on a drive by the file manager's
+        // `W`. The SAME `stick::View` the footer's region draws.
+        Some("stick") => {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            let drive = match words.as_slice() {
+                [] => None,
+                [flag, id] if flag == "--drive" => Some(id.clone()),
+                _ => anyhow::bail!("usage: ronoctua-shell stick [--drive <id>]"),
+            };
+            return stick_window::host_it(drive).context("host the installer stick");
+        }
+        // ── anchor: L18 ──
+        // ── anchor: L22 ──
+        // ── anchor: L23 ──
+        // `ronoctua-shell incus [images|new]` — Incus in a window (`LEADER s x
+        // w`): the SAME `incus::View` the footer's region draws, over its own
+        // threads, opened on the instances, the images or a new instance's
+        // draft.
+        Some("incus") => {
+            let words: Vec<String> = std::env::args().skip(2).collect();
+            let opening = incus_window::Opening::of_words(&words)?;
+            return incus_window::host_it(opening).context("host Incus");
+        }
+        // ── anchor: L24 ──
+        // `ronoctua-shell agents [n]` — the LLM accounts in a window (`LEADER m
+        // a w`), on the account at place `n` when one is given. The SAME
+        // `agents::View` the footer's region draws.
+        Some("agents") => {
+            let place = std::env::args()
+                .nth(2)
+                .and_then(|n| n.parse::<usize>().ok());
+            return agents_window::host_it(place).context("host the LLM accounts");
         }
 
         // `ronoctua-shell opener <file>…` — what opening each file reaches,
@@ -1786,7 +1865,9 @@ pub fn segments(
     // profile and at its rung: each is a fact about the machine that stays
     // until it stops being true, and none of them is louder than the battery.
     // Drawn only while a module publishes one: at rest there is nothing here.
-    for mark in marks.brain {
+    // A mark's instances in the order they read, `1 2 3` from the left
+    // (`brain::from_the_edge`).
+    for mark in brain::from_the_edge(marks.brain) {
         out.push(Segment {
             id: mark.id,
             text: mark.text.clone(),
@@ -1974,6 +2055,8 @@ mod tests {
                 count,
                 act: None,
                 opens: None,
+                instance: 0,
+                label: None,
             })
             .collect();
         for columns in [20_u16, 40, 80, 200] {

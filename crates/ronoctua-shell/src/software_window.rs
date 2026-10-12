@@ -68,7 +68,15 @@ pub const APP_ID: &str = "br.ronoctua.software";
 
 /// The levels `ronoctua-shell software <word>` opens on, by their word — the
 /// command line's, so English.
-pub const LEVEL_WORDS: [&str; 5] = ["home", "trials", "maintenance", "android", "advanced"];
+pub const LEVEL_WORDS: [&str; 7] = [
+    "home",
+    "trials",
+    "maintenance",
+    "android",
+    "advanced",
+    "declared",
+    "declined",
+];
 
 /// The word before a search's own words: `software search <words>` opens on
 /// what a search for them finds — what typing them into the window would,
@@ -105,6 +113,8 @@ pub fn opening_of(said: &str) -> Option<Opening> {
         "maintenance" => Opening::Maintenance,
         "android" => Opening::Android,
         "advanced" => Opening::Advanced,
+        "declared" => Opening::Declared,
+        "declined" => Opening::Declined,
         _ => return None,
     })
 }
@@ -211,6 +221,7 @@ pub fn host_it(opening: Opening) -> Result<()> {
             ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
         readings.now = crate::software_feed::seconds_now();
         readings.home = context.as_ref().map(|c| c.roots.home.clone());
+        readings.belongings = ronoctua_belongings::places::Places::from_env();
 
         // A FILE NO SOURCE INSTALLS opens the first page and says so, rather
         // than a question whose yes the CLI would refuse.
@@ -274,8 +285,31 @@ fn watch_the_preferences(
     .ok()
 }
 
+/// The window over readings handed in whole — no thread reads, no queue
+/// hears, no file is watched: what the photograph's camera takes
+/// ([`camera`]). The view, the rows and every key are the window's own.
+pub(crate) fn photographed(
+    readings: Readings,
+    opening: Opening,
+    texts: &ronoctua_i18n::Texts,
+) -> Software {
+    let (view, errand) = View::fresh(opening, &readings, texts);
+    let (pasted_image, _) = channel::channel::<Kept>();
+    Software {
+        view,
+        readings,
+        feed: None,
+        pictures: None,
+        carrying: None,
+        cursor: 0,
+        first: vec![errand],
+        pasted_image,
+        _watch: None,
+    }
+}
+
 /// The window.
-struct Software {
+pub(crate) struct Software {
     view: View,
     /// The latest of every answer, handed to the view on every call.
     readings: Readings,
@@ -916,6 +950,407 @@ impl DataOfferHandler for Door<Software> {
         _: &mut DragOffer,
         _: DndAction,
     ) {
+    }
+}
+
+pub mod camera {
+    //! THE SOFTWARE CENTRE'S WINDOW IN A PNG — `ronoctua-shell photograph --door
+    //! software`.
+    //!
+    //! # Why a camera of its own
+    //!
+    //! What the window draws is a READING of the machine
+    //! (`ronoctua_software::state::read`): the person's programs, their
+    //! declaration, what the system reported about it, the distro's programs.
+    //! So the picture is taken over a ROOM laid out as a machine lays those out —
+    //! the person's roots (`home/`, `config/`, `data/`, `state/`, `cache/`,
+    //! `runtime/`, the footer camera's own layout, so one room serves both
+    //! doors), the system's launcher entries (`share/applications/`) and the
+    //! machine's side of the declaration (`sys/etc/ronoctua/…`,
+    //! `sys/run/ronoctua-person/…`) — read with no tools at all: nothing runs,
+    //! no list of a package manager is asked, and the photograph is the files.
+    //! What is the SAME is taken as it is: the production window
+    //! (`software_window`), driven through `door::Detached` down the path a key
+    //! and a pointer take, a frame composed by `door::compose`.
+    //!
+    //! # The other door
+    //!
+    //! The footer draws the same view's rows: `photograph --door footer --room
+    //! <the same room>`, with `RONOCTUA_SOFTWARE_SYSROOT=<room>/sys` and
+    //! `XDG_DATA_DIRS=<room>/share`, walked with `--leader --key i`.
+    //!
+    //! Usage: `ronoctua-shell photograph --door software --room <folder>
+    //! [options] [steps]`, `--help` for the list.
+
+    use anyhow::{Context as _, Result, bail, ensure};
+    use ronoctua_tokens as tokens;
+    use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
+
+    use crate::door::{Content as _, Detached, Ui};
+
+    const USAGE: &str = "\
+    usage: ronoctua-shell photograph --door software --room <folder> [options] [steps]
+
+      --room <folder>       a machine laid out under one folder: home/, config/,
+                            data/, state/ (state/ronoctua/person/ is the
+                            person's declaration), cache/, runtime/,
+                            share/applications/ (the system's launcher entries)
+                            and sys/ (sys/etc/ronoctua/person-applied.json,
+                            distro-apps.json, declared-android.json)   (required)
+      --host <name>         this machine's name             (default: noctua)
+      --belongings <folder> the person's belongings laid out as the belongings
+                            camera's `--places` (home/.config/ronoctua/,
+                            home/.local/state/ronoctua/belongings/repo/key.age,
+                            run/ronoctua-belongings/): a change of the
+                            declaration then asks their passphrase as a session
+                            with no identity kept does
+      --opening <words>     where the window opens, as `ronoctua-shell software`
+                            takes it: home, declared, declined, advanced, …
+                                                            (default: home)
+      --now <seconds>       the clock, in seconds since the epoch (default:
+                            1791201600)
+      --out <file>          where to write                  (default: software.png)
+      --columns <n>         the window's width, in cells    (default: 90)
+      --lines <n>           the height, in lines            (default: 32)
+      --language <id>       pt-BR or en-GB                  (default: pt-BR)
+      --theme <id>          a theme of assets/themes        (default: the default)
+      --scale <n>           physical px per logical         (default: 1)
+      --list                prints the frame instead of drawing it
+
+    Steps — walked in the order they appear:
+
+      --key <notation>      a key, as the keymap writes it: <down>, RET, C-d
+      --hover <col,line>    rests the pointer on a cell of the surface
+      --click <col,line>    a press and a release there";
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Step {
+        Key(ronoctua_keymap::Key),
+        Hover(u16, u16),
+        Click(u16, u16),
+    }
+
+    #[derive(Debug)]
+    struct Asked {
+        room: std::path::PathBuf,
+        host: String,
+        belongings: Option<std::path::PathBuf>,
+        opening: String,
+        now: u64,
+        out: std::path::PathBuf,
+        columns: u16,
+        lines: u16,
+        language: String,
+        theme: tokens::theme::Theme,
+        scale: u16,
+        list: bool,
+        steps: Vec<Step>,
+    }
+
+    /// Whatever `photograph --door software` was given, to its end.
+    pub fn taken(rest: &[String]) -> ! {
+        let line: Vec<String> = std::env::args().skip(2).collect();
+        let words = if line.ends_with(rest) {
+            line
+        } else {
+            rest.to_vec()
+        };
+        match parse(&words).and_then(|asked| shoot(&asked)) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("Error: {e:?}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    fn number<T>(flag: &str, raw: &str, range: std::ops::RangeInclusive<T>) -> Result<T>
+    where
+        T: std::str::FromStr + PartialOrd + std::fmt::Display + Copy,
+    {
+        let n: T = raw
+            .trim()
+            .parse()
+            .ok()
+            .with_context(|| format!("`{flag} {raw}` is not a whole number"))?;
+        ensure!(
+            range.contains(&n),
+            "`{flag} {n}` is out of range {}..={}",
+            range.start(),
+            range.end()
+        );
+        Ok(n)
+    }
+
+    fn cell_of(flag: &str, raw: &str) -> Result<(u16, u16)> {
+        let (c, l) = raw
+            .split_once(',')
+            .with_context(|| format!("`{flag}` wants `column,line`, not `{raw}`"))?;
+        Ok((number(flag, c, 0..=999)?, number(flag, l, 0..=999)?))
+    }
+
+    fn parse(words: &[String]) -> Result<Asked> {
+        let mut room = None;
+        let mut me = Asked {
+            room: std::path::PathBuf::new(),
+            host: "noctua".to_owned(),
+            belongings: None,
+            opening: "home".to_owned(),
+            now: NOW,
+            out: std::path::PathBuf::from("software.png"),
+            columns: 90,
+            lines: 32,
+            language: "pt-BR".to_owned(),
+            theme: tokens::theme::default_one(),
+            scale: 1,
+            list: false,
+            steps: Vec::new(),
+        };
+        let mut words = words.iter();
+        while let Some(flag) = words.next() {
+            let mut value = || {
+                words
+                    .next()
+                    .cloned()
+                    .with_context(|| format!("`{flag}` with no value"))
+            };
+            match flag.as_str() {
+                "--help" | "-h" => {
+                    println!("{USAGE}");
+                    std::process::exit(0);
+                }
+                "--door" => {
+                    let said = value()?;
+                    ensure!(
+                        said == "software",
+                        "`--door {said}` is not this camera's door"
+                    );
+                }
+                "--room" => room = Some(std::path::PathBuf::from(value()?)),
+                "--host" => me.host = value()?,
+                "--belongings" => me.belongings = Some(value()?.into()),
+                "--opening" => me.opening = value()?,
+                "--now" => me.now = number("--now", &value()?, 0..=u64::from(u32::MAX))?,
+                "--out" | "-o" => me.out = value()?.into(),
+                "--columns" => me.columns = number("--columns", &value()?, 1..=1000)?,
+                "--lines" => me.lines = number("--lines", &value()?, 1..=1000)?,
+                "--language" => me.language = value()?,
+                "--theme" => {
+                    let id = value()?;
+                    me.theme = tokens::theme::by_id(&id)
+                        .with_context(|| format!("unknown theme `{id}`"))?;
+                }
+                "--scale" => {
+                    let most = u16::try_from(ronoctua_render::MOST_SCALE).unwrap_or(1);
+                    me.scale = number("--scale", &value()?, 1..=most)?;
+                }
+                "--list" => me.list = true,
+                "--key" => {
+                    let notation = value()?;
+                    let key = ronoctua_keymap::Key::parse(&notation)
+                        .map_err(|e| anyhow::anyhow!("`--key {notation}` is not a key: {e}"))?;
+                    me.steps.push(Step::Key(key));
+                }
+                "--hover" => {
+                    let (c, l) = cell_of("--hover", &value()?)?;
+                    me.steps.push(Step::Hover(c, l));
+                }
+                "--click" => {
+                    let (c, l) = cell_of("--click", &value()?)?;
+                    me.steps.push(Step::Click(c, l));
+                }
+                other => bail!("unknown option `{other}`.\n\n{USAGE}"),
+            }
+        }
+        me.room = room.with_context(|| format!("`--room` is required.\n\n{USAGE}"))?;
+        Ok(me)
+    }
+
+    /// The roots of a room: the footer camera's layout, and the machine's side.
+    fn roots_of(room: &std::path::Path) -> ronoctua_software::Roots {
+        ronoctua_software::Roots {
+            home: room.join("home"),
+            config: room.join("config"),
+            data: room.join("data"),
+            state: room.join("state"),
+            cache: room.join("cache"),
+            runtime: Some(room.join("runtime")),
+            data_dirs: vec![room.join("share")],
+            system: ronoctua_software::System::of_machine(Some(&room.join("sys"))),
+        }
+    }
+
+    /// The clock a picture is taken at when none is given: one fixed
+    /// second, so two pictures of one room draw the same dates.
+    pub(crate) const NOW: u64 = 1_791_201_600;
+
+    /// The readings of a room, as the machine `host` reads it: the machine
+    /// as its files say it, with no program asked — what both doors are
+    /// photographed over (the footer's camera takes them by `--software`).
+    pub(crate) fn readings_of_room(
+        room: &std::path::Path,
+        host: &str,
+        now: u64,
+    ) -> Result<crate::software_feed::Readings> {
+        let roots = roots_of(room);
+        let ctx = ronoctua_software::Context {
+            tools: ronoctua_software::Tools::default(),
+            prefs: ronoctua_software::prefs::read(&roots.config),
+            rehearse: true,
+            roots,
+        };
+        let (trees, _) = crate::leader::default_of()?;
+        let mut r = crate::software_feed::Readings::fresh(
+            ctx.prefs.clone(),
+            crate::software_feed::Taught::of_this_leader(&trees),
+        );
+        r.snapshot = Some(ronoctua_software::state::read_with(&ctx, host));
+        r.zone = ronoctua_files::when::Zone::utc();
+        r.now = now;
+        r.home = Some(ctx.roots.home);
+        Ok(r)
+    }
+
+    fn middle_of(column: u16, line: u16) -> (f64, f64) {
+        let px = tokens::text::size();
+        (
+            (f64::from(column) + 0.5) * f64::from(tokens::metrics::cell_width(px)),
+            (f64::from(line) + 0.5) * f64::from(tokens::metrics::line_height(px)),
+        )
+    }
+
+    /// `ronoctua-shell photograph --door software …`, to its end.
+    fn shoot(asked: &Asked) -> Result<()> {
+        tokens::theme::set(asked.theme);
+        tokens::theme::set_ground(tokens::theme::Ground::Chrome);
+        tokens::text::set(tokens::text::NORMAL);
+        crate::locale::prefs::set(crate::locale::Choice::default());
+        let texts = ronoctua_i18n::Texts::fresh(&asked.language)
+            .with_context(|| format!("the language `{}` does not exist", asked.language))?;
+        let opening = super::opening_of(&asked.opening).with_context(|| {
+            format!(
+                "`--opening {}` opens nothing; the words are {}",
+                asked.opening,
+                super::LEVEL_WORDS.join(", ")
+            )
+        })?;
+        let mut readings = readings_of_room(&asked.room, &asked.host, asked.now)?;
+        readings.belongings = asked
+            .belongings
+            .as_deref()
+            .map(ronoctua_belongings::places::Places::under);
+        let content = super::photographed(readings, opening, &texts);
+        let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
+        let mut d = Detached::new(ui, content);
+        let px = tokens::text::size();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let size = (
+            (f32::from(asked.columns + 2 * d.content.margin()) * tokens::metrics::cell_width(px))
+                .ceil() as u32,
+            (f32::from(asked.lines) * tokens::metrics::line_height(px)).ceil() as u32,
+        );
+        d.lay_out_at(size);
+        d.turn();
+        let mut gpu = ronoctua_render::offscreen::Offscreen::new(1, 1)?;
+        let format = ronoctua_render::offscreen::FORMAT;
+        let mut images = ronoctua_render::image::Images::new(&gpu.device, format)?;
+        // A FRAME BEFORE EVERY STEP: a key of the header is grabbed where the
+        // last paint drew it.
+        let mut composed = d.compose(&gpu.device, &gpu.queue, &mut images);
+        let mut entered = false;
+        for step in &asked.steps {
+            match *step {
+                Step::Key(key) => d.press(key),
+                Step::Hover(c, l) | Step::Click(c, l) => {
+                    let event = |kind| {
+                        vec![PointerEvent {
+                            surface: d.ui.surface.clone(),
+                            position: middle_of(c, l),
+                            kind,
+                        }]
+                    };
+                    let first = if std::mem::replace(&mut entered, true) {
+                        PointerEventKind::Motion { time: 0 }
+                    } else {
+                        PointerEventKind::Enter { serial: 0 }
+                    };
+                    let mut frames = vec![event(first)];
+                    if matches!(step, Step::Click(..)) {
+                        for kind in [
+                            PointerEventKind::Press {
+                                time: 0,
+                                button: crate::door::LEFT_BUTTON,
+                                serial: 0,
+                            },
+                            PointerEventKind::Release {
+                                time: 0,
+                                button: crate::door::LEFT_BUTTON,
+                                serial: 0,
+                            },
+                        ] {
+                            frames.push(event(kind));
+                        }
+                    }
+                    for events in frames {
+                        d.pointer(&events);
+                    }
+                }
+            }
+            d.turn();
+            if d.ui.quit {
+                break;
+            }
+            composed = d.compose(&gpu.device, &gpu.queue, &mut images);
+        }
+        let film = crate::scene_photograph::Film {
+            list: asked.list,
+            by: asked.scale,
+            language: &asked.language,
+            out: asked.out.clone(),
+        };
+        crate::scene_photograph::draw(
+            &mut gpu,
+            &mut images,
+            &composed,
+            (d.ui.width, d.ui.height),
+            &film,
+            i32::from(asked.scale),
+        )?;
+        if let Some(m) = d.ui.message.as_ref() {
+            println!("the message line says: {m}");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_room_is_required_and_the_words_are_read() {
+            let words = |line: &str| {
+                line.split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            };
+            assert!(parse(&words("--door software")).is_err(), "no room");
+            let asked = parse(&words(
+                "--door software --room /r --opening declined --host lap --key <down> --click 3,4 --list",
+            ))
+            .unwrap();
+            assert_eq!(asked.room, std::path::PathBuf::from("/r"));
+            assert_eq!(asked.opening, "declined");
+            assert_eq!(asked.host, "lap");
+            assert!(asked.list);
+            assert_eq!(asked.steps.len(), 2);
+            assert!(parse(&words("--door files --room /r")).is_err());
+            let roots = roots_of(std::path::Path::new("/r"));
+            assert_eq!(roots.state, std::path::PathBuf::from("/r/state"));
+            assert_eq!(
+                roots.system.reports,
+                std::path::PathBuf::from("/r/sys/etc/ronoctua")
+            );
+        }
     }
 }
 

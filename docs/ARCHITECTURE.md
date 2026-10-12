@@ -163,8 +163,9 @@ Então o corte é onde este projeto sempre o põe — a dependência entra quand
 aparece, e entra do tamanho do problema:
 
 - **rustls sobre `std::net::TcpStream`**, bloqueante, numa thread. Sem runtime assíncrono.
-- **Provedor `ring` e não `aws-lc-rs`**, que é o padrão da 0.23: o padrão quer cmake e uma
-  toolchain Go no closure de build, para buscar dois números.
+- **Provedor `aws-lc-rs`, com `prefer-post-quantum`** (desde 2026-10-05). Foi o `ring`, porque o
+  `aws-lc-sys` de então queria cmake e uma toolchain Go no closure de build; o `ring` não tem
+  ML-KEM, e a troca é o assunto da seção 9 (L02, "Transporte pós-quântico").
 - **Raízes do SISTEMA** (`/etc/ssl/certs/ca-certificates.crt`, que o `security.pki` monta), nunca
   `webpki-roots`. Raiz embutida envelhece DENTRO do binário, e o dia em que uma expira o sintoma é
   toda busca falhando numa máquina cujo navegador está bem. Sem o arquivo, o crate diz uma vez e
@@ -7988,7 +7989,8 @@ para AES-256-GCM, e quadros STOMP sobre WebSocket.
 
 **O nonce tem dezesseis bytes, e foi isso que decidiu a dependência.** O plano deste trabalho dizia
 que a cripto não custaria nada novo, porque o `ring` tem AES-256-GCM. Tem — com nonce de DOZE bytes,
-fixo: `ring::aead::NONCE_LEN` é 12 e não há outro construtor. O pycryptodome usa 16 por padrão
+fixo: `ring::aead::NONCE_LEN` é 12 e não há outro construtor (o `aws-lc-rs`, que o substituiu em
+2026-10-05, tem o mesmo 12). O pycryptodome usa 16 por padrão
 (medido cinco vezes na 3.2.0 instalada), e GCM com nonce que não é de 96 bits deriva o J0 por GHASH
 em vez de concatenação — o `ring` calcularia outro J0 e **nenhuma** mensagem autenticaria, em
 silêncio. O `aes-gcm` é genérico no tamanho, e o vetor capturado do Python do upstream é o que prova
@@ -8735,12 +8737,14 @@ dois wipes no mesmo segundo davam `@root` aninhado, sem erro.
 
 ---
 
-### Instalador: catorze perguntas, e o "só" continua sendo o critério
+### Instalador: dezessete perguntas, e o "só" continua sendo o critério
 
 A TUI coleta idioma, disco, instalação, o trio do teclado, locale, fuso, hostname, senha,
-frase-secreta, a rede sem fio e o `resume_offset`. O "só" é a parte difícil, e por isso a lista é um
-enum fechado com um teste que conta os casos — acrescentar uma pergunta quebra o teste, que é como
-uma décima quinta para de entrar por desatenção.
+frase-secreta, a rede sem fio (e a senha dela), as três do repositório da pessoa — endereço, acesso e
+senha dos pertences, obrigatórias desde 2026-10-05 (seção do L20) — e o `resume_offset`, que é
+calculado. O "só" é a parte difícil, e por isso a lista é um enum fechado com um teste que conta os
+casos — acrescentar uma pergunta quebra o teste, que é como uma décima oitava para de entrar por
+desatenção.
 
 Eram seis, e cada uma que entrou desde então entrou por não ter alternativa: **o teclado**, porque o
 xkb não recusa layout inexistente e a frase-secreta é digitada às cegas; **o locale e o fuso**, porque
@@ -8768,15 +8772,17 @@ instalação, e depois seria tarde.
 
 #### Duas instalações, e por que é uma OPÇÃO e não um segundo sistema
 
-`ronoctua.profile` vale `full` ou `minimal`, e a diferença é medida: **26,7 GiB contra 6,9**. Sai o
-Android (6,5), saem os compiladores (4,0), saem as variantes da fonte (2,0), saem o navegador, o
-editor e a mídia (2,0), e saem o Blender, o OrcaSlicer, o Claude Code e o Codex (3,9).
+`ronoctua.profile` vale `full` ou `minimal`, e a diferença é **~29 GiB contra ~11,8** (uma conta
+sobre o store; a medida dos dois sistemas construídos está no `docs/PENDING.md`). Sai o Android
+(6,5), saem os outros compiladores (go, python, node, gcc), saem as variantes da fonte (2,0), saem o
+navegador, o editor e a mídia (2,0), e saem o Blender e o OrcaSlicer. O trabalho na distro — o
+toolchain do devshell, o rust, o KVM e os agentes de código — fica nos dois (seção do L15).
 
-**É uma opção, e não um `nixosConfigurations` a mais.** O instalador continua mirando `#noctua` nos
-dois casos; o perfil é uma linha no `host.nix`. Isso decide três coisas de uma vez: quem se arrepende
-faz `nixos-rebuild` em vez de reinstalar, o alvo do instalador continua sendo um só, e a tabela que
-liga perfil a chaves fica num arquivo (`nix/modules/profile.nix`) em vez de virar duas listas de
-módulos que divergem.
+**É uma opção, e não um `nixosConfigurations` a mais.** O flake de uma máquina constrói um atributo
+só, com o nome da pessoa (`ronoctua.machine.attr`), nos dois casos; o perfil é uma linha no
+`host.nix`. Isso decide três coisas de uma vez: quem se arrepende reconstrói a máquina em vez de
+reinstalar, o alvo continua sendo um só, e a tabela que liga perfil a chaves fica num arquivo
+(`nix/modules/profile.nix`) em vez de virar duas listas de módulos que divergem.
 
 Todas as chaves entram por `lib.mkDefault`, porque a tabela é a voz mais fraca da sala: `host.nix` e
 `vm.nix` continuam vencendo.
@@ -11334,8 +11340,9 @@ bytes — a saída simples não tem byte nenhum.
 travas: `uninstallUnmanaged = false` (senão toda instalação da pessoa sumiria na próxima ativação),
 nada de atualização na ativação nem por timer (quem atualiza é a sequência da distro), e o remoto
 flathub vem de um `.flatpakrepo` VENDORIZADO (`assets/flatpak/`), para a ativação funcionar
-offline. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM — é a linha
-que "Tornar permanente" copia. **Tirar um id dessa lista DESINSTALA o app** na próxima ativação
+offline. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM — uma linha
+à mão no `host.nix`; a central declara no `declared.json` da pessoa (seção L18). **Tirar um id
+dessa lista DESINSTALA o app** na próxima ativação
 (lido no script gerado do nix-flatpak); o que a pessoa instalou à mão continua protegido. Um app
 declarado aparece na lista como do flake e recusa remover (`DeclaredInTheFlake`), com frase.
 
@@ -11629,7 +11636,9 @@ diz com quem cada um fala):
   o nome de um endereço da rede local —, cada uma num crate para que nenhum outro fale PAM ou
   `resolve1`.
 - **`ronoctua-security`.** As fronteiras da central de segurança: a porta do sudo (feature
-  `authority`, que só o shell liga), o firewall da pessoa e as checagens online.
+  `authority`, que só o shell liga; a execução de senha e a conversa num terminal dela), o firewall da
+  pessoa, a janela sem senha, a lista de chaves em que o `pam_u2f` confia e o cadastro de uma chave
+  (`pamu2fcfg`, como a pessoa), e as checagens online.
 - **`ronoctua-belongings`.** O repositório cifrado da configuração da pessoa: um binário próprio,
   chamado pela fila, pelo instalador e pelo módulo do brain que lembra de sincronizar.
 - **`ronoctua-video-metrics`.** O YouTube por HTTP simples e o catálogo SQLite; o único outro crate
@@ -13551,16 +13560,18 @@ A fundação da central de segurança é um crate (`ronoctua-security`), um bin�
 A página, as checagens online e o módulo do brain vêm por cima e não mudam o que está aqui.
 
 **A porta do sudo.** Não há agente polkit na sessão, e não haverá. Quando um gesto da pessoa precisa
-de root, ela digita a senha numa pergunta nossa e `ronoctua_security::authority` — o ÚNICO código
-que roda `sudo` (feature `authority`, só o shell liga) — tenta primeiro `sudo -n` (a janela aberta, o
-carimbo do próprio sudo) e, se falhar por falta de senha, `sudo -S -k -p "" -- <helper> <verbo>` com
-`LC_ALL=C`, a senha e uma quebra de linha no stdin e o stdin fechado. A senha nunca vai no argv nem no
-ambiente (que é esvaziado). O sudo roda sob `setsid`, sem terminal controlador: o PAM não recebe tty e
-a digital, que só responde em terminal, nunca faz a porta esperar um dedo. Por que sudo e não outra
-coisa: reaproveita a autoridade que a pessoa já tem (wheel + senha), não cria privilégio, e o sudo
-registra cada uso; `unix_chkpwd` numa unidade root precisaria de um `YES` do polkit e qualquer processo
-da pessoa pularia a senha; um agente polkit no shell quebra a regra "nenhum agente na sessão".
-`sudo-door-is-one` cobra tudo isso.
+de root, `ronoctua_security::authority` — o ÚNICO código que roda `sudo` (feature `authority`, só o
+shell liga, e desde 2026-10-11 só a barra do sudo a chama, seção "A barra do sudo e as telas") — tenta
+primeiro `sudo -n` (a janela aberta, o carimbo do próprio sudo) e, se falhar por
+falta de senha, ou passa a senha digitada a `sudo -S -k -p "" -- <helper> <verbo>` (a senha e uma
+quebra de linha no stdin, o stdin fechado, sob `setsid` e sem terminal controlador: o PAM não recebe
+tty, e a chave e o dedo, que só respondem em terminal, nunca fazem essa execução esperar), ou conversa
+com o sudo num terminal da própria porta, onde a chave e o dedo respondem antes da senha (a seção
+"Sudo, o lado root", abaixo). Sempre com `LC_ALL=C` e o ambiente esvaziado; a senha nunca vai no argv
+nem no ambiente. Por que sudo e não outra coisa: reaproveita a autoridade que a pessoa já tem (wheel +
+senha), não cria privilégio, e o sudo registra cada uso; `unix_chkpwd` numa unidade root precisaria de
+um `YES` do polkit e qualquer processo da pessoa pularia a senha; um agente polkit no shell quebra a
+regra "nenhum agente na sessão". `sudo-door-is-one` cobra tudo isso.
 
 **O helper diz o que aconteceu numa linha.** A saída dele são linhas `step <palavra>` (o progresso do
 cadastro de digital) e, por último, o veredito: `done` ou `refused <motivo>`. Uma execução sem linha
@@ -13580,22 +13591,20 @@ do fprintd). `UnitVerb` é o que unidades e o dispatcher do NetworkManager pedem
 a linha da janela sem tocar em nada (`print relax-line`), para o `relax-line-parses` passá-la pelo
 `visudo` no build.
 
-**A janela sem senha (exceção do inv. 6).** `@includedir /run/ronoctua-sudo`, escrito depois da regra
-do wheel (vence a última que casa). O helper escreve `<pessoa> ALL=(ALL:ALL) NOTAFTER=<UTC>
-NOPASSWD:SETENV: ALL` num rascunho com ponto (`.relax` — o sudo ignora nome com ponto), passa pelo
-`visudo -cf` pelo caminho no store, e só então renomeia para `relax` (0440, root): um erro de sintaxe
-num include trava TODO sudo, o resgate inclusive. O `SETENV` é o da regra do wheel que o NixOS escreve
-(`security.sudo.defaultOptions`): como a última regra que casa é a que vale, uma linha sem ele recusaria
-`sudo -E` enquanto a janela estivesse aberta — a janela tira a senha e mais nada. Quatro travas fecham: um timer transitório por janela
-(`ronoctua-sudo-expire-<fim>`, nome próprio para nunca colidir com o anterior), o `NOTAFTER` na própria
-linha, `/run` ser tmpfs, e `ronoctua-sudo-close.service` antes de `sleep.target` (autologin sem tela de
-bloqueio). Se o timer não arma, a janela é fechada de novo: três travas não são as quatro prometidas.
-Os timers da janela anterior só param depois que a linha nova está no lugar: uma reabertura que o
-`visudo` recusa deixa a janela aberta como estava, com o timer dela; e, uma vez a linha nova no lugar,
-qualquer falha fecha a janela inteira. O `sleep.target` recusa ser iniciado à mão
-(`RefuseManualStart`), então o `security-vm` lê a ligação dele com a unidade no systemd e roda a
-unidade como o alvo rodaria.
-A modeline mostra a HORA do fim, lida de `/run/ronoctua-security/sudo-until`.
+**A janela sem senha (exceção do inv. 6).** `@includedir /var/lib/ronoctua-sudo`, escrito depois da
+regra do wheel (vence a última que casa). O helper escreve `<pessoa> ALL=(ALL:ALL) NOTAFTER=<UTC>
+NOPASSWD:SETENV: ALL` (sem `NOTAFTER` quando não tem prazo) num rascunho com ponto (`.relax` — o sudo
+ignora nome com ponto), passa pelo `visudo -cf` pelo caminho no store, e só então renomeia para
+`relax` (0440, root): um erro de sintaxe num include trava TODO sudo, o resgate inclusive. O `SETENV`
+é o da regra do wheel que o NixOS escreve (`security.sudo.defaultOptions`): como a última regra que
+casa é a que vale, uma linha sem ele recusaria `sudo -E` enquanto a janela estivesse aberta — a janela
+tira a senha e mais nada. Ela sobrevive ao reboot e acaba no prazo ou pelo gesto da pessoa (decisão de
+2026-10-11; o porquê, as travas e a contagem estão em "Sudo, o lado root", abaixo). Os timers da
+janela anterior só param depois que a linha nova está no lugar: uma reabertura que o `visudo` recusa
+deixa a janela aberta como estava, com o timer dela; e, uma vez a linha nova no lugar, qualquer falha
+fecha a janela inteira, inclusive um timer que não arma — a pessoa recebeu a promessa de um fim. A
+modeline mostra o FIM (a hora, a data passada meia jornada, ou "sem prazo"), lido do estado
+`/var/lib/ronoctua-security/sudo-window`.
 
 **O firewall: duas tabelas e marcas entre elas.** A distro passou para nftables. No nftables um `drop`
 em qualquer tabela é final e um `accept` não é — ele só encerra a vez daquela tabela. Então a tabela
@@ -13718,8 +13727,8 @@ primeiro; a frase sob o ponteiro diz qual.
 padrão, o vigia diz isso no minibuffer (o evento `security-watch-network-public`, só para uma
 conexão que ele ainda não tinha visto, e nunca na primeira leitura), com a ação `security-home`: com
 uma rede pública esperando, ela vira casa pela porta; com várias, a página abre no Firewall, onde
-cada uma tem a própria linha; com nenhuma, isso é dito. Uma porta que precisa de senha pergunta na linha dela (`Why::NeedsPassword` →
-pergunta secreta `security-password`), e o trabalho espera a resposta na `View`. A rede que esta
+cada uma tem a própria linha; com nenhuma, isso é dito. O root que isso pede é perguntado na barra
+do sudo do rodapé, de qualquer porta (2026-10-11, seção "A barra do sudo e as telas"). A rede que esta
 máquina serve aparece como tal (`Status.served`), nem casa nem pública.
 
 **A regra em palavras.** Uma regra é uma linha só, na língua da pessoa ou em inglês (`allow tcp
@@ -13835,13 +13844,13 @@ crun é privado; o `containers-vm` o fixa.
 devolve. Três peças: o crate `ronoctua-belongings` (as formas e o motor), a vista (`belongings.rs`,
 duas portas) e o lembrete do cérebro (`modules/belongings-reminder`).
 
-**O formato é `age` por arquivo, e só o `key.age` paga o scrypt.** O repositório tem `FORMAT` em
-claro, `key.age` (uma identidade X25519 cifrada pela SENHA com scrypt), `index.age` (caminhos, modos,
-hashes, máquinas — cifrado para a identidade) e `blobs/<id aleatório>.age`, um por arquivo. Uma
-sincronização paga um KDF; trocar a senha recifra um arquivo pequeno e vale para todas as máquinas; e
-a recuperação sem a distro é o CLI do `age` (`age -d key.age`, depois `-i`). Os ids aleatórios
-escondem nomes e caminhos; o que vaza (quantos arquivos, tamanhos, horas dos commits) a tela diz. Os
-commits são de `ronoctua-belongings <noreply@localhost>`, e o nome da máquina só existe dentro do
+**Só o `key.age` paga o scrypt** (o formato, com pedaços e identidade pós-quântica, está na seção 9,
+"Pertences, formato 2"). O repositório tem `FORMAT` em claro, `key.age` (a identidade pós-quântica
+cifrada pela SENHA com scrypt), `index.age` (caminhos, modos, hashes, máquinas) e os pedaços, ambos
+cifrados para a identidade. Uma sincronização paga um KDF; trocar a senha recifra um arquivo pequeno e
+vale para todas as máquinas; e a recuperação sem a distro é o CLI do `age` ≥ 1.3 (`RECOVER.md`). Os
+nomes dos pedaços, hashes com chave, escondem nomes, caminhos e conteúdo; o que vaza (quantos
+pedaços, tamanhos, horas dos commits) a tela diz. Os commits são de `ronoctua-belongings <noreply@localhost>`, e o nome da máquina só existe dentro do
 índice cifrado. Um teste lê o repositório remoto inteiro atrás de qualquer byte de caminho, nome ou
 conteúdo em claro.
 
@@ -13922,9 +13931,9 @@ metade pública na tela para copiar) ou um token `0600`, que chega ao git só pe
 (`GIT_ASKPASS`, `ronoctua-git`). O endereço nunca leva credencial (`repository_is_plain`: recusa
 `user:pass@`, `http://`, `file://`).
 
-**O instalador pergunta o repositório** (a 15ª pergunta, opcional) e o escreve na HOME da pessoa,
-dona dele (uid lido do `/mnt/etc/passwd` depois do `nixos-install`), nunca no `host.nix`, que
-descreve a máquina e vai para backup. O `write_out` passou a nascer com o modo (`create_new` + modo,
+**O instalador pergunta o repositório** (obrigatório desde 2026-10-05, seção do L20) e o escreve na
+HOME da pessoa, dona dele (uid lido do `/mnt/etc/passwd` depois do `nixos-install`), nunca no
+`host.nix`, que descreve a máquina e vai para backup. O `write_out` passou a nascer com o modo (`create_new` + modo,
 por um rascunho renomeado).
 
 **O cérebro só lembra** (`belongings-reminder`, ver o `why.md`): uma sincronização pede a senha, e
@@ -14522,3 +14531,3527 @@ Três nomes mudaram por causa do selo dos módulos do brain: o que prende a unid
 de VM dela moram na pasta do `disk-space` (`disk-space-relief-unit-is-narrow`, `disk-space-vm`), e
 não em `tests/`.
 
+
+## 9. A leva de 2026-10-05
+
+A máquina da pessoa, os pertences no formato 2, a criptografia pós-quântica, o `/private`, o
+pendrive do instalador, o Incus, as ferramentas de desenvolvimento e as contas de LLM. Cada pacote
+escreve aqui o porquê das próprias decisões, depois da sua âncora.
+
+<!-- anchor: L01 -->
+
+### O age pós-quântico: `ronoctua-pq` (L01)
+
+- **Por que o X-Wing é escrito aqui.** O crate `age` do lock (0.12.1) fala o recipiente PQ marcado
+  das chaves de hardware (`mlkem768p256tag`), mas não o `mlkem768x25519` que o `age` do Go escreve
+  desde a 1.3 (`age-keygen -pq`). As peças estão todas no lock, embaixo do próprio age, e o PQ
+  marcado dele é montado sobre as mesmas: `hpke` 0.12, `ml-kem` 0.2.3, `x25519-dalek` 2, `sha3` e o
+  Bech32 sem limite do `age-core`. Então a composição (`xwing.rs`) é nossa, sobre primitivas
+  auditadas; o crate `x-wing` do RustCrypto não entrou (outras versões de `ml-kem` e `hybrid-array`
+  que as do lock, e não auditado). Quando o crate `age` ganhar o recipiente, o dele entra atrás da
+  mesma API e o nosso sai (`docs/PENDING.md`).
+- **De onde vem cada constante.** O spec C2SP do age manda ao `filippo.io/hpke-pq`
+  (draft-ietf-hpke-pq-03), cujo MLKEM768-X25519 (KEM `0x647a`) é idêntico ao X-Wing
+  (draft-connolly-cfrg-xwing-kem-11): semente de 32 bytes; `SHAKE256(semente, 96)` = `d ‖ z ‖`
+  escalar X25519; combinador `SHA3-256(ss_M ‖ ss_X ‖ ct_X ‖ pk_X ‖ "\.//^\")`, com o rótulo NO FIM
+  (os drafts antigos o punham no começo, e é o erro mais provável de quem escreve de memória). A
+  estrofe é o `SealBase` do HPKE com HKDF-SHA256 e ChaCha20-Poly1305, `info =
+  "age-encryption.org/mlkem768x25519"`, `aad` vazio: um argumento (`enc`, 1120 bytes, base64
+  canônico, uma linha de 1494 caracteres) e um corpo de exatamente 32 bytes, conferidos ANTES de
+  decifrar — os MUST do spec, contra oráculo de partição.
+- **Os vetores moram no fonte (`vectors.rs`), e não no `nix/test-vectors.nix`.** São três textos:
+  os do próprio X-Wing (Apêndice C); o único vetor HPKE com o conjunto exato do age (hpkewg/hpke-pq,
+  commit 11b5b95: dez mensagens e cinco exports, nos dois sentidos — o agendamento de chaves da RFC
+  9180 inteiro); e a amostra do spec do age (a identidade dá o recipiente dele, e a estrofe dele
+  abre com ela; com um bit trocado, não abre). Copiados por script, nunca digitados. O
+  `test-vectors.nix` é para arquivo grande que o `cargo test` comum não carrega; estes são uns 45
+  KB de texto, e assim todo `cargo test` os confere — é o que o próprio age faz com os vetores do PQ
+  marcado. Sabotados um a um (o rótulo, o `info`, o id do KEM, a ordem de `d` e `z`), cada um
+  quebrou a própria família de respostas, e o `info` só a amostra do spec, que é o único texto que o
+  carrega.
+- **Quem julga o arquivo é o Go.** Os vetores provam as peças; o `pq-age-interop` prova o arquivo,
+  pelo `ronoctua-seal` extraído: o Go abre o que selamos para a chave dele e para a nossa, nós
+  abrimos o que ele selou, e ele tira da nossa identidade o mesmo recipiente. É a promessa do
+  `RECOVER.md`: os pertences abrem com o `age` do Go, sem a distro. O nixpkgs pinado traz a 1.3.1,
+  e é ele o juiz; um nixpkgs mais velho troca, só neste check, por um `age` 1.3.1 pinado
+  (`buildGoModule` sobre a tag, com os hashes do próprio nixpkgs). O pin é um atributo do check
+  (`.#checks.x86_64-linux.pq-age-interop.pinnedGoAge`) para ser construído e provado hoje, e não no
+  dia em que fizer falta. Um `assert` no lugar dele derrubaria a avaliação do `checks` inteiro
+  (`nix flake check`, `.#most`, `.#gate`) por causa de um check só.
+- **A mistura.** Os dois recusam SELAR um recipiente PQ com um clássico (o rótulo `postquantum`; o
+  Go diz "incompatible recipients"). Ao ABRIR, só nós recusamos (`Why::Mixed`, regra congelada na
+  Fase 0): o Go abre um arquivo misto, e o spec deixa — ele pede ao selador que não misture e deixa
+  a identidade ignorar o que não conhece. Um arquivo misto já foi exposto à colheita, e quem o selou
+  desobedeceu à única regra do formato; dizê-lo é mais útil que abri-lo calado. Para que a recusa
+  saia com o nome certo, o `ronoctua-seal` também lê recipientes clássicos `age1…`: a mistura é dita
+  `mixed`, e não `corrupt`. Mas só para isso: um trabalho cujos recipientes são todos clássicos é
+  recusado (`corrupt`, como na Fase 0). Selá-lo escreveria, sem aviso, um arquivo sem a estrofe PQ,
+  exposto à colheita — e o "para outra pessoa" do cifrar-qualquer-coisa recebe uma chave colada. A
+  regra mora onde o texto da pessoa chega; a função `seal` aceita qualquer `age::Recipient`, como o
+  contrato congelado diz. E o `sniff` conta o `mlkem768p256tag` como PQ: ele leva o mesmo rótulo, e
+  o age o sela ao lado do nosso.
+- **O cabeçalho é lido até 1 MiB, e o que não é cabeçalho é recusado no primeiro byte.** O `open` lê
+  o cabeçalho antes do age para recusar a mistura sem decifrar nada. O teto de 64 KiB vinha do
+  substituto da Fase 0 (estrofes X25519 de uns 100 bytes); com a estrofe de 1,56 KB, ele chamava de
+  corrompido um arquivo válido de 43 recipientes, que o Go abre. O Go não tem teto. 1 MiB são uns
+  670 recipientes PQ, e passar dele é `failed`, não `corrupt`, porque nada diz que esse arquivo está
+  danificado. O dano de verdade é recusado antes: a primeira linha tem de ser a do age, byte a byte,
+  e todo byte do cabeçalho é ASCII imprimível (o Go recusa qualquer outro). Um arquivo cujo `---` se
+  perdeu é recusado no primeiro byte binário da carga, e não um mebibyte depois.
+- **O que o Go recusa, nós recusamos ao ler.** Uma chave ML-KEM que falha a checagem de módulo do
+  FIPS 203 (coeficiente ≥ q) e uma metade X25519 de ordem baixa (Diffie–Hellman todo zero) são
+  recusadas quando o recipiente é lido (`Corrupt`), e não no meio de um selo: um recipiente colado
+  pela pessoa não pode virar pânico na fila.
+- **A identidade é a semente, e só ela.** 32 bytes apagados no `drop`; cada uso expande de novo
+  (dezenas de microssegundos) em chaves que se apagam sozinhas — o `zeroize` do `ml-kem`, a única
+  linha do `Cargo.lock` que mudou fora do nosso crate. O `Debug` mostra o recipiente; o texto só sai
+  por `to_secret()`, um `SecretString`; e o `ronoctua-seal` só a recebe como caminho de um arquivo
+  `0600`: o `Job` não tem campo para ela, e um campo a mais é recusado. O
+  `pq-identity-never-prints` pergunta isso a todas as respostas do selador, a de cada recusa
+  inclusive.
+- **`ronoctua-test-pq`, e não um `cargo test` estreitado.** Os três checks rodam binários que o
+  workspace já constrói para os outros (os vetores, uma identidade nova para o Go, o arquivo misto
+  forjado, o `Debug`), em vez de uma derivação de testes a mais.
+
+<!-- anchor: L02 -->
+
+### Transporte pós-quântico (L02)
+
+**O que se protege é a troca de chaves, não o certificado.** Uma conversa gravada hoje é decifrada
+no dia em que um computador quântico quebrar a chave com que ela foi acordada ("colher agora,
+decifrar depois"). A assinatura de um certificado só precisa valer no instante do handshake; o
+segredo da sessão precisa valer enquanto o registro existir. Por isso esta leva mexe no KEX do TLS
+e do SSH e deixa os certificados RSA/ECDSA como estão.
+
+**O TLS é rustls sobre `aws-lc-rs`, com `prefer-post-quantum`.** O `ring` não tem ML-KEM: com ele,
+toda conexão só podia acordar uma chave clássica. A objeção que o manteve (cmake e Go no closure)
+era de um `aws-lc-sys` antigo; o 0.45 compila com o próprio construtor `cc` e as bindings
+pré-geradas, e o `buildBase` fixa os dois (`AWS_LC_SYS_CMAKE_BUILDER=0`, `AWS_LC_SYS_USE_SYSTEM=0`)
+para que outro construtor, ou uma cópia do sistema detectada, seja falha alta e não outra
+biblioteca. O closure de runtime não cresce: no perfil release o construtor aplica
+`-ffile-prefix-map` ao C e ao assembly, e a `.a` medida não carrega nenhum caminho do código
+vendorizado (no perfil `loop`, que não instala nada, carrega 259); e, por baixo disso, o
+`buildPackage` do crane apaga do binário instalado qualquer referência ao diretório vendorizado
+(`removeReferencesToVendoredSources`).
+
+**O provedor é passado ao builder, nunca instalado como padrão do processo**
+(`tls::provider`, `builder_with_provider`). Um padrão de processo é mais uma coisa que outro crate
+no mesmo processo pode definir antes, e então as chaves seriam acordadas com o que ele escolheu.
+
+**Preferido, nunca exigido.** O hello oferece `X25519MLKEM768` primeiro e o X25519 ao lado; um
+host que conhece o híbrido o acorda, e um que não conhece é alcançado classicamente. Exigir fecharia
+metade da internet de hoje para o relance, as buscas e a central de programas. O teste que o
+`tls-is-post-quantum-first` roda aperta a mão, no processo, com três servidores — o híbrido, só
+X25519, só P-384 (com o pedido de nova tentativa) — e confere o que o hello põe primeiro.
+
+**Oferecer é metade; quem escolhe é o host.** Por isso cada handshake grava o grupo acordado,
+por host, em `$XDG_STATE_HOME/ronoctua/tls-groups.json` (`ronoctua_http::groups`), que a seção
+quântica da segurança lê. O arquivo é estado DESTA máquina, e os pertences não o levam
+(`assets/belongings.nix`, motivo `machine`).
+
+**Uma gravação por vez, no processo e entre processos.** Vários processos falam TLS, cada um de
+várias threads, e a escrita MESCLA por host: lê o arquivo, troca uma entrada, devolve o resto como
+achou. Sem trava, isso quebrava de dois jeitos. Duas threads do mesmo processo escreviam no MESMO
+rascunho (o `write_atomically` dá a ele o nome do PID), e o `rename` publicava os bytes de uma com o
+rabo da outra: um arquivo que não parseia. E dois escritores quaisquer liam a mesma versão, e o mais
+lento apagava o host do outro — que o processo do primeiro, lembrando que já o escrevera, só
+gravaria de novo um dia depois. Então a memória do processo é um `Mutex` segurado da consulta ao
+`rename`, e entre processos um `flock` num arquivo vazio ao lado (`.tls-groups.json.lock`, que
+fica: apagar um arquivo de trava deixa dois processos travarem cópias diferentes). O host só entra
+na memória depois que a escrita deu certo. O teste que prova isso põe dezesseis threads gravando ao
+mesmo tempo sobre um arquivo de duzentos hosts; com a trava sabotada, ele perde hosts.
+
+**O arquivo que não parseia é substituído, não recusado.** A preferência da pessoa se recusa a
+sobrescrever (o `parsed` do `ronoctua-store` existe para isso); este arquivo é o que a máquina
+OUVIU, refeito pelas próximas requisições, e recusá-lo o deixava quebrado para sempre — com todo
+processo relendo-o e avisando a cada requisição HTTPS. Um arquivo de formato MAIS NOVO (um build
+mais novo o escreveu) fica como está. Os dois casos e a escrita que falha são ditos uma vez por
+processo no log.
+
+**E escreve pouco**: só um host novo, um grupo que mudou, ou a mesma resposta depois de um dia — o
+processo lembra o que o arquivo já diz, senão uma busca que pergunta ao mesmo host a cada tecla
+seria uma escrita por tecla. O teto (`tlsGroupsHosts`, 512) mora no `assets/cache.nix`; passou dele,
+sai o host ouvido há mais tempo. O host é guardado com a grafia do consentimento, para a seção pôr
+a resposta dele ao lado da permissão da pessoa.
+
+**O `connect` termina o handshake; os caminhos de uma chamada não.** O WebSocket do ClipCascade
+abre por `tls::connect`, que completa o handshake na hora (um certificado ruim falha ali) e grava o
+grupo. Os caminhos de uma chamada (`fetch`, `upload`, `download`) continuam deixando o handshake
+para a primeira escrita, que é o que o põe sob o `Abort`, e gravam logo depois dela. Essa ordem é
+frágil e falha calada — perguntado antes do handshake, o rustls não tem grupo, nada é gravado e
+nada avisa —, então os cinco caminhos recebem um `Client` (a configuração e o arquivo) e o teste
+os percorre de verdade contra um servidor rustls no loopback, com um arquivo próprio, conferindo
+o grupo gravado de cada um. Com a gravação do `over_tls` movida para antes da escrita, ele falha.
+
+**O `ring` sai do workspace inteiro.** As primitivas do nosso código — os SHA-256, o SHA-1 do
+WebSocket e do HIBP, o PBKDF2 do ClipCascade, a assinatura RSA do índice do F-Droid, a
+aleatoriedade — vêm do mesmo `aws-lc-rs` com que o rustls acorda as chaves: um provedor só. Ficam
+de fora o `age` (que traz o próprio RustCrypto para o formato age) e o `aes-gcm` do ClipCascade
+(nonce de 16 bytes, que nenhum provedor tem). Uma armadilha decidiu como isso é cobrado: o
+`Cargo.lock` CONTINUA listando o `ring`, porque o `rustls-webpki` o cita numa feature fraca
+(`ring?/alloc`) e o cargo escreve no lock a dependência opcional que nada ativa. A lista de nomes do
+lock não responde; o `one-crypto-implementation` pergunta ao `cargo tree`, com todas as features de
+todos os membros e todos os alvos, o que é COMPILADO.
+
+**O SSH negocia pós-quântico primeiro, e a lista mora num lugar.** `assets/ssh.nix` tem os três
+pós-quânticos (`mlkem768x25519-sha256` e o sntrup761 nos dois nomes) e, depois, duas listas
+clássicas. O CLIENTE leva os clássicos que o OpenSSH 10 oferece, sem os de SHA-1: ele vai aonde a
+pessoa mandar. O SERVIDOR leva só o que o NixOS recomenda para um sshd (X25519 nos dois nomes e o
+group-exchange com SHA-256): o sshd do ISO aceita login de root, e pôr os pós-quânticos na frente
+não é razão para passar a aceitar as curvas NIST ou um grupo de 2048 bits que ele recusava antes.
+O cliente do sistema (`nix/modules/ssh.nix`) e o sshd e o cliente do ISO (`nix/installer/iso.nix`,
+que não importa os módulos da distro) leem a mesma tabela.
+O `ssh-kex-is-pq-first` lê o que o próprio ssh lê (`ssh -G`, `sshd -G -T`) e confere cada nome
+contra o `ssh -Q kex` do ssh pinado: um nome que ele não conhece faz o ssh recusar o arquivo
+INTEIRO, e todo ssh da máquina pararia. A lista é a mesma que o OpenSSH 10 já usa por padrão, e foi
+isso que quase deixou o check vazio: na sandbox um arquivo do store pertence ao uid 65534 e o ssh
+recusa um `Include` que não é do root nem do usuário, então o check copia a configuração; a cópia
+lida com um `read` simples perdia a última linha (o arquivo gerado termina sem quebra de linha, e a
+última é o `KexAlgorithms`), o ssh caía no padrão — a mesma lista — e o check passava sem a
+configuração. Pôr os clássicos primeiro e ver o check continuar verde foi o que mostrou; hoje a
+cópia guarda a linha final e precisa conter a diretiva. Fixar a lista explicitamente é o que mantém
+a ordem se um OpenSSH futuro mudar o padrão.
+
+**Os pertences são SÓ pós-quânticos, pelos dois caminhos.** O que trafega ali é a casa cifrada
+inteira da pessoa, para um servidor que ela escolheu uma vez; o ssh do sistema alcança qualquer
+servidor, e um sem PQ continua sendo um que ela quer alcançar. As credenciais dos pertences levam
+`pq_only` — a chave de deploy e o token.
+
+- **SSH.** O ssh dos pertences não lê configuração nenhuma (`-F none`), então diz a própria lista
+  (`-o KexAlgorithms=`, `ronoctua_git::PQ_KEX`) e nenhum arquivo pode alargá-la. O sntrup761 fica:
+  o GitHub o responde hoje e só oferece ML-KEM a partir de 2026-10-14, e uma lista só com ML-KEM
+  recusaria o host onde a maioria dos pertences mora. A prova é contra um `sshd` de verdade (o teste
+  do `ronoctua-git` que o `belongings-ssh-is-pq-only` roda): só X25519 é recusado; o MESMO servidor
+  é alcançado por uma sessão sem o estreitamento (a recusa é dele); só ML-KEM e só sntrup761 passam
+  da troca de chaves.
+- **HTTPS com token.** Quem fala TLS aí é o git, pelo curl e pelo OpenSSL do store, e o git não tem
+  opção para os grupos. O OpenSSL tem uma porta que alcança outro programa: todo contexto TLS de um
+  processo nasce da seção `system_default` do arquivo que o `OPENSSL_CONF` nomeia. O
+  `nix/pq-tls.nix` gera um que lista só os híbridos ML-KEM, com TLS 1.3 no mínimo, e o
+  `ronoctua-git` roda o git sob ele quando o token é `pq_only` — com o piso do próprio git
+  (`GIT_SSL_VERSION=tlsv1.3`) também, porque o curl põe a versão mínima por cima da do OpenSSL e um
+  `http.sslVersion` do repositório a baixaria. Medido no git pinado: um servidor só
+  com X25519, só com as curvas NIST ou só com TLS 1.2 responde `alert handshake failure`; um com
+  `X25519MLKEM768` ou `SecP384r1MLKEM1024` é alcançado.
+
+**O OpenSSL ignora CALADO a configuração que não consegue usar** — arquivo ausente, caminho
+relativo, nome de grupo que a versão não conhece (os três medidos): o estreitamento some e todo
+servidor é alcançado, classicamente. Por isso o `ronoctua-git` recusa um token `pq_only` sem o
+arquivo (caminho absoluto e existente, senão `Unstartable`), e o `belongings-https-is-pq-only` roda
+o git pinado sob o arquivo que o build entrega contra servidores `openssl s_server` só clássicos e
+mostra cada um recusado — e alcançado pelo mesmo token sem o estreitamento. Trocar o arquivo por um
+vazio faz o teste falhar.
+
+**A recusa diz de quem é.** O "no matching key exchange method found" do OpenSSH e o "alert
+handshake failure" do curl viram `NotPostQuantum` só numa sessão `pq_only`, e ANTES de
+"inalcançável": o git fecha a mesma mensagem com "Could not read from remote repository" ou "unable
+to access", mas o host foi alcançado — só não ofereceu nada que a sessão pode acordar. Numa sessão
+sem o estreitamento (o fetch do navegador git do gerenciador de arquivos) a mesma frase do OpenSSH
+quer dizer outra coisa: o ssh ofereceu tudo o que esta máquina aceita, e o servidor só tinha trocas
+antigas de SHA-1. Ela vira `NoCommonKeyExchange`, com a frase dela; dizer "pós-quântico" ali seria
+culpar uma exigência que ninguém fez.
+
+**Sem chave de host RSA.** Todo sshd nosso tem só ed25519 (`hostKeys`): sem a linha, o sshd do ISO
+carregaria RSA, ECDSA e ed25519, e o de uma máquina que ligasse o sshd faria uma RSA no primeiro
+start. O `/persist` deixou de guardar o par RSA, e uma regra `r` do tmpfiles apaga o que uma máquina
+guardou antes — uma chave privada que nada lê não fica em disco.
+
+<!-- anchor: L03 -->
+
+### A máquina tem o próprio flake — `lib.machine` e as declarações da pessoa
+
+**Por que o flake inverteu.** Até a leva de 2026-10-05 cada máquina recebia em `/etc/nixos` uma
+CÓPIA do flake da distro, com `host.nix` e `facter.json` ao lado. A atualização só movia os inputs
+(nixpkgs, home-manager…), então o código da distro congelava no ISO da instalação. Agora a pasta da
+máquina é um flake dela, e a distro é um INPUT dele (`templates/machine/flake.nix`):
+
+```
+flake.nix  flake.lock  host.nix  facter.json  [secrets.yaml]
+person/    software/declared.json  software/declined.json  software/icons/<sha256>.png  brain/<my-id>/
+local/     held.json  approved.json  signer.json   (só root; nunca sincroniza)
+```
+
+O `outputs` inteiro do flake da máquina é `ronoctua.lib.machineFlake { dir = ./.; contract = 1; }`.
+O `lib.machine` (`nix/machine.nix`) monta o `nixosSystem` com os módulos e os inputs DA DISTRO, o
+`host.nix` e o relatório de hardware da máquina, os dados da pessoa e as metades root aprovadas. O
+`nixosModules.default` saiu do flake: os módulos leem `specialArgs.inputs` e os argumentos que o flake
+injeta (`_module.args.ronoctua`), e um `imports = distroModules` solto quebrava em qualquer flake que
+não fosse este.
+
+**O input segue a branch `release` por `github:`, e não por `git+https:`.** O tarball não traz
+histórico, e o Nix o baixa sozinho por HTTP; um input `git+https:` precisa de um `git` no `PATH` de
+quem atualiza, e a atualização roda numa unidade, cujo `PATH` é mínimo. O limite da API do GitHub
+(60 pedidos por hora por endereço, sem autenticação) é folgado: cada atualização pede uma vez.
+
+**A máquina usa exatamente os pins que o gate testou.** Ao travar ou atualizar o input `ronoctua`, o
+Nix copia os inputs da distro do `flake.lock` dela; só um `follows`, um `--override-input` ou um
+`nix flake update ronoctua/<x>` os mudariam, e o template não tem nenhum. Por cima disso, o
+`lib.machine` compara cada input que a distro recebeu com o `narHash` que o lock dela dá, e recusa
+com o caminho que difere. A comparação percorre o GRAFO do lock inteiro: um flake que religasse
+`ronoctua/lanzaboote/nixpkgs` não mudaria nada do que a raiz nomeia e ainda construiria contra um
+nixpkgs não testado (`machine-uses-the-distro-pins` prova os três casos). O mesmo vale para a máquina
+de referência: avaliar a distro com `--override-input` sem gravar o lock também é recusado.
+
+**O contrato.** O `flake.nix` da máquina diz para qual contrato foi escrito (`contract = 1`), e uma
+distro que fala outro recusa com uma frase, em vez de construir algo entendido pela metade.
+
+**O diretório da máquina tem um nome só.** Ele está escrito uma vez, em `nix/machine.nix`
+(`machineDir`). O arquivo é um conjunto de atributos, e não uma função, porque três leitores o
+precisam sem configuração NixOS na mão: o `nix/rust.nix` (que o entrega à Rust como
+`RONOCTUA_MACHINE_DIR`), o `steps.nix` da atualização e o próprio padrão da opção
+`ronoctua.machine.dir`. Um módulo lê a opção, e um programa lê a variável — por `env!`, e não por
+`option_env!`: um console de resgate compilado sem ela apontaria para uma pasta escolhida no código,
+e a compilação recusar é a resposta honesta. O `machine-dir-has-one-name` recusa o literal (e o
+`#noctua` escrito à mão) em todo o código, com strings e sem comentários — o instalador incluído: é
+ele que FAZ a pasta, sob o `/mnt` do alvo, e uma pasta que ele soletrasse de novo seria uma que
+ninguém lê. Ele a monta como `/mnt` + `RONOCTUA_MACHINE_DIR`, e o ISO guarda a distro na pasta da
+máquina dele pelo mesmo nome. Só o `#noctua` do plano do instalador continua escrito à mão, até ele
+escrever o flake da máquina a partir do template e perguntar o atributo a ele. O atributo que o
+flake constrói é `ronoctua.machine.attr`, que é `ronoctua.user`, e o `machine-flake-target-exists`
+(o check que só existia num comentário) prova que o template, a opção, a pessoa e toda unidade nossa
+que reconstrói a máquina dizem o mesmo `<pasta>#<atributo>`.
+
+`/etc/nixos` e `/var/lib/ronoctua-machine` estão no `persist.nix`: com a raiz apagada a cada boot, a
+máquina perderia o próprio flake e não teria o que descrevesse a próxima geração. O `secrets.yaml`
+compartilhado sai do flake da máquina quando ele tem um; a pasta `secrets/` da distro fica só para o
+sistema construído sem flake de máquina (a VM).
+
+**A máquina de referência.** `noctua` e `minimal` são construídos pelo mesmo `lib.machine`, sobre
+`tests/fixtures/machine/`: o `flake.nix` dela é cópia byte a byte do template, o `host.nix` é o que o
+ensaio do instalador escreve (`host-nix-golden-evaluates` compara os dois e instancia o `toplevel`
+inteiro), e o `facter.json` é sintético — nada da máquina de ninguém. Assim a referência é o que uma
+máquina constrói, e o `machine-template-evaluates` exige que o `toplevel` do template seja a MESMA
+derivação. O disco da referência é um caminho que não existe, e um `host.nix` na raiz da árvore (o
+leiaute do instalador antigo, cópia da distro com o arquivo da máquina ao lado) é recusado, e não
+ignorado: construída como antes, aquela máquina seria a de referência, disco incluído.
+
+**As declarações da pessoa são dados, e o sistema as consome sem quebrar.** Uma unidade root
+estreita valida o JSON da pessoa e o copia para `person/`; o `nix/modules/person.nix` só lê essa
+cópia. O `builtins.fromJSON` não lança um erro capturável, e por isso nada aqui lê a pasta da
+própria pessoa. Cada entrada passa por um dos cinco construtores (`nix/declared-apps/`), que
+respondem o que pôr onde ou por que não, de um conjunto fechado (`attr-missing`, `not-a-package`,
+`refused-by-meta`, `held`, `source-off`, `other-machine`, `format-unknown`). Um nome que o nixpkgs
+não tem é `null` no `lib.attrByPath`; um alias que lança, um pacote quebrado ou inseguro são
+capturados pelo `builtins.tryEval` (o check de `meta` roda quando o `drvPath` é lido). O que o
+`tryEval` NÃO pega é um erro de avaliação dentro de uma dependência (`attribute missing` não é
+`throw`), nem um `abort`, e é por isso que a atualização avalia cada entrada sozinha antes
+(`personEntries`, sem proteção nenhuma) e segura a que quebra em `local/held.json`. "Sozinha" quer
+dizer na máquina como a opção interna `ronoctua.person.alone` a deixa para aquela entrada: o
+consentimento de não livre é o dela e nenhum outro, segurada ou não. Pela máquina como ela é, ler o
+predicado leria o nome de toda entrada consentida, e uma irmã que aborta derrubaria a verificação de
+todas — e todas seriam seguradas por uma. A entrada segurada é pulada enquanto a impressão digital
+dela for a mesma: a entrada sem os carimbos e o `narHash` do nixpkgs — declarar de novo a mesma
+coisa continua segurado; um pin novo, uma edição ou um nixpkgs novo dão outra chance. Só o Nix
+calcula a impressão digital (`personFingerprints`). O `person-bad-entry-does-not-break-eval` planta
+cada maneira de uma entrada dar errado e exige o motivo certo de cada uma.
+
+**Tudo vai para a pessoa, nunca para o `systemPackages`** (`person-packages-are-per-user`): o pacote
+e o AppImage embrulhado vão para o `home.packages` dela, o web app é uma entrada do
+`xdg.desktopEntries`, o Flatpak entra na lista do nix-flatpak da instalação `--user` (só de um
+remote que a máquina declara — de outro, a instalação falharia a cada ativação; e só com a chave
+`ronoctua.software.flatpak` ligada, que é o que importa o módulo Home Manager do nix-flatpak: uma
+máquina que ligou o Flatpak do sistema à mão não tem essa lista, e defini-la lá impediria a máquina
+de avaliar), e o Android é um apk baixado pelo pin para o store e listado em
+`/etc/ronoctua/declared-android.json`, de onde o reconciliador da central o instala como a pessoa,
+enquanto a sessão roda: o Nix não instala nada dentro de um contêiner que só existe na sessão. Os
+programas estão na máquina porque a pessoa os declarou, e não porque a distro os traz.
+
+**O consentimento do não livre é perguntado no consumidor**, e não só ao predicado: uma máquina com
+o SDK do Android liga `allowUnfree` para tudo, e um pacote que a pessoa nunca aceitou não pode
+entrar por essa porta. Os nomes que ela aceitou (por `lib.getName`, o que o predicado compara)
+entram no predicado único (`nix/modules/nixpkgs-config.nix`); ler um nome não roda o check de
+`meta`, então pedir o nome não volta pelo predicado que ele alimenta. Mas ler o nome LÊ o pacote, e
+por isso uma entrada segurada nunca é lida, nem para o nome: a que a verificação segurou pode ser
+justamente a que aborta ao ser lida, e pelo predicado levaria a máquina inteira junto. O predicado
+só é perguntado onde `allowUnfree` está desligado (o perfil `minimal`), e é lá que o check o prova.
+
+**O consentimento cobre o que o programa precisa.** `steam` é não livre e precisa do
+`steam-unwrapped`, não livre com outro nome; o predicado só conhece o nome que a pessoa aceitou, e o
+check de `meta` da dependência recusaria o todo, dizendo que o pacote estava quebrado. Quando o
+nixpkgs da máquina recusa um pacote consentido e a `meta` DELE o deixa entrar (não quebrado, não
+inseguro, desta plataforma, não livre aceito), o pacote vem de um segundo nixpkgs, o mesmo com
+`allowUnfree`, e só se avaliar lá: uma dependência quebrada ou insegura continua recusando, e dita
+como tal. A derivação é a mesma (o `allowUnfree` não muda derivação), e o segundo nixpkgs só é
+instanciado nesse caminho. A alternativa — só dizer melhor por que o pacote ficou de fora — deixaria
+`steam` impossível de declarar num `minimal`, com o consentimento dado. Sem consentimento, um pacote
+livre que precisa de um não livre é recusado com essa frase; o predicado continua sendo a lista do
+que a pessoa nomeou.
+
+**Os construtores.** O do AppImage baixa pelo pin (SRI, nunca um endereço que se move) e embrulha
+com o `appimageTools.wrapType2` do nixpkgs; a entrada do lançador sai de DENTRO da imagem, no passo
+de instalação do próprio embrulho (`appimageTools.extract` é derivação, e ler a saída dela na
+avaliação seria import-from-derivation e baixaria o AppImage para AVALIAR o sistema). A entrada é
+reescrita, e não copiada: só as chaves que um lançador usa sobrevivem, e o `Exec=` é nosso
+(`appimage-desktop.py`). O web app diz o que as entradas da central dizem (`Exec=` estável com
+`web-open <slug>`, o endereço fora do `Exec=`, `X-Ronoctua-Web-*`); o `StartupWMClass` é a
+aritmética do Chromium que o `web::app_id` faz, repetida no Nix porque uma entrada escrita pelo Nix
+não pergunta à Rust. A Rust lê o host e o caminho DEPOIS do `Url::parse`, que reescreve o endereço
+(tira segmentos `.` e `..`, `%2e` inclusive; passa um host fora do ASCII para punycode; codifica no
+caminho o que está fora do ASCII, as aspas, `<`, `>`, a crase, `{` e `}`; troca `\` por `/`; escreve
+`127.1` como `127.0.0.1`). O Nix não tem esse parser, e fazer metade dele seria uma terceira
+aritmética: um endereço que qualquer uma dessas regras mudaria é RECUSADO, dito como tal, e o perfil
+é ASCII imprimível, para que contar bytes seja contar caracteres. A central declara o que o
+`Url::parse` lhe deu. Uma tabela só de (endereço, perfil) → id é lida pelo teste da Rust e pelo
+`web-app-ids-agree`, e o teste da Rust prova que cada endereço recusado é um que o navegador
+reescreve. Toda entrada declarada leva `X-Ronoctua-Declared=<id>`, para a central separar a cópia
+declarada da imperativa, que tem o mesmo id de arquivo. Os construtores tomam a entrada no formato
+do `declared.json`, e o registro da distro (`nix/modules/distro-apps.nix`) usa os mesmos.
+
+**O relatório** (`/etc/ronoctua/person-applied.json`) diz o que foi aplicado, o que foi pulado e por
+quê, as recusas da pessoa contra o registro da distro (atendidas, recusadas por serem essenciais,
+desconhecidas; um app renomeado mantém a recusa por `formerly`) e os módulos do brain. O
+`still-present` — um app recusado que ainda está no sistema por outro caminho — é medido no
+`system.path` dentro do build, e só quando há o que procurar: a máquina comum, sem recusa, não amarra
+o arquivo ao build do perfil.
+
+**Um módulo do brain da pessoa que alcança root precisa de uma aprovação do que ele É.** Sem
+`module.nix` ele roda só como a pessoa, dentro do brain dela, e entra. Com `module.nix` ele é um
+módulo NixOS — a máquina inteira —, e só é importado quando o `local/approved.json` o nomeia com o
+hash que o `nix/person-hash.nix` calcula da pasta AGORA: a única implementação, que a porta do sudo
+também pergunta pelo `nix eval`, então o número mostrado ao aprovar e o comparado ao construir não
+saem de duas implementações. O hash cobre a pasta inteira (nomes, lugares e conteúdo, relativo à
+pasta, então a cópia da pessoa e a do store dão o mesmo), recusa link e nome que não se escreve numa
+listagem sem ambiguidade, e um módulo que não se calcula nunca é importado. A metade root é
+importada de uma CÓPIA só da pasta dela, sozinha no store, e é essa cópia que se calcula: no lugar,
+dentro da fonte do flake da máquina, um `imports = [ ../my-common/lib.nix ]` alcançaria uma pasta
+irmã — e uma irmã sem `module.nix` não precisa de aprovação, então quem mudasse os dados da pessoa
+mudaria código root que a aprovação nunca viu. Da cópia, `../` é a raiz do store, e uma avaliação
+pura não acha nada lá. O que o isolamento não impede é um módulo que NOMEIA um caminho pela
+configuração (`config.ronoctua.facterReport` é um arquivo da fonte da máquina): isso está escrito no
+texto aprovado, onde quem aprova lê. A decisão é tomada no `lib.machine`, e não num módulo NixOS,
+porque decide `imports`, e o `imports` de um módulo não pode depender da configuração. Editado
+depois da aprovação, o módulo espera uma nova, e o relatório diz qual hash ela precisa nomear
+(`person-root-module-needs-approval`).
+
+<!-- anchor: L04 -->
+
+### O registro de programas da distro
+
+**Por que um registro.** A pessoa passou a poder dizer "este programa da distro, não" — nesta
+máquina ou em todas as dela (`software/declined.json`, na parte em claro dos pertences). Para isso
+valer, o programa tem de entrar na máquina por um caminho só. Antes ele entrava por linhas soltas de
+`environment.systemPackages` em oito módulos, e uma recusa não teria onde morder. Agora todo
+programa que a distro instala para a pessoa escolher usar é uma entrada `ronoctua.apps.<id>`
+(`nix/modules/distro-apps.nix`), escrita ao lado do código que o possui (o Chrome no `browser.nix`,
+o VLC no `media.nix`, o `tmux` no `cli.nix`), e é o registro que o põe no `systemPackages`. O que
+ele fez fica em `/etc/ronoctua/distro-apps.json`, no formato que o `ronoctua-person` lê
+(`reports::DistroApps`).
+
+**O que é entrada e o que não é.** Entrada é programa que a distro instala para a pessoa escolher
+usar: os que aparecem no lançador, as ferramentas de linha de comando (as do Go, o `ffmpeg`, o
+`htop`, e cada ferramenta do `cli.nix` — o `tmux`, o `gh`, o `bat` —, uma entrada por ferramenta,
+porque "sem tmux aqui" é a decisão que a pessoa toma) e os agentes. Não é entrada o que o sistema
+roda (compositor, rodapé, os programas que uma unidade chama) — e isso não é uma exceção, é o que
+torna a recusa segura: programa chamado pelo sistema é chamado pelo caminho no store, então tirá-lo
+do `PATH` não quebra nada. Também não é entrada:
+
+- o que o próprio NixOS ou a base instalam em toda máquina (`less`, `curl`, `which`, `iproute2`,
+  `rsync` e `strace` são do NixOS; `git`, `jq`, `ripgrep` e `fd` do `base.nix`; `iw` e `ethtool` do
+  `network.nix`). Uma entrada para um deles seria uma recusa que nunca se cumpre; o `cli.nix` os
+  lista numa linha solta, com o porquê, medido nos três sistemas;
+- o equipamento de uma função da distro, que entra e sai com ela: os formatos atrás do `extract`
+  (`archives.nix`), o `sops` e o `age` dos segredos, os transportes do Tor, o `podman-compose` dos
+  containers, o `virt-viewer` do console VGA do Incus;
+- o que só existe para um programa da pessoa: os plugins do zsh andam com o zsh, as ferramentas do
+  Doom com o Emacs (`extraPackages`), o GStreamer fica com o grupo de mídia.
+
+Nenhum check cobra hoje a regra para uma ferramenta de terminal nova (o `distro-apps-are-registered`
+vê lançadores, não `bin/`): ela vale pela revisão. Os toolchains são uma entrada por linguagem (e
+uma para as ferramentas de build), pela mesma razão das ferramentas: "Go aqui, não". Um lançador que
+não é de programa nenhum (a página do Syncthing, o Waydroid, que é suporte dos apps Android da
+pessoa, o `remote-viewer` do console do Incus) é listado com o motivo em `assets/distro-apps.nix`;
+o `distro-apps-are-registered` constrói o `system.path` dos dois perfis e recusa o lançador que não
+está num lugar nem no outro, e também a entrada que diz possuir um lançador que o pacote não tem
+mais.
+
+**Os grupos são os interruptores do perfil.** O `group` de uma entrada nomeia um interruptor do
+`profile.nix` (`browser`, `media`, `dev-android`…), e o `when` segue esse interruptor por padrão. O
+mapa nome → interruptor existe uma vez, no `distro-apps.nix`; o perfil continua sendo a tabela.
+
+**Essencial é um conjunto fechado, e hoje tem um motivo.** O único programa que não se recusa é o
+zsh (`the-login-shell`): é o shell de login, e recusá-lo seria recusar entrar. Cada motivo é uma
+frase (`software-essential-why-<motivo>`) em todos os idiomas; a recusa de um essencial é ignorada e
+relatada com o motivo, nunca aplicada pela metade. O `essential-apps-say-why` cobra que cada motivo
+tenha frase, que nenhuma frase sobre e que cada motivo seja dado por algum programa.
+
+**Dois programas são interruptores, e a recusa os desliga.** O Chrome e o Emacs não são só pacotes:
+o quiosque, o host de native messaging, a extensão e o diretório de estado leem
+`ronoctua.browser.enable`; o daemon, os arquivos do Doom e o passo `doom-sync` da atualização leem
+`ronoctua.editor.emacs`. Tirar só o pacote deixaria tudo isso apontando para nada. Então a
+declaração do interruptor leva um `apply` que o desliga quando o id está em
+`ronoctua.distroApps.honoured`, e todo leitor segue. É `apply`, e não uma definição com prioridade,
+por dois motivos. A recusa vence qualquer linha, `mkForce` inclusive: um interruptor ligado com o
+programa fora é exatamente o estado quebrado que isso evita. E o registro ainda lê o interruptor
+como o perfil e o host o definiram (as `definitions` da opção, que o `apply` não toca): com uma
+definição de prioridade 90, o grupo do Chrome viraria `false` com a recusa, e o registro diria que a
+máquina não o carrega quando a pessoa só o recusou.
+
+Na mesma linha, tudo o que segura um programa recusado segue o registro (`installed`), e não só o
+interruptor do grupo: a metade do Home Manager do Atuin e do Starship (`programs.*.enable` também
+põe o programa no perfil da pessoa, onde a recusa não chegaria), os tipos de modelo do OrcaSlicer, a
+variável da linha de vida do Claude Code, o `ANDROID_HOME`/`ANDROID_SDK_ROOT` do SDK e o
+`FLUTTER_ROOT` do Flutter (uma variável que nomeia o SDK o mantém no closure e aponta o gradle para
+ele: quem o recusou para recuperar os gigabytes ficaria com os dois), e o cache do `tldr` (o serviço
+semanal e o passo `tldr-cache` da atualização). O `declining-an-app-removes-it` procura o caminho no
+store de cada programa recusado em toda variável de sessão e da linha de vida. O Ghostty, não: o
+terminfo daquele módulo também é o do terminal nativo, e a recusa tira só o programa.
+
+**Nenhuma entrada fica dentro de um `mkIf`.** O interruptor lê `honoured`, que lê os nomes do
+registro. Uma entrada definida dentro de `mkIf <interruptor>` faria os nomes do registro dependerem
+do interruptor, e a avaliação andaria em círculo. Estar numa máquina é o `when`, nunca a definição.
+(O OrcaSlicer só lê o nome do próprio lançador onde está instalado: ler é import-from-derivation, e
+uma máquina sem ele — o workshop desligado ou a pessoa o recusou — não pode ter de baixá-lo para
+dizer que não o tem. Não anda em círculo porque o `installed` lê o `when` e as recusas, nunca um
+`desktopIds`.)
+
+**Um id sobrevive ao nome.** Uma recusa viaja meses entre máquinas que se atualizam em dias
+diferentes; um id que sumisse a transformaria em "desconhecido" e o programa voltaria. Por isso
+`assets/distro-apps.nix` guarda o livro-razão de todo id já publicado, e um id sai dele só para o
+`formerly` de uma entrada (que leva a recusa junto) ou para `retired`, com o motivo. É um livro, e
+não o histórico do git, porque o check (`distro-app-ids-are-stable`) roda num sandbox sem histórico,
+e porque o livro diz no mesmo arquivo o que foi publicado. O mesmo check pede a uma máquina que uma
+recusa feita com o nome antigo tire o programa renomeado.
+
+**O relatório fala nos ids da pessoa, e diz dois fatos.** A parte `declined` do
+`person-applied.json` (honrada, recusada com motivo, desconhecida, ainda presente) usa os ids como a
+pessoa os escreveu, para a central de programas casar cada linha do arquivo dela com o que
+aconteceu; o `distro-apps.json` usa os ids do registro. Nele, `on-this-machine` é se a máquina
+CARREGA o programa (o `when`, como o `reports::DistroApp` o congelou) e `declined-here` é se a
+pessoa o recusou aqui: com os dois, a central distingue o programa que o perfil não tem do que a
+pessoa só recusou, e sabe que desfazer a recusa do segundo o traz de volta. Instalado é o primeiro
+sem o segundo honrado. "Ainda presente" é medido na lista de que o `system.path` é feito, e só pelo
+pacote principal da entrada: os companheiros são divididos (o `ripgrep` é do Emacs e da base), e
+achar um deles não é achar o programa. A recusa é lida por um leitor só: o
+`ronoctua.person.declinedHere` do módulo da pessoa, quando existe; até lá, uma cópia do mesmo filtro
+(uma linha de forma desconhecida fica de fora, nunca para a avaliação).
+
+**As outras fontes da distro: formas da pessoa, pins num arquivo da ferramenta.** Flatpaks,
+AppImages, web apps e apps Android da distro vêm de `assets/distro-apps.nix` (vazio hoje), nas
+formas das declarações da pessoa, e os pins ficam em `assets/distro-pins.json`. O que é declarado à
+mão e o que a ferramenta escreve moram em arquivos separados, como `flake.nix` e `flake.lock`: o
+`nix run .#distro-pins` move só o que segue uma fonte (a release mais nova de um repositório do
+GitHub, a versão que o F-Droid sugere), mantém o pin escrito à mão do que não segue nada, recusa uma
+release com tag sem número (`continuous` serve bytes novos sob o mesmo nome — o defeito que o
+`downloads-are-pinned` recusa) e nunca faz commit: o pin é o que o gate testou, e só o dono o move.
+O Flatpak da distro vai para a instalação `--user` pela lista do nix-flatpak, a mesma do
+`declaredFlatpaks` (sair dela é o que desinstala). O AppImage é embrulhado no build
+(`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`, o nome que o AppImage declarado da
+pessoa recebe — uma chave nunca esconde um programa de mesmo nome. O lançador e o ícone saem da
+imagem no build, sem import-from-derivation, numa derivação à parte do embrulho (o ambiente FHS são
+centenas de pacotes; o lançador só precisa da imagem aberta), e o lançador é ESCRITO, não copiado:
+um AppImage é arquivo de outra pessoa e o lançador dele não escolhe o que roda. Ficam só as chaves
+de que um lançador precisa; `Name=` é o da tabela, `Exec=` é o caminho estável do embrulho mais o
+código de campo que a imagem pediu, e as ações ficam para trás (cada uma nomeia um programa de
+dentro da imagem, que nenhum caminho de fora alcança). O ícone é o `.DirIcon`, seguido só enquanto
+fica dentro da imagem e só quando É um PNG ou um SVG. O id é `ronoctua-appimage-<chave>.desktop`, o
+mesmo que o da pessoa teria. O web app é um lançador no formato que a central escreve, sem
+`StartupWMClass`: aquela conta é do Chromium e mora uma vez, em `web::app_id`. O app Android é um
+apk do store, entregue ao reconciliador por `ronoctua.distroApps.android`, que o módulo das
+declarações da pessoa lista no `declared-android.json` com `from` = `distro`.
+
+**Toda recusa é uma frase numa lista.** Uma entrada, uma linha da tabela ou um pin malformado nunca
+vira um "attribute missing" de dentro de um builder: o `ronoctua.distroApps.problems` diz cada um
+pelo nome, a linha malformada da tabela não chega ao registro, e os pacotes do sistema e o
+`distro-apps.json` se recusam a avaliar enquanto a lista não estiver vazia. Como a tabela está
+vazia, nada na árvore alcança esse código; o `distro-app-sources-are-checked` planta uma tabela e
+pins (as opções internas `table` e `pins` existem para isso): uma entrada boa de cada fonte, que tem
+de chegar a tudo o que lê a tabela e sair de novo com a recusa; todas as formas ruins de uma vez,
+cada uma dita pelo nome; e os builders construídos sobre AppImages minúsculos feitos ali (um
+cabeçalho ELF que diz `AI 2` e um squashfs atrás, que é tudo o que o `appimageTools.extract` lê). O
+`nix run .#distro-pins -- --check` pergunta primeiro o que não precisa de rede (`offline_problems`:
+o arquivo na forma da ferramenta, cada pin de uma entrada do seu tipo, cada entrada com o seu pin),
+e é isso, e não o planejador inteiro, que o check pergunta ao arquivo da árvore: no dia em que a
+tabela seguir a primeira fonte, o planejador precisaria de rede.
+
+**O Emacs aparece no lançador, e o comentário dizia que não.** O `emacs.nix` afirmava que
+`services.emacs.install = false` mantinha `emacs.desktop` e `emacsclient.desktop` fora do lançador.
+No nixpkgs pinado, `enable` sozinho põe o pacote no `systemPackages`, com os dois. O registro agora
+os declara como do Emacs, e o comentário diz o que acontece; esconder os dois é decisão aberta
+(`docs/PENDING.md`).
+
+
+<!-- anchor: L05 -->
+
+### A vida da máquina: aplicar, o ensaio de boot, a migração (L05)
+
+**Um programa só muda o sistema.** O rebuild de resgate (`ronoctua-rescue-rebuild.service`), a
+atualização e a central de programas (`ronoctua-update-apply.service`) rodam o mesmo
+`ronoctua-machine apply`, extraído do workspace (`rust.machine`) porque roda como root a cada
+atualização, resgate e boot. Ele não chama `nixos-rebuild`: constrói (`nix build
+path:<pasta>#nixosConfigurations.<pessoa>.config.system.build.toplevel --no-update-lock-file`), e só
+depois põe o sistema no perfil (`nix-env --set`), troca (`switch-to-configuration switch`) e arma o
+ensaio de boot. `path:` explícito porque, sem o esquema, uma pasta com `.git` vira flake git e
+constrói só o que o git rastreia. `--no-update-lock-file` porque aplicar nunca move um input: um lock
+que precisasse mudar é um build que falhou, não uma revisão nova que ninguém pediu. O `4` do switch
+("trocou, e alguma unidade falhou") é `switched-with-failures`, não falha: o sistema novo está rodando.
+Os programas (`nix`, `bootctl`) e os lugares chegam por UMA tabela (`ronoctua.machine.environment`),
+que as unidades põem no `Environment=` e o embrulho no `PATH` põe com `--set-default`; nada se procura
+num `PATH`.
+
+**A pasta da máquina descreve o sistema que roda.** A atualização move o input da distro ANTES de
+aplicar, então o lock que o `apply` encontra pode nomear uma revisão da qual nada foi construído. O
+lock do qual o sistema do perfil FOI construído é sabido fora da pasta: o próprio sistema o carrega
+(`/etc/ronoctua/machine.lock`, o texto do `flake.lock` da fonte que o `lib.machine` recebeu — texto e
+não link, que poria o flake da máquina inteiro, segredos inclusive, no fechamento), e o lugar dentro
+do toplevel chega ao programa pela tabela (`RONOCTUA_MACHINE_SYSTEM_LOCK`). Para um sistema que não
+carrega nenhum — o do layout antigo, logo depois de uma migração — vale uma cópia
+(`/var/lib/ronoctua-machine/applied.lock`), que a migração grava com o lock que ela construiu e todo
+`apply` regrava quando o perfil passa a nomear o sistema novo. Toda saída que não fez um sistema novo
+— um build que falhou, uma recusa — devolve esse lock à pasta (`apply-reverts-the-lock-on-build-
+failure`, que prova também o caso sem cópia nenhuma: o primeiro `apply` depois da instalação). Uma
+atualização que falhou deixa a pasta como a máquina roda, e o próximo `apply` constrói o que roda,
+não o que falhou.
+
+**O ensaio de boot é nosso.** O NixOS 26.05 não tem contagem de boot (o builder do systemd-boot não
+escreve contador, e não há opção). Depois de um switch cujo kernel, initrd ou parâmetros diferem dos
+do último sistema bom, `bootctl set-default` nomeia a entrada do ÚLTIMO BOM e `bootctl set-oneshot` a
+do NOVO: o próximo boot tenta o novo uma vez (a variável `LoaderEntryOneShot` some ao ser lida), e
+qualquer boot depois disso volta ao último bom. A entrada de um sistema é achada pelo `init=` que o
+`bootctl list` mostra — nada mais diz qual sistema uma entrada sobe. Para o boot ruim virar boot de
+novo sem ninguém: `panic=10` (um kernel em pânico reinicia em dez segundos), `boot.panic_on_fail` (um
+estágio 1 que falha entra em pânico em vez de esperar num shell de emergência cujo root está trancado;
+o initrd systemd do nixpkgs faz isso com `panic-on-fail.service`), o watchdog de hardware
+(`RuntimeWatchdogSec`) e um prazo para o estágio 2. Um estágio 2 que cai no modo de emergência (uma
+montagem que falhou) ou que nunca termina (uma unidade sem fim) deixa o PID 1 vivo e o watchdog
+alimentado, e esperaria para sempre num console trancado: o `ronoctua-boot-trial-deadline.service`
+começa com o estágio 2, sobrevive ao isolamento do modo de emergência ou de resgate (que também o
+querem) e, num boot que TENTA um sistema, reinicia a máquina se o alvo padrão não chegou em
+`trialBootSeconds`. Um boot tenta um sistema quando o `LoaderEntryDefault` está posto e o
+`LoaderEntrySelected` (que o systemd-boot escreve a cada boot) é outro — só um ensaio deixa o default
+posto, e todo julgamento o apaga —, então nenhum boot comum ganha prazo, e um estágio 2 quebrado num
+sistema já bom não vira um laço de reinícios. Três senhas erradas no disco são uma falha dessas, e
+reiniciam.
+
+**Um sistema que sobe igual ao último bom é bom na hora** (`boot-identical`): mesmo kernel, mesmo
+initrd e mesmos parâmetros; o `init=` difere, e essa metade o switch já rodou — mas só um switch que
+devolveu 0 provou isso. Depois de um 4 (alguma unidade falhou) ou de uma ativação que falhou, nada
+provou que o sistema novo roda bem, e ele ganha um ensaio de verdade: abençoá-lo na hora faria do
+sistema cuja ativação falhou o último bom, e a aparagem deixaria de guardar o bom de antes. Sem
+variáveis EFI graváveis não há ensaio, e isso fica escrito no registro (`no-trial`:
+`no-efi-variables`, `not-in-menu` ou `no-last-good`, com a chave `machine-no-trial-<why>`) até o
+sistema novo subir uma vez: a porta da atualização diz que ele não tem volta além do menu. Antes do
+primeiro bless, o último bom é o sistema que subiu esta máquina — ele subiu, e está rodando o
+`apply` —, e o lock dele (o que ele carrega, senão a cópia) é guardado como o do último bom.
+
+**O bless pende do alvo que o boot alcança.** A sessão é um login no console e uma unidade de
+usuário, sem gerenciador de display: o `graphical.target` nunca chega. O bless é querido pelo alvo
+padrão do sistema (`systemd.defaultUnit`, hoje `multi-user.target`) e ordenado depois dele, com
+`blessAfterSeconds` de espera na frente; um bless pendurado no `graphical.target` nunca rodaria, todo
+ensaio ficaria pendente e todo boot depois do primeiro voltaria ao sistema velho. O teste de VM roda
+com o alvo padrão da distro, sem sobrescrevê-lo.
+
+**O bless desarma, em vez de nomear o ensaio.** Se subiu o ensaio, ele é o último bom, e o
+`LoaderEntryDefault` é APAGADO (`bootctl set-default ""`): o `loader.conf` já nomeia a geração mais
+nova do perfil, que é o ensaio. Deixar o default EFI apontando para uma entrada sombrearia o
+`loader.conf` para sempre. Se subiu outro sistema com um ensaio esperando, o ensaio é `failed`, o
+perfil volta ao que subiu (`switch-to-configuration boot` reescreve o menu para ele), o default é
+apagado, e o lock do sistema de volta (o que ele carrega, senão `last-good.lock`) volta à pasta. Sem
+ensaio esperando, o que subiu e durou é o último bom.
+
+**O sistema que não subiu não é tentado de novo.** O `apply` que constrói exatamente o toplevel cujo
+ensaio falhou recusa (`did-not-boot`) e devolve o lock: sem isso, a atualização seguinte (ou a
+central de programas) trocaria para ele de novo e o próximo reinício falharia igual, para sempre.
+Uma revisão NOVA da distro constrói outro sistema, e esse é tentado.
+
+**O ensaio que falhou é dito, uma vez.** Quando o sistema novo não subiu, a máquina já voltou
+sozinha — e ninguém estava olhando: o boot que falhou foi um pânico, e o que voltou parece qualquer
+outro. O módulo do cérebro `boot-fallback` escuta a pasta do registro e diz isso no minibuffer, uma
+vez por ensaio (o porquê está no `why.md` dele).
+
+**Um ensaio é julgado pelo primeiro boot depois do que o armou** — não pelo boot em que o bless
+calha de rodar, e não pelo relógio. Dois registros pequenos, da máquina e não publicados (a
+identidade de um boot não diz nada em outra máquina), ficam ao lado do `state.json`:
+`trial-armed.json` (o toplevel e o boot que o armou, `/proc/sys/kernel/random/boot_id`) e
+`trial-tried.json` (o primeiro boot posterior que durou até o bless, e o que ele subiu). O primeiro
+switch que traz a unidade do bless a inicia na hora (um switch reinicia os alvos), e nesse boot o
+ensaio não foi tentado: julgá-lo tiraria a máquina de um sistema que ninguém mandou deixar. O
+segundo registro é escrito ANTES de o bless esperar a trava, uma vez por ensaio: um bless que espera
+muito (uma atualização segura a trava) ou nunca a pega (a máquina foi desligada) já disse o que
+subiu, e quem julga depois — o próximo bless, ou um `apply` — julga por aquele boot. Antes, o
+"armado neste boot" era `last-apply.at` contra o `btime`, e todo `apply` regrava o `last-apply`, até
+o que não arma nada: um `apply` sem troca no boot do ensaio, ou um bless recusado por `busy`, fazia o
+boot SEGUINTE — no default EFI, o sistema velho — chamar de `failed` um sistema que subiu bem. O
+segundo registro nomeia o primeiro, então uma nota sobre um ensaio que um `apply` já trocou é
+ignorada, e os dois escritores não precisam de trava entre si. Sem registro do boot que armou (um
+registro perdido), vale a prova antiga: um sistema em execução que É o ensaio, com outro tendo
+subido, foi trocado neste boot. `RemainAfterExit` faz os switches seguintes do mesmo boot não o
+rodarem de novo.
+
+**Um `apply` julga antes de construir.** Uma atualização que o timer dispara logo no boot pode rodar
+antes do bless deste boot. O `apply` julga primeiro um ensaio que um boot anterior tentou, como o
+bless julgaria (e volta o perfil, se ele falhou): senão armaria um ensaio novo contra um último bom
+que já não é o último, ou construiria de novo o sistema que não subiu.
+
+**O rollback à mão desarma o ensaio** (`ronoctua-machine disarm`). O rollback do console de resgate
+(`nix-env --rollback` + `switch-to-configuration`) escreve o perfil e o `loader.conf`, nunca as
+variáveis EFI: sem desarmar, o one-shot levaria o próximo boot de volta ao sistema de que a pessoa
+acabou de fugir, e o default manteria todo boot seguinte fora do `loader.conf`. O `disarm` apaga as
+duas, registra o ensaio que o perfil deixou como `failed` (a próxima atualização não troca para ele
+de novo) e devolve à pasta o lock do sistema que o perfil nomeia. Um ensaio que o perfil ainda nomeia
+fica armado. Uma recusa (outra mudança segura a trava) é dita, e o rollback segue.
+
+**O menu guarda o último bom.** O menu lista as N gerações mais novas (o `store.nix` limita todo
+carregador à contagem da aparagem). Aplicar várias vezes sem reiniciar empurra o último bom para fora,
+e um ensaio sem volta não é ensaio: o `apply` que faria isso recusa (`last-good-would-fall-out`) e pede
+um reinício. Um último bom que o menu já não lista não é perdido por nada, e não trava a máquina. A
+aparagem das gerações (`ronoctua-system-generations --machine-state`) guarda também o último bom e o
+ensaio, lidos do registro (`generations-keep-the-boot-trial`).
+
+**As travas.** O `apply`, o `bless`, o `disarm`, o `hold` e a `migrate` tomam a trava de root dos
+dados da pessoa (`ronoctua_person::root::Lock`, L06): um build lê esses dados, e um `apply` entre o
+`verify` e o switch entregaria ao build uma entrada que ninguém tentou. Sob o `ronoctua-person hold`
+da atualização ela chega na entrada padrão, já tomada; sozinho, ele a toma, espera um pouco e diz
+`busy` — menos o bless, que espera longamente (`blessWaitSeconds`, quatro horas), porque o julgamento
+pode esperar e o que subiu já foi escrito. Os filhos nascem sem entrada padrão: herdariam a trava. O
+`ronoctua-update-apply.service` e o rebuild do resgate tomam ANTES a trava da própria atualização
+(`flock -n` no `system.lock` que a metade root dela segura; a mesma linha de comando,
+`ronoctua.machine.applyCommand`): com a atualização construindo, a aplicação é recusada na hora, com
+código próprio, em vez de construir a pasta enquanto a atualização reescreve o lock dela. O
+`update-apply-rule-is-narrow` lê o nome dessa trava nas fontes da atualização.
+
+**A regra polkit é de uma unidade.** A central inicia o `ronoctua-update-apply.service` sem ninguém
+olhando um pedido, e não há agente polkit na sessão: a regra devolve `YES` para a pessoa, verbo
+`start`, essa unidade, e a condição não testa mais nada. O bless não tem regra: só o systemd o inicia.
+
+**`hold` só retém a revisão que roda.** Um lock escrito com `--override-input` nomearia outra revisão
+por um tempo e voltaria na primeira avaliação que o comparasse com o endereço do `flake.nix` — uma
+retenção que não retém. Então a revisão pedida tem de ser a do sistema em execução (o lock guardado,
+senão o da pasta), e a pasta volta a ela se tinha andado. O `apply` de uma máquina retida cujo lock
+nomeia outra revisão recusa (`held`); o passo `flake-update` da atualização é que não move o input
+enquanto o registro disser `hold`.
+
+**A migração só troca o layout se o novo constrói, e nunca renomeia a pasta.** Com a raiz apagada a
+cada boot, a pasta da máquina é uma montagem bind do `/persist`, e um ponto de montagem não se renomeia;
+o registro em `/var/lib` é outra montagem, e um `rename` entre as duas falha. Então: o flake novo nasce
+DENTRO da pasta (`.next`: o `flake.nix` do template, `host.nix`, `facter.json` e os segredos byte a
+byte — `secrets/secrets.yaml` vira `secrets.yaml` —, mais uma cópia de `person/` e `local/` para o
+build construir o que a máquina vai construir), é travado e CONSTRUÍDO; qualquer falha apaga `.next` e
+nada mais. Só então o layout velho é COPIADO inteiro para `legacy-<carimbo>` (um é guardado), as
+entradas velhas saem e as novas entram por `rename` no mesmo sistema de arquivos. `person/` e `local/`
+nunca se movem: só o `ronoctua-person` os escreve (`one-person-boundary`), e a cópia do build é
+descartada. O `RONOCTUA_MACHINE_DISTRO` aponta o input da distro para outro endereço (o teste de VM, a
+adoção a partir de um checkout); sem ele vale o do template.
+
+**O ensaio não muda nada.** `apply --rehearse` copia a pasta para `/run/ronoctua-update/rehearsal`,
+move o input da distro LÁ (como a atualização faria, menos com `hold`), e mede o build com
+`--dry-run`: quanto baixar e quantas derivações construir. A cópia some no fim; nem o registro é
+escrito.
+
+**Testável sem root.** `RONOCTUA_MACHINE_SYSROOT` põe o perfil do sistema, `/run/booted-system`,
+`/run/current-system`, a identidade do boot, a trava de root e o store sob outra pasta, como um
+chroot; com ele, os verbos
+não pedem root, porque nada do sistema real é alcançável por esses caminhos. É o que os testes do crate
+e o `apply-reverts-the-lock-on-build-failure` usam, com `nix`, `nix-env` e `bootctl` de mentira que
+se comportam como os de verdade naquilo de que os verbos dependem.
+
+**Uma só porta para o carregador de boot.** Só o `ronoctua-machine` roda `bootctl`, escreve
+`LoaderEntry*`, mexe no perfil do sistema e chama `switch-to-configuration` entre os crates
+(`one-bootctl-driver`); só o `machine.nix` entrega `bootctl` a uma unidade (e só o prazo do ensaio, nele,
+lê as variáveis do carregador). O rollback do resgate escreve o perfil, mas as variáveis ficam com o
+`disarm`. Ler o Secure Boot, como a vista de segurança faz, não é dirigir o carregador.
+
+<!-- anchor: L06 -->
+
+### Os dados da pessoa na máquina: a cópia root, o verify e a aprovação (L06)
+
+**Por que uma cópia root.** O flake da máquina lê o que a pessoa declarou de `person/`, no diretório
+da máquina, e não dos arquivos dela. Um JSON quebrado faz o `builtins.fromJSON` lançar um erro que
+nada captura, e root nunca constrói a partir de uma pasta que a pessoa pode mudar no meio do build.
+Então a pessoa PREPARA e root COPIA: `ronoctua-person apply`, na unidade
+`ronoctua-person-apply.service`, valida cada arquivo e troca o resultado inteiro.
+
+**Por que a pasta preparada fica em `/run`, debaixo de uma pasta de root.** A pessoa enche
+`/run/ronoctua-person/staged` (dela, `0700`), mas não pode trocá-la por um link, porque a pasta de
+cima é de root. É tmpfs, então some a cada boot — e por isso uma pasta vazia é recusada
+(`nothing-staged`) em vez de aplicada: senão o primeiro `systemctl start` depois de um boot apagaria
+todas as declarações. Quem prepara é o software da pessoa e a sequência de atualização, logo antes
+de iniciar a unidade.
+
+**Por que a pasta preparada tem a forma do `plain/` do repositório** (`person/…`,
+`brain-modules/<my-id>/…`): o instalador entrega o clone dele ao mesmo aplicador, e o software da
+pessoa copia o espelho dela para lá sem traduzir nada. O que a máquina não lê (`person/machines/`,
+nomes desconhecidos) fica de fora, nunca é aberto, e o veredito diz o quê; um ícone que nenhuma
+entrada cita nem chega a ser listado (abaixo).
+
+**Por que cada documento é reescrito na forma canônica.** Root grava só o que entendeu: cada
+arquivo passa pelo `ronoctua_person::parse` e sai do `to_json`. Um formato mais novo é recusado
+antes de qualquer campo ser lido (`newer`), e a recusa deixa os dados velhos no lugar — uma máquina
+mais velha continua com a cópia que tinha, e a atualização segue com ela. Os módulos do brain são
+código da pessoa e vão byte a byte; o `module.nix` de um deles só entra num build aprovado (abaixo).
+
+**Por que nada é seguido.** Tudo o que root abre debaixo da pasta da pessoa é aberto relativo à
+pasta que já abriu (`openat`), com `O_NOFOLLOW`, e o que foi listado é conferido de novo depois de
+aberto (mesmo dispositivo e inode, dono, ninguém mais pode escrever): uma troca entre olhar e abrir
+vira recusa, nunca leitura de outro arquivo. Link, segundo nome (hard link), pipe, socket e
+dispositivo são recusados onde a caminhada olha; o que ela ignora nem é aberto. Um pipe é aberto com
+`O_NONBLOCK`, então não prende a unidade. Os tetos (`tree::caps`) recusam em vez de cortar: uma
+declaração cortada ao meio é outra declaração.
+
+**Por que só os ícones citados, e lidos pelo nome.** O flake da máquina é `path:`, copiado inteiro
+para o store a cada avaliação; um ícone de uma entrada esquecida seria copiado para sempre por nada.
+E ele nem é aberto: a caminhada não entra em `software/icons/`; depois de ler as declarações, o
+aplicador abre só `<sha256>.png` de cada ícone citado, pelo nome. Assim um ícone velho — um link,
+um arquivo grande demais — não custa um byte nem recusa a árvore; um ícone citado que falta ou que
+mente recusa, porque ele faz parte da declaração.
+
+**Por que um problema dentro de um módulo do brain deixa de fora só ele.** A pasta de um módulo é a
+pasta de trabalho da pessoa, e um editor deixa coisas nela. Nome escondido e cópia de segurança
+(`.x.swp`, `.#x` do Emacs, que é um link, `#x#`, `x~`) ficam de fora sem ser abertos, e o módulo
+segue. Qualquer outro problema dentro de um módulo (link, nome estranho, arquivo acima do teto,
+módulo com arquivos demais, pasta que não se chama `my-…`) deixa de fora AQUELE módulo: a máquina
+fica com a cópia que tinha dele (`kept`), e as declarações e os outros módulos chegam. Recusar a
+árvore inteira por um `.swp` deixaria as declarações da pessoa fora da máquina enquanto o editor
+estivesse aberto. O veredito diz qual módulo ficou de fora, por quê e se a cópia antiga ficou. O
+que é do todo (formato, ícone citado, tetos da árvore inteira) continua recusando a árvore.
+
+**Por que a troca é um `renameat2(RENAME_EXCHANGE)`.** Quem lê `person/` vê a árvore velha ou a
+nova, nunca metade de cada; a velha vira `person.next` e é apagada. Antes de escrever, a árvore nova
+é comparada com a que está lá, e uma igual não escreve nada (`unchanged`).
+
+**Por que um lock que só root abre, e por que a atualização o segura até o switch.** `apply`,
+`approve`, `verify` e o rebuild da atualização tomam o mesmo lock exclusivo,
+`/run/ronoctua-person/machine.lock` (`root::LOCK`): um arquivo `0600` de root, numa pasta de root,
+criado pelo programa. Não é o diretório da máquina: todo mundo lê aquela pasta, o `flock` só pede um
+descritor de leitura, e um processo qualquer da pessoa (ou um malware rodando como ela) seguraria o
+lock para sempre — e a unidade `oneshot`, cujo início não tem prazo, esperaria junto. Quem não pega
+o lock em `LOCK_WAIT_S` (30 s) recusa como `busy` e diz no veredito; a espera pergunta de novo a
+cada 200 ms só enquanto espera, porque o `flock` não tem prazo e uma thread presa nele pegaria o
+lock depois da recusa. As unidades ainda têm `TimeoutStartSec`, por garantia.
+
+A atualização segura o lock do `verify` até o fim do switch: soltá-lo entre os dois deixaria uma
+declaração feita no meio (o software inicia a unidade sem senha) entrar numa árvore que o verify
+nunca tentou — exatamente o caso que o verify existe para pegar. Como são processos diferentes, quem
+segura passa o lock aos filhos como a ENTRADA PADRÃO (`ronoctua-person hold -- <programa>`,
+`Lock::for_a_child`): o mesmo arquivo aberto, então o `flock` do filho já é dele, e o `Lock::take`
+do filho o acha ali em vez de esperar pelo próprio pai. Sem `unsafe` (o crate o proíbe), a entrada
+padrão é o único descritor herdado que o Rust empresta sem cerimônia. Uma unidade iniciada por
+`systemctl start` não herda nada, então, na atualização, o rebuild roda como filho de quem segura; e
+o `ronoctua-machine` sozinho (o rebuild de resgate) toma o lock do mesmo jeito, pelo `root::Lock` da
+biblioteca — o contrato com o L05 e o L19, no `PENDING.md`. Enquanto isso, a declaração da pessoa
+recebe `busy` e chega na aplicação seguinte.
+
+**Por que um veredito em arquivo, com o nonce de quem preparou.** `systemctl start` só diz que a
+unidade falhou. O `/run/ronoctua-person/verdict.json` (de root, `0644`) diz o resultado, o motivo de
+uma recusa (onde, com um ponteiro JSON), o que não foi levado e os módulos que ficaram de fora; quem
+iniciou a unidade lê depois que o `start` volta. Mas um segundo `start` de um `oneshot` que já roda
+se junta ao job em curso e volta com o resultado DELE, que leu a árvore de outra preparação. Por
+isso quem prepara escreve um `nonce` na raiz da pasta — apaga o velho primeiro, escreve o novo por
+último —, o aplicador o lê antes e depois da caminhada (diferentes: `restaged`, a árvore mudou
+enquanto era lida) e o veredito o carrega. Um veredito cujo nonce não é o seu não é a sua resposta:
+inicie de novo. O veredito é escrito em toda saída (dono desconhecido, `busy` inclusive) e ainda com
+o lock na mão, para que a resposta de uma execução nunca seja a de outra; o status 0 só sai quando
+ele foi escrito. Uma recusa sai com status 1 — a unidade fica `failed`, o que é verdade — e quem a
+iniciou segue com os dados velhos e diz por quê; a atualização não para por ela.
+
+**Por que o verify avalia uma entrada por processo.** O consumidor Nix pula o que consegue ver que
+está errado, mas um erro no fundo de uma dependência não é alcançado pelo `tryEval`, e o sistema
+inteiro para de avaliar. Antes do rebuild, `ronoctua-person verify` (root, na atualização) pergunta
+de cada entrada num `nix` próprio: `eval` do `drvPath`, depois `build --no-link`. Primeiro vem a
+linha de base, `personFingerprints`: se o flake da máquina não avalia, a culpa não é de entrada
+nenhuma, nada é segurado e o `held.json` fica como estava. Nenhum log é lido: falha de avaliação é
+`eval-failed`; falha de build de uma entrada com pin pergunta ao `nix store prefetch-file --json`
+pelo endereço do pin — não baixa é `fetch-failed`, baixa com outro hash é `upstream-changed`, o
+mesmo hash é `build-failed`. O lock nunca se move (`--no-update-lock-file`): mover inputs é do
+`flake-update`. Uma entrada que volta a falhar pelo mesmo motivo guarda o `since`. O contrato com o
+flake da máquina: `personEntries` e `personFingerprints` têm os mesmos nomes — toda entrada que a
+máquina construiria, segurada ou não (a segurada é tentada de novo a cada atualização) — e só o Nix
+calcula a impressão. `--rehearse` só avalia e não escreve nada — e por isso não diz `ok` de entrada
+nenhuma: o que avaliou e não foi construído sai como `untried`, e o que o `held.json` segura, na
+mesma impressão, por um motivo que só um build acha (`build-failed`, `fetch-failed`,
+`upstream-changed`) sai como `still-held` e conta no total, porque o rebuild vai continuar pulando.
+
+**Por que a aprovação é um verbo sem argumento numa unidade fixa.** O `module.nix` de um módulo da
+pessoa alcança root, então entra num build só no hash que o `local/approved.json` guarda, e só a
+porta do sudo escreve esse arquivo. A pessoa prepara `{format, id, hash}` em
+`/run/ronoctua-person/approve` e passa pela porta com `person-module-approve`; o ajudante inicia
+`ronoctua-person-approve.service` e nada mais. A unidade consome o pedido (um pedido deixado para
+trás seria aprovado de novo no próximo `start`), pede ao `nix/person-hash.nix` o hash da cópia da
+máquina AGORA e grava a aprovação só se ele for o hash que a pessoa viu: o hash do pedido nunca é
+confiado, só comparado. Um módulo mudado entre ser mostrado e ser aprovado é recusado, e um editado
+depois de aprovado deixa de bater e não é importado. A linha da porta só diz que a unidade falhou, e
+"falhou" não é motivo: a unidade escreve `/run/ronoctua-person/approve-verdict.json` em toda saída —
+o módulo, o hash mostrado, o calculado e o motivo (`no-request`, `invalid-request`, `not-owned`,
+`busy`, `no-such-module`, `unhashable`, `changed`, `unwritable`) —, que a vista lê como lê o do
+apply. O pedido é gasto em toda saída, recusa inclusive.
+
+**Por que o hash tem uma implementação só, e em Nix.** O consumidor da máquina compara o hash ao
+importar (`nix/machine.nix`, L03); a unidade grava o hash ao aprovar. Duas implementações seriam
+duas respostas no dia em que uma mudasse, então há UM `nix/person-hash.nix`, e o Rust nunca calcula
+hash de módulo: chama `nix eval` sobre ele, com a pasta no ambiente (nunca colada na expressão).
+Medido com o Nix de verdade: a pasta como texto absoluto (o que a aprovação passa) dá o hash que a
+fixture aprovada do L03 escreve. Ele cobre toda pasta e todo arquivo, pelo nome e pelo SHA-256, e
+lança erro num link ou num nome fora de `[A-Za-z0-9._+-]` — a cópia da máquina nunca tem um, porque
+o aplicador aceita menos ainda (nada que comece com ponto). Um `approved.json`
+quebrado começa vazio (falha fechada: nada é importado até ser aprovado de novo), e a aprovação de
+um módulo que saiu da cópia cai na próxima.
+
+**Por que uma regra polkit no apply e nenhuma na aprovação.** Aplicar declarações é o caminho
+automático (o software depois de declarar, a atualização), e não há agente polkit na sessão: a regra
+responde `YES`, para `start`, desta unidade e do único usuário — `person-apply-rule-is-narrow` mede
+isso nas regras mescladas do sistema de verdade. Aprovar código que alcança root é um gesto, e passa
+pela senha.
+
+<!-- anchor: L07 -->
+
+### O store leniente: um valor quebrado custa ESSE valor
+
+Um arquivo de preferência deixou de ser de um escritor só: os pertences o levam entre as máquinas
+da pessoa, e uma máquina mais nova escreve respostas que a mais velha não conhece (um tema novo,
+um modo novo da modeline). Antes, um valor que não lia custava o arquivo INTEIRO — o `read` caía no
+padrão — e a primeira escrita depois tornava a perda permanente. Agora custa aquele valor, e nem
+ele se perde.
+
+- **A leitura conserta no lugar** (`ronoctua_store::lenient`). O arquivo vira um documento ordenado
+  (`json::Node`: o `serde_json` do workspace não tem `preserve_order`, e um `Value` reordenaria as
+  chaves de quem escreveu à mão) e é lido como `T` pelo `serde_path_to_error`, que diz ONDE falhou.
+  Elemento de lista que não lê sai; campo que não lê recebe o valor do `T::default()` no mesmo
+  ponteiro, ou sai quando o padrão não tem nada ali; campo exigido que falta é preenchido; o
+  mesmo lugar falhando duas vezes sobe ao pai — é onde caem os caminhos grossos de um enum com
+  `tag` ou `untagged`. Tudo isso em até 64 tentativas, e só quando nada sobra o arquivo inteiro vira
+  o padrão. Um conserto que precisou subir vira UMA linha, com o que o arquivo dizia ali antes de
+  todos os passos (`Mender::unwind`): uma falha, uma linha. Um documento de outro tipo (uma lista
+  onde se espera um registro) é o padrão de uma vez, porque o serde leria um registro de uma lista
+  posição por posição e diria que guardou alguma coisa.
+- **A leitura é por `Value`, não por texto.** O leitor de texto diz "expected value" de um número
+  onde vai uma palavra; o `Value` diz "invalid type", que é o motivo mostrado à pessoa. O preço é a
+  ordem: as falhas chegam na ordem alfabética das chaves, e a razão é uma SEQUÊNCIA nessa ordem
+  (o ponteiro de cada conserto vale no documento como ele estava naquele passo — um elemento
+  tirado de uma lista move os seguintes).
+- **O domínio também recusa** (`Refused`): um id que não nomeia tema, idioma, perfil ou anel de
+  data é consertado do mesmo jeito que uma falha do serde — `theme.rs`, `language.rs`, `locale.rs`
+  e o `power.json` dão a sua verificação ao store. Ela VIAJA COM O STORE (`Store::checked`), e não
+  com cada chamada: a escrita julga o arquivo velho para saber o que a leitura consertou, e tem de
+  julgá-lo exatamente como a leitura julgou. Uma verificação passada à leitura e esquecida na
+  escrita fazia a escrita tomar o conserto do domínio pela escolha da pessoa — o substituto gravado
+  por cima do valor do arquivo no primeiro salvamento de outra coisa —, e um segundo leitor com
+  outra verificação reescrevia a razão a cada leitura, e o "deixar" piscava. Carregada no `Store`,
+  toda leitura, o `parsed` e toda escrita usam a mesma, e não há o que passar.
+- **A razão de consertos é um arquivo por arquivo** (`ronoctua_store::repair`):
+  `state/repairs/<caminho lógico escapado>.json`, com o SHA-256 dos bytes julgados e cada conserto
+  (`pointer`, `found`, `kept`, `why`). Quem lê o store escreve a razão — só quando os bytes mudam,
+  senão cada leitor do `theme.json` acordaria quem vigia a pasta — e a apaga quando nada há a
+  consertar. O nome é o caminho LÓGICO dos pertences (`config/theme.json`), e o store só tem razão
+  quando a pasta dele fica sob uma das raízes do processo: a pasta de rascunho de um teste não
+  escreve razão na casa de quem roda o `cargo test`, e o arquivo do daemon de teclas
+  (`/var/lib/ronoctua/keys`) diz o conserto só no diário.
+- **A razão é privada desde o primeiro byte.** Ela guarda VALORES do arquivo que julgou — um
+  elemento tirado inteiro, um documento inteiro substituído —, e o arquivo pode guardar um segredo:
+  as chaves de pareamento do player são `0600` porque cada uma deixa uma máquina entrar. A razão
+  não sabe quanto o arquivo valia, então nunca é legível por outro que não a pessoa: a pasta
+  `repairs/` é `0700` (e é estreitada se alguém a fez mais larga), cada razão é um rascunho criado
+  `0600` e renomeado por cima — nunca escrita e depois estreitada. O "gravar o conserto" mantém o
+  modo do arquivo consertado: o rascunho recebe o modo antes do primeiro byte.
+- **A escrita não grava conserto que ninguém aceitou** (`lenient::kept_over`). O `write` relê o
+  arquivo e grava o valor novo com três coisas do velho: as chaves que o tipo não conhece (o campo
+  da máquina mais nova sobrevive à escrita da mais velha; dentro de listas, o elemento é achado de
+  novo pelo `id`), cada conserto desfeito onde o escritor deixou o valor como a leitura o deu (do
+  último ao primeiro; o que o escritor MUDOU é escolha dele, e o conserto vira passado) e a ordem de
+  chaves do arquivo. Depois a razão segue o arquivo escrito. É uma leitura a mais por escrita,
+  aceita.
+- **"Deixou como a leitura deu" é medido contra o VALOR LIDO, serializado**, e não contra o que o
+  conserto diz que pôs. Um campo dentro de um registro que o padrão do tipo não tem — o de um
+  elemento de lista, o de um valor de mapa (as telas do `display.json`), o de um `Option` que nasce
+  `null` (o `show` das notificações) — é TIRADO na leitura, e o tipo o lê com o padrão do próprio
+  campo e o ESCREVE de volta: `"normal"`, `null`. Julgado pela ausência, todo conserto assim parecia
+  escolha do escritor, e o `"flipped-90"` de uma máquina mais nova sumia do arquivo quando a pessoa
+  mudava a escala de outra tela. Por isso o valor lido é serializado ao lado do escrito, os
+  consertos são devolvidos aos dois no mesmo passo (os ponteiros de cada um valem no documento do
+  seu passo), e um lugar é do escritor só quando os dois diferem ali. Um lugar numa lista é achado
+  no valor escrito pelo `id` do elemento (ou pelo índice quando as listas têm o mesmo tamanho); o
+  que não se acha — o elemento apagado pelo escritor — é do escritor, e o conserto nunca cai no
+  elemento que tomou o lugar dele.
+- **`apply` e `dismiss` são as duas respostas da pessoa.** "Gravar o conserto" refaz a mesma
+  sequência no arquivo e apaga a razão — só enquanto o arquivo for o que a razão julgou (senão
+  `Stale`, e nada é escrito). "Deixar" marca a razão como dispensada para AQUELES bytes; uma leitura
+  dos mesmos bytes mantém a marca, uma mudança do arquivo pergunta de novo. Valor renomeado não é
+  conserto: é `#[serde(alias)]` no tipo.
+- **`parsed()` devolve `None` só quando nada do arquivo serve** (não é JSON, ou é JSON que não tem
+  nada a ver com o tipo). Quem regrava o arquivo inteiro continua lendo com `parsed`: agora ele
+  recebe o resto do arquivo consertado, e a escrita devolve o que não foi tocado. `whole()` é o
+  `parsed` de antes — `None` também para um arquivo com conserto — e serve a quem tem um
+  consumidor ESTRITO ou uma promessa que o conserto quebraria em silêncio: o `belongings.json`
+  (o motor dos pertences o lê com `serde_json` puro e recusa o arquivo inteiro; parecer
+  configuração seria mentir, e escrever por cima não adiantaria) e os lembretes (um lembrete
+  consertado para fora é um lembrete que não toca). Os dois continuam "ilegíveis", com a frase de
+  sempre.
+- **Quem dizia "não lê" diz agora "uma parte não lê".** Uma vista que dizia a recusa quando o
+  `parsed` dava `None` ficaria muda diante de um arquivo consertado: mostraria o conserto como se
+  fosse o que o arquivo diz, e a razão ainda não tem tela. `Reading::part_not_read` separa os dois
+  casos, e a tela de telas, a dos ponteiros e a `modeline` (o rodapé ao subir, a vigia dele e a
+  janela de ajustes, as duas portas) dizem `belongings-repair-part-not-read`: a parte fica no
+  arquivo como está escrita e esta máquina segue sem ela — verdade nas três, porque a escrita
+  devolve o valor. O rodapé subindo e a vigia julgam os mesmos bytes do mesmo jeito
+  (`adapt::Unread`, `adapt::at_start`): um conteúdo nunca se comporta de dois jeitos.
+
+Duas leituras continuam recusando, por decisão: o escolhedor de tema (`read_whole`) não escreve
+sobre um `theme.json` com conserto — ele escreve as cinco respostas a cada seta, e a prévia é uma
+escrita, então nenhuma resposta ficaria "não tocada" — e a vigia do `modeline.json`
+(`adapt::reread`) recusa e guarda a cópia que tem, porque o conserto de `hidden` é a barra
+visível. Nos dois casos a recusa agora aponta para algum lugar: o conserto está na razão, e
+"gravar o conserto" faz o arquivo ler inteiro.
+
+**Os nove escritores à mão viraram `Store`.** `theme.json`, `language.json`, `locale.json`, as
+preferências das notificações, `brain.json`, `power.json`, `keys.json` e `files-sidebar.json`
+eram lidos com `serde_json` e gravados com `write_atomically` — sem consertar nada e sem guardar
+campo desconhecido. O `toolkits.rs` é o nono do censo: a única escrita direta dele é o
+`ghostty-size.conf`, um fragmento gerado e não um JSON, e por isso ele continua `write_atomically`
+e entra no censo como `generated`. A barra lateral ganhou um `Default` escrito à mão (`showing:
+true`): o `bool` derivado é `false`, e o padrão agora é também o que um conserto põe no lugar.
+
+**O censo dos pertences varre `write_atomically`.** O `belongings-manifest-covers-the-stores` lia só
+`Store::at(`; um arquivo escrito à mão sob `config/` ou `state/` é um store para os pertences de
+qualquer jeito. A pasta é seguida até o `let` que a liga na mesma função; pasta que é parâmetro não
+dá para ler na chamada (e os stores que eram escritos assim viraram `Store`, que a varredura lê
+pelo arquivo). Entraram os fragmentos do compositor e do Ghostty (`generated`) e a fila do player
+(`machine`). Store fora das raízes da pessoa é uma lista exata no próprio check (`ELSEWHERE`), com
+onde ele fica.
+
+**O que a caminhada nunca guarda pelo que o arquivo É** (`ronoctua_belongings::sift`). A tabela
+decide por caminho; duas coisas não se veem pelo caminho:
+
+- **Rascunho**: o `write_atomically` escreve `<arquivo>.<pid>.new` e renomeia; um processo morto no
+  meio deixa um, e a regra `.*` não o pegava. Entrou a regra `*.new` (`draft`).
+- **Link para o `/nix/store`** (`system-managed`): o Home Manager os põe na casa, e um link é
+  guardado como o texto do alvo — em outra máquina, ou nesta depois de uma coleta, ele volta
+  apontando para o nada, por cima do que o sistema poria ali. O alvo relativo é resolvido
+  lexicamente contra a pasta do link; nada é seguido.
+- **A chave de acesso com outro nome** (`access`): um hard link da chave de deploy dentro do
+  `~/.ssh` é o mesmo arquivo com um nome que a tabela não vê. A comparação é por dispositivo e
+  inode (o mesmo arquivo) e por SHA-256 (uma cópia — a caminhada já calcula o hash de tudo que
+  guarda), contra a chave, a metade pública e o token: "o `~/.ssh` menos a chave de deploy" vale
+  com qualquer nome.
+
+O que é separado vai para `Found::never` com o motivo, e o merge deixa esse caminho — e tudo sob
+ele, porque um link do Home Manager pode ser de uma PASTA, e um arquivo que outra máquina guarda
+lá dentro seria escrito através do link — em paz dos dois lados, como o ilegível: não apaga a cópia
+do repositório para as outras máquinas (outra máquina pode ter um arquivo de verdade ali) nem a
+puxa por cima do link que o sistema fez. A exceção é a chave de acesso: se o repositório já a tem
+(empurrada antes desta regra), a máquina que a reconhece a tira de lá (`Step::Unkeep`), e as
+outras apagam a cópia que puxaram. Deixada lá, toda outra máquina continuaria puxando a chave
+desta para o próprio `~/.ssh`. Os dois motivos novos têm frase (`belongings-reason-*`), e os
+quatro porquês da razão também (`belongings-repair-why-*`), para a vista que as mostra.
+
+`Synced.repaired` diz o que a razão tem, sem resposta e ainda válido, quando o sync termina: um
+arquivo que o próprio sync escreveu entra assim que alguém o lê (a porta que o vigia lê na hora), e
+a página lê a razão ela mesma.
+
+<!-- anchor: L08 -->
+
+### Sem limite de partida nas unidades de um gesto (2026-10-11)
+
+`ronoctua-stick-write.service` e `ronoctua-person-apply.service` têm `StartLimitIntervalSec=0`
+(`startLimitIntervalSec = 0` nos módulos). Cada partida é um gesto da pessoa — escrever um pendrive,
+uma ordem da central que parte o aplicador até três vezes — e nenhuma das duas se reinicia sozinha
+(`Type=exec`/`oneshot`, sem `Restart=`), então o teto padrão do systemd (cinco partidas em dez
+segundos) não protege de laço nenhum: só recusava o sexto gesto como `start-limit-hit`, e a tela
+dizia uma falha que a pessoa não causou. O teste de VM do pendrive fazia `reset-failed` antes de cada
+partida para contornar isso; não faz mais. `stick-root-is-narrow` e `person-apply-rule-is-narrow`
+leem o valor do sistema avaliado e recusam outro que não `0`.
+
+### Pertences, formato 2: pedaços, identidade pós-quântica, compactação e consentimento
+
+Um blob `age` por arquivo teria três defeitos: um arquivo maior que 100 MB não sobe para o GitHub,
+um byte mudado reescreve o arquivo inteiro no histórico, e o que fosse cifrado para X25519 poderia
+ser colhido hoje e aberto por um computador quântico amanhã. O repositório é:
+
+```text
+FORMAT                 "ronoctua-belongings 2"
+key.age                a identidade PQ (AGE-SECRET-KEY-PQ-1…), age-scrypt(senha)
+index.age              a cabeça do índice {version, size_bytes, sha256, chunks}, selada
+chunks/<aa>/<id>.age   pedaços de todo arquivo selado E do próprio índice
+RECOVER.md             como restaurar com o `age` do Go ≥ 1.3 e o `jq` (em claro)
+.gitattributes         "* -text" (em claro)
+```
+
+- **Pedaços definidos pelo conteúdo** (`chunks.rs`, FastCDC v2020, `chunk` de
+  `assets/belongings.nix`: 256 KiB / 1 MiB / 4 MiB). O corte depende do conteúdo, então uma edição
+  move só os pedaços em volta dela: um byte mudado em 64 MiB grava no máximo três arquivos, contando
+  o do índice, e um arquivo de 300 MiB vira pedaços de no máximo 4 MiB mais o cabeçalho do `age`. O
+  ÍNDICE também é pedaço: ele cresce com o que é guardado, e o `index.age` é só a cabeça selada que
+  nomeia os pedaços do corpo. Os limites do FastCDC (que entra em pânico fora deles) e o teto de 2 GiB
+  de um push são `const assert` no `kept.rs`: uma tabela fora deles não compila.
+- **O nome de um pedaço tem chave.** É HMAC-SHA256 do texto claro, com a chave derivada da identidade
+  por HKDF (sal `ronoctua-belongings chunk v2`, info `id`) — nunca o SHA-256 do conteúdo, que qualquer
+  um com uma cópia de um arquivo calcularia e procuraria no repositório. A semente da tabela gear do
+  FastCDC sai da mesma chave (info `seed`): os tamanhos dos pedaços são visíveis, e um arquivo
+  conhecido não é cortado onde um estranho o cortaria. Ao abrir, o id é recalculado sobre o que abriu:
+  um pedaço trocado por outro é `Corrupt`, antes da conferência do SHA-256 do arquivo inteiro.
+- **Escrito uma vez.** Um pedaço só é escrito quando o arquivo dele não existe: a cifra do `age` é
+  aleatória, e selar de novo mudaria no git um arquivo cujo conteúdo não mudou. Dois arquivos iguais
+  são um conjunto de pedaços. O que vaza muda, e a nota "O que é guardado" diz: quantos pedaços, os
+  tamanhos, que conteúdo se repete e as horas.
+- **Uma sincronização varre só o que ELA deixou de nomear** (os pedaços do índice velho que o novo não
+  nomeia). Um pedaço que outra máquina empurrou num lote e cujo índice nunca subiu (perdeu a corrida
+  e desistiu) não é de índice nenhum; apagá-lo numa sincronização qualquer apagaria o trabalho de
+  uma máquina que vai tentar de novo em cima dele. Só a compactação o leva.
+- **Push em lotes, o índice por último.** Pedaços novos acima de `budget.pushMB` sobem em commits só
+  de pedaços (`belongings: chunks`), cada um abaixo do teto, e o commit do índice vem depois: o
+  GitHub recusa um push acima de 2 GiB, e um lote que perde a corrida nunca deixa no repositório um
+  índice que cite um pedaço ausente — a próxima tentativa reaproveita o que já subiu.
+- **O clone não comprime nem procura delta** (`core.compression 0`, `pack.window 0`): pedaço cifrado
+  não comprime nem tem delta, e o push de centenas de MiB gastava minutos de CPU procurando.
+
+**A identidade é pós-quântica, e só ela** (`crypt.rs`, sobre o `ronoctua-pq`): `open`,
+`from_secret`/`secret` (o que a sessão guarda no keyring do kernel), `recipient` e `chunk_id`. Um
+`key.age` ou um segredo guardado que não seja uma identidade `AGE-SECRET-KEY-PQ-1…` — uma X25519
+inclusive — é `Corrupt`: nada seria selado para ela de novo, e uma sincronização sob ela selaria
+clássico.
+
+**Só o formato 2 existe** (decisão do dono, 2026-10-11). Nenhum repositório privado foi usado antes
+dele, então o formato 1 (um blob por arquivo, identidade X25519) nunca existiu fora desta máquina, e
+o leitor, a migração (`Op::Migrate`), o corte da compactação na migração e a oferta na vista saíram
+inteiros: código que lê um formato que ninguém tem é superfície sem uso. `crate::format_check` é a
+regra única que sincronização, compactação e restauração perguntam: um `FORMAT` mais novo que esta
+build é `Why::Newer` ("atualize esta máquina"); um mais baixo, ou que não se lê, é `Why::NotOurs`
+("não é um repositório de pertences que este sistema lê") — nunca lido como se fosse este, nunca
+recusado calado (cobra `belongings-refuses-a-format-not-its-own`). A migração da PASTA DA MÁQUINA
+(`ronoctua-machine migrate`, `.#adopt-machine`) é outra coisa e continua.
+O destinatário PQ (público) fica em `state/belongings/recipient`, para o "para mim" do
+cifrar-qualquer-coisa não pedir a senha (`fleet::recipient`, `pq_recipient()`) — mas só depois que a
+identidade dele está NO REPOSITÓRIO: aberta de um `key.age` buscado, ou a nova de um repositório
+vazio depois que o push dela entrou. Gravado antes do push, um primeiro push recusado (uma chave de
+deploy somente leitura, o padrão do GitHub) deixaria um destinatário cuja identidade não existe em
+lugar nenhum — a tentativa seguinte cria outra —, e todo arquivo selado "para mim" até lá seria
+ilegível para sempre.
+
+**`RECOVER.md` é seguido de verdade.** É um script `sh` (o `age` do Go ≥ 1.3, o `jq` e o
+`sha256sum`) que restaura tudo em `restored/<caminho lógico>`, com modos e links. O dano realista é
+um pedaço que o `age` recusa (ele autentica cada pedaço), e o script foi escrito para ele: cada
+arquivo é restaurado dentro de um `if`, então o que não abre ou não confere com o índice vai para
+`damaged.txt` e o resto continua; e um `trap` de `EXIT` apaga o `identity.txt` (a identidade em
+claro) e o `index.json` como quer que o script termine — com `set -e` puro, o primeiro pedaço ruim
+encerrava tudo e deixava a identidade no disco. O check `belongings-recover-without-the-distro`
+extrai o bloco do arquivo que o repositório carrega e o roda como está, com a senha entregue ao
+terminal do `age` pelo `script`, duas vezes: o repositório inteiro (arquivos idênticos, modos, link)
+e uma cópia com o pedaço de um arquivo cortado (o arquivo nomeado, todos os outros de volta, nada
+deixado). Essa execução é uma derivação própria (`belongingsRecovered`), separada da que roda os
+testes: uma propriedade que falha não esconde as outras sete. O passo do `script` dentro do sandbox
+e o trecho inteiro com o `age` 1.3.1 do nixpkgs foram medidos sobre um repositório da mesma forma com
+chaves clássicas; com a chave PQ, depende do X-Wing do pacote pq-core. Inglês, porque é um arquivo de
+um idioma só (inv. 18).
+
+**O orçamento e a compactação** (`size.rs`, `compact.rs`). Toda sincronização mede a árvore e o
+histórico do clone (`git count-objects`) em `Synced.budget`, e também se uma compactação de
+`keepDays` dobraria algum commit (`foldable`) — a mesma leitura da história que a compactação faz
+(`Engine::folding`). O que isso
+pede à pessoa é uma conta só, `kept::weight`: aviso acima de `warnMB`; compactação recomendada acima
+de `recommendMB`, ou acima de `warnMB` com o histórico pesando `historyOverTree` vezes a árvore — e
+só quando há o que dobrar. A razão sozinha recomendava compactar um repositório de configuração de
+300 KB sincronizado todo dia (cada sincronização reescreve o pedaço do índice), cujos commits estavam
+todos dentro de `keepDays`: a compactação não dobrava nada e a recomendação nunca saía da tela.
+A compactação nunca é automática: sob a trava,
+busca o head H, faz da árvore do último commit até o corte (`keepDays`) uma raiz NOVA e reescreve os
+commits seguintes por cima com `commit-tree`, mantendo mensagem e datas — um commit reescrito igual
+tem o mesmo id, então um histórico sem nada a dobrar é o mesmo histórico e `keepDays = 0` é só a
+árvore do head. O motor nunca lê uma versão do histórico, então nada que ele restauraria se perde. Os pedaços que a árvore tem e o índice não nomeia (os órfãos) saem num commit, e o
+resultado sobe com `--force-with-lease=refs/heads/main:H`: um push que outra máquina fez depois da
+busca quebra a garantia, e a compactação recomeça por cima dele. Localmente, `reflog expire` e
+`gc --prune=now`. Sem nada a dobrar nem órfão, nada sobe e o status diz
+`NothingToCompact` — nunca "compactado: N virou N". Para as outras máquinas a base não muda (o
+`last.json` é de hashes de conteúdo); a que vê um head que não descende do que o clone dela tinha faz
+o mesmo `gc`. "O que o clone tinha" é uma ref própria, `refs/ronoctua/built-on`, que só a busca de
+cada execução move (`Engine::ground`), e o encolhimento acontece ali, em toda execução que busca: a
+ref remota não servia, porque toda busca a move — a do push que perdeu a corrida para a compactação
+também —, e a tentativa seguinte comparava o head novo com ele mesmo e guardava o histórico velho
+para sempre. O GitHub guarda objetos
+inalcançáveis até a coleta dele (ou um pedido ao suporte), e a frase do resultado diz. O
+`ronoctua-git` ganhou `commit_tree` (as seis variáveis de autor e data, só por dentro do `ran`) e
+`push_force_with_lease`, endurecidos como o resto. Os dias guardados vêm da tabela; a porta que
+pede outro número o faz pelo `requests.json` (`Compact{keep_days}`, do pacote
+belongings-targets-unlock).
+
+**Nada vai ao host antes de a pessoa permitir.** Toda busca e todo push dos pertences — sincronizar,
+compactar — cunham um `ronoctua_consent::Pass` para o host do endereço na hora
+(`Engine::let_in`, lido do `consent.json` naquele momento), e sem ele a execução é recusada com
+`Why::NotLet` sem ter perguntado nada. O endereço é a fonte que a pessoa configurou, e por isso
+digitá-lo na vista grava a permissão do host (como qualquer outro consentimento). Um endereço
+gravado antes desta regra tem host sem permissão: a vista lê o
+`consent.json` e, sem a permissão, desenha sob "Sincronizar" a linha de consentimento de todo app
+(`consent_rows`: "Perguntar a <host>", e pressioná-la permite — `RET`, o segundo clique ou `C-a`),
+e recusa sincronizar e aplicar com a frase antes de pôr qualquer coisa na fila (um `apply` recusado
+pelo CLI levaria a sessão e as decisões junto). A vista lê e grava o `consent.json` da MESMA raiz de
+onde lê os outros arquivos (`Places::config`, que no produto é a do CLI, e numa foto ou num teste é a
+pasta deles: o teste do endereço gravava o `consent.json` de verdade de quem rodava os testes). E um
+endereço cujo host o `consent.json` não sabe guardar (um IPv6 entre colchetes, um nome com `_`) é
+recusado ao ser digitado (`Invalid::UnnamedHost`): guardado, toda sincronização seria `NotLet` para
+sempre, e digitá-lo de novo nunca ajudaria. Um assim guardado antes desta regra é dito
+pela vista com a mesma frase antes de sincronizar, em vez do "sem repositório" do CLI. Um endereço
+sem host (uma pasta) só existe em teste: a ordem recusa um.
+O check `belongings-ask-with-a-pass` prova isso com um repositório de host alcançado por uma pasta
+(`insteadOf`) e lê o motor atrás de uma chamada de rede sem pass.
+
+**Quando a distro desta máquina foi construída** (`machines.<nome>.built_s`, para o `fleet.json` que
+as portas leem: qual máquina roda a distro mais nova) vem de `/etc/ronoctua/built-s` (o
+`lastModified` do flake), lido em tempo de execução: um commit novo não recompila nada, e um `switch`
+não reinicia a fila que roda o CLI. `RONOCTUA_BUILT_S` no ambiente vence (os testes).
+
+**A trava solta explicitamente.** O `flock` é do arquivo aberto, e um filho que outra thread cria
+herda uma cópia de todo descritor até o `exec`; fechar o nosso deixava a trava presa naquele
+instante (o `busy` da porta via uma execução já terminada). `Held` e `busy` soltam com `unlock`.
+
+
+<!-- anchor: L09 -->
+
+### Pertences: a parte em claro, assinada com a chave da pessoa
+
+**Por que assinar.** A máquina lê a parte em claro sem senha (a atualização, o instalador, o
+registro depois de um `switch`), e quem pode ESCREVER no repositório — a chave de deploy de qualquer
+máquina da pessoa, o token, o próprio host do git — podia mudá-la. Os módulos do brain da pessoa
+são compilados no brain e rodam como ela, e o `options.json` muda como root autentica: uma chave de
+deploy vazada virava código em toda a frota. A regra anterior (`plain::HELD`: código e opções que
+chegavam do repositório esperavam a pessoa em toda execução, em toda máquina) fechava o buraco
+obrigando a aceitar à mão o que a própria pessoa tinha feito em outra máquina. Agora a pessoa ASSINA
+a parte em claro, e o que ela assinou chega sozinho de novo — módulos e opções inclusive; o que não
+está validamente assinado fica retido, com a frase do motivo (decisão do dono, 2026-10-11).
+
+**A primitiva é o ML-DSA-65, no `ronoctua-pq`.** Assinatura nova da pessoa é pós-quântica, como a
+cifra. O ML-DSA-65 (FIPS 204) vem do `aws-lc-rs`, que já é o único provedor das primitivas que o nosso
+código chama (`one-crypto-implementation`), pelo caminho estável
+(`aws_lc_rs::signature::{PqdsaKeyPair, ML_DSA_65_SIGNING, ML_DSA_65}`): na 1.18 o módulo `unstable`
+só tem apelidos depreciados para o mesmo código. A chave é a semente de 32 bytes
+(`PqdsaKeyPair::from_seed`): é o que se escreve, e a chave inteira sai dela sempre igual. A semente
+vive numa `Zeroizing`, o `Debug` da chave mostra só a impressão digital (SHA-256 da chave pública), e
+nenhuma resposta a imprime (`pq-identity-never-prints`).
+
+**A chave nasce com o repositório e mora no `key.age`.** O `init` gera a chave ao lado da identidade
+X-Wing e as duas viajam no mesmo `key.age`, sob a mesma senha: quem abre um abre o outro, e não existe
+uma segunda coisa para guardar nem para perder. Ela vai numa linha de comentário
+(`# RONOCTUA-SIGNING-KEY-MLDSA65-1…`) porque o `age` do Go, lendo o mesmo arquivo como arquivo de
+identidade, pula linhas `#` — o `RECOVER.md` continua valendo, e diz que a assinatura não é
+necessária para recuperar nada. Um `key.age` sem as duas linhas é `Corrupt`: não há formato
+publicado com o qual ficar compatível (sem formato 1, decisão do dono). A sessão guarda as duas linhas
+no chaveiro do kernel, como guardava a identidade, e assina enquanto ela estiver aberta. A chave
+pública também vai em claro para o repositório (`plain/signer.pub`), só para uma tela mostrar:
+ninguém confia nessa cópia, porque quem escreve no repositório a trocaria junto com a assinatura.
+
+**O que é assinado é um manifesto.** `plain/signed.json` diz cada arquivo coberto com o SHA-256 dele,
+um contador que só cresce, a hora e a impressão digital de quem assinou; `plain/signed.sig` é a
+assinatura destacada, sobre `"ronoctua signed manifest v1\n"` seguido dos bytes exatos do JSON — o
+prefixo impede que uma assinatura feita para outra coisa valha como manifesto. Abrir confere a
+assinatura ANTES de ler qualquer campo do JSON, e um manifesto com o campo `signer` de outra chave é
+recusado mesmo com a assinatura certa. A cobertura é uma regra só, `ronoctua_person::tree::signed`,
+que os dois lados usam: tudo sob `person/` e `brain-modules/`, MENOS `person/machines/`.
+
+**Os registros das máquinas ficam fora, e nada os executa.** Cada máquina publica o próprio
+`machines/<host>.json` no fim da atualização (`ronoctua-person record`, que copia o `state.json`
+dela), sem a senha — não teria como assiná-lo. Quem o lê: só a sincronização dos pertences, que o
+leva e o mescla como qualquer arquivo em claro. O aplicador de root o pula sem abrir
+(`Place::Ignore`), o Nix não lê nenhum, e a central de programas lê só o `state.json` da própria
+máquina, na pasta de estado dela, nunca o espelho. Nenhum vira configuração nem código: um registro
+forjado é um arquivo que nada consulta.
+
+**Do lado da pessoa, a chave que vale é a dela, nunca a do repositório.** Numa execução com a senha
+(sincronizar, restaurar, `init`) ou com a identidade que a sessão guardou, a chave que vale é a que a
+senha abriu do `key.age`: a senha prova que ela é da pessoa. Numa execução sem ninguém (`sync-plain`,
+`plain pull`), é a chave que root fixou nesta máquina (`<pasta da máquina>/local/signer.json`, lida
+pelo mesmo leitor que root usa: chave que não lê, ou impressão digital que não é a dela, é nenhuma
+chave). Sem nenhuma das duas, toda mudança do repositório num arquivo assinado fica retida
+(`no-key`). Uma mudança do repositório num arquivo coberto só entra quando a assinatura vale sob essa
+chave, o manifesto nomeia o arquivo com o hash que ele tem, e o contador não é menor que o maior que
+esta máquina já viu daquela chave (`Seen`; uma chave nova, de um repositório refeito, conta do zero).
+Fora disso o arquivo fica como esta máquina o tem, e o `last.json` diz por quê (`PlainBase::held`:
+`unsigned`, `no-key`, `bad-signature`, `rolled-back`, `not-as-signed`, cada um uma frase na página).
+Numa sincronização com a pessoa, um arquivo retido é um conflito que pergunta, com o motivo e sem
+sugestão; o que ela decide aceitar passa a ser desta máquina, e esta máquina o assina.
+
+**Quem assina, e o que nunca é assinado.** Uma máquina com a chave na mão (a senha digitada, ou a
+identidade da sessão) assina quando manda uma mudança em arquivo coberto: o manifesto novo leva o
+contador um acima de todo contador visto, e um merge de duas máquinas é assinado por quem o fez. O
+manifesto novo cobre só o que esta máquina responde: um arquivo dela, um já aceito sob a assinatura,
+um merge dela, o que a pessoa decidiu aceitar. Um arquivo retido NUNCA entra com o conteúdo do
+repositório — se entrasse, a próxima assinatura lavaria a mudança de quem escreveu no repositório
+sem a chave; ele entra com o hash do arquivo que esta máquina tem, e continua retido em toda máquina.
+Sem a chave na mão, um manifesto que esta máquina assinou num gesto (`sign`, abaixo) ainda vai, se
+cobrir exatamente o que vai; senão as mudanças desta máquina em arquivos cobertos ESPERAM
+(`PlainBase::unsigned`, "esperando a sua senha para ser assinado") e só os registros das máquinas
+sobem. Um push assinado nunca é mandado sem assinatura.
+
+**Assinar num gesto, sem rede.** `ronoctua-belongings sign` assina a parte em claro desta máquina
+como ela está, sem buscar nada, e guarda o par em `$XDG_STATE_HOME/ronoctua/person-signed/`: a
+central de programas assina antes de preparar uma declaração para root, o passo `person-sign` da
+atualização assina depois de mover as fixações, e a página dos pertences tem "Assinar agora" quando
+há mudança esperando. Ele precisa da identidade (a da sessão, ou a senha que uma porta escreveu
+naquele gesto) e nunca pergunta: sem ela recusa com `no-passphrase`, e a atualização chama isso de
+notícia, não de falha. Quem pergunta é a porta, no gesto, porque a pessoa está lá: numa sessão que
+não guarda a identidade, a central de programas pede a senha dos pertences antes de mudar a
+declaração (instalar só para você, recusar, trazer de volta, esquecer, adiantar as fixações;
+`software::Ask::Sign`, nas duas portas) e a escreve onde o `sign` a lê; uma resposta vazia desiste do
+gesto. Sem repositório sincronizado não há chave para abrir, e nada é perguntado. É por isso que o par viaja na preparação: root não lê o repositório, lê o que
+a pessoa preparou.
+
+**Do lado de root, a chave fixada e nenhuma outra.** O `ronoctua-person apply` lê a chave fixada
+PRIMEIRO, antes de abrir a preparação. Com uma chave fixada, uma preparação sem assinatura, com a
+assinatura de outra chave ou com contador menor que o último aceito é recusada inteira
+(`not-signed`, `bad-signature`, `rolled-back`): os dados da máquina ficam, e o `signer.json` guarda
+a recusa para o `person-applied.json` dizer. Com a assinatura valendo, ela ainda responde arquivo a
+arquivo: um documento que não é o que foi assinado fica com a cópia da máquina (`kept_back`), e um
+módulo com um arquivo fora do assinado fica de fora, como um módulo que não se lê. Assim uma
+fixação que a atualização moveu com a identidade fechada espera, e todo o resto assinado chega. O
+contador aceito é gravado ANTES da troca: gravado depois, uma falha entre os dois deixaria a máquina
+com os dados novos e o contador velho, e uma preparação mais antiga, assinada de verdade, passaria.
+Gravado antes, a falha deixa os dados velhos com o contador novo, e a mesma preparação (contador
+igual) continua aceita. Numa máquina SEM chave fixada as
+declarações de programas entram como a pessoa as preparou — uma pessoa sem repositório não tem com
+que assinar, e declarar um programa numa máquina sozinha continua funcionando —, mas opções e
+módulos nunca (`no-key-pinned`): o que muda a configuração de root e o código que o brain compila
+pedem a assinatura, sempre. O brain compila os módulos da pessoa só da cópia de root
+(`<pasta da máquina>/person/brain`, `nix/machine.nix`), que só esse aplicador escreve
+(`brain-unsigned-module-never-compiled`).
+
+**Fixar é um gesto com a senha, nunca a primeira chave vista.** Confiar na primeira chave que
+aparecesse entregaria a máquina a quem escreveu primeiro no repositório. O instalador fixa a chave
+que a senha digitada abriu do `key.age` (o `plain --passphrase` a deixa ao lado da cópia, e o
+`ronoctua-person pin` a consome; num repositório feito pelo `init` da instalação, a chave nova, com
+`--owner` da pessoa). Numa máquina sem chave fixada — ou fixada em outra, depois de um repositório
+refeito — a página dos pertences oferece "Fixar a sua chave nesta máquina": a chave pública vem da
+identidade aberta pela senha dos pertences, e o gesto passa pela porta do sudo
+(`RootVerb::PersonSignerPin`, com a chave conferida pelo `parse` do verbo, como o hash do
+`PersonModuleApprove`). O helper escreve a chave na pasta de ROOT (`/run/ronoctua-person/signer-pin`
+— a pasta da pessoa é de qualquer processo dela, e uma chave trocada lá enquanto o sudo lê a senha
+seria fixada no lugar da mostrada) e inicia a `ronoctua-person-pin.service`, sem regra polkit e sem
+capacidade nenhuma. O `pin` consome o arquivo (um arquivo regular do dono, só dele, um nome só, pequeno)
+e o apaga como quer que termine: uma chave é fixada uma vez. Fixar de novo a mesma chave guarda o
+contador; uma chave nova começa do zero (`person-apply-rule-is-narrow`, `one-person-boundary`).
+
+**O que ficou de fora.** Fixar é um gesto de root como os outros: a senha, a chave ou o dedo são
+perguntados na barra do sudo (seção "A barra do sudo e as telas"), de qualquer porta, e a página não
+tem pergunta de senha própria. A porta
+do rodapé dos pertences não foi fotografada nos estados novos (a da janela foi, nos dois idiomas).
+
+
+### Pertences: a parte em claro, o merge e a restauração na instalação
+
+**A parte em claro existe porque a máquina precisa dela antes da senha.** O que a pessoa declarou
+(programas declarados e recusados, o registro de cada máquina, as opções) e os módulos do cérebro
+dela são lidos pela própria máquina — a atualização busca as declarações, o instalador as prepara
+antes do `nixos-install`, a máquina publica o registro depois de um `switch` — e nenhum desses
+momentos tem alguém para digitar a senha. Então eles vão em claro, sob `plain/<at>/` do repositório,
+e a página "O que é guardado" diz que quem lê o repositório lê isso. As raízes são uma tabela
+(`plain` em `assets/belongings.nix`): `state/person` → `plain/person`, `config/brain-modules` →
+`plain/brain-modules`. Uma raiz em claro VENCE a árvore em que está (`Verdict::Plain`):
+`config/brain-modules` fica dentro de `config`, e selá-lo também faria o mesmo arquivo viajar duas
+vezes, com dois merges que discordariam. Os padrões de nome do `never` continuam valendo abaixo dela
+(um rascunho não viaja em claro), um link, um socket ou um pipe não é dado, e um arquivo acima de
+`plainMostKiB` fica de fora dos DOIS lados e é nomeado (`PlainBase::too_large`), com a base
+guardada. O gerador recusa duas raízes que se sobrepõem (pelo caminho ou pelo `at`: um arquivo
+teria dois lugares, ou dois arquivos um) e uma raiz que encosta num caminho do `never` (os arquivos
+de acesso viajariam em claro).
+
+**A árvore do git é o índice dela.** Um arquivo em claro nunca entra no `index.age`. A base do merge
+seguinte é a seção `plain` do `last.json` (`PlainBase`): o SHA-256 de cada arquivo (o que "mudou"
+compara) e o blob do git dele (de onde o conteúdo da base é lido de volta, `git cat-file`). Por isso
+a parte em claro não precisa de cache nem de chave. A seção diz o próprio repositório: uma execução
+só da parte em claro pode ser a primeira coisa que uma máquina faz com ele, e então o resto do
+`last.json` fica vazio — o lembrete continua dizendo "restaure", e a sincronização selada continua
+sendo a primeira. Um repositório VAZIO não tem base, diga o `last.json` o que disser do endereço,
+como na parte selada: refeito vazio no mesmo lugar, ele é uma primeira vez e nada daqui é apagado —
+com a base antiga, todo arquivo em claro sem mudança pareceria apagado lá, e sairia daqui sem nunca
+chegar ao repositório novo.
+
+**Este lado é lido uma vez, e nada é escrito sobre um arquivo que mudou.** A caminhada que faz o
+plano é a única leitura dos arquivos desta máquina (`PlainPlan::here`); a base depois da execução
+sai do plano e do que a execução fez, nunca de uma segunda caminhada. O push lê o arquivo na hora de
+mandar, e a base é o que ele levou (`Landing::sent`), não o que o arquivo tem quando o push termina:
+sem isso, quem declarava um programa e o tirava de novo enquanto o push ia via o programa voltar na
+execução seguinte (a base ficava a antiga, este lado parecia sem mudança e o do repositório,
+mudado). E antes de escrever qualquer coisa aqui, o destino tem de ter o que o plano leu: um arquivo
+que a central de programas ou o registro da máquina escreveu nesse meio-tempo fica como está, com a
+base antiga (`Landed::moved`), e a execução seguinte vê os dois lados mudados e mescla ou pergunta.
+Numa sincronização com a pessoa ele sai em `unwritten`, e nada dele vai para `replaced/`, porque
+nada foi sobrescrito. Um merge que este push mandou mas que não pousou aqui também guarda a base
+antiga: o arquivo novo daqui descende do lado que o merge leu, não do merge.
+
+**Com a pessoa e sem ela.** Numa sincronização (`prepare`/`apply`) a parte em claro vai no mesmo
+commit da selada, e um conflito dela é um conflito do plano como qualquer outro (a pessoa decide;
+o que a decisão sobrescreve vai para `replaced/`). Um conflito em claro não nomeia máquina: nenhum
+commit diz nada da máquina, e a da última sincronização selada não é a que mudou o arquivo — a linha
+diz só os dois lados. Uma execução só da parte em claro — `sync-plain` (a fila, a vigia automática),
+`plain pull`/`plain push` (a atualização e o pacote da máquina) — não pergunta nada: sem
+identidade, sem senha, `index.age` e todo pedaço intocados (o check
+`belongings-plain-needs-no-passphrase` compara byte a byte). O que conflita ali fica como cada lado
+o tem, com a base antiga, e é nomeado (`PlainBase::conflicts`); a próxima sincronização com a
+pessoa o lista. Conflito nunca bloqueia. A página "O que é guardado" mostra as raízes em claro, cada
+arquivo que a última execução deixou de fora pelo tamanho (com a frase de `Why::PlainTooLarge`, que
+por isso é um motivo listado e não a recusa de uma execução) e quantos esperam a pessoa; a frase do
+alto da seção diz que tudo é cifrado MENOS a parte em claro. Ela não põe nada em `replaced/` (que é
+da sincronização selada, e uma vigia de 30 s empurraria os três últimos backups para fora): só leva
+o que o repositório mudou por cima do que esta máquina não mudou, ou um merge que tem os dois. Ela
+nunca apaga o que uma porta digitou (a senha de uma sincronização em andamento é desta). O
+`status.json` é das execuções que uma porta começou: o `sync-plain` só diz como terminou onde
+nenhuma delas disse nada (nada ainda, ou outra execução em claro). O fim de uma sincronização
+selada — uma falha, um plano esperando, o que ela sincronizou e não conseguiu escrever — é o que a
+porta mostra e o que a marca do lembrete lê, e uma vigia de 30 s que desse certo apagaria a marca
+de uma falha que continua; a recusa de uma execução em claro (sem rede, por exemplo) não é uma
+sincronização que falhou, e a linha da fila e o journal a dizem. Num repositório vazio ela é
+recusada (`Empty`): o primeiro commit tem de ser o da identidade, senão a primeira sincronização
+selada acharia um repositório sem `key.age`. Num `plain pull` que mescla, o arquivo daqui passa a
+conter o lado do repositório, então a base dele vira esse lado; o `push` seguinte manda só a
+diferença desta máquina.
+
+**O merge precisa de três lados, nunca de dois.** Sem base, uma mudança dos dois lados não se
+distingue de uma mudança de um só, e um merge chutaria: um primeiro sync, um arquivo que nunca foi
+texto, um cache perdido — tudo isso é conflito (`belongings-merge-needs-a-base`). A base da parte
+selada fica num cache SELADO para a identidade, `state/belongings/base/<sha256>.age` (`0600` numa
+pasta `0700`): a base é um arquivo da pessoa, e guardá-la em claro poria fora do repositório
+cifrado o que ele cifra. Só texto até 1 MiB (JSON é texto), nunca um caminho cujo alvo diz `choose`
+(`kept::merge_rule`, que o pacote dos alvos responde), podado ao que o `last.json` nomeia depois de
+cada sincronização. Cada tentativa mescla de novo a partir dos três lados que leu: nada mesclado
+sobrevive ao processo, então o `apply` mescla de novo o que o `prepare` mesclou, contra o
+repositório como está naquela hora.
+
+**JSON campo a campo, texto trecho a trecho.** Um `.json` que os três lados leem é juntado por
+chave (as chaves na ordem desta máquina, depois as novas do outro lado), e uma lista cujos elementos
+TODOS têm `id` (sem repetição) é juntada por id — ponteiro incluído: `/apps/nix:firefox`, não
+`/apps/3`, para a decisão da pessoa continuar valendo quando a lista se mexe. Outra lista é um valor
+só. O resto é texto, pelo `git merge-file -p` do `ronoctua-git` (`merge_file`, endurecido, os três
+lados em `0600` numa pasta do runtime, apagados depois; o código de saída é o número de trechos em
+conflito). As listas de programas da pessoa (`software/declared.json`, `declined.json`) usam o merge
+por id do `ronoctua-person`: duas máquinas que renovaram o pin do mesmo programa não perguntam nada
+(a edição mais nova vence) e uma remoção vence uma mudança só de pin — o merge genérico faria disso
+um conflito por campo (`pin/hash`, `edited-at`) toda semana. Um merge limpo vira `Step::Merge`: o
+arquivo juntado é escrito aqui e enviado. Um que conflita continua conflito e diz onde
+(`Conflict::merge`: os campos, ou quantos trechos), e oferece as duas decisões mescladas ("mesclar,
+mantendo o desta máquina onde conflitam" e a do repositório). Um conflito de JSON também se decide
+campo a campo: o `decisions.json` passou a ser `{paths, fields}` (`DecisionsFile`), e ainda lê o
+mapa plano de antes, porque duas portas de builds diferentes podem escrevê-lo; quem o grava de novo
+mantém os campos que a outra porta decidiu.
+
+**A restauração da instalação é uma primeira sincronização que só traz.** O instalador roda
+`ronoctua-belongings restore --home /mnt/home/<pessoa> --runtime <pasta 0700> --machine <host>` como
+a pessoa, com as raízes daquela casa (`Places::for_home`, os mesmos nomes que uma sessão de lá lê),
+a senha num arquivo `0600` do runtime e o acesso em `belongings-keys/`. Ele lê o formato 2 (e só ele),
+escreve tudo o que a tabela e as adições da pessoa guardam — modos, links, a parte em claro — e
+deixa o `last.json` dizendo exatamente isso, com o cache das bases: a restauração É a base, e a
+primeira sincronização da máquina nova não tem nada para mover (`belongings-restore-makes-a-home`).
+Nunca empurra: uma máquina que ainda não existe não tem o que dizer às outras.
+
+**O instalador diz o que a casa ainda não sabe.** Uma casa sendo feita não tem configuração, e o
+instalador não é a máquina que ele instala. Por isso os verbos com `--home` recebem o endereço
+(`--repository`, e `--user` para um host HTTPS que pede um nome): com ele, o `belongings.json`
+daquela casa não precisa existir antes — o plano do instalador o escreve depois da restauração —,
+e sem ele tem de existir. E `restore` e `init` exigem o nome da máquina nova (`--machine`, o
+hostname do `host.nix`), que o índice e o `fleet.json` guardam: com o `uname`, o host do ISO
+entraria na frota para sempre, como uma máquina que nunca mais sincroniza e que ainda pesaria na
+regra da "distro mais nova entre as máquinas". O tipo de acesso sai do endereço (HTTPS é token; o
+resto é a chave), então o `belongings.json` não ganhou o campo `credential` que o desenho da
+máquina pedia: o `auth` e os caminhos fixos de `belongings-keys/` já dizem o que o instalador grava.
+
+**As perguntas do instalador.** `probe --address --credential` (`ls-remote` e um push `--dry-run`
+de um commit vazio num repositório de rascunho: o servidor confere a credencial e nada é enviado; um
+push recusado depois de uma leitura que deu certo é acesso recusado, porque o GitHub diz "could not
+read" para uma chave só de leitura), `verify-passphrase` (abre o `key.age` e não toca em nada),
+`init` (a primeira sincronização de um repositório VAZIO; num que outra máquina encheu nesse
+meio-tempo, só confere a senha) e `plain --repository --keys --out` (copia `plain/` para a pasta que
+o instalador prepara, num clone de rascunho ao lado dela, apagado como quer que termine — sem casa,
+sem configuração, sem senha). `verify-passphrase` e `init` deixam a senha para a restauração que
+vem depois — o `init` que fez o repositório também, senão a restauração seguinte não teria com o que
+abrir — e só a apagam quando uma recusa diz que ela não presta (`tells_of_the_passphrase`: não abre
+o `key.age`, o arquivo não é um que uma porta escreveria, o repositório não é de pertences). Uma
+rede que caiu, um acesso que falta ou um repositório mais novo não dizem nada dela, e o instalador
+pediria a senha de novo sem um motivo para dar. A restauração a apaga como quer que termine. Toda
+chamada de rede segura um pass do host, como as da sincronização.
+
+<!-- anchor: L10 -->
+
+### Sudo, o lado root: chaves de segurança, dedo e a janela sem senha (2026-10-11)
+
+O dono decidiu três coisas de uma vez: uma chave de segurança (e o dedo) respondem ao sudo como
+ALTERNATIVA à senha, nunca as duas exigidas, e só ao sudo — o do terminal e o das telas, nunca o login;
+a pessoa cadastra, lista, remove e desliga as chaves na tela, com efeito na hora; e a janela sem senha
+ganha 24 h, 48 h e "sem prazo", sobrevive ao reboot e acaba só no prazo ou pelo gesto da pessoa. Esta
+seção é o lado root disso (`ronoctua-security`, `nix/modules/security.nix` e `yubikey.nix`); a barra
+do sudo e as seções da central são da tela.
+
+**O `pam_u2f` está sempre declarado, e liga e desliga pela lista do root.** Antes ele só entrava com o
+`pam-u2f` do `options.json`, num rebuild — e esse "sim" chegava à máquina sem senha, então só podia
+LIGAR o módulo, e a lista que ele lê era outra coisa. Agora ele está sempre no sudo, `sufficient`, e a
+lista do root (`/var/lib/ronoctua-security/u2f_keys`, `u2f::AUTHFILE`) é o interruptor: sem linha da
+pessoa ele não responde nada e a senha pergunta, como se ele não estivesse ali. Escrever a lista é o
+verbo `u2f-keys` da porta do sudo, então mudar como o root se autentica pede o root, e vale no mesmo
+instante, sem rebuild. O `pam-u2f` saiu do `options.json`: uma escolha que muda como o root se
+autentica não viaja como dado. Ele é `sufficient` e nunca `required` (uma chave perdida não tranca
+ninguém), nunca `nouserok` (a pessoa sem chave passaria), só no sudo (as outras unidades nascem com
+`u2f.enable` desligado, como já nasciam com o dedo) e atrás de uma porta de terminal, como o dedo.
+`pam-u2f-is-only-sufficient` cobra tudo isso, e que com `ronoctua.yubikey.enable = false` ele não
+existe.
+
+**Um `origin` só, em toda máquina.** Uma credencial FIDO é do relying party para o qual foi feita, e
+o `pam_u2f` e o `pamu2fcfg` usam `pam://<hostname>` por padrão: uma chave cadastrada num laptop não
+responderia em outro. Os dois recebem `pam://ronoctua` (`u2f::ORIGIN`) como `origin` e `appid`, então
+o `u2f_keys` que viaja nos pertences serve em toda máquina — e é por isso que a oferta dos pertences
+virou "trazer para a lista desta máquina as chaves que vieram" (`offers::keys_to_bring`: as que o
+arquivo da pessoa tem e a lista do root não tem, pelo key handle). Trazer pede o root, então o "sim" é
+da porta do sudo, no mesmo gesto; o `offers::accept` recusa essa oferta, e nada é gravado: em cada
+máquina, a oferta acaba quando a lista do root tem as chaves.
+
+**O cadastro roda como a pessoa.** `u2f::Enrolment` roda o `pamu2fcfg` pelo caminho no store, com
+`-n -o pam://ronoctua -i pam://ronoctua`, e devolve a credencial depois do toque. Não precisa de root
+(o dispositivo é do assento, pelas regras de udev), segura a chave enquanto espera, então roda sob
+`setpriv --pdeathsig KILL` e o `Drop` o mata; o cancelamento é um `kill` de outra thread, pelo mesmo
+`Child` que a espera usa — depois que ela o colheu, cancelar não sinaliza nada, nem um pid reaproveitado.
+A credencial vai para a lista do root pelo verbo e para o `u2f_keys` da pessoa (`set_person_keys`,
+`0600`) para viajar; tirar uma tira das duas, desligar tira só a linha do root. A tela compõe isso
+(`with_key`, `without_key`, pelo key handle).
+
+**A porta conversa com o sudo num terminal dela.** A execução de senha não tem tty, de propósito: é
+o que faz as portas de terminal pularem a chave e o dedo, e ela nunca espera um toque que ninguém foi
+avisado de dar. Para a chave e o dedo responderem, `authority::converse` dá ao sudo um pseudo-terminal
+da porta como terminal controlador (`setsid --ctty`, sem `unsafe`) e roda `sudo -k -p <PASSWORD_PROMPT>`.
+O que vem pelo terminal é texto do sudo e dos módulos do PAM — a palestra, as mensagens, traduzidas
+ou não, e qualquer coisa que um processo que escreva naquele terminal queira —, e a porta não lê
+nada disso: ela ouve três frases que ela mesma escreveu (`Hearing`). O `-p` do sudo é a pergunta da
+senha (o sudo o usa no lugar do `Password: ` do `pam_unix`); o `cue_prompt` do `pam_u2f` é "toque na
+chave"; e uma linha do `pam_echo` logo antes do `pam_fprintd`, atrás das mesmas portas, é "ponha o
+dedo" — o texto do fprintd é traduzido e de terceiro. Desde a 1.9.16 o sudo passa `PAM_SILENT` ao PAM
+por padrão, e o `pam_echo` então não diz nada: o sudoers ganhou `Defaults !pam_silent`, o comportamento
+de antes, e os módulos voltam a falar com quem se autentica (no terminal da pessoa também).
+`sudo-door-reads-its-own-sentinels` cobra que o Rust e a pilha avaliada dizem o mesmo, que os bytes do
+terminal só vão ao `Hearing` e que só as respostas dele viram pergunta; o teste do crate cobra que
+"Password: ", "Please touch the device." e as palavras do fprintd não perguntam nada. Um processo da
+pessoa que abrisse aquele terminal poderia imitar uma sentinela ou disputar a leitura dele; esse
+processo já lê a memória do rodapé, então o terminal não abre porta nova — e uma sentinela imitada só
+faz a barra perguntar, e o que a pessoa responde vai para a fila de um terminal que o sudo esvazia
+antes de ler.
+
+**A senha só depois da sentinela, e as duas saídas.** A senha é escrita no terminal só no braço da
+sentinela da senha, quando o sudo já esvaziou a entrada (`TCSAFLUSH`) e desligou o eco. Sair da
+conversa (cancelar, "usar a senha", ou a senha digitada enquanto o toque é esperado) não pode matar o
+sudo — ele se autentica como root, e a pessoa não manda sinal nele —, então a porta sai pelo terminal:
+o `^C`, que vira `SIGINT`, enquanto uma chave ou um dedo são esperados (o módulo desiste quando nota,
+ou no próprio prazo), e o `^D`, o fim da entrada, numa pergunta de senha. O `^D` existe por uma
+corrida medida: o sudo escreve o prompt e só depois chama `read`, e um `SIGINT` nesse intervalo é
+anotado e perdido — o `read` espera para sempre (os testes pegaram isso nos dublês). O `^D` fica na
+fila do terminal até o `read`, sem intervalo nenhum. Toda sentinela ouvida depois de sair recebe o
+mesmo. Uma senha errada termina igual: a pergunta de novo, depois de uma senha escrita, recebe o `^D`, e
+a tela diz "senha errada" — a porta nunca tenta de novo em nome da pessoa. E a porta espera esse sudo
+acabar antes de dizer como acabou: um toque dado mesmo assim rodou o verbo, e o veredito do helper é o
+que vale, nunca um "cancelado" que mente; e só então a execução de senha começa, para um verbo nunca
+rodar duas vezes. "Usar a senha" cai na execução sem terminal, como antes.
+
+**A janela sem senha sobrevive ao reboot, e acaba no prazo ou pelo gesto.** A pasta que o sudo inclui
+saiu do `/run` para `/var/lib/ronoctua-sudo`, persistida (`nix/modules/persist.nix`), e o que está
+aberto — o fim (ou "sem prazo") e a duração — vai para `/var/lib/ronoctua-security/sudo-window`
+(`relax::Opened`, JSON `0644`, lido pela tela, pela modeline e pelo brain). Nunca dentro da pasta
+incluída: o sudo leria o estado como sudoers, e um erro de sintaxe trava todo sudo. A guarda de
+verdade é o `NOTAFTER` do próprio sudo, que nenhum relógio, sono ou reboot desfaz; "sem prazo" não
+tem `NOTAFTER` e só a pessoa a fecha. O resto limpa: um timer transitório pelo relógio de parede
+(`--on-calendar=<UTC>`; um `--on-active` monotônico atrasaria o fim de tudo o que a máquina dormiu)
+roda `relax-expire <fim>`, que fecha só a janela que acaba naquele instante — uma aberta depois, com
+outro fim ou sem prazo, fica —; e a cada boot `ronoctua-sudo-window` olha de novo (`relax-boot`): a
+linha vencida, a linha sem estado e o estado sem linha saem, a janela viva ganha o timer de volta (um
+timer transitório não sobrevive ao reboot), a sem prazo fica. A unidade que fechava a janela antes de
+dormir saiu: a decisão é que ela acaba só no prazo ou pela pessoa, e com autologin sem tela de
+bloqueio quem decide isso é o dono. "Recomeçar a contagem" é abrir de novo pela mesma duração
+(`Opened::again`), pelo `sudo -n` que a janela aberta deixa passar; a contagem é `Opened::left_s`, e o
+relógio que a desenha é da tela. `sudo-window-survives-a-reboot` cobra a pasta persistida, o estado
+fora dela, a ausência de unidade no `sleep.target`, a unidade do boot e o relógio de parede; o
+`relax-line-parses` passa a linha sem prazo pelo `visudo`.
+
+**Os dublês dos testes e o `ETXTBSY`.** Os testes da conversa rodam o `setsid` de verdade sobre um sudo
+de mentira, e o `setsid` faz o `exec` dele: o `spawn` da porta repete um `ETXTBSY` do que ela mesma
+executa, mas não do que o filho executa. Um dublê recém-escrito ainda aberto num filho de outra thread
+de teste falhava assim, uma vez em umas vinte rodadas. Nos testes, escrever um dublê e criar um filho se
+excluem (`tools::FORKS`, um `RwLock` só de `cfg(test)`), e o filho já fez o `exec` quando o `spawn`
+volta.
+
+### Pertences: os alvos pré-definidos e a identidade guardada pela sessão (L10)
+
+**As chaves da pessoa viajam; o acesso aos pertences, nunca.** Até aqui os pertences não levavam
+chave nenhuma, e uma máquina nova começava sem o `~/.ssh`, sem o GnuPG e sem as chaves de segurança
+registradas. O dono reverteu isso (2026-10-05): uma tabela de ALVOS (`targets` em
+`assets/belongings.nix`) diz o que vai selado para toda máquina por padrão — `ssh` (`~/.ssh`), `git`
+(`~/.gitconfig`, `~/.config/git`, `~/.config/Yubico/u2f_keys`), `gnupg` (`~/.gnupg`), `shell`
+(`~/.shellrc.local`) e `doom` (`~/.config/doom/local.el`). A chave de implantação dos pertences
+continua fora sob qualquer nome: o `crate::sift` a reconhece por dispositivo, inode e conteúdo, então
+"o `~/.ssh` menos a chave de deploy" vale até para um link duro dela. Como agora uma senha fraca abre
+as chaves de SSH, o chaveiro do GnuPG e as chaves de segurança da pessoa, a força dela pesa mais: a
+frase `belongings-targets-note` diz isso, e a vista dos pertences a desenha junto da senha.
+
+**Um caminho, um veredito.** Um alvo é o seu próprio veredito (`Verdict::Target`), depois do `never`
+por caminho e da parte em claro e antes das árvores; o gerador recusa um alvo sobre outro alvo, sobre
+uma árvore, um arquivo, uma raiz em claro ou um caminho do `never` (a fixture negativa planta dois),
+e o `belongings-targets-avoid-home-manager` recusa um alvo sobre um arquivo que o Home Manager faz —
+esse é um link para o store que o sistema refaz, e voltaria pendurado. Abaixo de um alvo, só o `skip`
+dele tira nomes (`Verdict::Skipped`: sockets, travas, a semente do agente), e nunca os padrões do
+`never` das árvores (`.*` levaria o `.#lk` do GnuPG e mais nada). O que um alvo pula não viaja nem
+quando a pessoa acrescentou a casa inteira: é o momento desta máquina.
+
+**Privado é o dono, e é medido igual nos três pontos.** Um alvo `private` (`ssh`, `gnupg`) viaja com
+os bits do dono e só (`kept::kept_mode`): o `0644` de uma `.pub` vira `0600`, e uma chave `0400` fica
+`0400`. A conta é feita na LEITURA (o walk e o push) e na escrita (o pull), não só na volta: se o
+walk lesse `0644` e o índice dissesse `0600`, toda sincronização veria uma mudança de modo e
+empurraria de novo. As pastas não viajam, então o índice guarda o modo delas (`Index.dirs`) como a
+máquina que empurrou por último as tinha, e uma sincronização que traz um arquivo para dentro de uma
+põe as pastas acima dele, até a do alvo, nos bits do dono do que o índice diz — `0700` quando não
+diz nada. Só onde um arquivo chegou: uma pasta que a pessoa abriu de propósito não é fechada a cada
+sincronização. O merge segue o alvo: o que é chaveiro escolhe um lado (`choose`, e a base dele nunca
+entra no cache selado), `known_hosts` e `allowed_signers` juntam as linhas dos dois lados (`union`).
+
+**"Aqui não" e "em nenhuma" são coisas diferentes.** "Não nesta máquina" é o `excluded` da pessoa,
+como qualquer caminho: as cópias do repositório ficam para as outras. "Em nenhuma máquina" muda o
+REPOSITÓRIO, e só uma sincronização com a identidade pode escrever nele — a porta que ouve o gesto
+não tem nem senha nem identidade. Então ela escreve o pedido em `requests.json`
+(`DropEverywhere`/`KeepEverywhere`, um por alvo: o último vence) e enfileira uma sincronização, que o
+aplica ao índice que planeja e empurra (`Index.dropped`, quem e quando). Com o alvo largado, qualquer
+máquina que veja uma cópia dele no repositório a tira (`Step::Unkeep`; não só a que largou: um push
+que correu junto com o pedido também sai), e uma máquina que o guardava o ESQUECE (`Step::Forget`): o
+arquivo fica onde está, a base não o nomeia mais e nada dele sobe de novo. "Em nenhuma" nunca é
+"apagar". O pedido sai do arquivo depois do push, e só o que o índice empurrado resolveu: um pedido
+que a porta escreveu durante a sincronização não estava no que ela leu, e fica para a próxima. O
+`last.json` guarda os alvos largados (`Last.dropped`), para a porta dizer "em nenhuma" sem a senha.
+O `Compact { keep_days }` mora no mesmo arquivo e é da compactação, que o lê e o consome.
+
+**Oferecer só quando chegam os arquivos que tornam aquilo possível.** Com a chave de SSH da pessoa
+aqui, o git pode assinar os commits dela; com as chaves de segurança registradas aqui, uma chave pode
+responder ao sudo. A sincronização (ou a restauração da instalação) que TROUXE esses arquivos —
+uma metade de um par de chaves com que o git pode assinar, o `u2f_keys` — diz na saída
+(`Synced.offers`), e a porta desenha cada oferta com o "não" primeiro. Outro arquivo do mesmo alvo
+(uma linha nova no `known_hosts`, um alias no `.gitconfig`) não oferece nada: os dois alvos mudam a
+quase toda sincronização, e a oferta recusada voltaria sempre. Por isso o "não" não precisa ser
+lembrado: a oferta volta só quando a própria chave muda em outra máquina. O "sim" à assinatura fica
+no `options.json` da pessoa (parte em claro), e nenhuma outra máquina oferece de novo; o das chaves é
+a lista do root de cada máquina, e a oferta acaba quando ela tem as chaves ("Sudo, o lado root",
+acima). Também não se
+oferece assinar com SSH onde o git já assina, ou está pronto para assinar, com qualquer coisa
+(`offers::Signing`: um formato escolhido, uma chave nomeada ou `commit.gpgsign`): quem assina com
+OpenPGP perderia a configuração dele, e o `accept` recusa substituí-la mesmo se a porta pedir.
+
+**A assinatura viaja com a chave, não com o `.gitconfig`.** O `.gitconfig` é do alvo `git` e a chave
+é do alvo `ssh`, e a pessoa pode tirar só o `ssh` de uma máquina ("aqui não") ou de todas ("em
+nenhuma"). Se as configurações de assinatura morassem no `.gitconfig`, a máquina sem a chave
+receberia `commit.gpgsign` apontando para uma chave que não existe, e todo `git commit` dela
+falharia. Então o `offers::accept` escreve `gpg.format ssh`, `user.signingkey ~/.ssh/<chave>.pub`,
+`commit.gpgsign`, `tag.gpgsign` e `gpg.ssh.allowedSignersFile` num arquivo DENTRO do `~/.ssh`
+(`~/.ssh/git-signing.inc`, `0600`, pelo `ronoctua_git::set_in_file`), e o `.gitconfig` ganha só o
+`include.path` para ele (`ronoctua_git::add_global`, uma vez, sem tocar nos outros includes). O git
+ignora calado um include que não existe: onde a chave não está, o arquivo também não está, e os
+commits saem sem assinatura. Quando o git sabe o e-mail, a chave pública entra entre as que a pessoa
+confia (`~/.config/git/allowed_signers`, do alvo `git`). O `ronoctua_git::get_global` lê com
+`--includes`, como o git lê ao commitar.
+
+O mesmo módulo das chaves (`nix/modules/yubikey.nix`) declara o `pcscd`, as regras de udev das
+chaves e o agente do GnuPG; o `pam_u2f` dele, e por que a oferta de chaves dos pertences é trazer as
+que vieram no `u2f_keys` para a lista do root desta máquina, estão em "Sudo, o lado root", logo
+abaixo — o `options.json` não tem mais nada a ver com isso.
+
+**A aprovação de um módulo fixa o que a porta recebeu.** O verbo `person-module-approve` leva o id e
+o hash que a pessoa viu; o ajudante root os grava na pasta do root (`approve-pin`) antes de iniciar a
+unidade, e a unidade recusa um pedido da pasta da pessoa que não bata com eles. Sem isso, outro
+processo dela trocaria o pedido e a cópia da máquina (pelo aplicador sem senha) enquanto o sudo lia a
+senha, e a comparação de hash provaria só que os dois que ele escreveu concordam.
+
+**A sessão guarda a identidade, nunca a senha.** A senha digitada abre o `key.age` (o único scrypt) e
+acha a IDENTIDADE; com `keep_unlocked` (ligado por padrão, decisão do dono) o CLI a guarda no keyring
+do kernel: uma chave `user` no `@u`, descrita `ronoctua-belongings:<instância>:<16 hex do SHA-256 do
+repositório>` (o endereço não aparece na listagem), tudo para quem a POSSUI e só a vista para o
+usuário, com o tempo limite do kernel em `unlockHours`. A próxima sincronização a acha e não pergunta
+nada; ela nunca toca um disco. **Quem lê a identidade é todo processo da pessoa, durante a janela**:
+a posse não separa dois processos do mesmo usuário, porque qualquer um deles liga o `@u` no próprio
+keyring de sessão (é o que o CLI faz, abaixo) e passa a possuí-la. O keyring compra não tocar disco
+nem swap, e o tempo limite; outro usuário nunca alcança o `@u`. Um processo só possui o `@u` pelo keyring de sessão, e uma sessão que
+um gerenciador de serviços montou pode não ligá-lo (a da fila é a do gerenciador do usuário), então o
+CLI o liga na sua — o que o `pam_keyinit` faz para todo processo de um login. Só o que foi DIGITADO é
+guardado (`unlockHours` conta da digitação, não da última sincronização), e uma identidade guardada
+precisa abrir o índice DESTE repositório: outra máquina pode tê-lo migrado (identidade nova) ou
+refeito, e então ela é esquecida e a senha é pedida. O instalador não guarda nada (o motor dele não
+tem cofre): o kernel em que ele roda não é o da pessoa.
+
+**As portas leem um marcador, nunca o keyring.** O rodapé e as janelas não chamam `keyctl`: o CLI
+deixa `runtime/unlocked` (qual repositório e até quando, `unlock::Marker`), e a porta pergunta a
+`unlock::kept_for` se precisa pedir a senha. Se o marcador mentir (o kernel largou a chave antes), a
+sincronização é recusada por falta de senha e a porta pede — nunca uma resposta errada, no máximo uma
+pergunta a mais.
+
+**Acaba com a sessão, e antes de dormir sem corrida.** No logout, a `ronoctua-belongings-forget`
+(unidade de usuário, parte do `graphical-session.target`) esquece no `ExecStop` — e também no
+`ExecStart`, para uma chave que uma queda deixou não sobreviver à sessão em que foi digitada. Antes de
+dormir, o molde do `ronoctua-private-lock`: uma unidade de SISTEMA que o
+`sleep.target` quer e espera, rodando COMO a pessoa (`KeyringMode=shared` liga o keyring dela). O
+desenho pedia o brain ouvindo o `PrepareForSleep`; sem um inibidor de atraso, o logind não espera
+ninguém, e o esquecimento correria contra o congelamento. As duas unidades rodam `forget
+--everywhere`: TODA identidade dos pertences deste usuário, de toda instância (a do `.#dev` roda
+dentro da sessão e acaba com ela), e todo marcador da pasta de runtime dele, sem precisar de
+configuração, de casa nem de `XDG_RUNTIME_DIR` (a unidade do sono não tem nenhum). O `forget` sem a
+flag — o que a fila roda quando a pessoa desliga `keep_unlocked` — esquece só a identidade e o
+marcador DESTA instância (`unlock::instance_prefix`, `unlock::unmark_here`): o `.#dev` não pode
+fazer a sessão de verdade pedir a senha de novo. Desligar `keep_unlocked` também esquece na próxima
+execução. Um reboot esvazia o keyring e o runtime juntos.
+
+**A parte em claro vai sozinha.** Ela não pede senha nem identidade, então a máquina pode mandá-la
+sem perguntar a ninguém: o `belongings-reminder` vigia as raízes em claro e, depois de 30 s sem
+mudança, inicia a `ronoctua-belongings-plain.service` (`sync-plain`), que mora no `module.nix` do
+próprio módulo (selado). Só numa máquina que já sincronizou com o repositório configurado, nunca num
+ensaio (a cópia do `.#dev`), e o que bate dos dois lados fica para a próxima sincronização com a
+pessoa. As raízes são vigiadas como ÁRVORES (`Source::Tree` do brain, sobre o `Notice::on_dirs`): o
+inotify não é recursivo, e uma lista das pastas que existiam quando o brain subiu não ouvia o
+`software/` que a primeira declaração cria, nem nada escrito nele depois. E iniciar a unidade não é
+mandar: uma sincronização da pessoa que segura a trava a recusa, e um `sync-plain` que já roda só é
+juntado. O lembrete guarda a mudança até ver, pela pasta de estado, uma execução que pegou a trava
+DEPOIS do pedido terminar; se nenhuma pegou, pede de novo (poucas vezes, para uma falha nunca virar
+laço). O porquê inteiro está no `why.md` do módulo.
+
+**Código e opções que chegam do repositório chegam assinados.** Os módulos do brain da pessoa e o
+`options.json` vêm do repositório sozinhos só quando a chave da pessoa os assinou; o resto fica
+retido com o motivo, e a regra antiga (`plain::HELD`, que fazia deles conflito em toda execução) saiu.
+O porquê está em "Pertences: a parte em claro, assinada com a chave da pessoa". A restauração
+continua o gesto da pessoa, com a senha dela: o que ela traz passa pela mesma assinatura.
+
+<!-- anchor: L11 -->
+
+### Os módulos do brain da pessoa e as marcas com instâncias (L11)
+
+**O código da pessoa é compilado no brain da máquina dela, e não carregado.** O contrato de um
+módulo é Rust (`Module`, `Manifest`, o shim por `#[path]`), e Rust não tem ABI estável: um plugin
+carregado em tempo de execução seria um segundo contrato, com a fronteira em `extern "C"`. Os buffers
+WASM são o plugin da interface, mas um módulo do brain fala com o systemd, o journal e o disco da
+pessoa — o que um componente não alcança. Então a máquina compila o módulo da pessoa como compila os
+da distro. O preço é a corrente inteira: o texto que a página traduz está embutido no shell
+(`face()`), o glifo de uma marca é um caso do enum WIT contra o qual os buffers compilam, e o
+registro está no brain. Uma máquina com módulos da pessoa constrói o workspace dela — sem acerto no
+cache binário para ele —, e foi isso que o dono escolheu ("compilado no brain da máquina dela").
+
+**`withPersonModules` sobrescreve cada elo, não escreve outro.** `nix/person-brain.nix` recebe a
+corrente que o flake já monta (carregador, `i18nRs`, `glyphdb`, `tokensRs`, `wit`, `buffers`,
+`notificationsRs`, `brainModulesRs`, `rust`) e chama `.override` em cada uma com a pasta da pessoa ao
+lado da da distro: os mesmos geradores, com os mesmos argumentos, uma pasta a mais. Uma segunda cópia
+da corrente divergiria da primeira no primeiro gerador novo. O `distroModules` passou a ser
+`distroModulesFor rust` — uma função do workspace que os módulos rodam, porque todo `rust.*` da lista
+(o rodapé, o brain, a fila, a CLI dos pertences) tem de ser o da máquina. O que volta é tudo o que o
+`lib.machine` precisa, inteiro: `machineModules <ids aprovados>` (o `distroModulesFor` desse `rust`
+mais a metade NixOS de cada id aprovado, pela portaria do carregador) e `refused` (as pastas que
+ficaram de fora, com a frase de cada uma, para o relatório). Importar o `module.nix` cru pularia a
+portaria: a metade valeria com o brain desligado, e um `imports` fora da pasta ou um
+`disabledModules` deixariam de ser recusados. Quando nenhuma pasta carrega, todo elo é o da distro —
+as mesmas derivações, que o cache tem. A tabela do navegador de ícones e a dos tipos MIME ficam como
+a distro as fez: nenhuma desenha a marca de um módulo, e as duas são dado lido em tempo de execução.
+
+**Uma pasta ruim da pessoa sai sozinha, e diz por quê.** As pastas da pessoa chegam da home dela,
+pelos pertences, a toda máquina dela. Um `throw` por uma delas pararia a reconstrução de todas as
+máquinas até ela consertar — e o conserto viaja pelo mesmo caminho. Então o carregador lê cada pasta
+da pessoa sozinha (`read`, que nunca lança) e deixa de fora, com frase, a que não é módulo: id fora
+da gramática, pasta perdida sem `my-`, campo errado, texto faltando, e um nome que outro módulo já
+gera — tokens de glifo, eventos, comandos e prefixos de texto que se sobrepõem, que o `gen-i18n.py`
+recusaria no build. A ordem é a do nome: de duas pastas que colidem, a primeira carrega, em toda
+máquina igual. A pasta da distro continua recusada inteira: é do desenvolvedor, antes de qualquer
+build. O que a avaliação nem consegue pegar (um manifesto que não faz parse, um erro de tipo) para
+quem o lê; por isso `personProblemsOf.<id>` lê uma pasta só, para a verificação isolada da
+atualização avaliar uma de cada vez, e `personModulesOnly` (o `only` do `withPersonModules`) deixa
+de fora, sem ler, as que ela não aprovou e as que a máquina não inclui. Algumas armadilhas de tipo
+viraram frase (`glyph` que não é texto, `tags` que não é lista, função ou caminho no manifesto da
+pessoa), porque um erro que o `tryEval` não pega derruba a máquina do mesmo jeito. O build lê uma
+cópia com só as pastas que carregaram (`personModulesDir`): o `build.rs` compara a pasta com a tabela,
+e uma pasta recusada deixada nela pararia o build que a recusa manteve de pé. Um erro que só o build
+vê (Rust que não compila, glifo que não existe) continua parando o build da máquina, e o
+`ronoctua-machine apply` fica na última geração boa.
+
+**`my-` separa os donos por construção.** Um id de módulo vira nome em todo namespace gerado —
+chaves (`brain-task-<id>`, `<id>-…`), tokens de glifo (`<id>-<glifo>`), comandos (`<id>-<ação>`) e
+checks. Um módulo da pessoa com o nome de um da distro colidiria em todos, ou o sombrearia. Com o
+prefixo, todo nome que um módulo da pessoa gera começa com `my-`, e nenhum da distro começa: o id e
+os prefixos de chave da distro nunca são `my` nem `my-…` (com `my` e o glifo `x-seat`, a distro
+geraria `my-x-seat`), e os prefixos de chave da pessoa (`keys`) começam todos com `my-` — um prefixo
+como `agents` construiria hoje e pararia toda atualização dela no dia em que a distro criasse uma
+chave ou um módulo sob ele. Nenhuma chave da base está nesse namespace, e o
+`brain-person-module-ids-are-prefixed` prova os três lados. A gramática do id é uma só: `my-` mais
+uma palavra kebab cujos segmentos começam por letra, até 64 caracteres — a do carregador, porque o id
+vira módulo Rust, caso do WIT e prefixo de chave, e o WIT recusa segmento que começa com dígito
+(`my-2fa`). O `ronoctua-person`, que valida as aprovações, usa a mesma, e as duas são provadas na
+mesma tabela (`crates/ronoctua-person/fixtures/module-ids.json`): uma aprovação de um id que o
+carregador recusa seria aprovar nada. Cada registro diz de quem é (`origin`), e o `ids.txt` leva a
+terceira coluna (`<id> <snake> <origin>`): é por ela que o `build.rs` sabe que um `module.rs` está na
+pasta da pessoa (`RONOCTUA_BRAIN_PERSON_MODULES_DIR`) e não em `modules/`.
+
+**A pasta da pessoa é menor, e a parte que alcança root espera aprovação.** Ela precisa de
+`manifest.nix`, `module.rs` e um `.ftl` por idioma: é o que o brain compila e o rodapé traduz. O
+`module.nix` é opcional e é NixOS — alcança root —, então sai do carregador num atributo por id
+(`personNixosModules`), e a máquina importa só o aprovado pela porta do sudo; a portaria dele abre só
+com `ronoctua.brain.enable`, porque o `nix/modules/brain.nix` cria um interruptor por módulo da
+distro e não conhece os da pessoa. O `checks.nix` não é da distro para rodar, e o `why.md` é assunto
+da pessoa. O manifesto é o mesmo contrato, campo por campo: o mesmo que promove um módulo da pessoa a
+módulo da distro sem reescrevê-lo.
+
+**A tabela e a pasta são uma cópia só.** O `brainModulesRs` carrega a cópia que o carregador fez
+(`passthru.personModulesDir`), e o `nix/rust.nix` põe o `RONOCTUA_BRAIN_PERSON_MODULES_DIR` a partir
+dela, ausente — não vazio — num build sem pessoa. O `build.rs` compara a pasta da pessoa com as linhas
+`person` do `ids.txt` como compara `modules/` com as `distro`, e recusa uma tabela que lista um
+módulo da pessoa sem a variável: compilar sem ele seria um brain que esquece o módulo calado. As duas
+recusas são provadas por plantio no build do `brain-person-modules-load`, que também roda os testes
+do fixture.
+
+**O `brain-modules-are-sealed` pula a pasta da pessoa.** Os oito passos perguntam ao que está na
+árvore — os arquivos, os textos, o `namedBy`, os crates —, e a pasta da pessoa está na home dela e
+chega à máquina como cópia no store. Um plantio prova o pulo, e um gêmeo da distro do mesmo registro
+continua recusado.
+
+**Uma marca pode ter instâncias, de 1 a 9.** `instances = N` no manifesto; o rodapé desenha a
+instância como UM dígito, então nove é o teto, e o carregador e o gerador recusam o resto
+(`mark-instances-are-bounded`). Cada instância é o seu próprio segmento,
+`brain:<módulo>/<marca>.<n>`: a dica, a cor e o clique são dela.
+
+**A instância mora no `MarkId`, não no `Mark`.** Tudo o que o rodapé usa para fazer o segmento — o
+id, o glifo, a dica e o que o clique roda — está no `MarkId`, e a instância é parte de QUAL marca é
+(a terceira conta e a primeira são dois segmentos), como o `opens` é parte de para onde ela leva; as
+duas se põem do mesmo jeito sobre a constante declarada (`MarkId::numbered`, `MarkId::opening`). O
+`Mark` fica com o que a publicação diz sobre a marca: o tom, a contagem e a ação. E nenhum literal de
+`Mark` dos módulos existentes teve de mudar.
+
+**O dígito vai um espaço depois do glifo, onde iria a contagem.** Colado ao glifo, ele encostava no
+desenho — um ícone da Nerd Font ocupa a célula até a borda, e a foto do rodapé mostrou o `4` tocando
+o cubo. Com o espaço, a instância lê como a contagem lê; por isso uma instância não conta nada (o
+núcleo recusa contagem nela): dois números depois de um glifo seriam lidos como um.
+
+**As instâncias leem de 1 a N, da esquerda para a direita.** O lado direito da modeline é posto da
+borda para dentro: o primeiro segmento empurrado fica na borda. Empurradas na ordem publicada, três
+contas liam `3 2 1` — a foto mostrou. `brain::from_the_edge` empurra as instâncias de uma marca da
+última para a primeira, juntas, no lugar em que a primeira foi publicada; as outras marcas ficam onde
+estavam. O preço: no mesmo degrau, sai primeiro o segmento mais longe da borda, então numa linha
+curta a instância 1 é a primeira a sair. A ordem de leitura vale mais que mudar a regra única de quem
+sai.
+
+**O clique entrega a instância ao comando; uma ação não a recebe.** Uma marca que abre um app do
+shell (`MarkId::opening`) roda o comando com o número da instância como argumento — a terceira conta
+abre na terceira. Uma ação do módulo (`brain-act <módulo> <ação>`) não tem onde levar a instância e
+agiria na que o módulo adivinhasse, então o núcleo recusa `act` numa instância. A dica recebe
+`$instance` (número, para um seletor) e `$label`, a palavra que a pessoa deu à instância — dado, como
+o texto de um lembrete (exceção do inv. 8) —, ou o número quando ela não deu nenhuma: o Fluent não
+sabe perguntar se um texto é vazio. Uma palavra em branco é nenhuma (no `MarkId::numbered` e na
+dica): uma conta sem nome não vira um buraco na frase.
+
+**O núcleo confere cada marca contra a declaração.** `Manifest::refusal_of` lê o que o manifesto
+declara pelo NOME da marca, nunca os limites que o id publicado carrega: um módulo que montou o
+próprio `MarkId` não ganha uma décima instância nem um repouso que ninguém aprovou. Recusa marca não
+declarada, instância fora da conta, rótulo sem instância, ação ou contagem numa instância, a mesma
+marca duas vezes e a marca quieta não declarada em repouso.
+
+**O núcleo cobra o tom quieto, não o repouso inteiro.** "Uma marca só existe quando diz alguma coisa"
+continua sendo prosa para quase tudo: o núcleo não sabe se uma marca em `Watching` ou `Accent` tem o
+que dizer. O que ele sabe é o tom: uma marca em `Tone::Quiet` diz só que está tudo bem, e ele a
+descarta se o manifesto não declara `resting = true`. Nenhum módulo da distro publicava marca quieta,
+então nada mudou para eles. Declarar o repouso é uma aprovação do dono, uma a uma: a lista está em
+`assets/brain-resting-marks.nix` (dado declarado à mão, como as outras tabelas de `assets/`), o
+carregador recusa `resting = true` em marca fora dela e em módulo da pessoa, e o AGENTS.md nomeia as
+mesmas marcas ao lado da regra de que são exceção — `resting-marks-are-the-approved-ones` mantém os
+dois iguais. A primeira aprovação (2026-10-05) é das contas LLM: uma marca por conta, o uso dito pelo
+tom, presente também quando a conta está quieta. Quando o módulo `agent-accounts` existir, o
+`namedBy` dele lista `assets/brain-resting-marks.nix`, que o nomeia.
+
+**Fotografável.** `photograph --door footer --mind <arquivo>` entrega ao rodapé um `Mind` pelo mesmo
+caminho que a thread do brain usa (`mind_arrived`), e foi assim que o dígito colado e a ordem
+invertida foram vistos.
+
+<!-- anchor: L12 -->
+
+### O `/private` (pacote L12)
+
+Uma pasta que só a pessoa abre, com senha própria (e, se ela quiser, uma chave FIDO2 ao lado),
+montada em `/private` só quando pedida. As decisões e o porquê:
+
+- **Uma imagem esparsa, e não uma partição.** O disco já é LUKS inteiro (seção 7), e repartir uma
+  máquina instalada não é coisa que a distro faça sozinha. A imagem
+  (`/var/lib/ronoctua-private/private.img`) tem o comprimento do teto e ocupa no disco só o que
+  guarda: o btrfs de dentro é montado `discard=async`, o mapeamento LUKS2 deixa os descartes
+  passarem (`--allow-discards --persistent`, gravado no cabeçalho, então a abertura pela chave
+  também deixa) e o loop transforma o descarte num buraco na imagem. Apagar dentro do `/private`
+  devolve o espaço à máquina; o teste de VM grava 1 GiB, apaga, roda `fstrim` e mede o `du`. O
+  teto pode passar do espaço livre (é esparsa), e a seção diz isso em amarelo: se o disco encher,
+  gravar no `/private` falha — o btrfs de dentro aborta a transação e fica só leitura, que é o
+  comportamento dele.
+- **Um subvolume de topo, `@private`, NOCOW.** Fora do `@root`, nenhum snapshot dele carrega a
+  imagem e o wipe da impermanência não a leva. NOCOW porque um arquivo reescrito no lugar sob um
+  loop, em copy-on-write, fragmenta sem fim; o atributo vem da pasta e do `ioctl` no arquivo vazio,
+  antes do primeiro byte, nunca de opção de montagem — no btrfs a primeira montagem vence calada (o
+  `@swap` já ensinou). A pasta ganha `+C` e `0711` da unidade do subvolume, a cada boot, na raiz do
+  `@private` ANTES de montá-lo, e de novo do lado root quando ele cria a imagem: uma linha de
+  `tmpfiles` roda depois do `local-fs.target`, que não espera uma montagem `nofail`, e cairia na
+  pasta de baixo. Só onde a pasta é comum (a VM, outro layout) o `tmpfiles` a faz. Um snapshot
+  apontado para a imagem é recusado na avaliação (`filesystem.nix`): ele tornaria a imagem
+  copy-on-write de novo e seguraria todo bloco devolvido. Numa máquina instalada antes,
+  `@private` não existe: `ronoctua-private-subvolume.service` monta o topo do btrfs
+  (`subvolid=5`) só para si (`PrivateMounts`), cria o subvolume e desmonta; a montagem é `nofail`
+  e espera por ele (`x-systemd.requires=`), então uma máquina que não conseguiu criá-lo ainda dá
+  boot — e o lado root recusa pôr uma imagem em qualquer lugar que não seja uma montagem própria
+  (`statx`, `STATX_ATTR_MOUNT_ROOT`).
+- **Nada abre no boot.** Nem `fstab`, nem `crypttab`, nem initrd (`private-never-mounts-at-boot`).
+  Por baixo, `/private` é `0000`, de root e imutável (`chattr +i`): enquanto trancado, nada cai
+  ali em claro, nem de root. As duas linhas de `tmpfiles` que fazem isso são só de boot (`d!`,
+  `h!`), porque o `switch` roda o `tmpfiles` de novo e, com o cofre montado, elas fechariam a pasta
+  aberta da pessoa para ela mesma. A unidade que escreve o primeiro status espera a montagem da
+  imagem (`RequiresMountsFor`), como a root: lido antes dela, o status diria "não existe" de um
+  cofre que existe, e as duas portas ofereceriam criá-lo.
+- **LUKS2, AES-XTS-512, argon2id.** Duas chaves de 256 bits (nível de 256 bits, que a busca de
+  Grover reduz a 128) e uma derivação que custa memória além de tempo. É o que a seção
+  pós-quântica diz do `/private`: simétrico, sem troca de chaves para um computador quântico
+  quebrar.
+- **O root passa pela porta do sudo, e só por ela.** O gesto da pessoa grava um pedido
+  (`request.json`) e os segredos (`passphrase`, `new-passphrase`) como arquivos `0600` desde o
+  primeiro byte na pasta `0700` dela, `/run/ronoctua-private/staged`, dentro da de root
+  (`/run/ronoctua-private`, `0755`: quem pudesse plantar um link ali faria o root escrever através
+  dele). O verbo `private-root` só inicia a unidade de nome fixo, que lê o pedido com
+  `O_NOFOLLOW`, recusa arquivo de outro dono, legível por outros, com dois nomes ou longo demais,
+  faz a operação e apaga (zerando) a pasta, aconteça o que acontecer. A senha chega ao
+  `cryptsetup` pelo stdin; os dois programas que só leem arquivo (`systemd-cryptenroll`,
+  `luksChangeKey`) recebem uma cópia `0600` na pasta própria do root, que some com a unidade.
+  Nenhuma regra polkit (`private-root-is-narrow`).
+- **Por que a porta sabe o motivo.** O `systemctl start` de uma unidade que falhou só diz
+  "falhou". A unidade grava o veredito (`verdict.json`: a operação, o porquê, quando) e a porta lê
+  o da sua operação, não mais velho que o pedido: "essa não é a senha", "nenhuma chave
+  respondeu", "algo ainda usa o /private" — nunca "não deu certo".
+- **Sem namespace de montagem.** As três unidades que rodam o lado root não usam
+  `ProtectSystem`, `PrivateTmp`, `ReadWritePaths` nem nada que crie um namespace: o `/private`
+  montado ali dentro ficaria só para a unidade, e morreria com ela enquanto o mapeamento ficava; o
+  fechar e o gancho do sono desmontariam uma cópia, e o `luksSuspend` viraria o caminho de sempre.
+  Isso inclui `PrivateNetwork`: desde o systemd 254 ele traz `PrivateMounts` junto, a menos que
+  `PrivateMounts=no` esteja escrito — por isso as três o escrevem, e a rede fica fora pelas
+  famílias de endereço (só `AF_UNIX` e `AF_NETLINK`). O `private-root-is-narrow` recusa cada opção
+  que cria ou traz um namespace e exige o `PrivateMounts` falso. O estreitamento é o do programa
+  (uma pasta, um pedido, os programas pelo caminho do store que o ambiente da unidade entrega).
+  Os programas chegam pelo ambiente, e não por `option_env!`: assim nem o workspace nem o binário
+  extraído carregam referência a `cryptsetup` ou ao systemd.
+- **Tranca ao dormir, ou suspende.** `ronoctua-private-lock.service` é `WantedBy=sleep.target`:
+  desmonta, fecha e solta o loop. Se algo segura o `/private`, ele faz `luksSuspend` — a chave
+  sai da memória do kernel e o I/O congela até a senha retomá-lo (`luksResume`). O status diz
+  "suspenso em uso" ANTES da suspensão, e o "Agora" da segurança mostra isso em perigo.
+- **Nada toca o `/private` num laço de eventos.** Suspenso, quem o tocar espera no kernel — e a
+  porta que perguntaria a senha seria a que travou. As portas leem o `status.json` (uma leitura
+  pequena em `/run`) e fazem `stat` da imagem, que mora no disco da máquina. Toda listagem (as duas
+  portas do gerenciador, o seletor de arquivos, a fila do player) passa por um guarda só, em
+  `ronoctua_files::listing`, e o vigia de diretório pelo mesmo `may_touch`:
+  - **Onde o caminho cai, e não como se escreve.** `~/Private -> /private`, um `..` e um caminho
+    relativo chegam ao cofre sem começar por `/private`. `ronoctua_private::inside` anda o caminho
+    componente a componente, lendo cada link, e para — "dentro" — no instante em que o próximo nome
+    SERIA o ponto de montagem: nada sob o cofre é consultado, então a pergunta não trava num cofre
+    suspenso. Um link que não se lê conta como dentro.
+  - **Fechado, nada é tocado.** Trancado ou suspenso (o status), a listagem recusa com um
+    `Withheld` tipado, que cada porta diz com as próprias chaves no lugar das linhas — uma pasta
+    vazia diria que os arquivos sumiram.
+  - **Aberto, numa thread que se espera um instante.** O status pode ter dito "aberto" um instante
+    antes de o gancho do sono suspender. Por isso a leitura dentro do cofre roda numa thread, e o
+    chamador espera no máximo 400 ms: passou disso, ele diz que o cofre não responde e segue; a
+    thread fica presa até a senha retomá-lo, e enquanto ela está fora nenhuma outra leitura do
+    cofre começa.
+  - **As portas ouvem o status.** O vigia de uma listagem (`Notice::for_listing`) ouve também a
+    pasta do `status.json`: um cofre aberto, trancado ou suspenso é um "mexeu" como um arquivo que
+    chega, e a porta redesenha a linha do cofre (com os discos que já tinha: suspender não muda nada
+    do que o udisks diz) e lê a pasta de novo. Uma pasta do cofre que o vigia recusou enquanto ele
+    estava fechado é pedida de novo pela thread do vigia nesse mesmo "mexeu" — a porta não pode
+    pedi-la, porque o `look_at` engole o mesmo caminho —, e a leitura que vem depois já acha o
+    vigia no lugar.
+- **Uma linha na barra lateral, e não um disco.** O que sai do cofre é escondido das linhas de
+  disco (`ronoctua_disks::Skipped::Vault`: senão "formatar" ficaria a uma tecla dele); a linha do
+  cofre reusa `m` e `l` do disco cifrado e mais nada. Aberto é o que o udisks diz montado (é o que
+  move a barra; o status só é escrito no fim), suspenso é o que o status diz — ouvido pelo vigia da
+  listagem, porque nenhum sinal do udisks avisa uma suspensão.
+- **Cada porta pergunta na própria linha.** A seção `Private` da segurança tem o fluxo inteiro
+  (criar com teto e senha duas vezes, abrir pela senha ou pela chave, retomar, trancar, mostrar,
+  aumentar o teto, cadastrar e esquecer a chave, trocar a senha), no rodapé e na janela, com as
+  perguntas na linha de cada porta. `LEADER s e o` abre pela chave quando há uma, senão pergunta a
+  senha; num cofre aberto, mostra a pasta; sem cofre, abre a seção. O `m`/`l` da barra lateral faz
+  o mesmo onde é apertado: no rodapé, pelos dois comandos; na janela de arquivos, ela mesma roda o
+  fluxo (a vista da segurança, as perguntas e a senha do sudo na linha dela, a recusa dita nela) —
+  nenhuma porta manda a pessoa a outra.
+- **"Toque na chave" quando a unidade começa.** Com `Proof::Cached` a porta do sudo quase sempre
+  pede a senha primeiro; dito antes, o "toque" sumiria sob a pergunta e, depois dela, ninguém o
+  diria enquanto o `systemd-cryptsetup` espera o toque. O ajudante diz a palavra
+  `ronoctua_private::STARTED` depois que o sudo o deixou passar e logo antes de iniciar a unidade;
+  é nela que toda porta diz o toque. E a frase fica enquanto a unidade espera
+  (`ronoctua_private::TOUCH_WAIT`, o `token-timeout` dela): a janela a segura, o rodapé a mantém
+  pelo tempo da espera, com a página da segurança aberta ou não, e a resposta do trabalho toma o
+  lugar dela.
+- **O cursor fica na linha apertada.** O cursor da segurança é um índice nas linhas desenhadas, e
+  uma linha de "trabalhando" que aparece acima da linha apertada o empurraria para a de cima — um
+  segundo `RET` em "abrir com a chave" perguntaria a senha. Por isso o trabalho do cofre desenha
+  uma linha só, depois da última linha que age da seção, e a seção do sudo não desenha a dela
+  para ele.
+- **Tamanhos em unidades decimais.** Toda tela mostra `64.4 GB` (`sizes::readable_bytes`); a
+  pergunta do teto lê `64G` como 64 GB, e `GiB` só quando a pessoa escreve binário. Lido em
+  unidades binárias, o mesmo teto apareceria como `60G` na pergunta e "até 64.4 GB" na linha
+  logo acima.
+- **O swap do tamanho da RAM** (`ronoctua.swapSize`): o relatório de hardware (`facter.json`) é
+  escrito ANTES do `disko`, então o padrão do option sai dele — a soma da memória física,
+  arredondada para cima em GiB, e `16G` sem relatório. Era 16G em toda máquina: um laptop de 32 GiB
+  não hibernava. Só a criação do disco lê o tamanho (o `disko` faz o arquivo uma vez, e o
+  `swapDevices` nomeia o arquivo, nunca o tamanho), então uma máquina instalada não muda
+  (`swap-follows-the-ram`).
+
+<!-- anchor: L13 -->
+### O Incus: a plataforma (`nix/modules/incus.nix`) e o crate (`ronoctua-incus`)
+
+Containers de sistema e máquinas virtuais da pessoa, só no perfil `full` (decisão do dono): QEMU,
+OVMF, LXC e o daemon são ferramenta que se instala para USAR, e as imagens caem em
+`/var/lib/incus`, não no fecho. É a exceção do inv. 6 no molde do Podman: o daemon, a ponte, o pool
+e o perfil `default` são declarados; o que a pessoa cria dentro dele é dela.
+
+#### REST pelo socket, e o CLI só onde precisa
+
+O Podman é falado pelo CLI; o Incus, pela API REST no socket unix (`/var/lib/incus/unix.socket`,
+grupo `incus-admin`). A diferença é o que cada API dá: a do Incus é JSON tipado num envelope só
+(`sync`, `async` com uma operação, `error` com código e frase), as coisas demoradas são OPERAÇÕES
+que se acompanham com progresso (`/1.0/operations/<id>/wait`, um segundo por vez, e o `progress` do
+daemon entre duas esperas) e há eventos (`/1.0/events`, um WebSocket no mesmo socket) no lugar de
+sondar. Nenhum processo por chamada. O CLI (`RONOCTUA_INCUS`) fica para o que é do terminal
+(`console`, o shell, `console --type=vga`, que abre o remote-viewer) e para o que mora na
+configuração do CLIENTE, que o daemon não vê: os remotes da pessoa (`remote list`) e o catálogo de
+um remoto, um índice que o cliente baixa e filtra. Ler qualquer um à mão seria um segundo cliente
+do Incus. O catálogo é pedido INTEIRO, e a arquitetura é filtrada aqui, pelo campo `architecture`
+de cima da imagem (`x86_64`): um argumento `chave=valor` não significa isso, porque num remoto
+simplestreams o CLI filtra no cliente contra as PROPRIEDADES da imagem, onde a arquitetura é a
+palavra da distribuição (`amd64`), e `architecture=x86_64` ali não deixaria nada — a vista ficaria
+sem o que lançar e sem recusa para dizer.
+
+Backup, importação e arquivo empurrado ou puxado são CORPOS HTTP do tamanho de um disco. O
+`over_unix` guarda a resposta inteira como texto (certo para o JSON, errado duas vezes para um
+tarball), e o `tls::download` só sabe TLS e `GET`. O enquadramento é do `ronoctua-http`
+(`one-http-writer`), então o corpo em fluxo nasceu lá: `ronoctua_http::streamed::exchange`, genérico
+sobre o stream (testado com um stream de mentira), corpo da requisição lido enquanto vai, resposta
+2xx escrita no arquivo enquanto chega, recusa guardada na resposta e NUNCA no arquivo (uma página de
+erro salva como o backup pedido, sem nada na tela, é o defeito que ele impede), o tamanho anunciado
+encerra o corpo e o `heard` pode parar entre dois pedaços.
+
+O projeto é só o `default`: toda ação nomeia a instância pelo nome, e um nome só é de uma instância
+dentro de um projeto. Os outros são do CLI. Um nome que o Incus não aceita (`is_instance_name`) é
+recusado antes de virar caminho (`Why::Invalid`), e o id de uma operação também é conferido: os
+dois entram num path. O nome de um SNAPSHOT é mais livre que o de uma instância — o daemon só
+recusa espaço e `/` —, e é com essa regra que ele é conferido (`is_snapshot_name`): `pre_upgrade`,
+`v1.0` e um `snapshots.pattern` com data são nomes que o próprio Incus faz, e a lista os mostra;
+recusá-los na hora de restaurar ou apagar seria recusar o que a tela acabou de oferecer. Por ser
+livre, ele entra no path codificado como um segmento (`%`, `?`, `#`).
+
+#### Nada vai à rede sozinho
+
+O preseed põe `images.auto_update_interval = 0`: o padrão do daemon renova toda imagem em cache a
+cada seis horas, uma requisição a um host que ninguém liberou naquela hora. Toda chamada que faz o
+daemon (ou o CLI) alcançar um remoto toma o `Pass` de cada host do remoto, conferido ANTES de o
+socket abrir: a fonte remota de uma instância nova e a cópia de uma imagem (`source_of` e
+`image_copy_of` são os únicos lugares que escrevem `"server"` para o daemon) e o catálogo
+(`cli::catalogue`). O `Pass` não atravessa processo, então o filho da fila cunha os dele do
+`consent.json` da pessoa no momento de pedir, antes de qualquer chamada (`job::run`). Uma imagem
+local não pergunta a ninguém: `create` (com `Pass`) é a porta do remoto, e `create_local` recusa uma
+fonte remota.
+
+Os hosts de um remoto são TODOS os que o cliente dele pergunta por constante própria (`hosts_of`,
+`Source::needs_hosts`, `Job::needs_hosts`), e cada um precisa ser permitido. O daemon puxa uma
+imagem OCI pelo `skopeo` (`containers/image`), que serve o endereço do Docker Hub (`docker.io`) a
+partir de `registry-1.docker.io`, cujos tokens vêm de `auth.docker.io`: permitir `docker.io` não
+permitia nenhum dos dois, e eram eles que recebiam a pergunta. Por isso os três. Todo outro
+registro (`ghcr.io`, `quay.io`) serve manifesto e token do próprio host. Para onde o registro MANDA
+o cliente buscar uma camada (um CDN) é um redirecionamento, a resposta do próprio host — a mesma
+regra pela qual o `ronoctua_http::web` segue um redirecionamento sob o `Pass` do primeiro host. A
+porta passa o `Pass` do endereço; os outros hosts são lidos do `consent.json` na hora (como o filho
+da fila lê todos), e a linha de consentimento de uma porta permite todos de uma vez. Checks:
+`incus-asks-with-a-pass` (a forma) e os testes do crate (um `Pass` de outro host, ou o do
+`docker.io` sem os outros dois, é recusado antes do socket, que nesses testes nem existe — chegar a
+ele responderia `no-incus`).
+
+#### Duas camadas, e a fila só com o fio
+
+Sem features o crate é o FIO: o `Job` da fila, as linhas do `ronoctua-incus-job` (`percent`,
+`bytes`, `said`, `done`, `refused`), o `Why` e as formas. `client` traz o daemon (REST, WebSocket,
+consentimento, CLI) e `cli` o binário. A fila pede só o fio (`default-features = false`), o molde
+do `ronoctua-pq`, e o que isso garante é a FONTE: compilada sozinha (`cargo check -p
+ronoctua-transfers`), a fila não tem o cliente para nomear. O binário não: no build do workspace o
+Cargo unifica as features, e a fila é compilada contra o crate inteiro — o cliente fica de fora só
+como código que ninguém chama. Separar o binário de verdade pediria compilar a fila numa invocação
+própria do cargo, e nada aqui pede isso.
+O trabalho longo (criar a partir de uma imagem remota, copiar imagem, exportar, importar, publicar,
+empurrar e puxar arquivo) é um filho extraído (`rust.incusJob`, `RONOCTUA_INCUS_JOB` posto pelo
+módulo), num grupo de processos próprio. O cancelamento é `SIGTERM`: o filho cancela a operação NO
+DAEMON (`DELETE /1.0/operations/<id>`), apaga o arquivo pela metade e sai; dez segundos depois o
+grupo morre. Um arquivo exportado ou puxado nasce `create_new` e `0600` (um backup leva os segredos
+da instância), nunca por cima de outro, e o backup que o daemon fez para exportar é apagado aconteça
+o que acontecer — e expira sozinho em um dia se o filho morrer no meio. A `trouble` da linha é texto
+em inglês, como a de toda linha da fila (inv. 18): uma recusa abre com o que ela significa em
+palavras e segue com o stderr do filho, as palavras do daemon. As frases `incus-refused-<id>`, nos
+dois idiomas, são das PORTAS, que têm o `Why` na mão (`Refusal`); a linha da fila tem texto, e dar a
+ela o `Why` pediria um campo novo no `Job` da fila e um braço no rodapé.
+
+#### A plataforma
+
+- O pacote é o LTS, pinado pelo nome: o crate lê o que ESTE daemon imprime, e a linha de recursos
+  ganha extensões de API todo mês.
+- A ponte `incusbr0` tem sub-rede FIXA (`ronoctua.incus.subnet`, `10.218.42.1/24` por padrão): o
+  preseed é reaplicado a cada boot, e `auto` sortearia outra a cada vez, com o endereço de cada
+  instância junto. Sem IPv6 na ponte: um prefixo fixo nosso seria mais uma coisa a colidir.
+- A ponte é confiável (`trustedInterfaces`), o que o módulo de segurança transforma em
+  `/etc/ronoctua-security/local-interfaces`: a tabela da pessoa deixa o DHCP e o DNS das instâncias
+  chegarem ao dnsmasq do daemon mesmo com os escudos levantados. O Incus mantém a tabela `inet
+  incus` dele para o NAT, e é a asserção do `security.nix` (`flushRuleset` desligado) que impede um
+  reload nosso de apagá-la.
+- O NetworkManager não gerencia a ponte, os veth nem os tap: cada um viraria uma "conexão cabeada"
+  que ele tenta configurar e que a vista de rede listaria.
+- A pessoa está no `incus-admin`, que EQUIVALE A ROOT (um membro cria um container privilegiado que
+  monta o host). É o único grupo que alcança o socket inteiro, e o dono escolheu sabendo; o grupo
+  `incus` (o socket restrito, um projeto por pessoa) não alcança o projeto `default`, o pool nem a
+  ponte que a distro declara. Até o próximo login o grupo não vale, e a recusa diz isso
+  (`not-in-group`).
+
+#### Onde os bytes moram
+
+`/var/lib/incus` sobrevive à limpeza da raiz (o `persist.nix` o liga de `/persist`) e, em btrfs,
+`/persist/var/lib/incus` é um SUBVOLUME PRÓPRIO, aninhado: um snapshot de `/persist` não desce
+num subvolume aninhado, então o disco de toda instância e toda imagem nunca ficam presos por um. O
+`filesystem.nix` recusa um alvo de snapshot no armazenamento das instâncias ("it is the instances'
+storage"), e também a `/` onde o Incus está ligado e a pasta dele não é montagem própria.
+
+A unidade `ronoctua-incus-subvolume` roda antes do bind e antes do seed, toda vez que o bind sobe,
+e trata cinco casos pelo inode 256 (é a prova de "já é subvolume", sem estado guardado): nada lá
+(cria), pasta vazia (o que o `tmpfiles` de um `switch` faz pela linha `d` do bind ANTES de a unidade
+rodar: troca), pasta com dados (converte por reflink e `mv --exchange`, só enquanto o bind não está
+montado — senão espera o próximo boot), pasta que GUARDA SUBVOLUMES e uma conversão interrompida
+(desfaz ou termina). A pasta com subvolumes é a de um Incus que já rodou nela com pool btrfs: o
+pool, cada instância, imagem e snapshot são subvolumes do próprio daemon. Ela fica pasta. O `cp`
+copiaria cada um como pasta comum, debaixo do driver btrfs do daemon, e o `rm --one-file-system`
+não apaga a pasta velha (cada subvolume tem o próprio número de dispositivo): a unidade falharia
+naquele boot e em todos os seguintes, com o dobro do espaço ocupado. E deixar não custa nada: um
+snapshot de `/persist` não desce num subvolume aninhado, então os bytes das instâncias já estão
+fora de todos; na pasta ficam só o banco e os logs. O que fica como está é dito no journal como
+aviso, e a unidade termina bem — falhar repetiria a falha a cada boot, por um estado que só uma
+pessoa muda.
+
+Toda unidade do daemon (`incus`, `incus-user`, `incus-startup`, `incus-preseed` e os dois sockets)
+tem `RequiresMountsFor=/var/lib/incus`: iniciada antes do bind, gravaria na pasta da raiz, e o bind
+depois esconderia isso e mostraria a persistida.
+
+#### O disco de uma VM sem cópia na escrita
+
+O desenho pedia `chattr +C` na pasta `virtual-machines/`, e não funcionaria. Três fatos do btrfs,
+medidos num btrfs com `compress=zstd`: o `+C` de um arquivo é posto enquanto ele está vazio, vindo
+da pasta, ou nunca (um `chattr +C` num arquivo com dados não muda nada e não reclama); a raiz de um
+subvolume não herda flag nenhuma, nem da pasta onde é criado nem do subvolume pai; e um snapshot
+guarda as flags do arquivo que divide. Todo volume de um pool btrfs é um subvolume, então o `+C` em
+`virtual-machines/` não chegaria a disco de VM nenhum — e a tmpfiles do desenho seria um
+interruptor que não interrompe. Só o daemon, que escreve o disco, pode escrevê-lo sem cópia na
+escrita, e a alavanca dele é a compressão do volume: o crate pede `initial.btrfs.compression=none`
+no disco raiz de toda VM que cria, quando o pool é btrfs (sobre o disco raiz que os perfis dão, o
+último que tiver um vence), e o `incus-vm` (item 6) confere que um volume de bloco feito assim é
+`+C`. Os containers continuam comprimidos.
+
+O que NÃO está provado: uma VM feita de uma imagem num pool btrfs costuma ser um SNAPSHOT do volume
+da imagem em cache (`images/<fingerprint>`), e o snapshot guarda as flags do `root.img` da imagem.
+O pedido só chega a esse disco se o daemon escreveu o volume da imagem sem cópia na escrita, e ver
+isso exige uma VM — KVM aninhado, que a VM de teste não tem. Está no `docs/PENDING.md`, com o
+caminho que não depende do daemon: um pool `dir` para VMs numa pasta `+C`, onde todo volume é
+pasta e todo disco nasce dentro dela. Uma VM criada pelo CLI cru fica com cópia na escrita — o
+Incus não tem padrão por tipo de instância num perfil.
+
+#### As formas e o teste de VM
+
+Os parsers leem as formas do `shared/api` do pacote pinado, escritas em `fixtures.rs` (um tipo que
+o build não conhece recusa a lista, não vira um dos dois). O `incus-vm` sobe o daemon como o módulo
+o declara, sem rede: importa uma imagem construída no teste (busybox estático, um cliente DHCP e um
+sleep), lança um container que pega endereço da ponte, confere cada chave que o crate lê e GRAVA
+as respostas na saída do teste (`fixtures/`), para que uma mudança de forma do daemon seja um diff
+e não um palpite. Ele também roda o filho da fila contra o daemon de verdade (empurra e puxa um
+arquivo, exporta, recusa exportar por cima, recusa um remoto não liberado), mostra a alavanca do
+disco das VMs num volume de bloco (`lsattr` C) e roda o programa do subvolume em cada caso — os
+mesmos que rodaram, como dono, num btrfs de verdade fora da VM. Sem KVM aninhado: só containers.
+
+Checks: `incus-platform` (os dois sistemas avaliados), `one-incus-boundary`,
+`incus-asks-with-a-pass`, `incus-vm`.
+
+<!-- anchor: L14 -->
+
+### Contas de LLM: o núcleo (`ronoctua-llm`)
+
+Um crate só sabe onde o Claude Code e o Codex guardam o estado deles — as variáveis de pasta, os
+arquivos de credencial, os transcripts e os logs, o campo da statusline — e só ele pergunta ao
+endpoint de uso da Anthropic. Nenhum desses formatos é interface documentada, e um token mora num
+deles: um segundo leitor seria uma segunda cópia das duas coisas (cobra `one-llm-boundary`). O
+módulo do brain e a vista (L24) perguntam ao crate; o shell só lê o arquivo que o crate escreve.
+
+- **As contas são um arquivo da pessoa, editado sobre o que ele diz agora.** `llm-accounts.json`
+  passa pelo `Store`, e toda mudança (`add`, `rename`, `remove`, `set_default`) é aplicada ao
+  `parsed()` do momento e gravada inteira (`Accounts::keep`): duas portas mexendo em duas contas
+  ficam com as duas, e um arquivo que não lê é recusado em vez de sobrescrito. Um padrão por tipo;
+  remover o padrão passa o papel à próxima do mesmo tipo. Remover uma conta do Claude Code devolve
+  antes a statusline dela (`statusline::unwrap`, dentro do `keep`): senão o nosso comando ficaria no
+  `settings.json` nomeando uma conta que a lista não tem mais. Quando não dá para devolver (o
+  `settings.json` não lê, a pessoa no meio de uma edição), a remoção é recusada com o motivo, e nada
+  é escrito nem apagado. A pasta própria do agente (`~/.claude`, `~/.codex`) é aberta com a variável
+  DESLIGADA (`env -u`), não apontada: com `CLAUDE_CONFIG_DIR=~/.claude` o Claude Code passa a
+  guardar o `.claude.json` dentro da pasta, e a pessoa perderia o que ele guardava na home. Pelo
+  mesmo motivo o `llm-default.env`, que o `shellrc.sh` lê para `claude` e `codex` digitados num
+  terminal abrirem a conta padrão, só exporta a variável de um padrão que não é a pasta própria — e
+  escreve `unset` para esse e para um tipo sem padrão. Um arquivo que só se calasse não desfaria
+  nada: um multiplexador de terminal aberto quando outra conta era o padrão herda o `export` antigo,
+  e toda janela nova continuaria nela. O programa do agente chega pelo ambiente (`RONOCTUA_CLAUDE`,
+  `RONOCTUA_CODEX`) e nunca é compilado: o Claude Code é unfree e entraria em todo fechamento que
+  linkasse o crate.
+- **A statusline é embrulhada, nunca trocada.** É o jeito oficial de saber os limites: depois de
+  cada resposta o Claude Code entrega à statusline o `rate_limits` (cinco horas e semana, em por
+  cento, com o instante de cada reinício), e ele é fresco justamente enquanto a pessoa trabalha. O
+  `wrap` muda UM campo do `settings.json` no texto (`jsontext`: o arquivo é provado JSON pelo
+  `serde_json` e só o trecho do `statusLine` muda — parsear e imprimir ordenaria as chaves e
+  refaria toda a indentação da pessoa) e guarda o valor dela, como o texto exato que era, ao lado
+  (`ronoctua-statusline.json`, na pasta da conta e não no estado: o estado pode se perder, e o
+  `unwrap` precisa devolver a linha da pessoa byte a byte). O nosso comando é
+  `/run/current-system/sw/bin/ronoctua-llm statusline --profile <id>`: o `settings.json` sobrevive
+  à geração, e um caminho do store apontaria para um programa que a próxima coleta apaga — por isso
+  o CLI está no PATH dos dois perfis (`nix/modules/llm.nix`). Ele guarda os limites e ENCADEIA:
+  roda a linha da pessoa com o mesmo stdin, num shell (o Claude Code também roda num shell), e o
+  stdout e o código de saída dela são os nossos; sem nada para encadear, não imprime nada (cobra
+  `statusline-chains`). Uma linha que a pessoa pôs depois do embrulho é dela: o `wrapped` diz
+  `Replaced`, a vista oferece embrulhar de novo, e o `unwrap` a deixa em paz. A linha guardada é
+  achada pela conta na lista e, quando a lista não a tem mais (editada à mão, ou ilegível), na pasta
+  em que o Claude Code nos roda (`CLAUDE_CONFIG_DIR`, ou `~/.claude` sem ela), conferindo que foi
+  guardada para aquela conta: a linha da pessoa nunca fica em branco, calada, atrás de um nome que
+  ninguém lista. E o embrulho que não pousa não deixa rastro: a linha da pessoa é guardada antes
+  (o nosso nunca fica na frente de uma linha não guardada), e se o `settings.json` não puder ser
+  escrito (um link para uma pasta somente leitura) o arquivo guardado volta a ser o que era — senão
+  o `wrapped` diria que a pessoa trocou a nossa linha, o que ela não fez.
+- **Nunca um laço.** O nosso comando nunca é guardado como o da pessoa (embrulhar por cima do nosso
+  mantém o que já estava guardado), um comando guardado que é nosso nunca roda, e o filho
+  encadeado leva `RONOCTUA_LLM_CHAINED`, que impede um script da pessoa que nos chame de se chamar
+  através de nós. No `.#dev`, o comando leva `RONOCTUA_INSTANCE=<i>` na frente, para os limites
+  caírem no estado da instância que embrulhou.
+- **O arquivo da pessoa guarda o modo e o link.** O `settings.json` pode ter uma chave de API no
+  `env` (e ser `0600`) e pode ser um link para uma pasta de dotfiles; a escrita atômica vai ATRAVÉS
+  do link e cria o rascunho já com o modo do arquivo (`files::write_keeping`) — um `rename` sobre o
+  link o trocaria por um arquivo.
+- **Três fontes de limite, cada uma pelo que vale.** A statusline (oficial, de graça, só enquanto
+  o Claude Code roda); o endpoint de uso (`/api/oauth/usage`, NÃO oficial: diz também a janela
+  semanal do Opus e do Sonnet, e responde sem sessão aberta — a tela diz que ele é não oficial);
+  e, para o Codex, que não tem statusline, o `rate_limits` que ele mesmo escreve nos logs de sessão
+  (a janela de até um dia é a de cinco horas). Uma janela cujo reinício já passou some do
+  `limits`: ela recomeçou, e quanto da nova foi usado ainda não se sabe. Uma janela sem a
+  porcentagem também não é conhecida, nunca 0 %: um nome de campo que mudasse numa versão do agente
+  deixaria a marca calma com a pessoa no limite. Os logs do Codex lidos são os ÚLTIMOS ESCRITOS, e
+  vale o evento mais novo pela hora dele: o rollout tem o nome do dia em que a sessão começou, e uma
+  sessão retomada hoje escreve no arquivo daquele dia.
+- **O endpoint é consentido e nunca renova.** `usage::fetch` toma um `Pass` de
+  `api.anthropic.com` e recusa outro antes de ler o token (cobra `llm-usage-asks-with-a-pass`); o
+  `refresh` cunha o passe do `consent.json` na hora. Um token além do `expiresAt` nem sai, e 401 ou
+  403 é `Expired`: o Claude Code renova o próprio token quando roda, ou a pessoa entra de novo.
+  Renovar aqui seria um segundo programa escrevendo a credencial do agente pelas costas dele. Uma
+  recusa (sem rede numa rodada, o token vencido) é guardada AO LADO dos últimos números, com a hora
+  em que eles vieram (`usage_at_s`), e não no lugar deles: as janelas semanais do Opus e do Sonnet
+  só existem ali, e um minuto sem rede não pode apagá-las; o `Usage::at` tira as que já
+  reiniciaram.
+- **O token não fica.** Ele é lido só no `usage.rs`, na hora do pedido: o arquivo vai para memória
+  zerada no `Drop` (`files::read_secret`, com o tamanho medido antes, porque um `Vec` que cresce
+  deixa a cópia menor para trás), o token é EMPRESTADO de lá (`&str`, nunca um `String` dele) para
+  um cabeçalho também zerado, e as estruturas que o tocam só derivam `Deserialize` — nada de
+  `Debug` que o imprima. O cabeçalho segue emprestado até o `ronoctua-http`, que monta o pedido
+  inteiro num buffer medido antes (`head_len`) e zerado no `Drop` (`request_wiped`), peça por peça
+  e sem `format!` (`frame_head`): um temporário guardaria `Bearer <token>` sem ninguém o zerar, e
+  um `String` que cresce deixa a cópia menor para trás. Isso vale para todo transporte TLS do
+  crate, e portanto para toda chave de API em cabeçalho. Dali em diante os bytes são do
+  rustls, que (na 0.23 pinada, lido na fonte) sela cada registro no lugar, num buffer já do tamanho
+  certo: o texto claro é sobrescrito pelo cifrado. Os três fatos que a vista mostra (assinatura,
+  tier, validade) saem do mesmo buffer sem o token ser desserializado; o plano do Codex vem das
+  claims do `id_token`, decodificadas em memória zerada (cobra `llm-tokens-never-linger`).
+- **Um token é tudo o que o modelo processou.** No Claude Code, entrada, saída, criação e leitura
+  de cache de cada resposta; no Codex, o `total_tokens` de cada turno (a entrada dele já conta a
+  parte em cache). Uma resposta é escrita em várias linhas com o mesmo `message.id` e `requestId`,
+  e uma sessão retomada copia as respostas antigas para o arquivo novo: cada resposta conta uma vez,
+  lembrada por um hash FNV dos dois ids — FNV e não o `DefaultHasher`, cujo algoritmo pode mudar
+  com o toolchain e faria uma contagem guardada contar de novo. O `<synthetic>` é do próprio Claude
+  Code e não conta. O Codex escreve o total corrente da sessão, então um turno é o passo desde o
+  anterior (o mesmo total repetido é o mesmo evento escrito duas vezes); o rollout é conhecido pelo
+  NOME, porque arquivado ele muda de pasta e continua sendo o mesmo; o `.jsonl.zst` é lido pelo
+  `ruzstd`, em Rust, sem biblioteca C nem caminho no fechamento.
+- **A contagem é incremental e limitada.** O `Cache` guarda onde cada arquivo foi lido (só linhas
+  inteiras: um log é lido enquanto é escrito), as contas por hora UTC e por modelo e as respostas
+  já vistas; tudo o que é mais velho que `llmTokenDays` (31: o Claude Code apaga um transcript um
+  mês depois da última escrita) sai, e as respostas lembradas param em `llmSeenMost`, as horas mais
+  antigas primeiro (`assets/cache.nix`). O `refresh` guarda o cache em `$XDG_CACHE_HOME`: perdido,
+  conta-se de novo.
+- **Dias são de uma zona; horas não.** As contas ficam por hora UTC, que zona nenhuma muda, e o
+  `Cache::tally_in` faz os dias na zona que recebe — a porta tem a da máquina
+  (`ronoctua_files::when::Zone`), e o crate não ganha um segundo leitor de TZif. O
+  `by_day_and_model`, de assinatura congelada, responde dias UTC.
+- **O CLI.** `statusline` (o que o Claude Code roda; nunca falha a linha da pessoa por motivo
+  nosso), `refresh` (o que a unidade de uso roda: conta e pergunta, sem perguntar nada a ninguém),
+  `wrap`, `unwrap` e `remove` (o que a vista faz, num terminal). O `refresh` mora na biblioteca
+  (`refresh::run`), com o passe e o pedido entrando como funções: o CLI dá o `consent.json` e o
+  HTTP, e um teste dá um arquivo de consentimento dele e uma resposta pronta — a rodada inteira,
+  raízes e tudo, é testada como acontece. É extraído do workspace (`rust.llm`): o fechamento é TLS,
+  serde e o bash do encadeamento, nunca o desktop.
+- **Quem vigia pergunta ao crate.** O módulo do brain (L24) precisa vigiar os arquivos de limite e
+  as pastas de transcript; o `watched(conta)` responde os caminhos que o crate escreve e lê, das
+  mesmas funções que os escrevem e leem (`files`: limites, uso e contagem; `trees`: os logs, até
+  `tokens::DEPTH` de fundo). Os nomes dessas pastas e arquivos fora do crate são recusados (cobra
+  `one-llm-boundary`): um vigia com o layout escrito à mão ficaria na pasta velha no dia em que o
+  crate mudasse.
+
+<!-- anchor: L15 -->
+
+### Trabalhar na distro a partir da distro (as ferramentas de desenvolvimento)
+
+- **Um toolchain, dois leitores.** `nix/toolchain.nix` é a lista do devshell — o rust com as duas
+  metas wasm, o Python das fontes, `nixfmt`, QEMU, OVMF, `swtpm`, as bibliotecas Wayland, a Mesa, git
+  e as ferramentas, e o SQLite e o libpam que o workspace linka. O `nix/devshell.nix` a põe no PATH;
+  o `nix/modules/dev.nix` a guarda no store de todo sistema instalado, nos dois perfis
+  (`system.extraDependencies`). Antes, uma máquina instalada só chegava a ela BAIXANDO, no primeiro
+  `nix develop` — e uma instalada sem rede ou com rede medida não começava a trabalhar na distro que
+  roda. Cada lado chama o arquivo com o `pkgs` que tem (o do flake e o do sistema: o mesmo nixpkgs e
+  os mesmos dois overlays), e a igualdade é provada saída por saída, nunca suposta: um overlay a
+  mais num lado muda um caminho, e o `devshell-is-in-the-store` o nomeia. Saída, e não `.drv`,
+  porque o `mkShell` pede a saída `dev` de cada entrada (`jq.dev`, `wayland.dev`): um store com o
+  `jq` e sem o `jq.dev` ainda baixa, e o `.drv` dos dois é o mesmo. O `stdenv` do shell também
+  fica, e com ele o `cc`. O que o checkout gera (ganchos, WIT, buffers, as tabelas `-rs`) e os
+  programas que o build assa seguem o commit e não são toolchain: nenhum store instalado os tem
+  antes dele, e o primeiro `nix develop` os constrói.
+- **Guardado não é instalado.** `extraDependencies` segura caminhos sem pô-los no PATH: dois Pythons,
+  um segundo `pkg-config` e as ferramentas da Mesa em todo shell seriam ruído. O rust é a exceção e
+  entra pelo registro de programas (`ronoctua.apps.rust`, com `when = true` nos dois perfis), e é a
+  MESMA derivação do devshell: "funciona no devshell e falha fora" não pode ser obra de um segundo
+  compilador. Com ele vai o `cc` do `stdenv` (o mesmo do devshell, já no fechamento do rust): o
+  `cargo` do rust-overlay não nomeia linker, e o compilador C que ele propaga nunca chega ao PATH de
+  um pacote instalado — sem isso, `cargo run` fora do devshell era "linker `cc` not found" no
+  `minimal`. Recusá-lo tira o rust do PATH e o deixa no store, para o `nix develop`.
+- **Os agentes nos dois perfis** (decisão do dono, 2026-10-05). Trabalhar NA distro é justamente o
+  que o perfil reduzido faz — é o que reinstala em minutos —, e o Claude Code e o Codex fazem parte
+  desse trabalho. O rodapé recebe os dois pelo caminho do store (`RONOCTUA_CLAUDE`,
+  `RONOCTUA_CODEX`), como a linha de vida já recebia o primeiro: as contas de LLM abrem uma sessão do
+  processo do rodapé. Cada variável segue o PROGRAMA, então quem recusou o Codex não recebe a
+  sessão dele (cobra `agents-in-both-profiles`).
+- **O custo, medido.** O fechamento do toolchain é 6,5 GiB; tirando o que os pacotes do perfil
+  reduzido já trazem, sobram 5,2, dos quais ~0,8 são a Mesa e o LLVM que o driver gráfico de toda
+  máquina já tem — ~4,4 GiB a mais no `minimal`, quase tudo o rust com a documentação e as duas
+  bibliotecas wasm (1,8), o OVMF com o fonte do EDK2 que ele mantém (1,3) e o QEMU (0,94). Com os
+  agentes, o `minimal` vai de 6,9 a ~11,8 GiB. A `full` ganha 2,35 GiB pela mesma conta — o rust
+  já estava nela, mas o Incus traz um QEMU e um OVMF dele, não estes —, e fica em ~29 GiB
+  (`nix/modules/profile.nix`).
+- **O KVM segue a CPU, e quem lista o módulo é o nixos-facter.** O `facter.json` da máquina tem as
+  flags da CPU, e o módulo dele carrega `kvm-intel` para `vmx` e `kvm-amd` para `svm`. Listar os dois
+  às cegas parece mais simples e é pior: o do outro fabricante recusa carregar e deixa o
+  `systemd-modules-load.service` falho em todo boot. Sem relatório (uma máquina de teste), o kernel
+  carrega o módulo sozinho pelo modalias da CPU. O que é nosso: a pessoa no grupo `kvm` (o
+  `/dev/kvm` é dele) e as quatro `system-features` escritas por extenso — o padrão do NixOS hoje é
+  o mesmo, e um padrão que muda é um gate que para de construir os testes de VM sem dizer nada
+  (cobra `kvm-is-ready`, que pergunta à máquina de referência numa CPU plantada de cada fabricante).
+- **O `.envrc` não baixa nada aqui.** Ele pergunta `has nix_direnv_version` e só vai ao GitHub
+  quando falta; o direnvrc do sistema (`programs.direnv.nix-direnv`) o carrega. O gancho continua
+  no `assets/shell/shellrc.sh`, o lugar único da preparação de cada shell: as integrações do módulo
+  enganchariam o direnv uma segunda vez (cobra `direnv-sources-nix-direnv`, que roda o direnv com o
+  direnvrc dos dois perfis).
+- **O superpacote de ícones deixou de ser entrada do devshell, e só dele.** Como entrada, entrar
+  no devshell construía os 0,61 GiB em toda máquina, a reduzida inclusive, que o deixa de fora de
+  propósito. Agora o devshell leva só o CAMINHO (`builtins.unsafeDiscardStringContext`) e exporta
+  `RONOCTUA_ICONS` quando o store o tem: a `full` o tem, porque o sistema instala a mesma derivação;
+  na `minimal` o devshell diz como trazê-lo. O `.#dev` continua com ele como entrada, porque é lá que
+  os ícones são VISTOS: só pelo caminho, um host de fora o perdia na coleta de lixo seguinte e o laço
+  mostrava só glifos de categoria, sem uma palavra — um passo automático virava instrução escrita.
+- **O gate culpa os três que matam por memória.** O `earlyoom` de um host, o `systemd-oomd` — que
+  aqui vigia a `system.slice`, onde as builds do daemon rodam — e o OOM killer do kernel, cada um no
+  seu journal; antes só o primeiro era perguntado, e numa máquina da distro o `signal: 9` de um
+  `rustc` saía sem culpado. E o orçamento do gate nunca passa do `MemoryHigh` do `nix-daemon`
+  (`ronoctua.memory.buildCeiling`, metade da RAM): medido só pelo que está livre, ele planejava para
+  mais do que o daemon pode segurar, o kernel estrangulava os compiladores e o oomd matava a build.
+  O oomd não foi afrouxado; uma máquina que só constrói sobe o teto no `host.nix`.
+- **`LEADER / c` clona a distro.** O endereço é da construção (`RONOCTUA_DISTRO_REPOSITORY`, em
+  `nix/rust.nix`), então o que se pergunta é ONDE, e a pergunta nomeia o host que o endereço
+  nomeia ("Clonar de github.com em", tirado do endereço e não escrito na chave: um fork pergunta
+  pelo host dele): a resposta é o consentimento, gravado no `consent.json` como o repositório
+  digitado dos pertences, só então o `Pass` é cunhado, e a frase seguinte diz que o host ficou
+  permitido. Um redirecionamento não leva o clone a outro host (`http.followRedirects=false`; o
+  padrão do git, `initial`, segue a primeira resposta para qualquer lugar), e uma linha parada
+  desiste em 60 s abaixo de 1 KiB/s, porque o git por HTTPS não tem prazo próprio. Enquanto o clone
+  roda, a frase dele fica SEGURA na linha — é um estado, não um gesto — até a resposta a
+  substituir, e um segundo `/ c` ouve que ainda há um clone rodando em vez de achar "ocupada" a
+  pasta que o primeiro já criou. Uma pasta que já existe e não está vazia é recusada
+  antes de qualquer pergunta à rede. O `Repo::clone(pass, url, into)` do `ronoctua-git` recusa um
+  endereço cujo host o passe não cobre (`host_of`), e clona endurecido como toda chamada — sem
+  gancho, sem template, sem submódulo, sem pergunta. Fica atrás da feature `clone` porque o
+  `ronoctua-git-askpass` é compilado do fonte do crate só com `rustc` (`nix/git-askpass.nix`), sem
+  dependência nenhuma. O clone roda numa thread e volta como o mesmo comando com um argumento que
+  ninguém digita (começa com NUL), pelo canal que já roda um comando com argumento no laço; pronto,
+  o gerenciador de arquivos abre na pasta.
+
+<!-- anchor: L16 -->
+
+### A versão, o cache binário da pessoa e as máquinas que seguem a `release`
+
+**Uma branch que só anda para frente, e só por um comando.** Toda máquina tem o próprio flake com a
+distro como input, apontado para a branch `release` (`templates/machine/flake.nix`), e a
+atualização move esse input. O que chega às máquinas é, portanto, o que a `release` aponta, e quem
+a move é o `nix run .#release` (`nix/release.nix`) e mais ninguém: ele passa pelo gate antes, e o
+push é sem `--force`, de modo que o próprio git recusa o que não for avanço. Voltar atrás é um gesto
+diferente, com flag própria (`--rollback-to <rev>`): um force push escondido num `release` comum
+seria um rollback que ninguém pediu. Ele só aceita o commit de uma versão **publicada** — o que a
+tag de um Release do GitHub aponta —, e não qualquer ancestral da `release`: a branch salta muitos
+commits de uma vez, e o commit do meio nunca passou pelo gate, então cada máquina construiria um
+commit não testado. Não constrói nada; move a branch e marca aquela versão
+como a mais recente (`--latest`) de novo, porque o pendrive e o `.#fetch-iso` pedem ao GitHub a mais
+recente, e ela não pode continuar sendo a versão da qual o dono acabou de recuar. A versão de onde
+se recuou não é publicada outra vez: a próxima é um commit depois dela.
+
+**Só a `main` limpa e igual à `origin/main`.** O ISO carrega a árvore e a máquina guarda o commit no
+lock: o que se publica tem de ser um commit que qualquer um busca, não uma árvore de trabalho. Por
+isso recusa-se HEAD solto, outra branch, arquivo mudado ou não rastreado, `main` à frente ou atrás
+da `origin`, e uma `origin` que não seja `github.com/ronoctua/ronoctua-distro` — lida da
+configuração como está escrita, porque a branch e o Release do GitHub têm de cair no mesmo
+repositório. Tudo isso, e o login do `gh`, é conferido antes do gate:
+descobrir uma hora depois que faltava o login é o tipo de erro que um comando deve impedir. O
+`--dry-run` para aí e diz o que faria. Como o gate demora, a árvore é conferida de novo depois
+dele, e os sistemas são construídos do commit (`git+file://…?rev=`), não da pasta.
+
+**A ordem é a da segurança de quem segue.** (1) O gate. (2) Os dois sistemas de referência e o ISO,
+que leva a semente. (3) O Release do GitHub como rascunho, com todos os assets: o pendrive
+(`ronoctua-stick`) e o `.#fetch-iso` leem só versão publicada, então um upload pela metade fica
+invisível; rascunho não cria tag. (4) A branch. (5) Com `--sign`, a tag assinada sobe para a
+`origin` só agora. (6) A publicação, marcada `--latest` (e `--verify-tag` com a tag assinada; sem
+ela, o GitHub cria a tag no commit ao publicar): o mesmo repositório tem os Releases das fontes
+(`fonts-v1`) e dos sons (`ambience-v1`), e o "latest" do GitHub é o que o pendrive pede. Se a branch
+não anda, o rascunho fica sem publicar, a tag assinada fica só no checkout — e a recusa diz isso — e
+nada mais mudou; rodar de novo retoma (o upload sobrescreve o rascunho, a branch igual é nada). A
+tag é `v<AAAA.MM.DD>-<rev7>`, a data do commit em UTC: dois Releases no mesmo dia não colidem.
+
+**Nunca um commit.** As checksums são um asset (`SHA256SUMS`) e, com `--sign`, também a mensagem de
+uma tag assinada (`git tag -s`, que pede a chave do dono) — o `SHA256SUMS` deixa de depender só do
+TLS do GitHub para quem quer conferir. Um commit das checksums seria uma árvore que o ISO não
+carrega: o ISO teria de ser feito depois do próprio commit que o descreve. A tag é feita antes do
+rascunho mas só sai do checkout depois da branch: uma tag pública de uma versão que não veio seria
+uma promessa que ninguém cumpre.
+
+**A distro não tem cache binário; a pessoa pode ter o dela.** (Decisão do dono, 2026-10-11.) O cache
+da distro (`assets/cachix.nix` e o envio do `.#release`) saiu: um cache da distro seria uma conta do
+dono que toda máquina do mundo consulta, e o que ele economizava — compilar o que só este
+repositório faz — o ISO já leva na semente. O ISO leva **sempre** a semente (o shell, o compositor,
+as fontes, os ícones, o índice e as fontes dos inputs do flake): a instalação não compila nada disso,
+e o resto vem do `cache.nixos.org`. O que sobra para um cache é o que cada máquina constrói de seu
+— a variante do shell com os módulos do brain da pessoa, os programas que ela declarou e que o
+Hydra não constrói —, e isso é da pessoa: o cache é **dela**, no Cachix, com a conta dela. Nenhuma
+alternativa sem conta (rede local, Tailscale, servidor próprio) nesta leva.
+
+**Onde a escolha mora.** Nome, chave pública e quem lê (público ou privado) ficam no `options.json`
+da pessoa (`ronoctua_person::options::BinaryCache`), que viaja na parte em claro dos pertences —
+assinada pela chave pós-quântica dela — e chega à máquina como a cópia que o aplicador do root validou
+(`ronoctua.person.options`). Dois validadores leem a mesma escolha, o do Rust e o juiz do Nix
+(`nix/binary-cache.nix`), e os dois respondem a uma tabela só de casos
+(`crates/ronoctua-person/fixtures/binary-cache-cases.json`): um valor que um aceita e o outro recusa
+seria um cache que a tela aceita e a máquina ignora. Nome que não é do Cachix, chave de outro cache,
+formato mais novo: nada é declarado, e nada é consertado num cache plausível
+(`binary-cache-declared-once`). Com a escolha válida, só `nix/modules/binary-cache.nix` declara: o
+substituter vem **antes** do `cache.nixos.org` (o NixOS acrescenta o público com `mkAfter`), nunca
+no lugar dele, com a chave entre as confiáveis; e escreve `/etc/ronoctua/binary-cache.json`, o que o
+envio precisa saber.
+
+**O token é segredo, e só segredo.** O token de envio do Cachix fica na parte **cifrada** dos
+pertences — `config/binary-cache-keys/push-token`, uma pasta `0700` de arquivos `0600` desde o
+primeiro byte (`ronoctua_consent::keys`), que a árvore `config` leva selada e a restauração devolve
+nascida `0600` (`belongings_token_is_sealed`). Nunca na parte em claro, nunca num argumento, nunca no
+ambiente de um processo longo, nunca num log: ele chega ao `cachix` no ambiente DAQUELE filho
+(`CACHIX_AUTH_TOKEN`), e o que o `cachix` imprime volta com o token trocado por `<token>`
+(`binary-cache-token-never-prints`, e os testes do `ronoctua-cachix`).
+
+**Um cache privado se lê com o token.** Quem baixa de um substituter é o daemon do Nix, que roda
+como root e lê o `nix.settings.netrc-file` — que o módulo só declara para um cache privado,
+apontando para `/var/lib/ronoctua-binary-cache/netrc`, do root, `0600`, numa pasta que sobrevive ao
+apagamento (`persist.nix`). O token não pode estar numa expressão Nix (o store é legível por
+todos), então o netrc é escrito por um gesto: quando a pessoa dá o token ou torna o cache privado, o
+gesto — de root, perguntado na barra do sudo como todos — põe uma cópia do token na pasta de runtime da
+pessoa (`/run/user/<uid>`, `0600`) e chama o verbo `binary-cache-netrc <nome>`, cujo único argumento é
+o nome do cache, conferido pela gramática do nome. O ajudante do root abre a cópia relativa à pasta,
+com `O_NOFOLLOW`, exige que seja um arquivo comum da pessoa, só dela, do tamanho de um token, apaga-a
+e grava o netrc. A janela faz o mesmo gesto pela barra (o pedido desce pelo socket de controle do
+rodapé) e diz, na própria linha, o que veio — o gesto deixa o veredito num arquivo de runtime, que a
+janela relê. Tirar o token, ou deixar o cache público, remove o netrc (`binary-cache-netrc-remove`):
+um token que ninguém lê é um token a menos no disco. A senha, quando a janela sem senha não está
+aberta, é pedida na barra do sudo.
+
+**O envio segue cada atualização que trocou a máquina, uma vez.** É o último passo da atualização
+(`binary-cache-push`, classe `publish`, como a pessoa): só com cache nomeado, só se o registro da
+máquina diz que um `apply` TROCOU a máquina desde o último envio (uma atualização que falhou não
+publica nada, e uma que não mudou nada não reenvia), só com o token e com cada host que ele alcança
+permitido no `consent.json` — nomear o cache é o consentimento, e a tela o grava. As quatro faltas
+são notícia, nunca falha, e ninguém é perguntado. O que foi enviado, ou por que não, fica em
+`binary-cache-push.json`, e a tela o mostra.
+
+**O que um cache público pode receber.** Um cache público é redistribuição, então recebe só as
+**saídas da própria distro** — a semente do ISO como **a distro a avalia** (`seedRoots` no
+`flake.nix`), nunca como a máquina a avalia —, e só as que esta máquina tem válidas no store. Um
+caminho do store é função de tudo o que entrou nele: o que a avaliação da distro dá não pode carregar
+o nome da máquina, o usuário, o `/etc`, os programas declarados nem os módulos do brain da pessoa
+(uma máquina cujo shell leva esses módulos constrói OUTRO shell, que não está na lista — e o check
+confere que a lista não muda com o nome da máquina). Os caminhos vão sem o contexto de string: a lista
+não faz o sistema depender (e construir) uma semente que ele não usa. Do fechamento deles sai, como
+o `release.py` fazia (`ronoctua_cachix::closure::public`, com os testes de lá):
+
+- todo caminho **endereçado por conteúdo** (`ca`): os downloads e o que a avaliação escreve; quem
+  precisa busca onde sempre buscou;
+- todo programa **não livre**, pelos nomes que o `nix/release-unfree.nix` responde — as três
+  perguntas de sempre (a licença do pacote daquele nome, o predicado da máquina, e `android…` com o
+  Android ligado) — sobre os nomes que a máquina carrega: os pacotes do sistema e da pessoa, e cada
+  programa que uma sessão ou unidade de usuário recebe por caminho do store (é assim que o `uade` e
+  o `unrar`, que entram por um nixpkgs próprio, são pegos);
+- e **tudo que referencia um deles**, porque o `cachix push` empurra o caminho com o fechamento.
+
+Um cache **privado** não é redistribuição: recebe o fechamento do sistema que está rodando. E
+nenhum dos dois recebe o que o `cache.nixos.org` já serve: o envio pergunta a ele
+(`nix-store --store https://cache.nixos.org --check-validity --print-invalid`, com um `Pass`) e
+manda o resto.
+
+**A instalação já usa o cache.** Quando o repositório da pessoa nomeia um cache, o instalador o lê
+da cópia que o aplicador do root acabou de validar no flake de trabalho — depois, portanto, da
+verificação da parte em claro — e o entrega ao `nixos-install` na linha de comando
+(`--option extra-substituters` e `extra-trusted-public-keys`, o ISO não conhece pessoa nenhuma). Para
+um cache privado, antes de tocar no disco, ele lê o token da parte cifrada com a senha
+(`ronoctua-belongings take`: um arquivo da parte selada, escrito `0600`, a senha num arquivo que se
+apaga), faz um netrc do instalador e aponta o `nixos-install` para ele (`--option netrc-file`); depois
+do `nixos-install`, copia esse netrc para o do root na máquina, e o do instalador some com a pasta
+de rascunho.
+
+**A tela.** O cache é assunto da atualização, então mora na vista dela: `c` vira a vista para a
+página do cache e de volta, no rodapé (`LEADER s u u`, ou direto com `LEADER s u c`) e na janela
+(`LEADER s u w`), com as mesmas linhas, as mesmas teclas e as mesmas perguntas — no minibuffer e na
+linha da janela. O nome e depois a chave DELE são digitados; quem lê é alternado; o token é uma
+pergunta secreta; o netrc do root se grava de novo; e os dois gestos que não voltam (esquecer o
+token, deixar de usar o cache) perguntam com o "não" primeiro. O valor de uma linha é curto; o porquê
+de uma recusa vai inteiro na cabeça, enquanto o cursor está nela, quebrado e nunca cortado.
+
+Foi a recusa da semente da época do cache da distro que achou o caso real: o workspace — o build
+mais caro que existe — assava o caminho do `unrar` (não livre) pelo `generated`, então nunca iria
+para um cache público, e toda máquina o compilaria. O `unrar` passou para o `atRunTime`: o embrulho
+do `ronoctua-shell` o põe no ambiente (`--set-default`), a unidade da fila também
+(`nix/modules/transfers.nix`), e o devshell e o laço aninhado o exportam; o sistema já traz o `unrar`
+(`nix/modules/archives.nix`), então nenhum fechamento cresceu. Programa não livre não se assa no
+workspace: o `release-cache-holds-only-free-builds` recusa um no `generated`.
+
+**O ISO como asset.** O GitHub recusa um asset de 2 GiB ou mais, e "2 GB" lido em decimal é menor:
+o ISO vai inteiro só abaixo de 2 000 000 000 bytes; acima, em partes de 1900 MiB
+(`<iso>.part-NN`, de `00`, sem buraco, três dígitos depois de cem), poucas para a barra da fila do
+pendrive não recomeçar à toa. O `SHA256SUMS` tem uma linha por parte **e uma do inteiro**: uma
+parte certa sozinha mas juntada no lugar errado só a linha do inteiro pega. O `.#fetch-iso` lê o
+mesmo contrato que o `ronoctua-stick` (`release.rs`): baixa (retomando), confere cada parte,
+junta, confere o inteiro, e só então dá nome ao ISO; uma parte que falha é apagada para vir de novo.
+Retomar não basta para o pedaço que já estava no disco com o tamanho todo e errado (uma rodada que
+morreu entre o download e a conferência): esse vem de novo inteiro, uma vez, na mesma rodada
+(`iso-parts-reassemble`, contra uma versão servida nesta máquina como o GitHub serve).
+
+**`.#adopt-machine`: a migração vinda de fora.** Uma máquina do layout antigo (uma cópia da distro
+inteira no diretório da máquina) roda uma atualização que não sabe migrar. O app roda, com sudo, o
+`ronoctua-machine migrate` — o flake novo é construído ao lado e só substitui o velho se construir
+— e depois o `apply`, para a máquina passar a rodar um sistema feito do próprio flake, cuja
+atualização já sabe o caminho. Só segue para o `apply` com um veredito que diz que terminou
+(`migrated…`, saída 0): um sudo que não entrou, ou uma migração morta antes de falar, não diz nada,
+e nada não é "migrado" — o `apply` não recusa o layout antigo, e construiria a cópia velha. O `ronoctua-machine` é o do sistema de referência, já embrulhado com
+o ambiente das unidades (`ronoctua.machine.package`); só o atributo (o nome da pessoa, quem roda) e,
+enquanto não houver `release`, o endereço da distro (`--distro`) são dados na hora.
+
+**`.#apply-here`: o checkout do dono na máquina do dono.** Constrói o flake da máquina com
+`--override-input ronoctua git+file://<checkout>` e `--no-write-lock-file`: o diretório da máquina
+não muda, então a próxima atualização volta à `release` (a não ser que a máquina esteja retida). O
+build é como a pessoa — o checkout é dela —, e só o `nix-env --set` e o `switch-to-configuration`
+são do root; se o diretório da máquina tiver um arquivo que só o root lê (o `path:` copia tudo), o
+build também é do root, e ele diz qual arquivo. A metade do root roda **sob a trava da
+atualização** (`/run/ronoctua-update/system.lock`, a mesma do `applyCommand`), sem esperar: ocupada
+é recusa. Sem a trava, uma atualização que rodasse durante os minutos do build armaria um ensaio
+(as variáveis EFI apontando para o sistema dela) e o perfil passaria a nomear o do checkout — o
+próximo boot abençoaria o da atualização, e o switch do checkout não ficaria. Por isso o registro é
+lido de novo sob a trava: um ensaio esperando ser julgado é recusado (o boot loader aponta para a
+última geração boa e o switch não seria o que o próximo boot pega), e um `state.json` que não se lê
+também, não tomado por "sem ensaio". Não arma ensaio de boot: um sistema do checkout é do dono, que
+escolhe no menu se ele não subir — e por isso o menu tem de continuar tendo a volta. A geração que
+empurraria a última boa para fora do menu é recusada, com a mesma conta do `ronoctua-machine apply`
+(`last-good-would-fall-out`, `release.py menu-room`), e a última boa é a do registro ou, antes de
+qualquer bênção, o sistema que deu boot.
+
+<!-- anchor: L17 -->
+
+### O pendrive do instalador (`LEADER s z`, o `W` da barra lateral)
+
+**Um crate só sabe o que é uma versão e grava um drive inteiro: `ronoctua-stick`.** A fila e o
+rodapé pedem a ele — o que a versão é (`release`), quais drives podem ser gravados (`drives`), o que
+se prepara para a unidade root (`staging`) — e só ele abre um disco com `O_DIRECT`, lê o
+`LoaderDevicePartUUID` ou escreve em `/run/ronoctua-stick` (cobra `one-stick-boundary`). Dois
+gravadores de pendrive seriam dois conjuntos de recusas que discordam, e o que não tem uma delas é o
+que apaga o disco de alguém.
+
+**A versão é lida, nunca adivinhada.** O `releases/latest` do GitHub traz a ISO inteira
+(`ronoctua-distro-<rótulo>-x86_64.iso`) ou em partes (`….iso.part-NN`, numeradas a partir de 00 ou
+01 sem buraco, porque o GitHub recusa um asset de 2 GiB ou mais) e o `SHA256SUMS`, com uma linha
+por parte e uma para a ISO inteira. Rascunho, pré-versão, duas ISOs, parte faltando, asset ainda
+subindo ou endereço fora de `github.com/<repositório>/releases/download/` é `NoRelease` — uma
+versão que este código não entende não é uma que ele interpreta. Cada parte é conferida ao chegar
+e a ISO montada de novo: uma parte certa sozinha mas juntada fora de ordem ainda é pega.
+
+**Três hosts, uma linha de consentimento.** `api.github.com` (a versão), `github.com` (o endereço
+de cada asset) e `release-assets.githubusercontent.com` (para onde o GitHub redireciona o
+download). Um redirecionamento é resposta do host e não consentimento da pessoa
+(`ronoctua_http::web`), então o terceiro é pedido pelo nome, junto. Um `Pass` não atravessa o
+soquete da fila, então o motor cunha os dele do mesmo `consent.json` na hora de começar: um
+consentimento retirado depois do pedido para o download.
+
+**O download é da fila, e fica um só.** aria2 retoma e repete o que 4 GiB num wifi ruim pedem; uma
+parte já baixada e certa não é baixada de novo. A imagem vai para `$XDG_CACHE_HOME/ronoctua/stick`
+com um marcador `<iso>.sha256`, escrito só depois da conferência do todo: o cache é um subvolume que
+nenhum snapshot segura, a varredura do `assets/cache.nix` leva o que ninguém usou, e montar uma
+imagem nova apaga a anterior (`release::keep_only`). Um download só (`Work::Stick` sem `write`) é
+o "Só baixar" da vista.
+
+**A senha é pedida uma vez, ANTES do download.** O "sim" da pergunta (com o `não` primeiro e o
+cursor nascido nele) passa pela porta do sudo na hora: `RootVerb::StickWrite` inicia
+`ronoctua-stick-write.service`, `Type=exec`, e o `systemctl start` do helper volta assim que o
+gravador roda — por isso sem o `--no-block` que o desenho previa: o `start` de uma unidade `exec`
+já não espera a gravação, e assim a porta sabe que ela começou. A unidade espera o `ready` que a
+fila escreve depois da conferência, por inotify e com teto de doze horas. Pedir a senha depois de
+uma hora de download seria pedir a quem já saiu de perto.
+
+**A unidade root não confia no que lê.** A pasta de preparo é da pessoa (`0700`) dentro de uma
+pasta de root (`0755`), onde a unidade responde (`progress.json`): um arquivo que root escreve numa
+pasta da pessoa está a um symlink de qualquer arquivo da máquina. O pedido é lido sem seguir link,
+tem de ser da dona da pasta, é limitado e recusa campo desconhecido; o `ready` só conta se for mais
+novo que a unidade (menos dez segundos de folga): sobra de uma queda não grava o pendrive de
+ninguém. A imagem é aberta como arquivo regular DA PESSOA — senão root copiaria o `/etc/shadow`
+para um pendrive que ela lê.
+
+**O drive é relido pelo kernel antes de gravar.** O que a tela julgou pelo udisks (`drives::judge`)
+pode ter mudado numa hora de download: outro pendrive ganha o mesmo `/dev/sdb`. A unidade resolve o
+link de `/dev/disk/by-id/` escolhido, confere disco inteiro, tamanho e serial do udev (senão
+`Changed`), USB ou cartão, não só-leitura, nada montado (a tabela de montagem do PID 1, a do host),
+nada em swap, nada preso (LUKS aberto, LVM) e que não é o disco de onde o firmware carregou o
+sistema (`LoaderDevicePartUUID`, mesmo com o ESP desmontado). Abre com `O_EXCL` (o "ninguém segura"
+do próprio kernel) e compara o número do dispositivo aberto com o julgado. E o kernel recusa o
+resto de qualquer jeito: `DevicePolicy=closed` só com `block-sd` e `block-mmc`, uma capacidade
+(`CAP_DAC_READ_SEARCH`), sem rede (cobra `stick-root-is-narrow`).
+
+**O que decide é o hash do que foi gravado.** A imagem é da pessoa e pode mudar entre a conferência
+da fila e a leitura da unidade; então a unidade calcula o SHA-256 dos bytes que vão ao drive e
+compara com o do pedido. Se não bate, zera o primeiro MiB (o pendrive não pode dar boot em meia
+coisa) e recusa (`Mismatch`). Depois relê com `O_DIRECT` — ainda segurando o `O_EXCL`, para nada
+montar nem sondar o drive no meio — e compara de novo: um pendrive que mente a capacidade ou tem
+célula morrendo é `ReadBackDiffers`, e não um boot que falha uma hora depois em outra máquina. O
+último bloco é completado com zeros (o `O_DIRECT` quer blocos inteiros), dentro do drive, que o
+`Target::fits` já perguntou.
+
+**O pendrive em branco aparece.** A barra lateral listava volumes; um pendrive sem tabela nem
+sistema de arquivos não tinha nenhum e não aparecia. Agora todo drive que a vista do pendrive lista
+(`drives::is_a_stick`) e que tem tamanho ganha um cabeçalho, `sidebar::Target::Drive`, com os
+volumes dele embaixo — o `worth_a_heading` que ninguém chamava. O `W` é oferecido nesse cabeçalho e
+em nenhum volume (`Applies::Drive`), e abre a JANELA do pendrive naquele drive: a região é do
+gerenciador (cobra `blank-sticks-have-a-heading`). O cabeçalho não oferece `abrir` nem `ocultar`:
+não há onde entrar num drive inteiro, e o id dele é o nó (`drive:/dev/sdb`) que o próximo pendrive
+herda — ocultá-lo esconderia aquele também. O nó, e nunca o caminho do udisks, que carrega o
+serial. Para isso o `ronoctua-disks` passou a ler `Drive.Serial` e `Block.Symlinks`.
+
+**Cartão sim, eMMC não.** O udisks diz barramento `sdio` para todo `mmcblk`: o cartão no leitor e o
+eMMC soldado na placa, que num notebook é um disco interno com sistema de fábrica. O que separa os
+dois é o `Removable`, que o udisks liga para o cartão e não para o eMMC; então o barramento sozinho
+só diz "pendrive" para USB, e em `sdio` o drive tem de ser removível — na tela, no cabeçalho da
+barra e no `Applies::Drive`. A unidade root pergunta o mesmo ao kernel, e não ao nome: um `mmcblk`
+só é cartão quando o `device/type` diz `SD` ou o disco é removível no sysfs, porque o
+`DeviceAllow=block-mmc` deixa a unidade alcançar o eMMC também.
+
+**A vista diz por que um drive não serve.** Todo pendrive espetado é listado; o que não pode ser
+gravado é uma linha desenhada recusando (montado, cifrado aberto, do sistema, só leitura, sem nome
+estável, outro barramento, pequeno demais para esta versão), e pressioná-la diz o que fazer. Discos
+soldados não entram: a tela é sobre pendrives. As duas portas fazem o mesmo — a senha é perguntada
+no minibuffer ou na linha da janela, mascarada — e a câmera (`photograph --door stick --scene`)
+desenha a janela sobre leituras dadas inteiras.
+
+**Uma gravação por vez, e cada resposta diz de qual pedido é.** A máquina tem uma unidade, uma
+pasta de preparo e um `progress.json`. Um segundo "sim" com uma gravação em curso não iniciaria nada
+(a unidade já roda) e prepararia um segundo pedido para ela; e um "Só baixar" rodando junto de uma
+gravação apagaria o `SHA256SUMS` da outra e daria o mesmo caminho duas vezes ao aria2. Por isso são
+três travas, cada uma para um caminho: a vista recusa com uma frase, antes da senha, quando a última
+resposta da unidade não é final ou a fila tem uma gravação armada em curso (`stick::busy_of`); na
+fila, os trabalhos do pendrive esperam a vez um do outro (`stick::Turn`), e uma gravação armada
+durante um download acha a imagem conferida no cache quando chega a vez dela; e todo pedido leva um
+número (`Request::nonce`) que a unidade copia em cada resposta sobre ele — o trabalho só lê as
+respostas do próprio pedido, e o `Done` de outra gravação nunca vira o dele. Uma unidade esperando
+sem trabalho nenhum para alimentá-la (a fila reiniciou) é mandada parar, e a pessoa escolhe de novo.
+
+**A última resposta é sempre final, e diz por quê.** Uma resposta parada em "gravando" faria toda
+vista recusar uma gravação nova até reiniciar a máquina; então o `ExecStopPost` da unidade
+(`write::stopped`) troca uma resposta que não é final — a unidade parada, ou morta no teto — por uma
+falha do mesmo pedido. E quando é a FILA que desiste (uma parte que não confere, um download que não
+terminou, a fila que não respondeu depois da senha), o `cancel` leva o motivo (`cancel_for`), a
+unidade o carrega para o `progress.json`, e a vista diz a frase do pendrive em vez de "desistiu" —
+que fica só para quando a pessoa desistiu.
+
+**O cursor guarda o drive, não a linha.** A lista de drives muda quando um pendrive entra ou sai, e
+as linhas da versão se dobram numa só enquanto o GitHub é perguntado de novo; um cursor que guardasse
+o índice cairia no drive vizinho, e o próximo `RET` abriria a pergunta sobre um drive que ninguém
+escolheu. A pergunta guarda a versão com que foi feita: um `C-r` não é ensinado nem ouvido sobre ela.
+E o udisks que não respondeu é dito (`watch_readings` entrega a falha, não só a registra), e o `C-r`
+relê os drives de uma vigia nova.
+
+**O SHA-256 está num arquivo só (`digest.rs`),** sobre o `aws-lc-rs`, a implementação única da
+árvore (`one-crypto-implementation`): trocar o provedor é mexer só ali.
+
+<!-- anchor: L18 -->
+
+### Os programas declarados da pessoa — a central declara, a máquina aplica (L18)
+
+**"Instalar só para você" é declarar, e instala na hora.** Um clique (a linha principal da página
+de um programa, ou o `C-RET` de uma lista) vira `Order::Declare`: o programa entra JÁ pelo caminho
+de sempre da fonte (`nix profile add`, `flatpak --user`, a integração da AppImage, o Android), na
+pista dela, e só então a entrada vai para o `declared.json` da pessoa, que é preparado para o root
+aplicar e empurrado com a parte em claro dos pertences. Instalar antes de declarar é o que faz o
+botão fazer alguma coisa: uma declaração que esperasse a próxima atualização seria um clique sem
+efeito por uma semana. Declarar é o que faz o programa ficar: a atualização constrói a cópia
+declarada em cada máquina da pessoa, e o reconciliador tira a cópia à mão que ela substitui. A
+linha de baixo, "Instalar só neste computador", continua sendo o `Order::Install` sem declaração —
+quem quer só experimentar aqui não manda nada para os outros computadores. O `C-RET` de um teste
+continua mantendo o teste só aqui, e a frase da tecla diz as duas coisas.
+
+**O espelho é da pessoa; o root nunca lê a home.** A declaração mora em
+`$XDG_STATE_HOME/ronoctua/person/` (`software/declared.json`, `software/declined.json`,
+`software/icons/<sha256>.png`): é a raiz `state/person` da parte em claro dos pertences, que viaja
+para `plain/person/` e volta mesclada por id (L09). A cópia que o Nix lê é a do root, no diretório
+da máquina, e só o `ronoctua-person apply` a escreve (L06): a central monta a árvore em
+`/run/ronoctua-person/staged` no formato do `plain/` (os documentos, só os ícones que alguma
+entrada nomeia, os módulos do brain da pessoa sem link nenhum), apaga o `nonce` velho PRIMEIRO e
+escreve um novo por ÚLTIMO, inicia `ronoctua-person-apply.service` (a regra polkit de um verbo,
+uma unidade e um usuário; nada pergunta) e lê o veredito. Um veredito com o `nonce` de outra
+preparação responde a outra: prepara-se de novo, até três vezes. O arquivo do veredito é do root e
+fica entre uma execução e outra, então um `busy` (que não tem `nonce`: é dito antes de a preparação
+ser lida) só responde a esta partida se a execução dele começou depois dela (o `at`), e uma partida
+que falhou sem execução nova — uma unidade que não carrega — é
+recusada com o que o `systemctl` disse, nunca respondida pelo `busy` de uma atualização antiga.
+`busy` é a atualização construindo, e é resposta, não falha — mas a mudança NÃO vai com ela: a
+atualização preparou o espelho antes de tomar a máquina, e a mudança chega na aplicação seguinte. A
+tela diz isso pelos arquivos: o que saiu da declaração e o sistema ainda tem está SAINDO (abaixo), e
+uma recusa que o sistema não construiu espera.
+
+**Uma mudança é feita no arquivo como ele está AGORA, sob a pista da declaração.** A fila roda
+ordens de fontes diferentes ao mesmo tempo: cada ordem lê o documento, muda UMA entrada e grava de
+volta, segurando `declaration.lock` (`lock::take_declaration`, uma pista que nenhuma fonte tem). Os
+pertences trazem uma mescla (`plain pull`) sem essa pista, então cada lado confere antes de trocar o
+arquivo: a central relê o documento logo antes de gravar e, se ele mudou desde a leitura, refaz a
+mudança sobre o que está lá (até `CHANGE_TRIES` vezes); os pertences nunca escrevem sobre um arquivo
+que não tem mais o que eles leram. Sobra o instante entre a segunda leitura e o `rename`, que só uma
+trava tomada pelos dois fecharia (`docs/PENDING.md`). O documento é
+gravado na forma canônica do `ronoctua_person::to_json`, então regravar uma lista que não mudou não
+muda nada no git, e o root guarda os bytes que recebe — a cópia da máquina é a do espelho, byte a
+byte. Um documento que não se lê aqui (formato mais novo, arquivo quebrado) nunca é sobrescrito: foi
+o outro computador da pessoa que o escreveu, e este apagaria o que não entende
+(`Refusal::DeclarationUnreadable`, com frase). Remover de vez e trazer de volta também recusam
+ler um documento ilegível como "não declarado": removido só aqui, a próxima atualização o traria de
+volta.
+
+**O pin, e de onde vem o hash.** Uma declaração é construída nos outros computadores meses depois,
+e um endereço que serve bytes novos com o mesmo nome construiria outra coisa lá, ou nada. Então um
+download declarado é um endereço `https://` E o hash SRI do que ele serviu, o par do `fetchurl`.
+O hash vem, do mais barato para o mais caro: dos bytes que já estão aqui (a AppImage integrada
+guarda o SHA-256 no `app.json`; quando o asset do GitHub É esses bytes, pelo digest ou pela tag, o
+arquivo vai para o store com `nix store add --mode flat` sob o MESMO nome que o construtor busca —
+`store_name`, o `versionOf` do `nix/declared-apps/appimage.nix` — e o rebuild daqui não baixa
+nada); do índice assinado do F-Droid, que traz o SHA-256 de cada apk; ou de
+`nix store prefetch-file --json`, com o `Pass` do host do asset antes (nada vai para um host que a
+pessoa não permitiu). Um programa que veio de um arquivo sem endereço não tem pin possível e é
+recusado com frase (`NothingToPin`), antes de qualquer escrita.
+
+**Um pin segurado se conserta no mesmo endereço.** Uma entrada que a verificação segurou porque o
+download mudou sob o mesmo endereço (`upstream-changed`) — ou sumiu (`fetch-failed`) — não tem
+release mais novo para onde ir na maioria das vezes, e um pin que ficasse seria segurado em todas as
+máquinas para sempre. Então `pins::newer` baixa de novo o MESMO endereço dessas entradas
+(`pins::look`, do `person-applied.json`) e fica com o hash que ele serve agora; os mesmos bytes de
+novo não mudam nada. Um apk do F-Droid recompilado sob o mesmo `version-code` (outro hash no índice
+assinado) também move o pin (`pins::apk_moves`).
+
+**Procurar downloads mais novos não segura pista enquanto baixa.** `pins::newer` pergunta ao
+GitHub e ao F-Droid e baixa o que mudou sem pista nenhuma; `pins::take` grava sob a pista da
+declaração, no arquivo como ele está então, mexendo SÓ no pin e nos carimbos: uma entrada esquecida
+no meio do caminho continua esquecida, e uma cujas máquinas outra porta mudou mantém as máquinas.
+Uma mudança só de pin é a que a mescla resolve sozinha (o `edited-at` mais novo vence, L09). O
+download novo é construído na próxima atualização, cuja verificação testa cada entrada antes (L06),
+e é isso que a linha diz.
+
+**Remover de vez, recusar e trazer de volta reconstroem a máquina; declarar não.** A cópia
+declarada faz parte do sistema, então tirá-la é um rebuild: `ronoctua-update-apply.service` (L05)
+constrói o diretório da máquina sem mover os inputs, e a central espera o fim. O código 75 do
+`flock` dessa unidade é a atualização segurando a máquina — `Rebuilt::Busy`: a mudança espera a
+aplicação seguinte, como o `busy` do aplicador; um switch com unidade falhando
+(`switched-with-failures`) é um switch. Declarar não precisa de rebuild: o que a declaração trouxe
+já está aqui. Uma recusa só para OUTROS computadores também não reconstrói este.
+
+**O que saiu da declaração e ainda está aqui diz que sai.** `Declarations::leaving` é o que o
+`person-applied.json` diz aplicado e o espelho não declara mais: removido de vez enquanto a
+atualização segurava a máquina, ou removido em outro computador e trazido pelos pertences. Fica na
+lista com `Refusal::LeavesAtNextApply` como problema ("sai na próxima atualização deste computador"),
+em vez de sumir enquanto continua instalado; remover de vez de novo pede outra vez o rebuild. Um
+Flatpak ou um app Android saindo é a cópia do sistema na instalação única que existe; um pacote do
+perfil, uma AppImage de `~/Applications` ou um web app da pessoa é a cópia dela, e continua dela.
+
+**Declarar o que já está declarado muda só para onde vai.** "Também neste computador" (uma entrada
+só de outros computadores) e "Instalar só para você" de algo declarado em outro lugar nunca instalam
+pela chave: uma AppImage viria no release mais novo em vez do pin — e o pin mudaria para todas as
+máquinas —, e um web app não tem o que instalar por um slug. A entrada é a declaração (pin, ícone,
+de onde veio); mudam as máquinas e os carimbos, e se este computador entrou agora e o programa não
+está aqui, a máquina é reconstruída na hora e chega a cópia declarada, a mesma dos outros.
+
+**Mudar um web app declarado é declará-lo de novo.** O editor grava a entrada da pessoa aqui pelo
+caminho de sempre (criando-a, se o reconciliador já a tinha tirado) — a mudança aparece na hora,
+escondendo a cópia declarada como o lançador as lê — e a central declara de novo a partir do que foi
+gravado, mantendo as máquinas, prepara e empurra (`declare::edit_declared_web`, que a CLI escolhe
+para um `WebEdit` de slug declarado). O reconciliador não tira essa entrada enquanto o sistema não
+construiu a mesma coisa (`reconcile::waits_for_build`: ela é o que a declaração diz e a entrada do
+sistema não é); uma entrada que a declaração não diz mais é cópia velha e sai. O editor de um web app
+declarado diz que salvar muda a declaração. Um slug novo da pessoa nunca é o de um declarado (nem a
+entrada do sistema, nem a declaração para outro computador).
+
+**"Remover de vez" se explica antes de perguntar.** Num programa declarado o `C-d` nunca é a
+remoção daqui (que a próxima atualização desfaria): é a pergunta, com o "não" primeiro e o cursor
+nele, e antes das respostas três linhas do que o sim faz — sai deste computador e da declaração,
+os outros computadores o removem na próxima atualização deles, o que ele guardou fica a não ser
+que se escolha apagar. O segundo sim, que apaga os dados, vem na cor de perigo. Manter um programa
+da distro desinstalado pergunta do mesmo jeito, dizendo que esta máquina é reconstruída agora.
+
+**O reconciliador mexe só no que o razão dele diz.** O Nix põe no sistema quase tudo o que a
+pessoa declara; duas coisas ele não faz, e o `reconcile` faz, como a pessoa. Os apps Android: o
+Android é um container que só existe enquanto a sessão dele roda, então o Nix baixa cada apk
+declarado pelo pin e o lista em `/etc/ronoctua/declared-android.json`, e o reconciliador o instala
+do store — só com o Android rodando; senão a tela diz que ele espera, e entra quando a sessão
+Android começa pela central ou no passo de reconciliação da atualização. E as cópias à mão que uma
+declarada substitui (o pacote no perfil Nix, a AppImage em `~/Applications`, o `.desktop` de web app
+da pessoa que esconderia o do sistema), tiradas só quando o `person-applied.json` diz que a
+declarada está no sistema — uma declaração pulada (atributo sumido, entrada segurada) deixa a cópia
+à mão, porque nada a substitui. O razão (`$XDG_STATE_HOME/ronoctua/software/declared-applied.json`)
+lista os apps Android que o reconciliador pôs, ou achou já instalados na versão declarada e assumiu
+(instalar por cima de um mais novo seria um downgrade que o Android recusa). É o ÚNICO registro do
+que ele pode tirar: um app que sai da declaração só sai do Android se o razão o tem, e um razão que
+falta ou não se lê é VAZIO, que não deixa tirar nada. O que a pessoa instalou pelo F-Droid, pela
+Play Store ou de um arquivo nunca entra no razão (cobra `reconcile-touches-only-the-ledger`).
+
+**Quem pôs o programa ali decide como ele sai.** `Origin` tem quatro respostas, perguntadas nesta
+ordem: a declaração da pessoa (`MineDeclared`), o registro da distro pelo `.desktop` e pela fonte
+(`Distro { declinable }`, do `distro-apps.json`), o que o flake instalou de outro jeito
+(`Declared`, uma linha à mão no `host.nix`) e, por último, o que a pessoa instalou só aqui
+(`Mine`). O registro só responde pela entrada do sistema e pelas fontes cuja instalação a distro
+divide com a pessoa — o Flatpak `--user` (nix-flatpak) e o Android (o reconciliador). Os pacotes
+Nix, as AppImages e os web apps da distro estão no sistema (`systemPackages`), nunca no perfil, em
+`~/Applications` ou em `~/.local/share/applications`, que é tudo o que essas listas leem: a cópia da
+pessoa de um programa que a distro também traz é dela, e chamá-la de da distro a deixaria sem saída
+(sem "remover", só "manter desinstalado", que recusa a cópia do sistema e deixa a dela). Por isso o `C-d` é, respectivamente, remover de vez, manter desinstalado (aqui ou em
+todos), nada com a frase do motivo, e remover. A frase do motivo de um programa essencial é a chave
+`software-essential-why-<motivo>`, montada pelo id do motivo do registro: o
+`essential-apps-say-why` (L04) garante a frase de todo motivo em todo idioma, e um motivo novo não
+precisa de braço no código.
+
+**Declarados por você, Recusados por você.** Duas portas da primeira página levam aos níveis
+`Declared` e `Declined`, iguais nas duas portas (o rodapé e a janela desenham o mesmo `View`). Cada
+entrada declarada diz como este computador está para ela — neste computador, chega com a próxima
+atualização, só nos outros computadores, ou deixada de fora com o motivo do `person-applied.json` —
+e a página dela oferece o conserto que o motivo pede: um download mais novo para um pin segurado
+(`fetch-failed`, `upstream-changed`), procurar outro programa para um nome que o nixpkgs não tem
+mais, "também neste computador" para uma declarada só em outros, e remover de vez em todas. Num
+valor longo, o motivo vai numa linha própria ("Por quê"): a coluna de valor corta o que não cabe, e
+o motivo é o que a pessoa veio ler. Cada recusa diz o que fez aqui — fora deste computador, ainda
+aqui por outro programa que o traz (perigo), mantido porque a distro precisa (com o motivo), não
+conhecido, recusado em outro computador (nomeado), sai com a próxima atualização —, e depois vêm os
+outros programas da distro, cada um a um `C-d` de ficar desinstalado. Toda recusa se traz de volta
+pela página dela, seja qual for o resultado: a que o sistema recusou porque a distro precisa do
+programa, a de um programa que a distro não traz mais, e a só de outros computadores (que oferece
+também manter desinstalado AQUI, como pergunta a remoção pelo lançador). Um programa que não está
+mais recusado aqui e o sistema ainda deixa de fora diz que volta na próxima atualização.
+
+**A leitura segue os arquivos, não a fila.** Enquanto a vista está aberta (é quanto vive a `Feed`,
+nas duas portas), a central vigia o que a leitura da declaração lê (`declaration::watched`): os dois
+documentos do espelho, os três relatórios, o link `/run/current-system` — numa máquina os links dos
+relatórios em `/etc` nunca mudam (muda o `/etc/static`), então é a troca do sistema que diz que eles
+mudaram — e o razão do reconciliador. Uma sincronização dos pertences, a aplicação da atualização e
+o passo de reconciliação dela chegam à vista aberta sem nenhuma ordem da fila.
+
+**O "Tornar permanente" saiu.** Ele copiava uma linha para o `host.nix`, que a pessoa tinha de
+colar e reconstruir; a declaração faz isso por ela, em todas as máquinas, e o
+`ronoctua.software.declaredFlatpaks` fica só para quem escreve o `host.nix` à mão.
+
+**O `web-open` procura também em `$XDG_DATA_DIRS`.** O `.desktop` de um web app declarado é o que o
+Home Manager pôs no perfil da pessoa (`/etc/profiles/per-user/<usuário>/share/applications`), não um
+arquivo dela; o dela, se existir, vem primeiro, como no lançador.
+
+**No `.#dev` nada disso roda.** As ordens da declaração que mudam algo imprimem o que fariam e
+param: o laço aninhado divide a home e a máquina com a sessão de verdade, e um clique de teste não
+pode declarar um programa nos outros computadores da pessoa.
+
+**As duas portas se fotografam sobre a mesma sala.** A câmera da janela
+(`photograph --door software --room <sala>`) e a do rodapé (`--door footer --room <sala> --software
+<máquina>`) leem a mesma leitura (`software_window::camera::readings_of_room`): a home, a
+declaração, os relatórios do sistema em `sys/` e os `.desktop` do sistema em `share/`, sem rodar
+programa nenhum. A sala de referência é `tests/fixtures/software-room`, e é sobre ela que
+`declined-list-is-drawn` e `forget-explains-itself` leem o quadro impresso (`--list`) das duas
+portas, nos dois idiomas.
+
+
+<!-- anchor: L19 -->
+
+### A atualização da máquina que tem o próprio flake (L19)
+
+O porquê de cada passo, de cada lei de ordem e da pergunta na bateria mora no `why.md` do módulo
+(`crates/ronoctua-brain/modules/system-update/why.md`, seções "A máquina que tem o próprio flake",
+"Bateria, disco e rede tarifada" e "O que a vista diz dos registros da máquina"). Aqui fica o que
+cruza a fronteira do módulo.
+
+**Três tempos, e o gerador é quem os garante.** A pessoa reúne o que declarou em outras máquinas
+ANTES da metade root (`gather`: puxar a parte em claro, adiantar as fixações, entregar ao aplicador
+de root), a metade root migra, move só o input da distro, verifica e aplica, e a pessoa reconcilia e
+publica por último. Cada lei é uma recusa com frase no `gen-updates.py`, e o
+`system-update-laws-refuse` quebra cada uma uma vez — porque uma ordem que mora numa convenção é uma
+ordem que a próxima edição troca sem ninguém ver. O `system-update-gathers-first-and-publishes-last`
+roda as duas metades geradas inteiras num mundo de dublês que anotam o que lhes pediram.
+
+**O rebuild é um filho da metade root, e não mais a unidade do resgate.** O lock de root dos dados
+da pessoa (`ronoctua-person hold`, L06) só passa por herança da entrada padrão: o `verify` e o
+`ronoctua-machine apply` (L05) rodam como filhos da metade que o segura, e assim o que foi tentado é o
+que é construído. Uma unidade iniciada por `systemctl start` não herdaria nada.
+
+**O registro da máquina viaja pela parte em claro.** `ronoctua-person record` (o crate dono do
+esquema `state::MachineState` e dos nomes do espelho) copia o `state.json` de root, validado e na
+forma canônica, para `machines/<host>.json` no espelho da pessoa — e não escreve quando nada mudou,
+para que uma atualização que não mudou nada não empurre nada. Um registro que não lê é recusado,
+nunca empurrado. É o último passo antes do `plain push`, e os dois rodam em toda saída da metade da
+pessoa: um rebuild que falhou também é algo que esta máquina fez.
+
+**Esperar não é perguntar.** A rede tarifada é uma pergunta nova ao NetworkManager
+(`ronoctua_network::Manager::metered`, sobre o `NMMetered` do daemon: os palpites contam, "não sei"
+não é "não") e a carga é uma leitura nova do `/sys` (`ronoctua_memory::machine::battery_percent`: as
+baterias da máquina na média). Cada uma mora no crate que já era a fronteira com aquele serviço. O
+módulo SEGURA uma execução agendada com elas; só uma execução à mão pergunta, e o "sim" é um arquivo
+de uma execução só, que a metade da pessoa apaga ao sair — porque a metade root não tem sessão a quem
+perguntar, e um sim que sobrevivesse seria honrado por uma execução agendada.
+
+**Uma bateria é a da máquina.** `ronoctua_memory::machine::machine_batteries` é o filtro único
+(pula `scope=Device`) que o `on_battery` e o `battery_percent` leem: perguntados a conjuntos
+diferentes, um desktop com mouse sem fio ficava "descarregando, carga desconhecida", e o módulo
+segurava toda atualização agendada para sempre. O portão geral do cérebro, que lê o mesmo
+`on_battery`, deixou de segurar todo módulo de um desktop com mouse pelo mesmo motivo.
+
+**A pergunta da rede tarifada segue o cérebro.** Uma execução pedida à mão vai ao cérebro como sempre;
+a porta que a pediu a segue no `Mind` (`update_window::Followed`) e, quando a linha aparece segurada
+por `HOLD_METERED`, pergunta com o "não" primeiro. A porta não lê a rede (ler o NetworkManager no laço
+que desenha bloquearia): ela pergunta exatamente quando o cérebro segura, e o "sim" tira a execução da
+fila do cérebro antes de começá-la pelo systemd, senão ela rodaria de novo quando a rede mudasse.
+
+**O lock do flake só anda para um rebuild que pode ser tentado.** O `move-inputs` carrega o piso de
+bateria e a folga no disco do `apply-configuration` (lei do gerador): um lock movido numa execução cujo
+rebuild é pulado deixaria a pasta da máquina descrevendo uma distro que não roda, e a próxima aplicação
+(a da central, a do resgate, L05) a construiria inteira sem verificação.
+
+**A metade root espera a aplicação em curso.** Ela roda sob `ronoctua-person hold --patient`
+(`Lock::wait_for`, bloqueada no `flock` do kernel): a `ronoctua-update-apply.service` segura o lock
+de root dos dados da pessoa da construção à troca, e a recusa `busy` depois de 30 s fazia a
+atualização inteira contar como falha enquanto a máquina só aplicava. Quem espera 30 s e recusa
+continua sendo quem é interativo (a central, a aprovação); o relatório da metade root é esvaziado
+antes da espera, para que as portas não mostrem os vereditos da execução anterior.
+
+**Uma recusa guarda a palavra.** A última linha `refused <palavra>` de um programa da máquina vira
+`declined-<palavra>` (notícia, a sequência segue) quando o passo a declara, e `failed-<palavra>`
+quando não: a vista diz a frase da máquina para ela (`machine-refused-<palavra>`, do L05), e o sheet
+do cérebro conta `failed-*` como falha. Assim "o rebuild falhou" vira "o sistema novo não construiu,
+nada mudou" sem que o roteiro leia log nenhum.
+
+<!-- anchor: L20 -->
+
+### O instalador: o repositório da pessoa, a rede e o release (L20)
+
+O instalador passou a fazer a máquina **da pessoa**, e não uma máquina que ela depois adota. Três
+decisões do dono (2026-10-05) mudaram o que ele pergunta e em que ordem: o repositório privado é
+obrigatório, a rede é exigida, e a máquina segue a branch `release`.
+
+**As perguntas são dezessete.** As três do repositório vêm depois da rede, cada uma provada antes da
+seguinte: o endereço (só o endereço, como antes), o **acesso** e a **senha dos pertences**.
+
+- **O acesso de um endereço SSH não é digitado.** O instalador faz uma chave de implantação para esta
+  máquina numa home de rascunho em RAM (`/run/ronoctua-install`, `ronoctua-belongings keygen`) e a
+  mostra em texto, em QR e com a página "adicionar chave" do servidor quando ele é um dos três
+  conhecidos (GitHub, GitLab, Codeberg). Depois pergunta ao repositório, a cada poucos segundos e só
+  enquanto a tela está à mostra, se a chave **lê e escreve** (`probe --json`). Uma chave só de
+  leitura deixaria a restauração rodar e falharia na primeira sincronização da máquina — longe da
+  causa. Um endereço HTTPS pede um token, digitado escondido e testado do mesmo jeito.
+- **A senha abre o `key.age` antes de qualquer coisa ser tocada** (`verify-passphrase --json`): um erro
+  de digitação achado depois do disco apagado é uma restauração que falha com a máquina pela metade.
+  Num repositório **vazio** não há o que abrir, então a senha é digitada duas vezes (com o mínimo de
+  12 caracteres de uma frase de disco), e a instalação **cria** o repositório (`init`) onde teria
+  restaurado.
+- **A rede é um portão.** Sair da pergunta da rede exige um link — o cabo, ou a rede Wi-Fi escolhida e
+  conectada — sem página de login na frente (`gate.rs`, puro sobre o `Snapshot` do `ronoctua-network`);
+  sem ele a tela diz por quê, onde a pessoa pode consertar. **O portão não julga se o link chega à
+  internet:** o veredito do NetworkManager sobre isso é buscar uma página de um servidor por HTTP
+  simples (`nix/modules/network.nix`), e uma rede que bloqueia a porta 80, ou esse servidor fora do ar,
+  sai "limitada" com o GitHub, o cache e o repositório da pessoa respondendo — e a instalação ficava
+  impossível ali. Quem decide são as perguntas de verdade que vêm logo depois (o release, o acesso, a
+  senha), cada uma na sua tela. A frase da pergunta nomeia os servidores que serão alcançados (o do
+  release e os caches binários do `nix`): responder é o consentimento. O endereço digitado é o
+  consentimento do servidor do repositório, gravado no `consent.json` da home de rascunho e, depois, no
+  da pessoa.
+- **O modo sem terminal confere as mesmas quatro coisas** antes do primeiro passo, e sai com o código 3
+  quando falta rede (`installer-requires-network`) e 4 quando o repositório recusa. O ensaio (sem
+  `--execute`) não pergunta nada à rede.
+
+**As verificações são jobs, e a tela não espera por elas.** O `State` da TUI só diz o que quer
+conferido (`job.rs`); uma thread roda (`reach.rs`), e a resposta volta numerada — a de uma tela que a
+pessoa já deixou é descartada. Assim o estado continua uma função pura de teclas e respostas, os
+testes respondem os jobs sem rede, e o modo sem terminal roda os mesmos jobs em fila.
+
+**O plano faz o flake da máquina a partir do template,** e as declarações da pessoa entram **antes** do
+disco: `templates/machine` → `host.nix` → `facter.json` → `nix flake lock` → o atributo, perguntado ao
+próprio flake (`nixosConfigurations`; o instalador não escreve mais `#noctua`) → a parte em claro do
+repositório copiada para fora (`ronoctua-belongings plain`) → aplicada no `person/` do flake pelo
+mesmo aplicador root da máquina (`ronoctua-person apply --owner root`) → cada entrada experimentada
+(`ronoctua-person verify`, que retém o que não constrói). Uma declaração que não baixa aparece aqui,
+com o disco intacto. Só então `disko`, a cópia, a senha, o Wi-Fi e o `nixos-install` — a máquina já
+nasce com os programas da pessoa. Depois, na home dela: o acesso (`0700`/`0600`, dela), o servidor no
+`consent.json`, o `belongings.json` (antes da restauração, que lê o repositório dele — assim a linha
+de comando da restauração não nomeia nem o repositório nem o acesso) e a restauração, rodada **como a
+pessoa** (`setpriv` com o uid e o gid do `/etc/passwd` do alvo). A restauração escreve o espelho em
+`~/.local/state/ronoctua/person/`, e o `last.json` dela é a base da primeira sincronização.
+
+**Nenhum filho herda uma resposta.** No modo sem terminal as senhas chegam pelo ambiente, e todo
+programa que o instalador inicia as herdaria — `mkpasswd`, `lsblk`, `btrfs`, o `systemd-creds` que o
+`ronoctua-network` roda, o `nixos-install` durante uma hora —, cada um com as quatro no
+`/proc/<pid>/environ`. Tirar uma variável de um processo vivo pede `unsafe` no Rust 2024, então o
+instalador **se reinicia** antes de qualquer outra coisa: o mesmo pid, o ambiente sem nenhuma
+`RONOCTUA_INST_*`, e as respostas entregues à imagem nova por um pipe (`--answers -`), lidas e
+consumidas antes do primeiro passo. É a primeira parede; a segunda é que todo filho que o instalador
+monta passa por um construtor só (`executor::command`), que as remove de novo. Um teste de integração
+lê o `/proc/<pid>/environ` do instalador de verdade no instante em que ele bate num barramento de
+sistema que o teste controla. Como o ambiente não leva mais as respostas, o salto para o release as
+entrega no mesmo arquivo `0600` dos dois modos.
+
+**A máquina segue o release, e o instalador também** (`release.rs`). Logo depois do portão, o
+instalador pergunta ao `nix` em que revisão a `release` está (`nix flake metadata --refresh`, com a
+referência que o template nomeia — o instalador não soletra o repositório da distro). Um release **mais
+novo** que o ISO (feito depois da revisão dele) inicia o instalador **dele** (`nix run <release
+travado>#install -- --from-release <rev> --distro <árvore>`), com as respostas dadas, num arquivo `0600`
+em RAM que o novo lê e apaga (`--answers`). O `--from-release` impede um segundo salto. **Só o mais novo
+é seguido:** um ISO feito de um commit à frente do release — o jeito de experimentar um instalador novo
+antes do `.#release` — trocaria o próprio instalador pelo mais velho a cada vez, e o novo nunca rodaria.
+Um release que **voltou** (`.#release --rollback-to`) por isso não é seguido: segui-lo é decisão do
+dono, e pediria reconhecer a volta em vez de tratar toda revisão mais velha como uma.
+
+Fica com a própria distro um instalador cuja revisão é a do release, um **à frente** dele, um de
+**desenvolvimento** (árvore suja ou sem revisão: o que ele traz é o que está sendo testado) e um que não
+teve resposta do release — os três últimos dizem isso na revisão. Ficando com a própria árvore, o flake
+de trabalho é **apontado** para ela antes de ser travado (a única string que é a referência do release,
+trocada; um template que não a tem exatamente uma vez é recusado antes do disco), e **o alvo fica com o
+par apontado**: o `flake.nix` e o `flake.lock` que construíram o sistema, copiados juntos depois da
+trava e nunca mais escritos. Pôr de volta o `flake.nix` do template depois do `nixos-install` deixava-o
+discordando de uma trava feita para o apontado, e toda avaliação que não pode mexer na trava (o `verify`
+do `ronoctua-person`, o `apply` da máquina, os dois com `--no-update-lock-file`) recusava a máquina até
+uma atualização travar de novo. Travar o template contra o release no lugar faria a pasta descrever um
+sistema que não roda — justamente o que o `apply` da máquina põe de volta numa falha. A árvore que o
+flake apontado nomeia é um caminho do store que nada mais segura: o `host.nix` de uma máquina apontada
+a guarda em todo sistema construído dela (`system.extraDependencies = [ inputs.self.outPath ]`), senão
+a primeira coleta deixava o `/etc/nixos` nomeando nada. Uma máquina apontada fica na árvore em que foi
+instalada; passar ao release pede que a atualização ponha o `flake.nix` do template de volta antes de
+travar (`docs/PENDING.md`).
+
+**A árvore da distro no ISO não é mais a pasta da máquina.** Ela fica em `/etc/ronoctua/distro`
+(`RONOCTUA_FLAKE_DIR`, com `RONOCTUA_FLAKE_REV` e `RONOCTUA_FLAKE_LAST_MODIFIED`), e o `/etc/nixos`
+do ISO é de ninguém: o que vira máquina é o template. O ISO e o app `.#install` levam no `PATH` os dois
+programas da pessoa construídos com o instalador (`rust.belongings`, `rust.person`) — o instalador de
+um release iniciado por `nix run` roda os do release, não os do ISO.
+
+**O swap é a RAM, até o disco não poder.** O padrão do `ronoctua.swapSize` já sai do relatório de
+hardware; o que o relatório não sabe é o disco. O instalador mede a RAM pelo `ronoctua-memory` (a
+fronteira com `/proc`) e o disco pelo `lsblk`, e escreve o tamanho no `host.nix`, limitado a um quarto
+do disco (`swap.rs`). Um swap limitado é menor que a RAM e não guarda imagem de hibernação, e então a
+máquina nasce **sem hibernação, dito como opção**: o `host.nix` escreve `ronoctua.hibernation = false`
+sempre que não escreve um `resume_offset` (swap limitado, ou o offset que o `btrfs` não respondeu). Só
+tirar o offset não bastava: o `boot.resumeDevice` continuava lá e o UPower continuava hibernando no
+último por cento, num swapfile menor que a RAM. Desligada, a máquina não nomeia dispositivo de retomada,
+o systemd recusa os três sonos que escrevem a RAM no swapfile (o logind responde `na` ao
+`CanHibernate`, e nada oferece) e o UPower desliga em vez de hibernar (`hibernation-follows-the-swap`).
+O padrão é ligada, que é o de toda máquina instalada antes: o `host.nix` dela traz o offset e não diz
+nada. Sem medida (um ensaio longe do disco) o tamanho não é escrito, e o padrão do relatório vale.
+
+**A senha de cada conferência tem uma pasta só dela.** Uma conferência que a pessoa deixou (`Esc`)
+continua rodando na thread dela; com um arquivo só para todas, a seguinte escrevia, a primeira acabava
+e apagava, e a CLI da segunda não lia nada — uma senha certa recusada como "sem senha".
+
+**A TUI responde ao ponteiro** (invariante 19): um terminal por SSH manda eventos de mouse. A linha de
+uma lista é escolhida no primeiro clique e tomada no segundo, a roda anda na lista, cada tecla da linha
+de teclas é um clique (`Enter`, `Esc`, `Ctrl+C` — lidas pela primeira palavra de cada dica, que é o
+nome da tecla e não se traduz), e o que está sob o ponteiro acende. O que a pintura desenha e o que o
+ponteiro acerta é uma resposta só (`tui::places`), e a lista guarda onde rolou (`State::scroll`): rolar
+a partir da escolha a cada quadro mexia a lista entre os dois cliques, e o segundo caía em outra linha.
+As linhas que quebram (a ajuda, a recusa, o texto da chave) são contadas pelo mesmo quebrador que as
+desenha (`Paragraph::line_count`), nunca por caracteres ÷ largura; o estado do acesso tem linhas
+próprias, que o texto acima não empurra para fora.
+
+**A TUI se fotografa sem disco.** `ronoctua-install --show <tela>` desenha, de uma fixture e sem rede,
+as telas que conferem a rede e o repositório; o QR da chave foi lido de volta por um leitor de QR a
+partir das cores que a TUI pinta (os testes conferem módulo a módulo que o desenho é o código). O QR é
+desenhado em meios-blocos (`ratatui::symbols::half_block`, o glifo é da biblioteca), com as cores dos
+tokens, e não é desenhado cortado: um código pela metade não é lido por câmera nenhuma.
+
+
+<!-- anchor: L21 -->
+
+### Pertences: a lista do que vai para o repositório (L21)
+
+**Uma lista, gerada da caminhada.** A página dos pertences tinha "O que é guardado" (as regras da
+tabela, cada uma com o motivo) e "Nunca guardado" (as regras do `never`): dizia o que a TABELA
+mandava, não o que a sincronização levaria desta casa. Com os alvos, a parte em claro, o que outra
+máquina acrescentou e os arquivos que o `sift` recusa pelo que são, as duas coisas se afastaram. Agora
+há uma seção só, "O que vai para o seu repositório", feita da mesma caminhada que a sincronização faz:
+o `ronoctua_belongings::inventory` encontra os caminhos pelo `Scope::meet` — a mesma travessia que o
+`walk::walk` do motor percorre, com as mesmas raízes, os mesmos links lidos como links, a mesma pasta
+ilegível — e diz de cada arquivo de onde ele vem (uma regra, um alvo, o que a pessoa acrescentou aqui
+ou em outra máquina, a parte em claro), se esta máquina o guarda (guardado, não nesta máquina, em
+nenhuma máquina, ou nunca e por quê), o tamanho e o estado. A página não pode prometer um arquivo
+que a sincronização deixa de fora, nem esconder um que ela envia: o `belongings-list-is-the-walk`
+caminha uma casa com um arquivo de cada origem e de cada motivo de recusa com as duas caminhadas
+(a selada e a da parte em claro) e com a lista, e cobra que todo caminho caminhado esteja na lista
+como a caminhada o tratou. Um arquivo que o último sync deixou e que a caminhada não encontra mais
+também é uma linha, "apagado aqui": o merge toma um arquivo que falta aqui e não mudou lá por uma
+remoção, e toda outra máquina a segue — a única mudança da página que alcança todas as máquinas era
+a única que ela escondia. Um alvo com só um caminho tirado desta máquina (o `~/.gitconfig` pela linha
+dele) diz "em todas as máquinas, parte dele não nesta" e oferece as duas ações; "não nesta máquina"
+só quando todos os caminhos saíram.
+
+**Um leitor das tabelas.** As árvores, os arquivos, os alvos, as raízes em claro e o `never` são
+lidos só no `kept.rs` (a aritmética) e no `scope.rs` (o leitor); o resto do workspace pergunta ao
+`scope` — o `walk`, o motor da parte em claro, o `plain.rs`, o módulo do brain que vigia a parte em
+claro e a vista. Um segundo leitor seria uma segunda lista, e as duas se separariam no primeiro alvo
+novo. A mesma regra vale para o que a pessoa escolheu e para o que esta máquina segue: o `Scope` é a
+soma do `belongings.json`, das raízes que o último sync deixou, do que nenhuma máquina guarda mais
+(`last.json`) e do que a pessoa pediu ao próximo sync (`requests.json`), então "em nenhuma máquina"
+aparece na hora do pedido, não depois do sync. Os números da tabela (pedaços, orçamento, teto da parte
+em claro) continuam lidos pelo `kept`, que os reexporta: não são uma lista que a página mostra.
+
+**Só `stat`, numa thread da porta.** Uma casa pode guardar muito, e uma porta não lê o conteúdo de
+nada para desenhar uma linha: o estado sai do `lstat` contra o `last.json`. Outro tipo, outro tamanho
+ou outro modo é "mudou"; o mesmo tamanho é decidido pelo instante da última mudança, que o sync que
+deixou a base agora grava (`Last.modified_s`, por caminho, para os arquivos selados e os em claro). Só
+grava o que pode garantir: um arquivo que mudou até o segundo em que o sync começou (é o que ele leu)
+ou que o próprio sync escreveu, e cujo tamanho é o da base; um arquivo mexido durante o sync fica sem
+instante, e a lista diz que mudou — sem isso, toda máquina que acabou de puxar veria tudo "mudado",
+porque puxar escreve o arquivo depois do começo do sync. Uma base antiga, sem instantes, é julgada
+pela hora do próprio sync. A cópia da chave de acesso que o `sift` pega pelo hash é pega aqui pelo
+SHA-256 também, calculado só quando o tamanho é o de um arquivo de acesso, numa memória que se apaga
+(`zeroize`): a porta nunca guarda os bytes da chave de deploy, que é uma chave privada. Um arquivo de
+acesso vazio não tem segredo e faria de todo arquivo vazio uma cópia dele: não é somado, nos dois.
+A contagem roda numa thread por porta, uma de cada vez: uma leitura que chega no meio pede só mais
+uma depois (`Counting`); quem dispara é a vigia dos arquivos dos pertences e a das pastas do que a
+lista contém (`Heard`: cada raiz da caminhada que é pasta, como árvore; a pasta de cada raiz que é
+arquivo, ou a mais próxima que existe, para ouvir quando ela nasce), levantada de novo quando uma
+contagem acha outras pastas e com teto (64 de cada, cada árvore com o teto da vigia) — nunca uma tecla
+que só move o cursor. A contagem também traz o que desenhar pede: as linhas dos arquivos formatadas
+uma vez por contagem e idioma, o índice por origem e quais caminhos são pastas aqui; o desenho roda a
+cada quadro e a cada tecla e não faz `stat` nem formata um arquivo de novo.
+
+**O que aparece sozinho pergunta com o "não" primeiro.** O que um restore ofereceu (assinar commits
+com a chave SSH, a chave de segurança no lugar da senha) e um arquivo que uma leitura leniente
+consertou são perguntas que a pessoa não fez: desenham "não" (e "deixar") primeiro, e o cursor nasce
+ali — nas duas portas, e o rodapé mostra a página onde o cursor nasceu. A resposta a uma oferta vai
+para `state/belongings/offers-answered.json`, junto do `at_s` do status que a fez (as respostas de
+outro sync não valem para este): as duas portas a leem, e o "sim" roda numa thread (a assinatura SSH
+roda o git) que escreve ali como terminou — "ligando", "ligado" ou a recusa com a frase dela. Um
+conserto mostra o ponteiro e o motivo, nunca o valor achado: o arquivo pode guardar um segredo (as
+chaves de pareamento do player). "Gravar o conserto" é o `repair::apply`, "deixar" é o `dismiss`.
+
+**O conserto se grava sozinho só na máquina mais nova.** Regra do dono: um valor que a máquina que
+roda a distro mais nova das da pessoa não lê é um valor que nenhuma lê. Então o sync com a pessoa,
+nessa máquina (`fleet.json`), grava os consertos que ninguém respondeu antes da caminhada — e os
+envia no mesmo sync; nunca um que a pessoa deixou. Em qualquer outra máquina a página pergunta, e diz
+qual é o caso. O ponteiro vazio é o documento inteiro (RFC 6901) e a linha diz "o arquivo inteiro":
+`/` nomearia um membro "" na raiz.
+
+**Compactar é uma pergunta numa página.** O peso do histórico e a recomendação saem do
+`Synced.budget` (`kept::weight`); a compactação só é oferecida quando dobraria alguma coisa
+(`foldable`). Ela tira coisas do repositório para todas as máquinas: é uma página com a pergunta e
+"não" primeiro, como o "em nenhuma máquina" de um alvo. A senha não é pedida se a sessão a lembra.
+Ela responde pelo comando do sync, com a pergunta própria (`Ask::asks`): um comando só alcança a pergunta da vista nas duas portas. No rodapé, todo gesto da pessoa segue o
+cursor depois do que faz — tecla, clique ou comando pelo nome (`belongings_errand`): a página de uma
+pergunta tem cinco linhas, e a rolagem da lista desenharia nenhuma. O que chega de um arquivo só
+segura a página dentro do que existe (`settle_region`).
+
+**A sessão que lembra a senha não pergunta.** Com o marcador do `unlock` valendo para este
+repositório, "Sincronizar agora" vai direto para a fila; se o último run foi recusado por falta de
+senha (o kernel esqueceu antes do marcador), a próxima vez pergunta. Desligar o interruptor grava o
+`keep_unlocked` e enfileira o `forget`, que esquece a identidade desta instância na hora. Nenhum
+arquivo diz que o marcador venceu: enquanto a vista está aberta, cada porta arma um temporizador no
+instante em que ele vence (`belongings::until`) e lê de novo quando toca, e o "lembrada até" some.
+
+**Cada campo de um conflito JSON, sozinho.** O motor já aceitava decisões por campo; a página agora
+desenha cada campo que conflita com o valor desta máquina, o do repositório e o de antes, e decide o
+campo (as teclas do conflito, numa linha de campo, decidem o campo). Decidir um campo apaga a decisão
+do caminho inteiro, que passaria por cima dele no motor, e a sugestão do primeiro sync deixa de valer
+para aquele caminho; um conflito com todos os campos decididos é um conflito decidido, e o "Aplicar"
+grava os campos para o CLI. O valor de um campo ocupa uma linha, cortado no espaço que a coluna de
+valores da seção deixa (com o "escolhido" inteiro), e não move a coluna: uma lista longa empurraria
+todos os valores da página. Uma oferta é guardada pela própria oferta, nunca pelo lugar na lista, que
+outro sync pode reordenar.
+
+<!-- anchor: L22 -->
+
+### A barra do sudo e as telas (2026-10-11)
+
+O dono decidiu que o sudo das telas passa por uma barra nova no rodapé, acima da modeline, chamativa,
+onde todo gesto de root de toda tela é perguntado: a senha, um toque de chave de segurança ou um dedo.
+Antes cada porta perguntava a senha na própria linha (`security-password`, `stick-password`,
+`files-root-password`) e chamava o `authority::run`, sem terminal — então a chave e o dedo, que o
+lado root (seção acima, de 2026-10-11) já deixava responder, só respondiam num terminal da pessoa.
+
+**A barra é a superfície do rodapé crescendo, e só existe enquanto pergunta.** É a emenda do
+invariante 14: como a barra de alerta máximo, nenhuma superfície nova, nenhum popup — linhas a mais
+no topo do rodapé, que está ancorado embaixo, então a modeline não se move. Ela fica ACIMA da faixa
+de notificação e da barra de alerta (não toma o lugar delas, porque a bateria acabando continua sendo
+dita), e a altura é constante (`sudo_bar::ROWS`, duas linhas: quem pede e o quê; o que o sudo espera,
+a linha digitada e os controles), nunca função da largura, pela regra de toda linha do rodapé. Grita
+pela cor, o único recurso que o invariante 15 deixa: o segundo par da barra de alerta
+(`alert.ground-alt`/`alert.text-alt`, já resolvido e medido pelos portões), parado — a da bateria é a
+que alterna, e as duas juntas não se confundem. Papel novo exigiria família em todas as sementes e
+reconstruir o workspace; o par que existe já é o "isto exige você" do sistema. O controle sob o
+ponteiro acende como um chip no outro par (`alert.ground`/`alert.text`), também medido. No modo
+oculto ela vale como a faixa (`band_or_brain`): fundo próprio, empurrando ou por cima.
+
+**O rodapé pega o teclado só enquanto ela pergunta.** A senha é digitada nela, como a leader: em
+repouso o rodapé não pega o teclado, e o `grabbing` passa a dizer "a barra está de pé ou uma vista
+segura o teclado". Toda tecla vai para a barra antes de qualquer vista (`key_arrived`), e ela usa a
+mesma `line::Line` secreta do minibuffer (um ponto por célula, nunca o texto), apagada (`zeroize`) ao
+responder, cancelar ou cair. Enquanto o toque ou o dedo são esperados a linha continua aceitando a
+senha — o `converse` já trata a senha digitada nesse estado como "usar a senha" com ela pronta —, e
+`RET` sem nada digitado, `C-p` ou o clique em "usar a senha" deixam a chave pela senha. `Esc` (e
+`C-g`) cancelam em qualquer estado. Tudo responde ao ponteiro: os controles são peças com o lugar em
+que foram desenhadas (`sudo_bar::at`, contadas da borda como foram postas), a frase deles sai na
+linha de mensagem como a da faixa, e o texto da barra se seleciona arrastando.
+
+**Toda tela pergunta pela barra; só o `sudo_bar.rs` chama a porta.** Uma vista entrega à porta dela
+um `Gesture`, e o gesto roda cada verbo pela barra. No rodapé (`Gate::footer`) a conversa roda na
+thread da própria vista, e o que o sudo pergunta chega ao laço como `ToBar`; a resposta volta pelo
+`Answerer` que a barra segura. Numa janela (`Gate::window`) o gesto escreve o pedido no soquete de
+controle do rodapé (`root-gesture <json>`, uma linha e um `write_all`) e espera, na thread da janela, as
+linhas do rodapé — as palavras de progresso do helper e o veredito, na gramática do próprio helper
+(`Said`) —, e a janela diz o veredito na porta dela. Rodapé que não responde, ou que cai antes do
+veredito, é `Why::NoFooter`: frase, nunca silêncio. A janela não tem outro caminho para o root, e
+`sudo-door-is-one` passou a cobrar que o `sudo_bar.rs` é o único arquivo que alcança
+`authority::{run, run_with, converse}`; as perguntas de senha de cada porta e o comando
+`security-password` saíram. Os dois gestos de root que chegaram na mesma leva também passam por ela:
+fixar a chave de assinatura nos pertences (`PersonSignerPin`, pelos pertences) e o netrc do cache
+binário (`BinaryCacheNetrc`, pela atualização, `Asker::Update`) — a pergunta de senha do
+`belongings-pin` e o comando `binary-cache-sudo` saíram.
+
+**Uma conexão é um gesto.** O gerenciador de arquivos muda dono e permissões um caminho por vez (a
+unidade instala um pedido só), e antes reusava a senha digitada para o conjunto. A conexão da janela
+(e o gesto do rodapé) guarda a senha que respondeu o primeiro verbo num `Secret`, apagado com o
+gesto, e responde os seguintes com ela sem levantar a barra; uma chave ou um dedo são perguntados de
+novo a cada verbo. Quando a janela vai embora (fim da conexão), a conversa em andamento é cancelada
+e a senha vai junto com a thread.
+
+**Senha errada é perguntada de novo, nunca tentada de novo.** A porta nunca reescreve uma senha em
+nome da pessoa (seção acima); a barra pergunta de novo, até três vezes, como o próprio sudo num
+terminal (`passwd_tries`), dizendo que a anterior estava errada; na terceira, a tela que pediu diz
+"senha errada". A barra fica de pé entre as tentativas (um número de conversa só, `ToBar::Over` uma
+vez, no fim), e depois de responder mostra "conferindo…" e não aceita tecla — uma senha digitada nesse
+intervalo iria para uma conversa que já acabou. Um gesto por vez (`TURN`): o segundo espera o primeiro
+acabar, sem aparecer.
+
+**Quem pede, e para quê.** A barra diz numa frase a tela e o gesto (`Deed::sentence`): "A janela do
+gerenciador de arquivos pede para mudar o que só o administrador pode mudar". O verbo é o conjunto
+fechado do helper, e o pedido de uma janela é relido pelo `RootVerb::parse` antes de qualquer
+pergunta (`Deed::valid`): credencial que poderia quebrar uma linha, módulo que não é da pessoa ou
+operação do cofre num verbo que não é o do cofre são recusados ali. Todo pedido que chega pelo
+soquete é dito como de uma janela, diga o que disser. O soquete é da pessoa (`$XDG_RUNTIME_DIR`,
+`0700`): quem escreve nele já poderia rodar o sudo num terminal, então a barra não acrescenta
+autoridade — a pessoa ainda responde — e uma frase mentirosa só faz a barra perguntar.
+
+**A central: chaves, e a janela sem senha que conta.** A seção das chaves lista as da pessoa na lista
+do root (`u2f::listed`, `0644`) e diz quando nenhuma chave pode responder nesta máquina (o `pam_u2f`
+não está na pilha do sudo lendo a lista do root: `u2f::answers_sudo`, lido em `/etc/pam.d/sudo`).
+Cadastrar roda o `pamu2fcfg` como a pessoa numa thread (`u2f::Enrolment`, começado e esperado na mesma
+thread por causa do `pdeathsig`), a seção diz "toque na chave" e o `Esc` ou "parar" o cancela; o toque
+dá a credencial, a lista do root a recebe pela barra e, depois, a lista da própria pessoa (que viaja)
+também. Remover pergunta antes, com o "não" primeiro, e tira das duas; desligar tira só a linha do
+root e guarda a da pessoa, então ligar traz de volta sem toque; "trazer" junta as das outras máquinas
+(`offers::keys_to_bring`, a mesma regra da oferta dos pertences, que agora também passa pela barra no
+mesmo gesto do "sim"). A janela sem senha ganhou a contagem viva (`left_text`, a aritmética dos
+filmes) e "recomeçar a contagem", que reabre pela mesma duração com o `sudo -n` que a janela aberta
+deixa passar — a barra nem aparece. O relógio da contagem existe só enquanto a página está aberta
+com uma janela de fim marcado, bate uma vez por segundo e só pinta quando as linhas do administrador
+estão na tela; a modeline continua dizendo o FIM, nunca uma contagem (um relógio que corre é relógio
+no cromo).
+
+**A marca da modeline já existia.** O `security-until` (o cadeado aberto e a hora do fim, ou "sem
+prazo"), no tom de perigo, abre a seção do administrador e some quando a janela fecha — o brain vigia
+a pasta do estado e a modeline relê. É a marca que a decisão de 2026-10-11 pede, e ficou como estava.
+
+### Cifrar qualquer coisa e a seção pós-quântica (L22)
+
+- **Tudo vai para a fila, até o arquivo pequeno.** O `E`/`U` do gerenciador e o `LEADER s e c` da
+  central de segurança entregam um `Work::Seal`, e quem sela ou abre é o `ronoctua-seal`, filho da
+  fila. Assim o `age` e o X-Wing ficam fora do rodapé e do daemon da fila, que ligam o `ronoctua-pq`
+  sem features (o `Job`, o `sniff` e o `is_recipient`, que confere uma chave colada); a fila já sabe
+  mostrar o progresso, parar, matar o grupo e limpar o pedaço; e um arquivo grande não trava porta
+  nenhuma. Quem prova é o binário (`transfers-never-link-age`): o `age` é um crate compilado dentro
+  dele, e o `nix why-depends` diria "não" sobre qualquer binário.
+- **Um selo por vez, na ordem da fila.** O age escolhe o fator do scrypt medindo a máquina (cerca de
+  um segundo), e isso custa de 256 MiB a 1 GiB por processo. Quarenta arquivos com senha eram
+  quarenta programas juntos — o OOM matava a fila ou a sessão — e cada um media o scrypt disputando
+  a CPU com os outros, escolhendo um fator mais fraco do que escolheria sozinho. A fila dá a vez a
+  um trabalho de selo por vez (`seal::Turn`, o menor id primeiro, abrir incluído); os outros esperam
+  na linha deles, e parar alcança também quem espera.
+- **Só arquivo ou pasta.** O link é seguido (o gerenciador mostra o que ele aponta), mas o que ele
+  aponta tem de ser um arquivo comum ou uma pasta: um `/dev/zero` chamado `foto.jpg` seria selado
+  até encher o disco, e um pipe prenderia o trabalho em zero para sempre. O programa abre com
+  `O_NONBLOCK` e pergunta ao próprio descritor (um pipe trocado depois da olhada abre na hora e é
+  recusado); o `sniff` do `U` faz o mesmo antes de ler o cabeçalho.
+- **Nunca por cima de nada, e o original fica.** A porta escolhe um nome livre ao lado
+  (`nota (2).txt.age`, o número antes da extensão), e o programa cria a saída com `create_new` e o
+  modo `0600`: o nome pode ser tomado entre as duas coisas (outra porta, outro selo), e o
+  `create_new` tem a última palavra. O original nunca é tocado. O programa diz `bytes 0/…` logo
+  depois de criar a saída, e essa linha é o sinal de que ela é dele: a fila só apaga a metade de um
+  trabalho cortado (parado, ou morto sem veredito) depois dela. Antes, o nome pode ser um arquivo de
+  alguém que o `create_new` recusou.
+- **Uma pasta vira `nome.tar.age` sem tar em claro no disco.** O `ronoctua-seal` sela o tar que o
+  bsdtar escreve na saída dele (`ronoctua_archive::Tools::tar_stream`; o `run.rs` continua sendo o
+  único lugar do crate que inicia um programa), com os nomes no stdin (`--null -T -`, o motivo do
+  `create`: `@x` e `-Cx` seriam lidos como outra coisa). Um membro que não se lê faz o bsdtar sair
+  com falha no fim, e a pasta é recusada inteira, a metade apagada — nunca selada pela metade. Abrir
+  dá o `nome.tar`, e o gerenciador entra nele como numa pasta; extrair é do menu de arquivos
+  compactados, não do selo.
+- **Os três modos.** *Para você*: o recipiente `age1pq1…` que a última sincronização de formato 2
+  dos pertences deixou em `own/recipient` (público; o arquivo é dos pertences, `Places::recipient`),
+  e nenhuma senha pedida para cifrar. Sem pertences, ou com pertences ainda clássicos, a própria
+  linha diz por quê ao lado do rótulo. *Com senha*: scrypt, a senha pedida duas vezes — uma senha
+  errada uma vez é um arquivo que ninguém abre mais. *Para a chave de alguém*: colada, e conferida
+  (prefixo, alfabeto, 1216 bytes de chave e o checksum Bech32) ANTES de ir para a fila: uma chave
+  cortada é dita na hora, e não descoberta pela fila depois que a pessoa saiu.
+- **Abrir: o cabeçalho escolhe a pergunta.** O `sniff` lê o começo do arquivo numa thread (um `.age`
+  num pendrive, ou num cofre suspenso, não é do laço). Senha: a senha. PQ: a senha dos pertences, e o
+  `key.age` é aberto DENTRO do `ronoctua-seal` (`Action::OpenWithKey`), em memória, nunca escrito —
+  só a identidade pós-quântica abre. Não é o `Keyring` dos pertences porque nem a porta nem a fila
+  ligam o `age`. O `key.age` nunca está entre os `secrets()` do trabalho, que a fila apaga no fim.
+  Clássico: recusado com frase, sem perguntar a senha (a chave da pessoa é só pós-quântica, e a
+  pergunta só terminaria em "chave errada"). Misto: recusado com frase.
+- **A recusa é dita na vista que mandou o trabalho, e só nela** (`seal::Sent`, `seal::job_ended`, a
+  regra dos arquivos compactados). Cada vista guarda o que entregou à fila — selo e abertura, cada
+  arquivo, separados pelo tipo —, e uma senha errada é perguntada de novo ali; qualquer outra recusa
+  (um arquivo que não se lê, uma pasta sem escrita) vira a frase ali. Antes, só a abertura era
+  guardada, e um selo recusado não era dito em porta nenhuma. Um trabalho que termina sem recusa
+  (feito, parado, ou um programa morto sem veredito, cuja falha é dita como a de qualquer trabalho)
+  manda `SealReport::Ended`, e a vista o solta: assim a lista guarda só o que está na fila, e uma
+  recusa posterior do mesmo arquivo vinda de outra porta não é tomada como própria. Na central do
+  rodapé, isso só vale enquanto a página está aberta (fechada, a pergunta não teria para onde
+  voltar); a frase continua na linha da fila.
+- **Segredo é arquivo.** A senha digitada na linha mascarada vira um arquivo `0600` por trabalho
+  (`secrets::keep`, `create_new`), porque cada trabalho apaga o seu ao terminar. O programa recusa
+  um arquivo que outros leem e um link (`O_NOFOLLOW`), e nada vai em `argv`: o trabalho inteiro
+  chega numa linha do stdin (`seal-secrets-are-files`, a regra do
+  `stream-key-is-never-an-argument`).
+- **Duas vistas, uma máquina de estados.** `seal.rs` (`choose`, `answer`, `sniffed`, `refused`) é o
+  que o gerenciador e a central dirigem; cada uma traduz o `Next` na própria pergunta, e as duas
+  perguntam a mesma coisa na mesma ordem. Na central, o seletor de arquivos é hospedado sobre a
+  página (arquivos, uma pasta, ou o `.age`), e o "para quem" também.
+- **A seção pós-quântica é uma tabela pura sobre fatos** (`ronoctua_security::quantum::channels`):
+  o que a máquina diz agora — o recipiente dos pertences, os grupos que os nossos hosts HTTPS
+  acordaram (`tls-groups.json`), o que o ssh ofereceria, na ordem, depois de ler a configuração, se
+  o sops-nix decifrou algo — e o que esta geração entrega, escrito no build (`nix/pq-facts.nix`,
+  `RONOCTUA_PQ_FACTS`): as versões do OpenSSL, Chrome, OpenSSH, Tor, Tailscale e do Syncthing, com o
+  Go que o compilou, a linha `go` do `go.mod` dele (o padrão do Go segue a versão para a qual o
+  módulo foi escrito) e se o fonte estreita `CurvePreferences`. No build, porque a versão é um fato
+  da geração; lê-la em tempo de execução seria rodar cada programa. O gerador recusa um fonte do
+  Syncthing cujo layout mudou, senão diria "não estreita" sobre uma árvore que não leu.
+- **Duas cópias dos fatos, porque o workspace é um só.** O binário que todos os perfis compartilham
+  não sabe que configuração vai rodá-lo, então a cópia dele não diz quais canais opcionais existem, e
+  ali (o `.#dev`, uma foto) todos aparecem. Cada sistema escreve a sua (`nix/modules/security.nix`)
+  com `ships`: Chrome (e com ele a extensão), Syncthing, Tailscale, Tor e Android (e com ele o
+  F-Droid), perguntados à opção que liga cada um — a do nixpkgs quando existe. A unidade do rodapé
+  aponta para ela, as janelas herdam, e um canal desligado não é linha: no perfil `minimal` a seção
+  não fala de um Chrome que não está instalado. O check `every-channel-says-its-quantum-status` lê a
+  unidade gerada dos dois perfis.
+- **O SSH é lido como está configurado e na ordem.** `ssh -G` (pelo caminho no store, sem conectar,
+  para um host `.invalid` que nenhum bloco `Host` nomeia — o que vale para todo host) dá a lista
+  `kexalgorithms` depois do `ssh_config` e do `~/.ssh/config`. O `ssh -Q kex` listava o que o
+  programa foi COMPILADO para saber, e um `KexAlgorithms curve25519-sha256` continuava "pós-quântico".
+  O cliente oferece a lista na ordem e o servidor fica com a primeira que conhece, então só é
+  pós-quântico quando a primeira é; uma pós-quântica depois de uma clássica é clássico, e a frase diz
+  qual vem primeiro.
+- **Contagem é número.** As frases do HTTPS escolhem o plural pelo número (`Reading::counts`, que
+  chegam ao Fluent como `Arg::Number`): logo depois da instalação há um host só, e "todos os 1 hosts"
+  estava errado nas duas línguas.
+- **Quatro estados, e só um é "sim".** Pós-quântico; simétrico (o Grover divide a força pela metade,
+  256 bits seguram, e a senha fraca é o ponto fraco); clássico (o que o computador quântico quebra —
+  numa ASSINATURA, como a da extensão, a do F-Droid, a do cache e a do Secure Boot, o risco é a
+  falsificação no momento do ataque, não a leitura depois, e a frase diz qual); e não sabido, quando
+  falta o fato ("esta compilação não disse"), nunca um palpite. Clássico vai na cor de aviso: perigo
+  é cor. O sops só vira linha quando decifrou algo; um disco do sistema sem cifra não é linha (não é
+  pergunta quântica, e a seção do aparelho já o diz).
+- **O canal que tem onde mudar age.** Pertences e o transporte abrem os pertences (é lá que a
+  migração é oferecida), cifrar abre o seletor, e o `/private`, o Syncthing, o Tailscale e o Tor
+  abrem a vista deles. Também por isso o `s e q` cai na seção: sem nenhuma linha que age, o cursor
+  ia para a próxima seção que age (as checagens online), e a página rolava para longe do título.
+- **Uma lista de KEX só.** As trocas do SSH que contam como pós-quânticas são as do transporte dos
+  pertences (`ronoctua_git::PQ_KEX`, que segue o `assets/ssh.nix`), e um teste do shell prende as
+  duas.
+
+<!-- anchor: L23 -->
+### O Incus: a vista (`LEADER s x`)
+
+**Uma `View`, duas portas, na forma dos containers.** `incus.rs` decide o que a tela mostra e o que
+uma tecla, um clique ou uma resposta faz; o rodapé (`surface.rs`) e a janela (`incus_window.rs`) só
+entregam teclas, cliques, respostas e leituras. A aritmética das colunas é a do `containers.rs`
+(`places`, `layout_of`, `PaneScroll`, reexportados): três colunas a partir de
+`space.containers.panesFrom` células — os sete tipos com a contagem, a lista do tipo e o detalhe —, e
+empilhado na região do rodapé e numa janela estreita. Duas vistas com a mesma forma e duas contas de
+largura seriam duas maneiras de errar a mesma coisa; quem um dia mudar a proporção muda as duas. Os
+tipos são instâncias, imagens, remotos, perfis, redes, armazenamento e projetos; só a instância tem
+abas (visão geral, snapshots, limites, ações), porque só ela tem o que fazer além de ler.
+
+**A vista não guarda leitura, e o feed só lê o que está na tela.** A listagem (instâncias com estado e
+snapshots, imagens, perfis, redes, pools, projetos — uma resposta só, porque o daemon responde tudo ou
+nada), os remotos do cliente, o catálogo de um remoto, os volumes de um pool, o consentimento e os
+trabalhos da fila chegam em `Readings`. `View::wants` diz o que ler: o catálogo só com o detalhe do
+remoto aberto e todos os hosts dele permitidos, os volumes só com o detalhe do pool. O feed
+(`incus_feed.rs`) abre o `/1.0/events` do daemon numa thread que vive enquanto ele vive — e ele vive
+enquanto uma porta mostra a vista: fechar a vista larga o `Stopper`, que fecha o socket, e a leitura
+bloqueada acaba na hora. O HANDSHAKE do WebSocket também é da thread: abrir o fluxo é conectar,
+pedir e esperar o `101`, que um daemon ainda subindo responde tarde, e o laço do rodapé não pode
+esperar por isso (a tecla e a leader parariam). Por isso o `Stopper` mora numa trava com a marca de
+que o feed se foi: um fluxo que abre depois de a vista fechar é fechado ali mesmo. Um evento pede uma
+listagem (uma rajada vira duas, nunca uma por evento), e um evento de armazenamento marca os volumes
+como velhos. O `consent.json` é vigiado no mesmo prazo, porque um host permitido noutra porta é o
+catálogo que pode ser pedido agora; um catálogo recusado por falta de consentimento só é pedido de
+novo quando o consentimento mudou — pedir a cada quadro seria um laço —, e um recusado por outro
+motivo (sem rede, o CLI falhou) é esquecido quando o detalhe sai e pedido de novo quando volta. A
+resposta de um catálogo ou de volumes que não são mais os pedidos é descartada: um remoto lento que a
+pessoa já deixou não ocupa o lugar do que está na tela.
+
+**Um relógio só para o que nenhum evento diz.** O Incus não manda evento quando um container recebe o
+endereço do DHCP (vem depois do `instance-started`) nem quando tempo de processador, memória e
+processos andam. Então, enquanto a TELA mostra uma instância ligada sem endereço ainda, ou a visão
+geral de uma instância ligada, `Wants::states` a nomeia, e um relógio lê de novo só o `state` dela a
+cada `STATE_SECONDS`; a resposta entra na instância se ela ainda está ligada (uma parada listada
+nesse meio-tempo ganha). O relógio é armado só enquanto há o que reler e termina sozinho quando não
+há — e quando o feed se vai. O mesmo relógio reabre o fluxo de eventos quando o DAEMON o encerra (um
+`switch` ou uma atualização reiniciam o `incus.service`): a vista diz acima da lista que o que mostra
+pode estar velho, a próxima listagem também tenta reabrir, e o que mudou enquanto ele estava fechado é
+listado assim que ele volta. Sem isso, a vista seguiria dizendo que acompanha os eventos e não
+mostraria mais nada feito noutro lugar.
+
+**Um feito sobrevive à porta.** Ligar, desligar, um snapshot rodam numa thread e são contados até
+responder. O rodapé que fecha com um feito em curso cala o feed (sem eventos, sem relógio, sem
+vigia) e o guarda até a resposta chegar, com o sino pendurado: uma recusa (ocupado, demorou demais)
+ainda é dita na linha. A janela não precisa: ela vive enquanto o feed vive.
+
+**O cursor fica na COISA, e o dado não rola a página.** O detalhe de uma instância é uma lista que o
+daemon reordena (um snapshot expira, outro é tirado na outra porta): o cursor do detalhe guarda o
+alvo da linha (o nome do snapshot, o do volume, o valor de um fato e quantas linhas acima têm o
+mesmo) e o procura de novo a cada leitura, em vez de ficar no índice e cair no snapshot vizinho, que
+o `RET` restauraria. E o `settle` que segue uma leitura nunca traz uma coluna de volta ao cursor: só
+uma tecla, um clique, uma resposta ou um redimensionamento da pessoa chamam o `keep_in_sight` — quem
+rolou a lista com a roda ou a barra continua lendo onde estava.
+
+**Nada vai à rede antes de a pessoa permitir.** O catálogo de um remoto e a instância ou a imagem
+copiadas dele precisam de TODOS os hosts que o cliente do remoto pergunta
+(`ronoctua_incus::hosts_of`: o Docker Hub são três). Enquanto falta um, o detalhe desenha a linha de
+consentimento de todo app (`consent_rows`, `C-a`) no lugar do que seria buscado, e o rascunho de uma
+instância nova a desenha antes da linha que lança. A porta passa o `Pass` do endereço; o crate lê os
+outros do `consent.json` na hora, como o filho da fila.
+
+**Uma instância nova é um rascunho, não uma pergunta.** `C-l` (e `LEADER s x n`, e `RET` numa imagem
+daqui ou do catálogo) abre no lugar do detalhe: tipo (container ou máquina virtual, que o `RET` vira),
+nome, imagem, processadores, memória e processos, e a linha que lança. Cada valor é digitado na linha
+da própria porta (`Errand::Ask` — o minibuffer no rodapé, `Ui::ask` na janela), e a vista guarda o
+que a pergunta era (`Asking`), porque a resposta chega depois, pelo id. O rascunho é GUARDADO quando é
+posto de lado (`Esc`, um clique fora, `TAB`, e `LEADER s x i` com a vista aberta, que vira a vista
+para as imagens em vez de abrir outra — `View::show`): o que a pessoa digitou não se perde com um
+clique desviado, e só o lançamento o descarta. O nome é conferido como o Incus confere e contra as
+instâncias que existem; a imagem é `remoto:alias` (o endereço e o protocolo saem dos remotos do
+cliente) ou uma imagem daqui pelo alias ou pelo começo da impressão digital; a memória pede a
+unidade, porque um número solto, para o daemon, é bytes, e "2" querendo dizer dois gigabytes seria
+uma instância de dois bytes. O lançamento vai para a fila (`Job::Launch`), cria e liga. Os limites
+de uma instância que existe são a mesma pergunta, na aba Limites, e mudam UM limite e nada mais
+(`Incus::set_limit`, `LimitChange`): mandar os três copiaria para a instância o limite que vem de um
+perfil, e ela pararia de seguir o perfil. A aba diz de onde vem cada limite (o crate lê a
+configuração própria à parte da expandida, `Instance::own_limits`); uma resposta vazia tira o limite
+PRÓPRIO, e num limite que é de um perfil a tela diz que não há o que tirar, em vez de dizer "feito"
+sobre uma linha que continua igual. Uma máquina virtual não tem linha de processos, porque o kernel
+dela os conta.
+
+**O que vai para onde.** Ligar, desligar, reiniciar, congelar, apagar, os limites e os snapshots
+rodam numa thread do feed (segundos; o crate espera a operação). Lançar, copiar uma imagem, exportar,
+importar, enviar e trazer arquivo e publicar vão para a fila (`Work::Incus`, minutos, sobrevivem à
+porta). O console de texto e o shell abrem no NOSSO terminal (`ronoctua-shell terminal <incus>
+console|exec …`), e a tela de uma máquina virtual pelo próprio CLI (`console --type=vga`, que abre o
+remote-viewer e espera), nunca dentro de um terminal: as duas portas lançam o que UMA função diz
+(`incus::launched`), e o `incus-console-is-the-terminal` segura isso. O rodapé se fecha antes de
+lançar, a regra do lançador. Apagar uma instância, uma imagem ou um snapshot, e restaurar um
+snapshot (o que mudou desde então se perde), perguntam com o "não" primeiro, e qualquer outra tecla é
+"não". Enviar e trazer são duas perguntas (o arquivo, depois onde), e trazer e exportar nunca
+gravam por cima de um arquivo que existe — a tela recusa antes, e o filho da fila (`create_new`)
+recusa de novo.
+
+**O projeto é o padrão.** O crate nomeia uma instância pelo nome, e um nome só é de uma instância
+dentro de um projeto; a vista lista os projetos e diz na tela que trabalha no padrão, em vez de
+parecer alcançar os outros.
+
+**Fotografável sem daemon, nas duas portas.** O `photograph --door incus` leva uma CENA (`--scene`,
+as formas do `ronoctua-incus` em JSON) que o feed responde na hora: um feito é um "sim" que não muda
+nada, um consentimento é permitido na cena, e um trabalho é GUARDADO e relatado ("would have
+queued"), nunca posto na fila desta máquina — a foto não toca o consentimento nem a fila da pessoa. O
+que a porta lançaria sai em "would have started". A cena também pode recusar tudo com um motivo
+(`refused`), recusar só os feitos (`deeds_refused`) e dizer que o fluxo de eventos acabou
+(`events_ended`): é assim que cada recusa e cada estado ganham um quadro nas duas línguas e nas duas
+portas, e o relatório da foto diz que estados o relógio leria de novo. O rodapé fotografado (`photograph --door footer
+--command incus-open`) não tem laço de eventos nem bandeira para uma vista só: a câmera dele roda de
+novo numa sala que herda o ambiente, e um rodapé que é de uma foto (`Screen::photographing`) lê a
+mesma cena do arquivo que `RONOCTUA_PHOTOGRAPH_INCUS_SCENE` nomeia — o molde do podman substituto dos
+containers. Um rodapé numa tela nunca lê essa variável. Uma cena que não se lê é recusa NA FOTO (e o
+motivo no log), nunca uma cena vazia que passaria por uma. As datas saem em UTC nas duas.
+
+
+<!-- anchor: L24 -->
+
+### Contas de LLM: a marca e a vista (`agent-accounts`, `LEADER m a`)
+
+O módulo do brain `agent-accounts` põe uma marca por conta na modeline, e a vista `m a` mostra cada
+conta por inteiro, nas duas portas. O porquê do módulo — a cor, as duas vigias, a unidade só depois
+de uso — mora no `why.md` dele; aqui fica o que as duas metades combinam.
+
+- **Uma regra de cor, a do módulo.** A barra de uma janela na vista e a marca na modeline vestem a
+  mesma cor porque a vista PERGUNTA ao módulo (`ronoctua_brain::compiled::agent_accounts::lines`,
+  `tone_of`, `mark_of` para o glifo) em vez de guardar 80 e 95 de novo: duas cópias discordariam no
+  dia em que a pessoa mudasse uma linha numa delas. Quem prova que concordam é um teste, não uma
+  varredura de código: o `a_bar_and_its_mark_wear_one_colour` entrega a mesma leitura ao módulo
+  (`windows_said`, `mark_tone`, o que o `face` usa) e à vista (`windows_of`, `window_tint`) e compara
+  a barra mais colorida com a marca para cada janela, momento e par de linhas. O manifesto lista a
+  vista no `namedBy`: as duas são uma feature.
+- **As linhas são um arquivo com três escritores.** A região do rodapé, a janela e a página do módulo
+  gravam o `brain/agent-accounts/lines.json`, então nenhum regrava a cópia que leu antes: cada um
+  muda UMA linha sobre o que o arquivo diz na hora (`keep_line`, sobre o `Store::parsed`), e um
+  arquivo que não lê é recusado com frase, nunca substituído. O módulo cria a pasta dele e a da lista
+  ao nascer, antes de o núcleo levantar as vigias — o núcleo vigia um arquivo pela pasta, e um
+  caminho sem pasta fica sem vigia para sempre (numa máquina nova, a linha mudada na vista nunca
+  chegaria à marca) — e, se a vigia das linhas cai, a página diz. A vista, se a pasta ainda não
+  existe, vigia a pasta existente mais próxima até ela nascer (`Watching::ancestors`).
+- **O dígito é o lugar na lista.** A marca de uma conta leva como instância o lugar dela na lista
+  inteira (não dentro do tipo), e o clique entrega esse número ao `agents-open`, que abre a vista
+  com o cursor naquela conta (`View::aim_at_place`). Um número por tipo seria ambíguo num comando
+  só. Nove no máximo: um dígito.
+- **Ler é numa thread.** Uma leitura abre credenciais, os números guardados, a contagem e o fim dos
+  logs mais novos de uma conta do Codex; as duas portas a pedem a uma thread (`read_off_the_loop`),
+  uma de cada vez, e a resposta chega pelo laço. Um `refresh` (contar e perguntar ao endpoint, com o
+  passe do `consent.json`) é pedido ao abrir a vista — os números que a pessoa vê estão frescos — e
+  pela linha "Contar e perguntar de novo". O que um gesto escreve (a lista, a statusline, as
+  linhas, o consentimento) é arquivo pequeno, escrito onde o gesto acontece, e lido de novo na hora
+  — e SÓ depois de um gesto que escreveu (`Errand::writes`): uma seta segurada não relê os arquivos
+  de todas as contas a cada repetição. As vigias da vista (a lista, o consentimento, as linhas e,
+  por conta, o que o `ronoctua_llm::watched` diz) vivem só enquanto ela está aberta, e são levantadas
+  de novo quando a leitura muda o que cobrem.
+- **Um relógio só com a vista aberta.** Quando uma janela reinicia, nada é gravado, mas a vista passa
+  a dizer outra coisa (a barra vira "ainda não se sabe"). Cada porta arma UM temporizador no
+  reinício mais próximo que mostra (`next_reset`) e lê de novo quando ele toca; fechada a vista, não
+  há relógio. O módulo, no mesmo momento (`Heard::Wake`), muda a geração da página, senão o
+  hospedeiro nunca a pediria de novo e ela seguiria mostrando a janela cheia em perigo.
+- **Acrescentar é um gesto inteiro.** O nome é perguntado na linha da porta; a pasta da conta é
+  criada `0700` antes de entrar na lista (o Codex recusa uma pasta que não existe, e as vigias do
+  módulo a ouvem desde o início); a lista é editada sobre o que o arquivo diz agora
+  (`Accounts::keep`); numa conta do Claude Code a nossa statusline vai na frente da da pessoa, porque
+  os limites vêm dela; e o login abre no nosso terminal. Sessão e login são a linha de comando do
+  crate (`launch_arguments`, `login_arguments`) dentro de `ronoctua-shell terminal`, com a vista
+  fechada antes (a regra do lançador). O programa do agente chega ao rodapé pelo ambiente
+  (`nix/modules/agents.nix`, `RONOCTUA_CLAUDE`/`RONOCTUA_CODEX`, cada um seguindo o seu programa no
+  registro), nunca compilado: o Claude Code é unfree.
+- **Remover pergunta antes, "não" primeiro.** A pasta fica (com as sessões e o login), mas uma conta
+  acrescentada de novo ganha outra pasta, então a pergunta aparece na vista com o cursor no "não" e
+  o "sim" na cor de perigo. Numa conta do Claude Code a frase diz que a statusline dela volta.
+- **O endpoint diz que é não oficial.** A seção do endpoint de uso existe só com uma conta do Claude
+  Code: a linha de consentimento enquanto o host não foi permitido, e uma frase que diz que a
+  Anthropic não documenta o endpoint. A nota sob as janelas de cada conta diz de onde vieram os
+  números e quando o endpoint respondeu, ou por que não respondeu.
+- **As fotos.** A janela é fotografada sobre uma máquina posta numa pasta (`photograph --door agents
+  --places`): a câmera a copia e roda de novo numa sala cujo `HOME` e raízes XDG são a cópia, e
+  move para a cópia as pastas da lista que estavam sob a pasta dada — pelo `Store` do crate. A sala
+  fica ao lado da foto e é apagada antes da cópia, então a câmera recusa uma sala que seja a pasta
+  dada, esteja dentro dela ou a contenha. A câmera do rodapé ganhou `--room <pasta>` (a sala é a
+  pasta dada, e fica depois) e `--accounts-marks`: as marcas das contas na foto são as que o próprio
+  módulo faz lendo os arquivos da sala (`marks_read_now`), nunca um `--mind` escrito à mão — uma foto
+  com marca e barra que o módulo não produziria não prova nada.
+- **O brain não leva o meio que pergunta à rede.** O `ronoctua-llm` separa o que lê o login e
+  pergunta ao endpoint (o leitor de credenciais, `usage::fetch`, o `refresh`, o rustls e o passe) na
+  feature `fetch`, ligada para a CLI e o shell; o brain depende dele com `default-features = false`,
+  porque o módulo só lê o que foi guardado — quem pergunta é a unidade.

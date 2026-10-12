@@ -28,6 +28,9 @@ tracing.workspace = true
 # A PASSPHRASE IS A `Secret`: printed as nothing, wiped when dropped. It goes
 # into the bus call that unlocks or formats, and nowhere else.
 ronoctua-consent = { path = "../ronoctua-consent" }
+# WHERE THE /private VAULT IS MOUNTED, by its one name: what came out of it is
+# not a disk row (`Skipped::Vault`) — the vault has its own.
+ronoctua-private = { path = "../ronoctua-private" }
 
 [lints]
 workspace = true

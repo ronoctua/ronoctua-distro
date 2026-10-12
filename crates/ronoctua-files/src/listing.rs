@@ -93,6 +93,14 @@ impl Default for Sort {
 /// directory one wants to look at, and the alternative is a screen that says
 /// nothing at all.
 pub fn read_dir_at(dir: &Path, sort: Sort) -> Result<Vec<Entry>> {
+    // THE /private VAULT, READ ONLY WHILE IT IS OPEN, and then off the
+    // caller's thread (`guarded`). Refused, the error IS a [`Withheld`].
+    guarded(dir, move |at| read_plainly(&at, sort))?
+}
+
+/// [`read_dir_at`] itself, for a folder that may be read where the caller
+/// stands.
+fn read_plainly(dir: &Path, sort: Sort) -> Result<Vec<Entry>> {
     let handle =
         std::fs::read_dir(dir).with_context(|| format!("could not list {}", dir.display()))?;
     let mut out: Vec<Entry> = handle
@@ -183,15 +191,18 @@ fn folded(e: &Entry) -> String {
 ///
 /// When the directory cannot be opened.
 pub fn gathered_from(dir: &Path) -> Result<Vec<Entry>> {
-    let handle =
-        std::fs::read_dir(dir).with_context(|| format!("could not list {}", dir.display()))?;
-    Ok(handle
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            Entry::of_path(path.to_string_lossy().into_owned(), &path)
-        })
-        .collect())
+    // THE OPEN VAULT'S OWN BIN TOO, by the same guard (`guarded`).
+    guarded(dir, |at| {
+        let handle =
+            std::fs::read_dir(&at).with_context(|| format!("could not list {}", at.display()))?;
+        Ok(handle
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                Entry::of_path(path.to_string_lossy().into_owned(), &path)
+            })
+            .collect())
+    })?
 }
 
 /// The directory's own modification time, for "has this changed since I looked".
@@ -201,7 +212,167 @@ pub fn gathered_from(dir: &Path) -> Result<Vec<Entry>> {
 /// for nothing.
 #[must_use]
 pub fn stamp(dir: &Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(dir).ok()?.modified().ok()
+    // NOR STAT'ED but by the same guard: see `read_dir_at`.
+    guarded(dir, |at| std::fs::metadata(&at).ok()?.modified().ok())
+        .ok()
+        .flatten()
+}
+
+// ─── the /private vault ─────────────────────────────────────────────────────
+
+/// Why a folder inside the `/private` vault was not read. A door says it in
+/// its own words ([`Withheld::sentence`]); this text is for the journal
+/// only. It travels inside the `anyhow::Error` a listing returns:
+/// [`withheld`] takes it out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Withheld {
+    /// The vault is not open — locked, or suspended at sleep while in use:
+    /// it is not touched at all.
+    Shut,
+    /// It is open, but did not answer within [`VAULT_PATIENCE`]: suspended
+    /// an instant after its status was read. The read waits on its own
+    /// thread until the passphrase resumes the vault; the door goes on.
+    Silent,
+}
+
+impl Withheld {
+    /// The sentence a door says instead of an empty listing.
+    #[must_use]
+    pub const fn sentence(self) -> &'static str {
+        match self {
+            Self::Shut => ronoctua_i18n::key::FILES_PRIVATE_WITHHELD_SHUT,
+            Self::Silent => ronoctua_i18n::key::FILES_PRIVATE_WITHHELD_SILENT,
+        }
+    }
+}
+
+impl std::fmt::Display for Withheld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Shut => "the /private vault is not open",
+            Self::Silent => "the /private vault did not answer",
+        })
+    }
+}
+
+impl std::error::Error for Withheld {}
+
+/// The [`Withheld`] inside a listing's error, when that is why it failed.
+#[must_use]
+pub fn withheld(error: &anyhow::Error) -> Option<Withheld> {
+    error.downcast_ref::<Withheld>().copied()
+}
+
+/// How long a door waits for a read inside the open vault before it says
+/// the vault is not answering. A folder of the vault reads in microseconds
+/// from the page cache and in milliseconds from the disk; what takes longer
+/// is a vault frozen under the read.
+pub const VAULT_PATIENCE: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Reads inside the vault that outlived their wait and have not come back.
+/// While one is out, the vault is taken for frozen: a further read is
+/// refused at once instead of stranding a second thread beside it.
+static STRANDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Runs `read` on `dir` — the vault's guard every listing goes through.
+///
+/// Outside `/private` (once links are followed: `ronoctua_private::inside`,
+/// which never looks inside the vault), `read` runs right here. Inside, the
+/// vault must be OPEN (one read of its status file, which root rewrites
+/// before it suspends), and then `read` runs on a thread of its own that the
+/// caller waits for [`VAULT_PATIENCE`] at most: the status said "open" an
+/// instant before the sleep hook suspended it, and a door's event loop that
+/// read it itself would wait in the kernel until the passphrase — asked on
+/// that same loop — resumed it.
+fn guarded<T: Send + 'static>(
+    dir: &Path,
+    read: impl FnOnce(PathBuf) -> T + Send + 'static,
+) -> std::result::Result<T, Withheld> {
+    guarded_by(
+        dir,
+        Path::new(ronoctua_private::MOUNT_POINT),
+        Path::new(ronoctua_private::STATUS_FILE),
+        VAULT_PATIENCE,
+        read,
+    )
+}
+
+/// [`guarded`], with the vault's two places and the patience handed in.
+fn guarded_by<T: Send + 'static>(
+    dir: &Path,
+    mount_point: &Path,
+    status_file: &Path,
+    patience: std::time::Duration,
+    read: impl FnOnce(PathBuf) -> T + Send + 'static,
+) -> std::result::Result<T, Withheld> {
+    if !ronoctua_private::inside_with(dir, mount_point) {
+        return Ok(read(dir.to_path_buf()));
+    }
+    if !ronoctua_private::is_open(status_file) {
+        return Err(Withheld::Shut);
+    }
+    off_the_caller(dir.to_path_buf(), patience, read)
+}
+
+/// `read(dir)` on a thread, waited for `patience` at most. One that does not
+/// come back in time is left to finish when it can, and counted
+/// ([`STRANDED`]) until it does.
+fn off_the_caller<T: Send + 'static>(
+    dir: PathBuf,
+    patience: std::time::Duration,
+    read: impl FnOnce(PathBuf) -> T + Send + 'static,
+) -> std::result::Result<T, Withheld> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+    const RUNNING: u8 = 0;
+    const DONE: u8 = 1;
+    const LEFT: u8 = 2;
+
+    /// Marks the read done when the thread ends — returned or unwound — and
+    /// gives its place back when the caller had left it behind.
+    struct Ending(Arc<AtomicU8>);
+    impl Drop for Ending {
+        fn drop(&mut self) {
+            if self.0.swap(DONE, Ordering::AcqRel) == LEFT {
+                STRANDED.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+    }
+
+    if STRANDED.load(Ordering::Acquire) > 0 {
+        return Err(Withheld::Silent);
+    }
+    let state = Arc::new(AtomicU8::new(RUNNING));
+    let (send, came) = std::sync::mpsc::sync_channel(1);
+    let ending = Ending(Arc::clone(&state));
+    let spawned = std::thread::Builder::new()
+        .name("ronoctua-vault-read".to_owned())
+        .spawn(move || {
+            let _ending = ending;
+            let _ = send.send(read(dir));
+        });
+    if spawned.is_err() {
+        return Err(Withheld::Silent);
+    }
+    match came.recv_timeout(patience) {
+        Ok(value) => Ok(value),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(Withheld::Silent),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // COUNTED BEFORE IT IS LEFT, so a thread that ends in between
+            // finds the count to give back.
+            STRANDED.fetch_add(1, Ordering::AcqRel);
+            if state
+                .compare_exchange(RUNNING, LEFT, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                Err(Withheld::Silent)
+            } else {
+                // IT ENDED in that instant: its answer is already sent.
+                STRANDED.fetch_sub(1, Ordering::AcqRel);
+                came.recv().map_err(|_| Withheld::Silent)
+            }
+        }
+    }
 }
 
 /// The path broken into the pieces a breadcrumb offers.
@@ -395,5 +566,107 @@ mod tests {
         for wanted in Order::ALL {
             assert!(seen.contains(&wanted), "the key never reaches {wanted:?}");
         }
+    }
+
+    /// FAILS IF: a folder of a vault that is not open is read (through a
+    /// link too), an open one's is not, or a refusal stops being a
+    /// [`Withheld`] the door can word.
+    /// The two tests below share [`STRANDED`]: one at a time.
+    static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn the_vault_is_read_only_while_it_is_open() {
+        let _one = VAULT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = std::env::temp_dir().join(format!("ronoctua-withheld-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mount = root.join("private");
+        let home = root.join("home");
+        std::fs::create_dir_all(mount.join("notes")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(mount.join("notes/kept.txt"), b"k").unwrap();
+        std::os::unix::fs::symlink(&mount, home.join("Private")).unwrap();
+        let status = root.join("status.json");
+        let state = |s: ronoctua_private::State| {
+            let written = ronoctua_private::Status {
+                state: s,
+                ..ronoctua_private::Status::absent()
+            };
+            std::fs::write(&status, serde_json::to_vec(&written).unwrap()).unwrap();
+        };
+        let list = |dir: &Path| {
+            guarded_by(
+                dir,
+                &mount,
+                &status,
+                std::time::Duration::from_secs(5),
+                |at| read_plainly(&at, Sort::default()),
+            )
+        };
+        for shut in [
+            ronoctua_private::State::Locked,
+            ronoctua_private::State::SuspendedInUse,
+        ] {
+            state(shut);
+            assert_eq!(list(&mount.join("notes")).err(), Some(Withheld::Shut));
+            assert_eq!(
+                list(&home.join("Private/notes")).err(),
+                Some(Withheld::Shut)
+            );
+            assert!(list(&home).is_ok(), "outside is read");
+        }
+        state(ronoctua_private::State::Open);
+        let read = list(&home.join("Private/notes")).unwrap().unwrap();
+        assert!(read.iter().any(|e| e.name == "kept.txt"), "{read:?}");
+        // AND IT TRAVELS AS ITSELF inside the listing's error.
+        let e: anyhow::Error = Withheld::Silent.into();
+        assert_eq!(withheld(&e), Some(Withheld::Silent));
+        assert_eq!(withheld(&anyhow::anyhow!("no")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a read inside the vault that does not come back holds the
+    /// caller past its patience, a second one is started beside it, or the
+    /// vault stays refused once the first came back.
+    #[test]
+    fn a_frozen_read_is_left_behind_and_the_next_refused_at_once() {
+        use std::time::{Duration, Instant};
+        let _one = VAULT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (go, held) = std::sync::mpsc::channel::<()>();
+        let started = Instant::now();
+        let first = off_the_caller(PathBuf::from("/x"), Duration::from_millis(50), move |_| {
+            let _ = held.recv();
+            1
+        });
+        assert_eq!(first, Err(Withheld::Silent));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the caller waited"
+        );
+        // WHILE IT IS OUT: refused at once, nothing started.
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let r = std::sync::Arc::clone(&ran);
+        let second = off_the_caller(PathBuf::from("/x"), Duration::from_secs(5), move |_| {
+            r.store(true, std::sync::atomic::Ordering::SeqCst);
+            2
+        });
+        assert_eq!(second, Err(Withheld::Silent));
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
+            "a second read was started"
+        );
+        // THE VAULT RESUMED: the first read ends, and the next one is read.
+        go.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while STRANDED.load(std::sync::atomic::Ordering::Acquire) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            off_the_caller(PathBuf::from("/x"), Duration::from_secs(5), |_| 3),
+            Ok(3)
+        );
     }
 }

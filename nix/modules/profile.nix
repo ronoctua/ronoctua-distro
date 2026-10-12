@@ -29,7 +29,8 @@
 # Measured on 2026-08-14, closure of `nixosConfigurations.noctua`: `full` is
 # 23,2 GiB. The four groups below are ~6,5 GiB (Android), ~4,0 GiB (toolchains),
 # ~4,6 GiB (font variants and icon superpack) and ~2,0 GiB (browser, editor,
-# media).
+# media). (Since 2026-10-05 rust and its ~1,3 GiB left the toolchains group:
+# the devshell's toolchain is in both profiles — see the end of the table.)
 #
 # Measured on 2026-09-30, what the two newest groups ADD to it — `nix
 # path-info -rS` of each package, minus every path the full profile's other
@@ -40,7 +41,18 @@
 # OpenCASCADE and WebKitGTK), the two together 3,33 GiB (they share Python,
 # OpenVDB and Boost); Codex 0,30 GiB and Claude Code 0,22 GiB (0,31; unfree,
 # not on the cache — measured on a local build). All four: ~3,9 GiB, so the
-# full profile is ~26,7 GiB with them (`docs/INSTALL.md`'s table).
+# full profile is ~26,7 GiB with them.
+#
+# ESTIMATED on 2026-10-05, after the devshell's toolchain and the coding
+# agents went into both profiles (the arithmetic is at the end of the table,
+# after the L15 anchor): `full` ~29 GiB, `minimal` ~11,8 GiB — the figures
+# `docs/INSTALL.md`'s table gives. Estimates and not measurements: neither
+# toplevel was built for them, and `docs/PENDING.md` keeps the measurement.
+#
+# | profile   | 2026-08-14 / 09-30 (measured) | 2026-10-05 (estimated) |
+# |-----------|-------------------------------|------------------------|
+# | `full`    | 23,2 → 26,7 GiB               | ~29 GiB                |
+# | `minimal` | 6,9 GiB                       | ~11,8 GiB              |
 { config, lib, ... }:
 
 let
@@ -51,9 +63,11 @@ in
     # Android Studio 3,24 GiB + Flutter 0,74 + Dart 1,18 + JDK 0,46 + the SDK.
     # The single largest item in the distro.
     dev.android = lib.mkDefault full;
-    # rust + rust-docs 1,3 GiB, clang/llvm 1,3, go 0,5, python/pyright 0,4, node,
-    # gcc. Building THIS project does not depend on them: `nix develop` brings
-    # its own toolchain, pinned, and that is where the work happens.
+    # clang/llvm 1,3, go 0,5, python/pyright 0,4, node, gcc. Building THIS
+    # project does not depend on them: `nix develop` brings its own toolchain,
+    # pinned, and that is where the work happens. Rust (1,3 GiB with its docs)
+    # is no longer behind this switch: it IS that toolchain's compiler, on the
+    # PATH in both profiles (the end of the table).
     dev.toolchains = lib.mkDefault full;
 
     # Chrome, 0,42 GiB. The one the owner named as the example: on a reduced
@@ -120,12 +134,45 @@ in
     # images it pulls land in the home, not the closure.
     containers.enable = lib.mkDefault full;
 
-    # THE CODING AGENTS, Claude Code and Codex (~0,5 GiB together, measured
-    # above), and THE WORKSHOP, Blender and OrcaSlicer (~3,3 GiB): programs
-    # one installs to USE. A reduced machine that opens a `.stl` gets the
-    # sentence that nothing opens it, and one line in `host.nix` changes it:
-    # `ronoctua.workshop.enable = true;`, `ronoctua.dev.agents = true;`.
-    dev.agents = lib.mkDefault full;
+    # THE WORKSHOP, Blender and OrcaSlicer (~3,3 GiB): programs one installs
+    # to USE. A reduced machine that opens a `.stl` gets the sentence that
+    # nothing opens it, and one line in `host.nix` changes it:
+    # `ronoctua.workshop.enable = true;`. (The coding agents left this line:
+    # see the end of the table.)
     workshop.enable = lib.mkDefault full;
+
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L04 ──
+    # THESE SWITCHES ARE THE GROUPS OF THE PROGRAM REGISTRY
+    # (`ronoctua.apps.<id>.group`, named once in `nix/modules/distro-apps.nix`):
+    # a program of the distro is on a machine when its group's switch is, and
+    # a person's decline (`software/declined.json`) takes it off again —
+    # `/etc/ronoctua/distro-apps.json` says which.
+    # ── anchor: L13 ──
+    # INCUS, the person's system containers and virtual machines: QEMU, OVMF,
+    # LXC and the daemon are a toolchain one installs to USE, and the images
+    # land in `/var/lib/incus`, not the closure. The owner's decision: full
+    # only (2026-10-05).
+    incus.enable = lib.mkDefault full;
+    # ── anchor: L15 ──
+    # THE CODING AGENTS, Claude Code and Codex, IN BOTH PROFILES (the owner's
+    # decision, 2026-10-05): working ON the distro is what the reduced
+    # profile is for too — it is the one that reinstalls in minutes — and the
+    # agents are part of that work. ~0,5 GiB (measured above); a person still
+    # declines either through the registry.
+    dev.agents = lib.mkDefault true;
+    #
+    # AND THE DEVSHELL'S TOOLCHAIN, kept in the store of both (`nix/toolchain.nix`,
+    # wired in `nix/modules/dev.nix`) with rust on the PATH — no switch here:
+    # it is not a program one chooses, it is what `nix develop` on this
+    # checkout needs. MEASURED on 2026-10-05 (`nix path-info -S` of each path
+    # of its closure, minus every path already in the reduced profile's
+    # packages): 5,2 GiB, of which ~0,8 GiB is Mesa and its LLVM that the
+    # graphics driver of every machine already brings — so ~4,4 GiB added,
+    # most of it rust with its documentation and both wasm standard libraries
+    # (1,8), OVMF with the EDK2 source it keeps (1,3) and QEMU (0,94).
+    # The reduced profile is then ~11,8 GiB (6,9 + 4,4 + the agents' 0,5).
+    # The full one gains 2,35 GiB by the same count — rust was in it, but
+    # Incus brings a QEMU and an OVMF of its own, not these — so ~29 GiB.
   };
 }

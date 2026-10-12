@@ -59,6 +59,15 @@ commands:
                             what one program's sheet shows: nix <attribute>,
                             flatpak <app id>, appimage <key>,
                             android <package> or web <slug>.
+  reconcile [<source>]      make this machine match the person's declaration:
+                            Android's declared apps in (while Android runs)
+                            and out, and the copies installed by hand that a
+                            declared one replaces, once it is applied.
+  pins refresh              look for newer downloads of the declared AppImages
+                            and Android apps, and write them into the
+                            person's declaration (nothing is staged).
+  person stage [--check]    lay the person's declaration where root's applier
+                            reads it; --check only reads it, as root would.
   help                      this text.
 
 Every command but `upgrade android-system` refuses to run as root.
@@ -108,6 +117,15 @@ pub enum Verb {
         key: AppKey,
         /// One JSON object.
         json: bool,
+    },
+    /// `reconcile [<source>]`.
+    Reconcile(Option<Source>),
+    /// `pins refresh`.
+    PinsRefresh,
+    /// `person stage [--check]`.
+    PersonStage {
+        /// Only read the declaration, as root would; stage nothing.
+        check: bool,
     },
     /// `help`.
     Help,
@@ -190,6 +208,22 @@ pub fn parse(args: &[String]) -> Result<Verb, String> {
         },
         "search" => search_of(rest),
         "details" => details_of(rest),
+        "reconcile" => match rest {
+            [] => Ok(Verb::Reconcile(None)),
+            [source] => one_of(source, &Source::ALL, "reconcile").map(|s| Verb::Reconcile(Some(s))),
+            _ => Err("`reconcile` takes one source at most".to_owned()),
+        },
+        "pins" => match rest {
+            [word] if word == "refresh" => Ok(Verb::PinsRefresh),
+            _ => Err("`pins` takes one word: refresh".to_owned()),
+        },
+        "person" => match rest {
+            [word] if word == "stage" => Ok(Verb::PersonStage { check: false }),
+            [word, flag] if word == "stage" && flag == "--check" => {
+                Ok(Verb::PersonStage { check: true })
+            }
+            _ => Err("`person` takes `stage`, and --check after it".to_owned()),
+        },
         other => Err(format!("`{other}` is not a command")),
     }
 }
@@ -329,6 +363,10 @@ pub enum Route {
     Trial,
     /// An upgrade of everything, one source's lane at a time.
     Everything,
+    /// One of the person's declaration's orders (`crate::declare`), which
+    /// takes the lane of its source itself, around what touches the source
+    /// — never across a rebuild.
+    Declaration(Option<Source>),
 }
 
 impl Route {
@@ -340,6 +378,7 @@ impl Route {
             Self::Source(s) => Some(s),
             Self::Trial => Some(Source::Nix),
             Self::Everything => None,
+            Self::Declaration(s) => s,
         }
     }
 }
@@ -353,6 +392,17 @@ impl Route {
 /// kinds this crate installs.
 pub fn route(order: &Order) -> Result<Route, Refusal> {
     match order {
+        // THE DECLARATION'S ORDERS: what the flake installed is no source's,
+        // and is declined or kept by the registry's id, never declared.
+        // ── anchor: L18 ──
+        Order::Declare { key, .. } | Order::Forget { key, .. } => key
+            .source()
+            .map(|s| Route::Declaration(Some(s)))
+            .ok_or(Refusal::DeclaredInTheFlake),
+        Order::Decline { .. }
+        | Order::Undecline { .. }
+        | Order::Reconcile { .. }
+        | Order::RefreshPins => Ok(Route::Declaration(order.lane())),
         Order::Try { .. } | Order::StopTrial { .. } | Order::Keep { .. } => Ok(Route::Trial),
         Order::Upgrade {
             scope: Scope::Everything,
@@ -378,6 +428,8 @@ pub fn key_of(order: &Order) -> Option<AppKey> {
     match order {
         Order::Install { key, .. }
         | Order::Remove { key, .. }
+        | Order::Declare { key, .. }
+        | Order::Forget { key, .. }
         | Order::Upgrade {
             scope: Scope::One { key },
         } => Some(key.clone()),
@@ -395,9 +447,15 @@ pub fn name_of(order: &Order) -> String {
     match order {
         Order::Install { key, .. }
         | Order::Remove { key, .. }
+        | Order::Declare { key, .. }
+        | Order::Forget { key, .. }
         | Order::Upgrade {
             scope: Scope::One { key },
         } => key.id().to_owned(),
+        Order::Decline { id, .. } | Order::Undecline { id } => id.clone(),
+        Order::Reconcile {
+            source: Some(source),
+        } => source.word().to_owned(),
         Order::InstallFile { path, .. } => path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -418,7 +476,9 @@ pub fn name_of(order: &Order) -> String {
         }
         | Order::AndroidSession { .. }
         | Order::AndroidErase
-        | Order::AndroidWindows { .. } => String::new(),
+        | Order::AndroidWindows { .. }
+        | Order::Reconcile { source: None }
+        | Order::RefreshPins => String::new(),
     }
 }
 
@@ -456,15 +516,36 @@ pub fn perform(ctx: &Context, order: &Order, report: &mut dyn Report) -> Done {
 
 /// One routed order, under its lane.
 fn run_routed(ctx: &Context, route: Route, order: &Order, report: &mut dyn Report) -> Done {
+    if let Route::Declaration(_) = route {
+        return crate::declare::run(ctx, order, report);
+    }
+    // A DECLARED WEB APP CHANGED is declared again: an edit of the person's
+    // entry alone would be taken away by the reconciler and never reach the
+    // declaration. It takes the web lane itself, and then the declaration's.
+    if let Order::WebEdit { slug, spec } = order
+        && crate::declaration::read_declared(&ctx.roots)
+            .is_ok_and(|d| d.entry(&format!("{}:{slug}", Source::Web.word())).is_some())
+    {
+        return crate::declare::edit_declared_web(ctx, slug, spec, report);
+    }
     let Some(source) = route.lane() else {
         return everything(ctx, report);
     };
-    let _lane = lane(ctx, source, &name_of(order), report)?;
-    module(ctx, route, order, report)
+    let done = {
+        let _lane = lane(ctx, source, &name_of(order), report)?;
+        module(ctx, route, order, report)
+    };
+    // ANDROID STARTED: what the person declared for it goes in now — the
+    // reconcile takes the lane this order just let go of.
+    if matches!(order, Order::AndroidSession { on: true }) && done.is_ok() {
+        let _ = crate::reconcile::run(ctx, Some(Source::Android), report)
+            .map_err(|e| tracing::warn!(error = %e, "the declared Android apps wait"));
+    }
+    done
 }
 
 /// The module's own `run`.
-fn module(ctx: &Context, route: Route, order: &Order, report: &mut dyn Report) -> Done {
+pub(crate) fn module(ctx: &Context, route: Route, order: &Order, report: &mut dyn Report) -> Done {
     match route {
         Route::Trial => crate::trial::run(ctx, order, report),
         Route::Source(Source::Nix) => crate::nix::run(ctx, order, report),
@@ -473,6 +554,7 @@ fn module(ctx: &Context, route: Route, order: &Order, report: &mut dyn Report) -
         Route::Source(Source::Android) => crate::android::run(ctx, order, report),
         Route::Source(Source::Web) => crate::web::run(ctx, order, report),
         Route::Everything => everything(ctx, report),
+        Route::Declaration(_) => crate::declare::run(ctx, order, report),
     }
 }
 
@@ -829,7 +911,62 @@ pub fn main() -> ExitCode {
             json,
         } => search(&ctx, &query, &sources, json),
         Verb::Details { key, json } => details(&ctx, &key, json),
+        Verb::Reconcile(source) => {
+            let done = perform(&ctx, &Order::Reconcile { source }, report.as_mut());
+            answer(report.as_mut(), done)
+        }
+        Verb::PinsRefresh => pins_refresh(&ctx, report.as_mut()),
+        Verb::PersonStage { check } => person_stage(&ctx, check),
         Verb::Help => ExitCode::SUCCESS,
+    }
+}
+
+/// `pins refresh`: newer pins into the declaration, and nothing staged —
+/// the update's `person-stage` comes after it.
+fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
+    let host = crate::declaration::host_of(&crate::declaration::this_host());
+    let done = host.and_then(|host| {
+        // THE DOWNLOADS RUN WITH NO LANE HELD, and only the write takes it.
+        let newer = crate::pins::newer(ctx, &crate::github::Net, &host, report)?;
+        let moved = if ctx.rehearse {
+            newer.len() as u64
+        } else {
+            let _held = crate::lock::take_declaration(&crate::lock::directory(&ctx.roots), || {
+                report.step(Phase::Waiting, 0, 0, crate::lock::DECLARATION);
+            })
+            .map_err(|e| Failure::trouble(format!("could not take the declaration's lane: {e}")))?;
+            crate::pins::take(&ctx.roots, &newer)?
+        };
+        Ok(Outcome {
+            amount: Some(moved),
+            rehearsed: ctx.rehearse,
+            ..Outcome::default()
+        })
+    });
+    answer(report, done)
+}
+
+/// `person stage [--check]`: the declaration laid where root's applier reads
+/// it — the nonce on standard output — or, with `--check`, only read.
+fn person_stage(ctx: &Context, check: bool) -> ExitCode {
+    let said = if check || ctx.rehearse {
+        crate::stage::check(&ctx.roots)
+            .map(|(declared, declined)| format!("reads: {declared} declared, {declined} declined"))
+    } else {
+        crate::lock::take_declaration(&crate::lock::directory(&ctx.roots), || {})
+            .map_err(|e| Failure::trouble(format!("could not take the declaration's lane: {e}")))
+            .and_then(|_held| crate::stage::stage(&ctx.roots, &ctx.roots.system.staged()))
+            .map(|nonce| format!("staged {nonce}"))
+    };
+    match said {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        Err(f) => {
+            let _ = writeln!(std::io::stderr(), "ronoctua-software: {f}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -975,7 +1112,6 @@ pub fn plain_details(d: &Details) -> String {
         ),
     );
     fact("anti-features", Some(d.anti_features.join(", ")));
-    fact("declaration", d.declaration.clone());
     if !d.permissions.is_empty() {
         out.push_str("permissions:\n");
         for p in &d.permissions {
@@ -1140,6 +1276,29 @@ mod tests {
             },
             Order::AndroidSession { on: true },
             Order::AndroidErase,
+            Order::Declare {
+                key: AppKey::Flatpak {
+                    id: "org.x.Y".into(),
+                },
+                consent: Consent::default(),
+                machines: None,
+            },
+            Order::Forget {
+                key: AppKey::Android {
+                    package: "org.x".into(),
+                },
+                keep_data: true,
+            },
+            Order::Decline {
+                id: "gimp".into(),
+                machines: None,
+            },
+            Order::Undecline { id: "gimp".into() },
+            Order::Reconcile {
+                source: Some(Source::Android),
+            },
+            Order::Reconcile { source: None },
+            Order::RefreshPins,
         ]
     }
 
@@ -1217,6 +1376,27 @@ mod tests {
                 .contains("`install`")
         );
         assert!(parse(&args("help me")).is_err());
+        assert_eq!(parse(&args("reconcile")), Ok(Verb::Reconcile(None)));
+        assert_eq!(
+            parse(&args("reconcile android")),
+            Ok(Verb::Reconcile(Some(Source::Android)))
+        );
+        assert!(
+            parse(&args("reconcile pypi"))
+                .unwrap_err()
+                .contains("`pypi`")
+        );
+        assert_eq!(parse(&args("pins refresh")), Ok(Verb::PinsRefresh));
+        assert!(parse(&args("pins")).is_err());
+        assert_eq!(
+            parse(&args("person stage")),
+            Ok(Verb::PersonStage { check: false })
+        );
+        assert_eq!(
+            parse(&args("person stage --check")),
+            Ok(Verb::PersonStage { check: true })
+        );
+        assert!(parse(&args("person apply")).is_err());
     }
 
     #[test]
@@ -1331,7 +1511,6 @@ mod tests {
             download_bytes: Some(73_415_160),
             permissions: vec!["share=network".into()],
             reference: "org.x.Y".into(),
-            declaration: Some("ronoctua.software.declaredFlatpaks = [ \"org.x.Y\" ];".into()),
             name: "Y".into(),
             summary: "Does y".into(),
             version: "1.0".into(),
@@ -1342,7 +1521,6 @@ mod tests {
             plain_details(&d),
             "Y  (org.x.Y)\nDoes y\nversion: 1.0\ndownload: 73.4 MB\n\
              badges: sandboxed, verified\n\
-             declaration: ronoctua.software.declaredFlatpaks = [ \"org.x.Y\" ];\n\
              permissions:\n  share=network\n\nFirst.\n\nSecond.\n"
         );
         assert_eq!(megabytes(0), "0.0 MB");
@@ -1376,6 +1554,14 @@ mod tests {
                 "{verb:?} ran as root"
             );
             assert_eq!(root_rule(verb, false), Ok(()), "{verb:?}");
+        }
+        for verb in [
+            Verb::Reconcile(None),
+            Verb::PinsRefresh,
+            Verb::PersonStage { check: true },
+        ] {
+            assert_eq!(root_rule(&verb, true), Err(Refusal::WrongUser), "{verb:?}");
+            assert_eq!(root_rule(&verb, false), Ok(()), "{verb:?}");
         }
         let images = Verb::Upgrade(Target::AndroidSystem);
         assert_eq!(root_rule(&images, true), Ok(()));
@@ -1442,6 +1628,23 @@ mod tests {
             consent: Consent::default(),
         };
         assert_eq!(route(&notes), Err(Refusal::UnknownItem));
+        // NOR IS IT DECLARED OR FORGOTTEN: the registry declines it by id.
+        let flake = AppKey::System {
+            desktop_id: "firefox.desktop".into(),
+        };
+        for order in [
+            Order::Declare {
+                key: flake.clone(),
+                consent: Consent::default(),
+                machines: None,
+            },
+            Order::Forget {
+                key: flake,
+                keep_data: true,
+            },
+        ] {
+            assert_eq!(route(&order), Err(Refusal::DeclaredInTheFlake));
+        }
     }
 
     #[test]

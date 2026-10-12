@@ -25,16 +25,51 @@ pub enum Op {
     Keygen,
     /// Change the passphrase: re-encrypt `key.age` alone.
     Rekey,
+    /// Squash the history older than `keepDays` and force it up with a lease
+    /// (the belongings-sealed package).
+    Compact,
+    /// The plain part alone: fetch, merge, commit, push — no passphrase (the
+    /// belongings-plain-merge package).
+    SyncPlain,
+    /// Forget the identity kept for the session (the belongings-targets-unlock
+    /// package).
+    Forget,
+    /// Pull into a new home, never push — the installer's (the
+    /// belongings-plain-merge package).
+    Restore,
+    /// Whether an address and a credential can read AND write (the
+    /// belongings-plain-merge package, for the installer).
+    Probe,
+    /// The first sync of an empty repository with a passphrase typed twice
+    /// (the belongings-plain-merge package, for the installer).
+    Init,
+    /// Whether the passphrase opens `key.age`, touching nothing (the
+    /// belongings-plain-merge package, for the installer).
+    VerifyPassphrase,
+    // ── anchor: L08 ──
+    // ── anchor: L09 ──
+    /// Sign this machine's plain part here, with the identity the session
+    /// kept or the passphrase a door wrote — no network.
+    Sign,
+    // ── anchor: L10 ──
 }
 
 impl Op {
     /// Every one, for the census of their texts.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 13] = [
         Self::Prepare,
         Self::Apply,
         Self::Abandon,
         Self::Keygen,
         Self::Rekey,
+        Self::Compact,
+        Self::SyncPlain,
+        Self::Forget,
+        Self::Restore,
+        Self::Probe,
+        Self::Init,
+        Self::VerifyPassphrase,
+        Self::Sign,
     ];
 
     /// The CLI's word for it, and the suffix of its text key.
@@ -46,6 +81,14 @@ impl Op {
             Self::Abandon => "abandon",
             Self::Keygen => "keygen",
             Self::Rekey => "rekey",
+            Self::Compact => "compact",
+            Self::SyncPlain => "sync-plain",
+            Self::Forget => "forget",
+            Self::Restore => "restore",
+            Self::Probe => "probe",
+            Self::Init => "init",
+            Self::VerifyPassphrase => "verify-passphrase",
+            Self::Sign => "sign",
         }
     }
 
@@ -74,11 +117,17 @@ pub enum Phase {
     Pushing,
     /// Making a key.
     Keying,
+    /// Merging both sides of a path (the belongings-plain-merge package).
+    Merging,
+    /// Rewriting the history (the belongings-sealed package).
+    Compacting,
+    // ── anchor: L08 ──
+    // ── anchor: L09 ──
 }
 
 impl Phase {
     /// Every one, for the census of their texts.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Fetching,
         Self::Unlocking,
         Self::Reading,
@@ -86,6 +135,8 @@ impl Phase {
         Self::Encrypting,
         Self::Pushing,
         Self::Keying,
+        Self::Merging,
+        Self::Compacting,
     ];
 
     /// Its word, the suffix of its text key.
@@ -99,6 +150,8 @@ impl Phase {
             Self::Encrypting => "encrypting",
             Self::Pushing => "pushing",
             Self::Keying => "keying",
+            Self::Merging => "merging",
+            Self::Compacting => "compacting",
         }
     }
 

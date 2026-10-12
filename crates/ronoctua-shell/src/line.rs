@@ -90,6 +90,11 @@ pub struct Line {
     /// The question's OWN key, when it is not `ask-<id>` — what a brain
     /// module declared for one of its actions, which it names as it likes.
     pub asks: Option<&'static str>,
+    /// The question's variables, when its words name something only the
+    /// asker knows — the host a clone will ask (`LEADER / c`): consent is
+    /// given to the host the question NAMES, not to a word written in the
+    /// key.
+    pub asks_with: Vec<(&'static str, String)>,
     /// Whether what is typed is hidden — a password, a PIN, a key.
     pub secret: bool,
     /// What has been typed.
@@ -139,6 +144,7 @@ impl Line {
         Self {
             id,
             asks: None,
+            asks_with: Vec::new(),
             secret,
             text: initial.map(one_line).unwrap_or_default(),
             completes: if secret { None } else { completer_of(id) },
@@ -216,8 +222,17 @@ impl Line {
     /// construction.
     #[must_use]
     pub fn question(&self, texts: &ronoctua_i18n::Texts) -> String {
+        let args: Vec<(&str, &str)> = self
+            .asks_with
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
         let said = |key: &str| {
-            let text = texts.t(key);
+            let text = if args.is_empty() {
+                texts.t(key)
+            } else {
+                texts.t_with(key, &args)
+            };
             // A KEY NOBODY WROTE resolves to `[key]` (`Texts::t_marked`), and
             // that is how this asks whether it exists at all.
             (!text.starts_with('[')).then_some(text)

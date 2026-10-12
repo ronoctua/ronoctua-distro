@@ -9,6 +9,15 @@ use std::path::{Path, PathBuf};
 
 use crate::{Action, Own, Run, Section, of_section};
 
+/// The machine directory: the machine's own flake, whose `host.nix` and
+/// `flake.nix` are the two papers the machine owns.
+///
+/// Baked by `nix/rust.nix` from its one name (`nix/machine.nix`,
+/// `machine-dir-has-one-name`). `env!` and not `option_env!`: a console built
+/// without it would point at a directory chosen here, and the build refusing
+/// is the honest answer.
+pub const MACHINE_DIR: &str = env!("RONOCTUA_MACHINE_DIR");
+
 /// A configuration file the console can reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Paper {
@@ -33,11 +42,11 @@ pub struct Paper {
 pub const fn papers() -> &'static [Paper] {
     &[
         Paper {
-            path: "/etc/nixos/host.nix",
+            path: concat!(env!("RONOCTUA_MACHINE_DIR"), "/host.nix"),
             origin: None,
         },
         Paper {
-            path: "/etc/nixos/flake.nix",
+            path: concat!(env!("RONOCTUA_MACHINE_DIR"), "/flake.nix"),
             origin: None,
         },
         Paper {
@@ -421,7 +430,7 @@ mod tests {
         v.section = Section::Config;
         v.on_sidebar = false;
         v.row = 0;
-        assert_eq!(papers()[0].path, "/etc/nixos/host.nix");
+        assert_eq!(papers()[0].path, format!("{MACHINE_DIR}/host.nix"));
         let Step::Hand(Hand::Edit(_)) = v.key(Key::Enter) else {
             panic!("host.nix opened for reading");
         };

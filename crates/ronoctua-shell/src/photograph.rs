@@ -60,10 +60,13 @@ use crate::player_window::{Door as Which, Outbox, Player, Stage};
 const USAGE: &str = "\
 usage: ronoctua-shell photograph [options] [steps]
 
-  --door <door>         window, column, footer-settings, update, files,
-                        git, icons, calc, video-metrics, security,
-                        containers, belongings, display, clipboard, curtain,
-                        lifeline or footer (default: window);
+  --door <door>         window, column, footer-settings, update,
+                        update-scene, files, git, icons, calc,
+                        video-metrics, security, containers, belongings,
+                        stick, software, incus, agents, fast-access,
+                        network, bluetooth, locale, camera-settings,
+                        display, clipboard, curtain, lifeline or footer
+                        (default: window);
                         footer-settings is the footer's own settings in
                         their window (`LEADER s r w`), no player's door;
                         update is the update's window (`LEADER s u w`), over
@@ -75,7 +78,10 @@ usage: ronoctua-shell photograph [options] [steps]
   --modeline <file>     the footer's preferences as `modeline.json` keeps
                         them, for footer-settings — never this machine's
                         (default: the defaults); a copy is what a key
-                        changes, and the file given is left as it was
+                        changes, and the file given is left as it was. A
+                        file that does not read as written (not JSON, a
+                        value repaired) is drawn as the window opens over
+                        it, with the sentence it is owed
   --unwritable          footer-settings over a directory that will not take
                         the file, so a key that changes a setting draws the
                         refusal
@@ -561,6 +567,33 @@ fn parse(words: &[String]) -> Result<Asked> {
                     // takes the rest of the words (`crate::belongings_photograph`).
                     "belongings" => crate::belongings_photograph::taken(words.as_slice()),
 
+                    // THE 2026-10-05 WAVE'S CAMERAS, each package after its
+                    // anchor.
+                    // ── anchor: L12 ──
+                    // ── anchor: L17 ──
+                    // THE INSTALLER STICK'S WINDOW, over readings handed in
+                    // whole (`crate::stick_window::photographed`).
+                    "stick" => crate::stick_window::photographed(words.as_slice()),
+                    // ── anchor: L18 ──
+                    // THE SOFTWARE CENTRE'S WINDOW, over a machine laid out in
+                    // a room (`crate::software_window::camera`).
+                    "software" => crate::software_window::camera::taken(words.as_slice()),
+                    // ── anchor: L19 ──
+                    // THE UPDATE'S WINDOW OVER A WHOLE SCENE — the machine's
+                    // records and its battery as well as the reports
+                    // (`crate::update_window::photographed_scene`).
+                    "update-scene" => crate::update_window::photographed_scene(words.as_slice()),
+                    // ── anchor: L21 ──
+                    // ── anchor: L22 ──
+                    // ── anchor: L23 ──
+                    // INCUS'S WINDOW has a camera of its own, over a scene
+                    // handed in whole (`crate::incus_photograph`).
+                    "incus" => crate::incus_photograph::taken(words.as_slice()),
+                    // ── anchor: L24 ──
+                    // THE LLM ACCOUNTS' WINDOW has a camera of its own, over a
+                    // machine laid out under one folder (`crate::agents_photograph`).
+                    "agents" => crate::agents_photograph::taken(words.as_slice()),
+
                     // THE SEARCH'S WINDOW AND COLUMN have a camera of their own,
                     // over an index built for it and a fixture for what the
                     // network would answer (`crate::fast_access_photograph`).
@@ -583,7 +616,7 @@ fn parse(words: &[String]) -> Result<Asked> {
                     }
 
                     other => bail!(
-                        "`{other}` is not a door; the doors are window, column, footer-settings, update, files, git, icons, calc, video-metrics, security, containers, belongings, network, bluetooth, locale, camera-settings, display, clipboard, curtain, lifeline and footer"
+                        "`{other}` is not a door; the doors are window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, locale, camera-settings, display, clipboard, curtain, lifeline and footer"
                     ),
                 };
             }
@@ -1037,11 +1070,12 @@ impl Native {
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir)
                     .with_context(|| format!("could not make `{}`", dir.display()))?;
+                // AS IT IS, broken or not: a file that does not read as
+                // written is a state of the window too — it opens over it and
+                // says the sentence the file is owed (`adapt::at_start`).
                 if let Some(file) = &asked.modeline {
-                    let raw = std::fs::read_to_string(file)
+                    let raw = std::fs::read(file)
                         .with_context(|| format!("could not read `{}`", file.display()))?;
-                    serde_json::from_str::<crate::adapt::Prefs>(&raw)
-                        .with_context(|| format!("`{}` is not a modeline.json", file.display()))?;
                     std::fs::write(dir.join(crate::adapt::FILE), raw)
                         .with_context(|| format!("could not copy `{}`", file.display()))?;
                 }

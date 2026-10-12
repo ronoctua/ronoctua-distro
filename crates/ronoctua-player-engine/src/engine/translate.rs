@@ -340,7 +340,7 @@ impl Engine {
 /// its language and who translated it — another translator's words are
 /// another translation.
 fn cache_name(text: &str, to: &str, by: &Provider) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, text.as_bytes());
     let hex: String = digest.as_ref()[..16]
         .iter()
         .map(|b| format!("{b:02x}"))

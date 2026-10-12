@@ -169,7 +169,7 @@ pub(crate) struct Origin {
 #[must_use]
 pub(crate) fn fingerprint(queue: &Queue) -> String {
     let bytes = serde_json::to_vec(&queue.kept(None)).unwrap_or_default();
-    ring::digest::digest(&ring::digest::SHA256, &bytes)
+    aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &bytes)
         .as_ref()
         .iter()
         .map(|b| format!("{b:02x}"))

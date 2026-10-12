@@ -48,6 +48,10 @@ let
   '';
 in
 {
+  # The registry this module writes the shell's programs into (see
+  # `browser.nix` for why it is imported here too).
+  imports = [ ./distro-apps.nix ];
+
   # zsh is the login shell. `programs.zsh` at the SYSTEM level is what makes it
   # a valid shell in /etc/shells and puts /etc/zshenv in place; without it,
   # `users.defaultUserShell` gives a user who cannot log in.
@@ -61,18 +65,36 @@ in
   };
   users.defaultUserShell = pkgs.zsh;
 
-  # The plugins are sourced by `.zshrc` from `/run/current-system/sw/share/…`.
-  # They are in systemPackages and not in home.packages on purpose: the path is
-  # then the same for every user and for a root shell.
+  # THE SHELL'S PROGRAMS ARE THE REGISTRY'S (`nix/modules/distro-apps.nix`),
+  # in the `base` group, so a person can keep one off a machine — every one
+  # is guarded by `command -v` in the shell files, which then simply do
+  # without it. ZSH IS THE EXCEPTION, and says why: it is the login shell
+  # (`users.defaultUserShell` above), and declining it would be declining to
+  # log in.
+  #
+  # The plugins ride with zsh: `.zshrc` sources them from
+  # `/run/current-system/sw/share/…`, which is why they are in
+  # `systemPackages` and not in `home.packages` — the path is then the same
+  # for every user and for a root shell.
+  ronoctua.apps = {
+    zsh = {
+      package = pkgs.zsh;
+      extraPackages = with pkgs; [
+        zsh-autosuggestions
+        zsh-syntax-highlighting
+      ];
+      essential = "the-login-shell";
+    };
+    atuin.package = pkgs.atuin;
+    starship.package = pkgs.starship;
+    fzf.package = pkgs.fzf;
+    zoxide.package = pkgs.zoxide;
+  };
+
+  # AND WHAT IS NOT A PROGRAM ANYBODY CHOOSES: bash's hooks and completions,
+  # and the devshell cache `direnv` loads.
   environment.systemPackages = with pkgs; [
-    zsh
-    zsh-autosuggestions
-    zsh-syntax-highlighting
     bash-preexec # bash has no preexec hook; atuin needs this one
-    atuin
-    starship
-    fzf
-    zoxide
     direnv
     nix-direnv
     bash-completion
@@ -140,8 +162,10 @@ in
         };
       };
 
+      # Its Home Manager half FOLLOWS THE REGISTRY: `enable` also puts the
+      # program in the person's profile, where a decline would never reach.
       programs.starship = {
-        enable = true;
+        enable = config.ronoctua.distroApps.installed.starship;
         # `.zshrc` and `.bashrc` run `starship init` themselves, last, so that
         # nothing overwrites the prompt. home-manager's own hook would run
         # earlier, and the symptom would be a prompt that sometimes reverts.
@@ -156,8 +180,9 @@ in
         };
       };
 
+      # The same, for the same reason.
       programs.atuin = {
-        enable = true;
+        enable = config.ronoctua.distroApps.installed.atuin;
         # Same reason as starship: our files call `atuin init` with
         # `--disable-up-arrow`, and two inits fight over Ctrl+R.
         enableZshIntegration = false;

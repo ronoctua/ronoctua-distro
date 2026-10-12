@@ -10,7 +10,8 @@
 //! RECORDED here like any other: adding a channel to video-metrics lets its
 //! hosts (`ronoctua_video_metrics::HOSTS`) in the same file, so the scanner's
 //! every request still takes a [`Pass`]. The repository of the belongings is
-//! the person's own address, and does not come through here.
+//! the same: typing its address lets its host here, and every fetch and push
+//! of the belongings mints a [`Pass`] for it first.
 //!
 //! # A `Pass` is the proof
 //!
@@ -204,6 +205,28 @@ fn mint(store: &Store<Consents>, host: &str) -> Result<Pass, NotLet> {
 /// [`Unkept::Unwritable`].
 pub fn let_hosts(hosts: &[&str], on: bool) -> Result<(), Unkept> {
     keep(&store(), hosts, on)
+}
+
+/// [`allows`], over the `consent.json` under `config` — the config root a
+/// door already holds and reads its other files from (the belongings'
+/// `Places::config`, which is this instance's own root, or the folder a
+/// photograph is taken over). It mints nothing: a [`Pass`] is only
+/// [`pass`]'s, over the person's own file.
+#[must_use]
+pub fn allows_under(config: &std::path::Path, host: &str) -> bool {
+    Store::<Consents>::at(Some(config.to_path_buf()), FILE)
+        .read()
+        .allows(host)
+}
+
+/// [`let_hosts`], over the `consent.json` under `config` — see
+/// [`allows_under`].
+///
+/// # Errors
+///
+/// As [`let_hosts`].
+pub fn let_hosts_under(config: &std::path::Path, hosts: &[&str], on: bool) -> Result<(), Unkept> {
+    keep(&Store::at(Some(config.to_path_buf()), FILE), hosts, on)
 }
 
 /// [`let_hosts`], over a given store.
@@ -402,6 +425,30 @@ mod tests {
             .expect("the watch heard the write");
         assert!(allows_in(&store, "lrclib.net"));
         drop(watched);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: the config root a door holds is not the file it reads and
+    /// writes — a door's consent would land in one file and be looked for
+    /// in another — or a write there forgets what the file said.
+    #[test]
+    fn a_door_reads_and_writes_the_consent_under_its_own_root() {
+        let dir = scratch("under");
+        assert!(!allows_under(&dir, "github.com"));
+        let_hosts_under(&dir, &["lrclib.net"], true).unwrap();
+        let_hosts_under(&dir, &["GitHub.com."], true).unwrap();
+        assert!(allows_under(&dir, "github.com"));
+        assert!(
+            allows_under(&dir, "lrclib.net"),
+            "the earlier consent was lost"
+        );
+        let store = store_at(Some(dir.clone()));
+        assert!(
+            pass_in(&store, "github.com").is_ok(),
+            "another file was written"
+        );
+        let_hosts_under(&dir, &["github.com"], false).unwrap();
+        assert!(!allows_under(&dir, "github.com"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

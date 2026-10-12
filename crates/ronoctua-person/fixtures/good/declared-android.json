@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "id": "android:org.fdroid.fdroid",
+      "package": "org.fdroid.fdroid",
+      "apk": "/nix/store/abcdefghijklmnopqrstuvwxyz012345-org.fdroid.fdroid_1021050.apk",
+      "version-code": 1021050,
+      "from": "person",
+      "image": "vanilla"
+    }
+  ]
+}

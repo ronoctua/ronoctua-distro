@@ -84,6 +84,26 @@ let
 
   updates = pkgs.callPackage ./sequence.nix { };
 
+  # THE PERSON'S DATA TOOL, told the machine's places (`ronoctua-person
+  # verify` reads the machine directory with this machine's `nix`, and
+  # `record` reads the machine's record) — the same table every unit that
+  # runs `ronoctua-machine` gives it (`ronoctua.machine.environment`), by
+  # `--set-default`, so nothing can disagree about which flake or which `nix`.
+  personTool =
+    pkgs.runCommand "ronoctua-person-for-the-update"
+      {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+      }
+      ''
+        makeWrapper ${config.ronoctua.person.tool}/bin/ronoctua-person $out/bin/ronoctua-person ${
+          lib.concatStringsSep " " (
+            lib.mapAttrsToList (
+              name: value: "--set-default ${name} ${lib.escapeShellArg value}"
+            ) config.ronoctua.machine.environment
+          )
+        }
+      '';
+
   runners = updates.mkScripts {
     # EVERY PACKAGE A STEP NAMES, resolved to a store path — never a bare name,
     # because a unit's `PATH` is minimal and the failure would appear far from
@@ -104,6 +124,19 @@ let
       # it names only the ones this machine has, so a reduced profile carries
       # no Waydroid through this unit.
       software = config.ronoctua.software.package;
+      # THE 2026-10-05 WAVE: the machine's life (`ronoctua-machine`, wrapped
+      # with the machine's places: migrate, apply), the person's declarations
+      # (`ronoctua-person`: verify, record) and the belongings' plain part
+      # (`ronoctua-belongings plain pull|push`) — each the EXTRACTED binary,
+      # so a unit that runs as root carries none of the desktop.
+      machine = config.ronoctua.machine.package;
+      person = personTool;
+      belongings = config.ronoctua.belongings.cli;
+      # THE 2026-10-11 WAVE: the push to the person's binary cache
+      # (`ronoctua-cachix`, EXTRACTED), wrapped by `nix/modules/binary-cache.nix`
+      # with the machine's `nix`, its record and — where a cache is named —
+      # `cachix`.
+      binary-cache = config.ronoctua.binaryCache.pusher;
     };
     wiring = {
       shell = pkgs.runtimeShell;
@@ -121,6 +154,21 @@ let
       config = configFile;
       system-unit = systemUnit;
       system-unit-rehearsal = rehearsalUnit;
+      # THE 2026-10-05 PRECONDITIONS. Mains (`systemd-ac-power`, which says
+      # yes on a machine with no battery), the kernel's power supplies, `df`
+      # for the room a rebuild wants and the machine's own Nix collecting
+      # garbage before refusing, `jq` over the machine's record for a hold,
+      # and — for the root half, which has no session — the one person whose
+      # yes to a run on battery counts, found under the runtime directories.
+      ac-power = "${pkgs.systemd}/bin/systemd-ac-power";
+      power-supplies = "/sys/class/power_supply";
+      df = "${pkgs.coreutils}/bin/df";
+      collect-garbage = "${config.nix.package}/bin/nix-collect-garbage";
+      jq = "${pkgs.jq}/bin/jq";
+      machine-state = "${config.ronoctua.machine.stateDir}/state.json";
+      id = "${pkgs.coreutils}/bin/id";
+      person = user;
+      runtime-root = "/run/user";
     };
   };
 
@@ -146,12 +194,12 @@ let
 
   # THE UNITS A STEP STARTS INSTEAD OF RUNNING A PROGRAM.
   #
-  # The rebuild is one: `nix/modules/rescue.nix` already declares the only
-  # `nixos-rebuild switch` in this repository, and a second copy here would be a
-  # second copy of `--flake /etc/nixos#<person>` to keep in step. And the trim
-  # is the other: `nix/modules/store.nix` owns the one trim of the system's
+  # The trim is one: `nix/modules/store.nix` owns the one trim of the system's
   # generations, which the boot and the memory panel start too — and its
-  # rehearsal, which this sequence's rehearsal starts in its place.
+  # rehearsal, which this sequence's rehearsal starts in its place. (The
+  # rebuild was the other until 2026-10-05; it is `ronoctua-machine apply`
+  # now, run as a CHILD of the root half so root's lock of the person's data
+  # reaches it — see the root half's unit below.)
   borrowed = lib.concatMap (
     s:
     lib.optional (s ? unit) {
@@ -234,8 +282,8 @@ in
       assertion = config.systemd.services ? "${lib.removeSuffix ".service" step.unit}";
       message =
         "ronoctua.update: the step `${step.id}` starts `${step.unit}`, which this "
-        + "machine does not have. Switch on whoever declares it (`ronoctua.rescue.enable` for "
-        + "the rebuild), or switch the step off: `ronoctua.update.steps.${step.id} = false;`.";
+        + "machine does not have. Switch on whoever declares it (`nix/modules/store.nix` for "
+        + "the trim), or switch the step off: `ronoctua.update.steps.${step.id} = false;`.";
     }) borrowed;
 
     # WHERE THE ROOT HALF LEAVES ITS REPORT.
@@ -274,7 +322,26 @@ in
         # compiles the workspace and `DefaultTimeoutStartSec` is 90 seconds.
         Type = "oneshot";
         TimeoutStartSec = "infinity";
-        ExecStart = "${runners}/libexec/ronoctua-update-system --execute";
+        # THIS RUN'S REPORT STARTS EMPTY, before anything waits: the doors
+        # read it, and the root half may wait a while for the lock below —
+        # with the last run's lines still there, they would draw that run's
+        # verdicts as this one's. `-`: a report that cannot be emptied stops
+        # nothing; the runner empties it again when it starts.
+        ExecStartPre = "-${pkgs.coreutils}/bin/truncate --size=0 ${stateDir}/system.report";
+        # UNDER ROOT'S LOCK OF THE PERSON'S DATA, for the whole half: taken
+        # by `ronoctua-person hold` and handed to the runner — and so to the
+        # verification and the apply it runs — as the standard input. The
+        # declarations the verification tried are then the ones the rebuild
+        # builds: a person's apply started meanwhile (the software centre's)
+        # waits, or hears `busy` and lands at the next apply, instead of
+        # slipping between the two.
+        #
+        # `--patient`: an apply already building when the update starts
+        # (`ronoctua-update-apply.service` holds the lock from build to
+        # switch) is waited for, said in this unit's journal, and the update
+        # runs after it. Refused as `busy` after half a minute, the whole
+        # update counted as failed while the machine was only applying.
+        ExecStart = "${personTool}/bin/ronoctua-person hold --patient -- ${runners}/libexec/ronoctua-update-system --execute";
         # The same scheduling `nix/modules/memory.nix` gives its housekeeping:
         # this competes with everything for CPU and disk, and it yields to
         # whatever the person is actually doing.

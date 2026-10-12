@@ -157,8 +157,10 @@ in
       example = [ "org.gnome.Calculator" ];
       description = ''
         Flathub application ids this machine keeps installed for the person,
-        declaratively — the line the software view's "Make it permanent" copies
-        into `host.nix`. They go to the person's own `--user` installation
+        declaratively, written by hand in `host.nix` — the software view
+        declares a program in the person's `declared.json` instead, which
+        follows them to every machine (`nix/modules/person.nix`). They go to
+        the person's own `--user` installation
         through nix-flatpak's Home Manager module (`nix/modules/flatpak.nix`),
         which adopts an app that is already installed instead of installing it
         twice.
@@ -244,5 +246,9 @@ in
       appimage-cache = lib.mkDefault config.programs.appimage.enable;
       android-apps = lib.mkDefault config.virtualisation.waydroid.enable;
     };
+
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L03 ──
+    # ── anchor: L18 ──
   };
 }

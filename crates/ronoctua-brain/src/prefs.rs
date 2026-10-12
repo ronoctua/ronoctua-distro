@@ -491,46 +491,32 @@ pub fn more_often(days: u16) -> u16 {
 }
 
 /// Reads the preferences from an explicit directory.
+///
+/// A `Store`, so a choice that will not read — a module's switch a newer
+/// distro added, a typo — costs that choice and not every one the person
+/// made: the rest is read, the repair goes into the ledger the belongings'
+/// page shows, and the store says it in the log.
 #[must_use]
 pub fn read_from(dir: &Path) -> Prefs {
-    let path = dir.join(PREFERENCES_FILE);
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Prefs::default();
-    };
-    match serde_json::from_str::<Prefs>(&raw) {
-        Ok(p) => {
-            tracing::info!(path = %path.display(), tarefas = p.tasks.len(), "the brain's preferences were read");
-            p
-        }
-        Err(e) => {
-            // LOUD, and not silent. A hand-edited file that stopped parsing
-            // means every choice the person made is back to the distro's, and
-            // the symptom would be a rebuild starting on a day they had
-            // switched it off.
-            tracing::error!(
-                path = %path.display(),
-                error = %e,
-                "the brain's preferences are unreadable; carrying on with the distro's"
-            );
-            Prefs::default()
-        }
-    }
+    let p = store_at(dir).read();
+    tracing::info!(dir = %dir.display(), tasks = p.tasks.len(), "the brain's preferences were read");
+    p
 }
 
-/// Writes the preferences into an explicit directory.
+/// `brain.json` as a [`ronoctua_store::Store`] in `dir`.
+fn store_at(dir: &Path) -> ronoctua_store::Store<Prefs> {
+    ronoctua_store::Store::at(Some(dir.to_path_buf()), PREFERENCES_FILE)
+}
+
+/// Writes the preferences into an explicit directory — pretty (a person opens
+/// this one by hand), whole and atomically, keeping what the file holds that
+/// this machine does not know.
 ///
 /// # Errors
 ///
 /// The directory cannot be created, or the file cannot be written.
 pub fn write_to(dir: &Path, p: &Prefs) -> std::io::Result<()> {
-    // PRETTY, and the only file in this crate that is: a person opens this one
-    // by hand. The journal is machine-written and stays compact.
-    let text = serde_json::to_string_pretty(p).map_err(std::io::Error::other)?;
-    // ATOMICALLY, like every other store in this tree. It was a plain
-    // `fs::write` — this crate already linked `ronoctua-xdg` for the roots and
-    // simply did not use the third function in it — so a kill or a full disk
-    // in the middle left the person with half of their own preferences.
-    ronoctua_xdg::write_atomically(dir, PREFERENCES_FILE, text.as_bytes())
+    store_at(dir).write(p)
 }
 
 #[cfg(test)]

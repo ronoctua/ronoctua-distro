@@ -79,10 +79,15 @@ pub fn cpu_pressure(p: &Places) -> Option<ronoctua_protocol::Pressure> {
 /// What decides is the SUPPLY's own `status`, not `AC/online`: a laptop docked
 /// to a charger that is not charging still reports `Discharging`, and that is
 /// the state a long build must not start in.
+///
+/// THE MACHINE'S BATTERIES ONLY ([`machine_batteries`]): a wireless mouse or
+/// a headset is a `Battery` too, always `Discharging`, and counted it held
+/// every build of a desktop with a mouse for ever — on a machine that has no
+/// battery at all. `systemd-ac-power` skips them the same way.
 #[must_use]
 pub fn on_battery(p: &Places) -> Option<bool> {
     let mut found = None;
-    for path in battery_supplies(p) {
+    for path in machine_batteries(p) {
         let Some(status) = read(&path.join("status")) else {
             continue;
         };
@@ -94,6 +99,45 @@ pub fn on_battery(p: &Places) -> Option<bool> {
         found = Some(false);
     }
     found
+}
+
+/// How charged the batteries that feed the machine are, in per cent.
+///
+/// THE MACHINE'S OWN, averaged: a laptop with two counts both, and a mouse's
+/// or a headset's battery — the kernel lists those too, with
+/// `scope=Device` — counts for nothing. `None` when no battery reports a
+/// capacity: a desktop, a virtual machine — which is not "empty".
+///
+/// Who asks: the update, which neither compiles a system on a battery below
+/// its floor nor starts one by hand there without asking.
+#[must_use]
+pub fn battery_percent(p: &Places) -> Option<u8> {
+    let (mut sum, mut count) = (0_u32, 0_u32);
+    for path in machine_batteries(p) {
+        let Some(share) = read(&path.join("capacity")).and_then(|c| c.trim().parse::<u8>().ok())
+        else {
+            continue;
+        };
+        sum += u32::from(share.min(100));
+        count += 1;
+    }
+    u8::try_from(sum.checked_div(count)?).ok()
+}
+
+/// The batteries that feed the MACHINE: every [`battery_supplies`] but the
+/// ones the kernel scopes to a device (`scope=Device` — a mouse, a keyboard,
+/// a headset, a phone over USB).
+///
+/// ONE FILTER for both readings that ask about the machine's battery —
+/// [`on_battery`] and [`battery_percent`] — so "is it discharging" and "how
+/// charged is it" are always asked of the same supplies: asked of two sets,
+/// a desktop with a mouse read as discharging and as having no charge to
+/// speak of, and a run waited for a charger it was plugged into.
+#[must_use]
+pub fn machine_batteries(p: &Places) -> Vec<std::path::PathBuf> {
+    let mut out = battery_supplies(p);
+    out.retain(|path| read(&path.join("scope")).as_deref().map(str::trim) != Some("Device"));
+    out
 }
 
 /// Every supply under `class/power_supply` whose `type` is `Battery`, as the
@@ -447,6 +491,76 @@ mod tests {
 
         std::fs::write(bat.join("status"), "Discharging\n").expect("status");
         assert_eq!(on_battery(&places), Some(true));
+    }
+
+    /// A MOUSE IS NOT THE MACHINE ON BATTERY: a desktop whose only battery is
+    /// a wireless mouse's — `scope=Device`, always discharging — has no
+    /// battery to be on, and a laptop charging with that mouse beside it is
+    /// on mains. Both readings ask the same supplies.
+    #[test]
+    fn a_mouse_is_never_the_machine_on_battery() {
+        let (dir, places) = fake();
+        let supplies = dir.path().join("sys/class/power_supply");
+        let put = |name: &str, status: &str, capacity: &str, scope: Option<&str>| {
+            let at = supplies.join(name);
+            std::fs::create_dir_all(&at).expect("mkdir");
+            std::fs::write(at.join("type"), "Battery\n").expect("type");
+            std::fs::write(at.join("status"), status).expect("status");
+            std::fs::write(at.join("capacity"), capacity).expect("capacity");
+            if let Some(scope) = scope {
+                std::fs::write(at.join("scope"), scope).expect("scope");
+            }
+        };
+        put("hidpp_battery_0", "Discharging\n", "5\n", Some("Device\n"));
+        assert_eq!(
+            on_battery(&places),
+            None,
+            "the mouse made a desktop a laptop"
+        );
+        assert_eq!(battery_percent(&places), None);
+        assert!(machine_batteries(&places).is_empty());
+
+        put("BAT0", "Charging\n", "30\n", Some("System\n"));
+        assert_eq!(
+            on_battery(&places),
+            Some(false),
+            "a laptop charging beside a mouse read as on battery"
+        );
+        assert_eq!(battery_percent(&places), Some(30));
+
+        put("BAT0", "Discharging\n", "30\n", Some("System\n"));
+        assert_eq!(on_battery(&places), Some(true));
+    }
+
+    /// THE MACHINE'S BATTERIES, AVERAGED, AND A MOUSE'S NOT AT ALL: a laptop
+    /// with two counts both, and a headset at 5 % must not make the update
+    /// refuse a machine at 90 %.
+    #[test]
+    fn the_charge_is_the_machines_own_batteries_averaged() {
+        let (dir, places) = fake();
+        assert_eq!(battery_percent(&places), None, "a desktop has no charge");
+        let supplies = dir.path().join("sys/class/power_supply");
+        let put = |name: &str, capacity: &str, scope: Option<&str>| {
+            let at = supplies.join(name);
+            std::fs::create_dir_all(&at).expect("mkdir");
+            std::fs::write(at.join("type"), "Battery\n").expect("type");
+            std::fs::write(at.join("capacity"), capacity).expect("capacity");
+            if let Some(scope) = scope {
+                std::fs::write(at.join("scope"), scope).expect("scope");
+            }
+        };
+        put("BAT0", "80\n", Some("System\n"));
+        assert_eq!(battery_percent(&places), Some(80));
+        put("BAT1", "40\n", None);
+        assert_eq!(battery_percent(&places), Some(60), "two are averaged");
+        put("hidpp_battery_0", "5\n", Some("Device\n"));
+        assert_eq!(battery_percent(&places), Some(60), "the mouse counted");
+        put("BAT2", "nonsense\n", None);
+        assert_eq!(
+            battery_percent(&places),
+            Some(60),
+            "a capacity that is no number counted"
+        );
     }
 
     #[test]

@@ -200,6 +200,14 @@ let
       # tiny squashfs): its tests read them with `include_bytes!` and
       # `std::fs::read`, and like the `.wgsl` above they would only fail HERE.
       (src + "/crates/ronoctua-software/tests/fixtures")
+      # The person's data fixtures (`ronoctua-person`): the golden files and
+      # the person's brain-module id table, which its tests `include_str!` —
+      # the `.wgsl` trap again, which only this build would show.
+      (src + "/crates/ronoctua-person/fixtures")
+      # The web apps' id table (`ronoctua-software/fixtures`), which the
+      # crate's test `include_str!`s and `web-app-ids-agree` reads from Nix:
+      # one file, both sides — and the `.wgsl` trap a third time.
+      (src + "/crates/ronoctua-software/fixtures")
     ];
   };
 
@@ -263,7 +271,21 @@ let
       # THE PASSWORD CHECK of `ronoctua-pam`, which links libpam and talks to it
       # through its conversation callback; the password never crosses a process.
       pkgs.linux-pam
+      # ── anchor: L02 ──
     ];
+    # ── anchor: L02 ──
+    # THE TLS STACK'S C, PINNED TO ONE WAY OF BUILDING IT. `aws-lc-sys`
+    # (under rustls and our own digests, `Cargo.toml`) picks its builder by
+    # what it finds: its `cc` one with the pregenerated bindings when nothing
+    # asks for bindgen, cmake otherwise — and, before either, an AWS-LC it
+    # can DETECT on the system. Both are said here, so the layer builds the
+    # same everywhere and a builder that cannot is a loud failure rather than
+    # a different library: `cc` (no cmake, no Go, no clang in this closure),
+    # and never a system copy. The release profile's `-ffile-prefix-map`,
+    # which that builder adds itself, is what keeps the vendored source's
+    # store path out of the binaries.
+    AWS_LC_SYS_CMAKE_BUILDER = "0";
+    AWS_LC_SYS_USE_SYSTEM = "0";
   };
 
   # WHAT ONLY OUR OWN CRATES READ.
@@ -645,9 +667,9 @@ let
     RONOCTUA_GIT_ASKPASS = "${
       import ./git-askpass.nix { inherit pkgs rustToolchain; }
     }/bin/ronoctua-git-askpass";
+    # `RONOCTUA_UNRAR` is NOT here: it is in `atRunTime` (see there).
     inherit (import ./archive-tools.nix { inherit pkgs; })
       RONOCTUA_7ZZ
-      RONOCTUA_UNRAR
       RONOCTUA_BSDTAR
       ;
 
@@ -659,6 +681,67 @@ let
     # openssh is already in the closure through it.
     RONOCTUA_SSH_KEYGEN = "${pkgs.openssh}/bin/ssh-keygen";
 
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L01 ──
+    # ── anchor: L02 ──
+    # THE BELONGINGS' HTTPS, POST-QUANTUM ONLY: the OpenSSL configuration
+    # `ronoctua-git` runs git under for a post-quantum-only token — the hybrid
+    # ML-KEM groups alone (`nix/pq-tls.nix`). A few hundred bytes, baked like
+    # `RONOCTUA_GIT` so that every program linking the crate finds it.
+    RONOCTUA_GIT_PQ_TLS = "${import ./pq-tls.nix { inherit pkgs; }}";
+    # ── anchor: L03 ──
+    # THE MACHINE DIRECTORY, by its one name (`nix/machine.nix`,
+    # `machine-dir-has-one-name`): the rescue console's papers, the person's
+    # files and the machine's life all read it from here. A value and not a
+    # store path, so it costs no reference — and it is in `generated` because
+    # `env!` needs it at compile time, where a missing value is a refusal to
+    # build rather than a guess.
+    RONOCTUA_MACHINE_DIR = (import ./machine.nix).machineDir;
+    # ── anchor: L05 ──
+    # ── anchor: L06 ──
+    # ── anchor: L08 ──
+    # ── anchor: L10 ──
+    # THE SECURITY KEY'S REGISTRATION (`ronoctua_security::u2f::Enrolment`):
+    # `pamu2fcfg`, run as the person from the screen, by store path. The
+    # module that trusts what it makes (`pam_u2f`) is the same package.
+    RONOCTUA_PAMU2FCFG = "${pkgs.pam_u2f}/bin/pamu2fcfg";
+    # ── anchor: L11 ──
+    # THE PERSON'S BRAIN MODULES (`my-…`), when this build has any: the
+    # folder their `module.rs` is read from, which the brain crate's
+    # `build.rs` compares with the table's `person` lines. It rides on the
+    # table (`brainModulesRs.personModulesDir`), so the two are one copy.
+    # ABSENT, not empty, for a build with none — the distro's: the name is
+    # `null` then, and Nix leaves the attribute out.
+    ${
+      if (brainModulesRs.personModulesDir or null) == null then
+        null
+      else
+        "RONOCTUA_BRAIN_PERSON_MODULES_DIR"
+    } =
+      "${brainModulesRs.personModulesDir}";
+    # ── anchor: L12 ──
+    # ── anchor: L13 ──
+    # ── anchor: L14 ──
+    # THE LLM CLI'S TWO PROGRAMS, by store path (`ronoctua-llm`): the shell the
+    # person's own status line is chained through — Claude Code runs it in a
+    # shell, so the chain must too — and the `env` a session of an account is
+    # opened with. Both already in every closure (bash, coreutils).
+    RONOCTUA_LLM_SH = "${pkgs.bash}/bin/bash";
+    RONOCTUA_LLM_ENV = "${coreutils}/bin/env";
+    # ── anchor: L15 ──
+    # THE DISTRO'S OWN REPOSITORY, for `LEADER / c` (`dev-clone`): what the
+    # footer clones when somebody wants to work on the distro from it. A value
+    # and not a store path — it costs no reference — and in `generated`, next
+    # to the release this build came from, rather than a literal in a crate.
+    RONOCTUA_DISTRO_REPOSITORY = "https://github.com/ronoctua/ronoctua-distro.git";
+    # ── anchor: L17 ──
+    # ── anchor: L22 ──
+    # WHAT THIS GENERATION SHIPS — the versions the security centre's
+    # post-quantum section reads (`ronoctua_security::quantum::built`) and
+    # whether Syncthing's source narrows TLS's curves (`nix/pq-facts.nix`). A
+    # few hundred bytes of JSON naming no store path; it changes when nixpkgs
+    # moves, as the workspace does anyway.
+    RONOCTUA_PQ_FACTS = "${import ./pq-facts.nix { inherit pkgs; }}";
   };
 
   # What compiles OUR code needs both halves.
@@ -755,6 +838,18 @@ let
     # Absence is a refusal the icons app draws (`icons-why-no-variable`), not an
     # error. `iconset-is-at-run-time` holds it here.
     RONOCTUA_ICONSET = "${iconset}";
+
+    # UNRAR, AT RUN TIME AND NOT IN `generated`, because it is UNFREE: baked,
+    # its store path was a reference of the workspace, and `nix run .#release`
+    # never pushes to the public cache what refers to an unfree program — so
+    # the workspace, the most expensive build there is, would never be in the
+    # cache, and every machine and every installation would compile it. Set by
+    # the wrapper here, by the queue's unit (`nix/modules/transfers.nix`) and
+    # exported by the devshell and the nested loop; the system carries unrar
+    # anyway (`nix/modules/archives.nix`), so no closure grows.
+    # `release-cache-holds-only-free-builds` refuses an unfree program in
+    # `generated`.
+    inherit (import ./archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
 
   };
 
@@ -1226,6 +1321,143 @@ rec {
     patchelf --shrink-rpath $out/bin/ronoctua-belongings
   '';
 
+  # THE 2026-10-05 WAVE'S EXTRACTED BINARIES (`seal`, `machine`, the person's
+  # applier, the private vault's and the stick's root helpers, the Incus
+  # job, the LLM CLI): one region per package, after its anchor.
+  # ── anchor: L01 ──
+  # THE SEALER, extracted for the belongings' reason: the queue runs it for
+  # every `Work::Seal`, and it links `age` and the X-Wing pieces, which stay
+  # out of the queue's daemon (it links `ronoctua-pq` without features) and
+  # out of the footer. Its `[[bin]]` requires `cli`, a DEFAULT feature of
+  # `ronoctua-pq`; the day the default goes, the refusal below says why
+  # instead of `cp`.
+  seal = pkgs.runCommand "ronoctua-seal" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    if [ ! -x ${workspace}/bin/ronoctua-seal ]; then
+      echo "the workspace built no ronoctua-seal: its [[bin]] requires the" >&2
+      echo "feature cli, and no member of the build enabled it" >&2
+      exit 1
+    fi
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-seal $out/bin/
+    chmod +w $out/bin/ronoctua-seal
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-seal
+  '';
+
+  # ── anchor: L05 ──
+  # THE MACHINE'S LIFE, extracted for the person's applier's reason, and as
+  # sharp: `ronoctua-machine` runs as root on every update, every rescue
+  # rebuild and every boot (`ronoctua-boot-bless.service`). It links
+  # `serde`, `rustix` and the person crate's schemas and lock, nothing of the
+  # desktop. Its programs (`nix`, `bootctl`) come from the units' environment
+  # (`ronoctua.machine.environment`), never baked here: a store path in the
+  # compilation would be a reference of the whole workspace.
+  machine = pkgs.runCommand "ronoctua-machine" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    if [ ! -x ${workspace}/bin/ronoctua-machine ]; then
+      echo "the workspace built no ronoctua-machine: its [[bin]] is in" >&2
+      echo "crates/ronoctua-machine, and the build did not reach it" >&2
+      exit 1
+    fi
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-machine $out/bin/
+    chmod +w $out/bin/ronoctua-machine
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-machine
+  '';
+  # ── anchor: L06 ──
+  # THE PERSON'S ROOT HALF, extracted for the reason the files' helper gives,
+  # and the sharpest version of it: `ronoctua-person apply` runs as root on
+  # every declaration, `approve` behind the sudo door, `verify` in the
+  # update. A `[[bin]]` of `ronoctua-person` (feature `apply`, a DEFAULT one,
+  # so the workspace build makes it): it links `serde`, `rustix` and the
+  # crate's own schemas. The refusal says why when the binary is not there,
+  # instead of `cp`.
+  person = pkgs.runCommand "ronoctua-person" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    if [ ! -x ${workspace}/bin/ronoctua-person ]; then
+      echo "the workspace built no ronoctua-person: its [[bin]] requires the" >&2
+      echo "feature apply, and no member of the build enabled it" >&2
+      exit 1
+    fi
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-person $out/bin/
+    chmod +w $out/bin/ronoctua-person
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-person
+  '';
+  # ── anchor: L12 ──
+  # THE /private VAULT'S ROOT SIDE, extracted for the security helper's
+  # reason: three units run it as root (a request, the sleep hook, the boot's
+  # status), and the whole workspace would put the renderer, wgpu and the wasm
+  # runtime there. Its `[[bin]]` links `ronoctua-private`, serde and rustix,
+  # and cites no store path: the programs it runs (`cryptsetup`, `losetup`,
+  # `systemd-cryptenroll`…) reach it by its units' environment
+  # (`nix/modules/private.nix`).
+  privateRoot = pkgs.runCommand "ronoctua-private-root" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-private-root $out/bin/
+    chmod +w $out/bin/ronoctua-private-root
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-private-root
+  '';
+  # ── anchor: L13 ──
+  # THE QUEUE'S CHILD FOR `Work::Incus`, extracted for the belongings CLI's
+  # reason: the queue's source names only the job's wire (`ronoctua-incus`
+  # without features), and the daemon's client — the socket, the WebSocket,
+  # the consent file — is this binary's work. (The workspace build unifies
+  # features, so the queue is compiled against the whole crate; it calls
+  # none of the client.) The unit gets its path as `RONOCTUA_INCUS_JOB` from
+  # `nix/modules/incus.nix`, where Incus is on. Its `[[bin]]` requires
+  # `cli`, a DEFAULT feature; the queue takes the defaults off by name, and
+  # the refusal below says so if nobody turns them on.
+  incusJob = pkgs.runCommand "ronoctua-incus-job" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    if [ ! -x ${workspace}/bin/ronoctua-incus-job ]; then
+      echo "the workspace built no ronoctua-incus-job: its [[bin]] requires the" >&2
+      echo "feature cli, and no member of the build enabled it" >&2
+      exit 1
+    fi
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-incus-job $out/bin/
+    chmod +w $out/bin/ronoctua-incus-job
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-incus-job
+  '';
+  # ── anchor: L14 ──
+  # THE LLM CLI (`ronoctua-llm`), extracted for the belongings' reason and one
+  # of its own: Claude Code runs its `statusline` after every answer, from
+  # `/run/current-system/sw/bin` (a `settings.json` outlives a generation), and
+  # the usage unit runs its `refresh`. Its closure is TLS, serde and bash —
+  # never the desktop the workspace's rpath would bring.
+  llm = pkgs.runCommand "ronoctua-llm" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-llm $out/bin/
+    chmod +w $out/bin/ronoctua-llm
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-llm
+  '';
+  # THE PUSH TO THE PERSON'S BINARY CACHE (`ronoctua-cachix`), extracted for
+  # the belongings' reason: the update runs it after every switch, and its
+  # closure is serde and the consent's file — never the desktop. It cites no
+  # store path: `cachix` and the machine's `nix` reach it by the wrapper
+  # `nix/modules/binary-cache.nix` puts around it.
+  cachix = pkgs.runCommand "ronoctua-cachix" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-cachix $out/bin/
+    chmod +w $out/bin/ronoctua-cachix
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-cachix
+  '';
+  # ── anchor: L17 ──
+  # THE INSTALLER STICK'S ROOT WRITER, extracted for the security helper's
+  # reason and a sharper one: it writes a whole drive as root, and its unit
+  # must carry this crate and nothing of the desktop (`stick-root-is-narrow`).
+  stickWrite = pkgs.runCommand "ronoctua-stick-write" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
+    mkdir -p $out/bin
+    cp ${workspace}/bin/ronoctua-stick-write $out/bin/
+    chmod +w $out/bin/ronoctua-stick-write
+    # The graphics rpath belongs to the footer; this program opens no window.
+    patchelf --shrink-rpath $out/bin/ronoctua-stick-write
+  '';
+
   # Tests. A separate derivation so it can say WHAT broke.
   #
   # AND THE FIVE PROGRAMS, which is a defect being closed and not a nicety.
@@ -1329,6 +1561,20 @@ rec {
         RONOCTUA_BSDTAR
         ;
 
+      # ── anchor: L01 ──
+      # ── anchor: L02 ──
+      # The post-quantum-only TLS of git, read at run time as a unit would.
+      RONOCTUA_GIT_PQ_TLS = "${import ./pq-tls.nix { inherit pkgs; }}";
+      # ── anchor: L06 ──
+      # ── anchor: L07 ──
+      # ── anchor: L08 ──
+      # ── anchor: L09 ──
+      # ── anchor: L10 ──
+      # ── anchor: L12 ──
+      # ── anchor: L13 ──
+      # ── anchor: L14 ──
+      # ── anchor: L17 ──
+      # ── anchor: L22 ──
     }
   );
 

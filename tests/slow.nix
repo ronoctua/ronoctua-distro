@@ -41,6 +41,10 @@
   # The two whole systems side by side, to compare what goes into each profile.
   # `full` carries Android Studio: 1.47 GB of download the first time.
   "profile-minimal-closes"
+  # The two profiles' `system.path`, built to read the launcher entries every
+  # program ships — the same weight as the line above, which builds the
+  # whole system the path is part of.
+  "distro-apps-are-registered"
   # The ISO, measured at 3712 MiB. It has no ceiling any more — see the
   # check itself — but building the image is still building an installation.
   "iso-is-measured"
@@ -133,9 +137,10 @@
   "persist-home-vm"
 
   # `security-vm` meets none of the four criteria: three small nodes built
-  # from one module, no installation, no disk, no reboot (the sleep hook is
-  # started, never slept), no TPM, one compilation. It stays in `.#most`; its
-  # time is to be measured the first time the battery runs it.
+  # from one module, no installation, no disk, no reboot (the boot's look at
+  # the sudo window is started, never booted), no TPM, one compilation. It
+  # stays in `.#most`; its time is to be measured the first time the battery
+  # runs it.
 
   # THE RESIZER, IN A COMPOSITOR: a VM of its own for one tool of the
   # developer's, which the everyday battery has no reason to pay for.
@@ -171,4 +176,20 @@
   # workspace every VM test links, `appimage-run` and Flatpak. MEASURED with
   # `--rebuild`, the workspace already built: 35 s, the script 26.5 s — inside
   # the band of the battery's other VMs.
+
+  # ---------------------------------------------------------------
+  # THE 2026-10-05 WAVE — each package's VM tests that build an
+  # installation (or reboot, or emulate a TPM), after its anchor.
+  # ---------------------------------------------------------------
+  # ── anchor: L05 ──
+  # THE BOOT TRIAL ON A MACHINE THAT BOOTS LIKE AN INSTALLED ONE: a disk image
+  # with systemd-boot, EFI variables that persist, and three reboots — one of
+  # them into a system that panics (criterion 2).
+  "boot-trial-falls-back"
+  # ── anchor: L10 ──
+  # ── anchor: L12 ──
+  # ── anchor: L13 ──
+  # ── anchor: L17 ──
+  # ── anchor: L19 ──
+  # ── anchor: L20 ──
 ]

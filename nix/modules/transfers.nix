@@ -261,7 +261,14 @@ in
         # the minter's own (`potProvider.environment`, `nix/pot-provider.nix`):
         # where its plugin is is a fact of its layout, and a unit that spelled
         # it once pointed one level too deep.
-        // lib.optionalAttrs (cfg.poToken == "on-demand") ronoctua.potProvider.environment;
+        // lib.optionalAttrs (cfg.poToken == "on-demand") ronoctua.potProvider.environment
+        # WHERE unrar IS, read at run time and never baked (`atRunTime` in
+        # `nix/rust.nix`): it is unfree, and baked into the workspace it kept
+        # the workspace out of the public binary cache. The footer gets it
+        # from the shell's wrapper; the queue runs the bare binary.
+        // {
+          inherit (import ../archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
+        };
       serviceConfig = {
         ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";
         Restart = "on-failure";
@@ -283,5 +290,10 @@ in
         TimeoutStopSec = 5;
       };
     };
+
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L13 ──
+    # ── anchor: L17 ──
+    # ── anchor: L22 ──
   };
 }

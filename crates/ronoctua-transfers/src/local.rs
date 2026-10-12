@@ -213,7 +213,10 @@ fn weigh(work: &Work, switch: &Arc<Control>) -> Result<u64> {
         | Work::Software { .. }
         | Work::Scan { .. }
         | Work::Container { .. }
-        | Work::Belongings { .. } => {
+        | Work::Belongings { .. }
+        | Work::Seal { .. }
+        | Work::Incus { .. }
+        | Work::Stick { .. } => {
             anyhow::bail!("a job of another engine handed to the local engine")
         }
     })
@@ -287,7 +290,10 @@ fn carry_out(work: &Work, w: &mut Watch<'_>) -> Result<Option<u64>> {
         | Work::Software { .. }
         | Work::Scan { .. }
         | Work::Container { .. }
-        | Work::Belongings { .. } => {
+        | Work::Belongings { .. }
+        | Work::Seal { .. }
+        | Work::Incus { .. }
+        | Work::Stick { .. } => {
             anyhow::bail!("a job of another engine handed to the local engine")
         }
     }

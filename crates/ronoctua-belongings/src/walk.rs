@@ -1,9 +1,9 @@
 //! This machine's side (feature `crypt`): every path it keeps, read.
 //!
-//! The walk starts at every root of what is kept — the trees, the files, and
-//! the folders and files a person added on any of their machines (the
-//! index's roots) — and asks [`crate::kept::kept_here`] about each path it
-//! meets. Links are read as links (their target is what is kept), never
+//! The walk starts at every root of what is kept — the trees, the files, the
+//! targets, and the folders and files a person added on any of their
+//! machines (the index's roots), all read by [`Scope`] alone — and asks the
+//! scope ([`Scope::kept_here`]) about each path it meets. Links are read as links (their target is what is kept), never
 //! followed; a socket or a pipe is not a file of anybody's. A file — or a
 //! FOLDER — that cannot be read is UNREADABLE and not missing: the merge
 //! leaves it, and everything under it, where it is on both sides, instead of
@@ -16,9 +16,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
 use crate::kept;
-use crate::places::{Places, Root, covers};
+use crate::places::{Places, Root};
 use crate::plan::{Kind, Side};
-use crate::prefs::Belongings;
+use crate::scope::{Met, Scope};
 
 /// What the walk found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -27,6 +27,14 @@ pub struct Found {
     pub files: BTreeMap<String, Side>,
     /// The paths kept here that could not be read.
     pub unreadable: BTreeSet<String>,
+    // ── anchor: L07 ──
+    /// The paths the rules keep that are NEVER kept for what they are, with
+    /// the reason's id ([`crate::sift`]): a link into the system's store, the
+    /// access key under another name. Left alone on both sides by the merge.
+    pub never: BTreeMap<String, &'static str>,
+    // ── anchor: L09 ──
+    // ── anchor: L10 ──
+    // ── anchor: L21 ──
 }
 
 /// The SHA-256 of what `from` gives, hexadecimal — streamed.
@@ -35,7 +43,7 @@ pub struct Found {
 ///
 /// A read failed.
 pub fn sha256_of(from: &mut dyn std::io::Read) -> std::io::Result<String> {
-    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut context = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
     let mut buffer = [0u8; 64 * 1024];
     loop {
         let n = from.read(&mut buffer)?;
@@ -97,105 +105,44 @@ pub fn side_of(path: &Path) -> std::io::Result<Option<Side>> {
     }))
 }
 
-/// Walks every path this machine keeps. `added_elsewhere` are the roots a
-/// person added on any machine (`crate::merge::roots_after`); `extra_roots`
-/// the paths the walk must also look at (the base's, so a deletion here is
-/// seen).
+/// Walks every path this machine keeps, from the [`Scope`]'s roots — the
+/// walk the listing of what goes to the repository is made of too
+/// (`crate::inventory`): both meet the same paths ([`Scope::meet`]), and
+/// this one reads (hashes) what the scope keeps.
 #[must_use]
-pub fn walk(
-    places: &Places,
-    prefs: &Belongings,
-    added_elsewhere: &BTreeSet<String>,
-    extra_roots: &BTreeSet<String>,
-) -> Found {
-    let mut roots: BTreeSet<String> = kept::TREES
-        .iter()
-        .map(|t| t.path.to_owned())
-        .chain(kept::FILES.iter().map(|f| f.path.to_owned()))
-        .chain(prefs.extra.iter().cloned())
-        .chain(added_elsewhere.iter().cloned())
-        .chain(extra_roots.iter().cloned())
-        .collect();
-    // A root under another is walked with it.
-    let all: Vec<String> = roots.iter().cloned().collect();
-    roots.retain(|r| !all.iter().any(|o| o != r && covers(o, r)));
+pub fn walk(scope: &Scope, places: &Places) -> Found {
     let mut found = Found::default();
-    for root in &roots {
-        let Some(at) = places.resolve(root) else {
-            continue;
-        };
-        visit(places, prefs, added_elsewhere, root, &at, &mut found, 0);
-    }
-    found
-}
-
-/// How deep a walk goes: a loop of bind mounts must end somewhere.
-const DEEPEST: usize = 64;
-
-fn visit(
-    places: &Places,
-    prefs: &Belongings,
-    added_elsewhere: &BTreeSet<String>,
-    logical: &str,
-    at: &Path,
-    found: &mut Found,
-    depth: usize,
-) {
-    // A PATH INSIDE ANOTHER ROOT is that root's: `home/.config/ronoctua` is
-    // `config`, walked as itself.
-    if places.logical_of(at).as_deref() != Some(logical) {
-        return;
-    }
-    let Ok(meta) = std::fs::symlink_metadata(at) else {
-        return;
-    };
-    let elsewhere = added_elsewhere.iter().any(|a| covers(a, logical));
-    if meta.is_dir() {
-        if depth >= DEEPEST {
-            return;
-        }
-        let Ok(entries) = std::fs::read_dir(at) else {
-            // A FOLDER THAT CANNOT BE READ hides what is in it: the merge
-            // takes it for every path under it.
-            if kept::kept_here(logical, prefs, elsewhere) {
+    scope.meet(places, &mut |logical, at, met| match met {
+        // A FOLDER THAT CANNOT BE READ hides what is in it: the merge takes
+        // it for every path under it.
+        Met::Hidden => {
+            if scope.kept_here(logical) {
                 found.unreadable.insert(logical.to_owned());
             }
-            return;
-        };
-        let mut names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
-        names.sort();
-        for name in names {
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let child = format!("{logical}/{name}");
-            if !crate::places::is_logical(&child) {
-                continue;
+        }
+        Met::Entry(_) => {
+            if !scope.kept_here(logical) {
+                return;
             }
-            visit(
-                places,
-                prefs,
-                added_elsewhere,
-                &child,
-                &at.join(name),
-                found,
-                depth + 1,
-            );
+            match side_of(at) {
+                Ok(Some(mut side)) => {
+                    // A PRIVATE TARGET'S FILE is read with its owner's bits
+                    // alone: group and other never travel
+                    // (`kept::kept_mode`).
+                    if side.kind == Kind::File {
+                        side.mode = kept::kept_mode(logical, side.mode);
+                    }
+                    found.files.insert(logical.to_owned(), side);
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    found.unreadable.insert(logical.to_owned());
+                }
+            }
         }
-        return;
-    }
-    if !kept::kept_here(logical, prefs, elsewhere) {
-        return;
-    }
-    match side_of(at) {
-        Ok(Some(side)) => {
-            found.files.insert(logical.to_owned(), side);
-        }
-        Ok(None) => {}
-        Err(_) => {
-            found.unreadable.insert(logical.to_owned());
-        }
-    }
+    });
+    crate::sift::sift(places, &mut found);
+    found
 }
 
 /// Reads the first `most` bytes of a file, for the text test.
@@ -225,6 +172,7 @@ pub fn root_of(logical: &str) -> Option<Root> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prefs::Belongings;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!(
@@ -253,12 +201,12 @@ mod tests {
 
         let mut prefs = Belongings::default();
         let none = BTreeSet::new();
-        let found = walk(&p, &prefs, &none, &none);
+        let found = walk(&crate::scope::Scope::for_sync(&prefs, &none, &none), &p);
         let paths: Vec<&str> = found.files.keys().map(String::as_str).collect();
         assert_eq!(paths, ["config/player-keys/tmdb", "config/theme.json"]);
 
         prefs.extra.push("home/notes".to_owned());
-        let found = walk(&p, &prefs, &none, &none);
+        let found = walk(&crate::scope::Scope::for_sync(&prefs, &none, &none), &p);
         let link = &found.files["home/notes/b.md"];
         assert_eq!(link.kind, Kind::Link);
         assert_eq!(link.size_bytes, 4, "the target's length, never the file's");
@@ -269,7 +217,7 @@ mod tests {
         );
         // ADDING THE HOME ITSELF does not walk the configuration twice.
         prefs.extra.push("home".to_owned());
-        let found = walk(&p, &prefs, &none, &none);
+        let found = walk(&crate::scope::Scope::for_sync(&prefs, &none, &none), &p);
         assert!(!found.files.keys().any(|k| k.starts_with("home/.config")));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -283,7 +231,10 @@ mod tests {
         std::fs::write(&locked, b"{}").unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
         let none = BTreeSet::new();
-        let found = walk(&p, &Belongings::default(), &none, &none);
+        let found = walk(
+            &crate::scope::Scope::for_sync(&Belongings::default(), &none, &none),
+            &p,
+        );
         // ROOT READS EVERYTHING: the test says so instead of passing blind.
         if std::fs::File::open(&locked).is_err() {
             assert!(found.unreadable.contains("config/locked.json"));
@@ -306,7 +257,10 @@ mod tests {
         std::fs::write(studio.join("scenes.json"), b"{}").unwrap();
         std::fs::set_permissions(&studio, std::fs::Permissions::from_mode(0o000)).unwrap();
         let none = BTreeSet::new();
-        let found = walk(&p, &Belongings::default(), &none, &none);
+        let found = walk(
+            &crate::scope::Scope::for_sync(&Belongings::default(), &none, &none),
+            &p,
+        );
         if std::fs::read_dir(&studio).is_err() {
             assert!(found.unreadable.contains("config/studio"), "{found:?}");
         } else {

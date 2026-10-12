@@ -115,7 +115,9 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
         // A watch and not a clock of its own, and that is the whole point: with
         // several of these windows open, a timer would be one wake-up per second per
         // window for ever, while a watch that nobody touches costs nothing at all.
-        let notice = match ronoctua_files::notice::Notice::watching(store.as_deref(), {
+        // `for_listing`: the /private vault's status too, which says what the
+        // listing may read and how the vault's row is drawn.
+        let notice = match ronoctua_files::notice::Notice::for_listing(store.as_deref(), {
             let s = sender.clone();
             move || s.send(crate::files::Report::Stirred).is_ok()
         }) {
@@ -274,7 +276,7 @@ pub fn host_it(start: Option<&std::path::Path>) -> Result<()> {
                 let s = sender_for_git;
                 move |line| s.send(crate::files::Report::Git(Box::new(line))).is_ok()
             })),
-            root_waiting: None,
+            vault: Vault::default(),
         };
         // POINTED AT WHERE THE VIEW ALREADY IS. `View::at` has read the directory
         // by now, so what this arms is the watch for everything that happens NEXT.
@@ -384,10 +386,27 @@ pub(crate) struct Files {
     /// photograph, which reads the line on its own thread
     /// ([`Files::inspect_now`]).
     git: Option<crate::git_line::Keeper>,
-    /// A change only root may make, waiting for the password the sudo door
-    /// asked for — asked on this window's line
-    /// ([`crate::files::ROOT_PASSWORD`]).
-    root_waiting: Option<crate::files::Root>,
+    /// THE /private VAULT'S `m` AND `l`, run in THIS window ([`Vault`]).
+    vault: Vault,
+}
+
+/// The `/private` vault's flow in the file manager's window — `m` and `l` on
+/// its sidebar row. The security centre's own view asks the questions and
+/// keeps the work (`crate::security`, as the footer's leader keys do), and
+/// this window asks them on ITS line and says on it what came back: a door
+/// never sends the person to another one.
+#[derive(Default)]
+struct Vault {
+    /// The questions and the work in flight.
+    view: crate::security::View,
+    /// The vault's part of the scene, read at each gesture.
+    scene: crate::security::Scene,
+    /// How the work's answers come back to this loop — hung at the first
+    /// work, and only then.
+    send: Option<channel::Sender<crate::security::Came>>,
+    /// The status the camera planted (`--private`): read in place of the
+    /// file, and no work is ever started from it.
+    planted: Option<Option<ronoctua_private::Status>>,
 }
 
 /// What the pointer that spoke last is resting on, copied out of its hand.
@@ -753,6 +772,19 @@ impl Files {
                         ui.ask_paint();
                         return;
                     }
+                    // THE INSTALLER STICK'S WINDOW, on this drive — the same
+                    // window the footer's door opens.
+                    Doing::WriteInstaller(drive) => {
+                        if let Ok(me) = std::env::current_exe() {
+                            ui.launch(
+                                &me.to_string_lossy(),
+                                &crate::stick_window::window_on(&drive),
+                                None,
+                            );
+                        }
+                        ui.ask_paint();
+                        return;
+                    }
                     Doing::Terminal(dir) => {
                         if let Ok(me) = std::env::current_exe() {
                             ui.launch(
@@ -766,6 +798,14 @@ impl Files {
                     }
                     Doing::RootTerminal(dir) => {
                         self.root_terminal(ui, &dir);
+                        ui.ask_paint();
+                        return;
+                    }
+                    // THE /private VAULT'S `m` AND `l`, here: the passphrase
+                    // asked on this window's line, the work run from it, and
+                    // what came back said on it (`Vault`).
+                    Doing::Vault(open) => {
+                        self.vault_gesture(ui, open);
                         ui.ask_paint();
                         return;
                     }
@@ -821,7 +861,10 @@ impl Files {
                         if matches!(other, Doing::Paste(_)) {
                             self.view.clip_used();
                         }
-                        match crate::files::carry_out(other, &self.sender, &clip) {
+                        // ROOT, if it comes to that, asked in the footer's
+                        // sudo bar, the verdict said here.
+                        let gate = crate::sudo_bar::Gate::window();
+                        match crate::files::carry_out(other, &self.sender, &clip, &gate) {
                             Errand::Done => self.view.reread(),
                             Errand::Say(e) => {
                                 let m = ui.texts.t_with(e.key, &e.borrowed());
@@ -931,16 +974,6 @@ impl Files {
                 let m = ui.texts.t_with(e.key, &e.borrowed());
                 ui.say(m);
             }
-            // THE SUDO DOOR WANTS THE PASSWORD: asked on THIS window's line,
-            // and the change goes on with it (`Content::answered`).
-            crate::files::Report::Password(change) => {
-                self.root_waiting = Some(change);
-                ui.ask(crate::line::Line::new(
-                    crate::files::ROOT_PASSWORD,
-                    true,
-                    None,
-                ));
-            }
             crate::files::Report::Door(why) => {
                 let m = ui.texts.t(crate::security_words::refusal(why));
                 ui.say(m);
@@ -967,6 +1000,9 @@ impl Files {
             // here would throw the sidebar's cursor away every time something is
             // pinned. See `View::sidebar_stale`.
             crate::files::Report::Stirred => {
+                // THE VAULT'S STATUS may be what moved: its row first, then
+                // the folder — which may be the vault's.
+                self.view.vault_moved();
                 self.view.reread();
                 if self.view.sidebar_stale() {
                     self.view.reread_sidebar();
@@ -994,6 +1030,12 @@ impl Files {
             // turned into a step by the same view the footer asks.
             crate::files::Report::Archive(r) => {
                 let step = self.view.archive_reported(*r);
+                self.apply(ui, step);
+            }
+            // A SEAL'S ANSWER — a header read, the queue's refusal — the same
+            // view the footer asks (`files::View::seal_reported`).
+            crate::files::Report::Seal(r) => {
+                let step = self.view.seal_reported(*r);
                 self.apply(ui, step);
             }
         }
@@ -2085,7 +2127,7 @@ impl Files {
             notice: None,
             in_place: true,
             git: None,
-            root_waiting: None,
+            vault: Vault::default(),
         };
         // POINTED AT WHERE THE VIEW IS, as `host_it` points it — there is no
         // watch here to point, and the door says so the same way.
@@ -2094,9 +2136,129 @@ impl Files {
     }
 
     /// Hands the view a reading of the disks, as the udisks thread does —
-    /// what the camera gives it instead of a bus (`--luks`).
-    pub(crate) fn racked_now(&mut self, rack: &ronoctua_disks::Rack) {
-        self.view.racked(rack);
+    /// what the camera gives it instead of a bus (`--luks`), with the
+    /// `/private` vault's status planted (`--private`) in place of the file:
+    /// the camera draws what it was asked for, never this machine's.
+    pub(crate) fn racked_now_with_vault(
+        &mut self,
+        rack: &ronoctua_disks::Rack,
+        vault: Option<ronoctua_private::Status>,
+    ) {
+        self.view.racked_with_vault(rack, vault);
+        self.vault.planted = Some(vault);
+    }
+
+    /// `m` or `l` on the vault's row: the security centre's two leader keys
+    /// (`private_open`, `private_lock`), over the vault as it is now.
+    fn vault_gesture(&mut self, ui: &mut Ui, open: bool) {
+        self.vault.scene = match self.vault.planted {
+            Some(planted) => crate::security::vault_scene_of(planted),
+            None => crate::security::vault_scene(),
+        };
+        let errand = if open {
+            self.vault.view.private_open(&self.vault.scene, &ui.texts)
+        } else {
+            self.vault.view.private_lock(&self.vault.scene, &ui.texts)
+        };
+        self.vault_errand(ui, errand);
+    }
+
+    /// What the vault's flow asked for, done in this window.
+    fn vault_errand(&mut self, ui: &mut Ui, errand: crate::security::Errand) {
+        use crate::security::{Errand, Job};
+        match errand {
+            Errand::Ask {
+                id,
+                secret,
+                initial,
+            } => ui.ask(crate::line::Line::new(id, secret, initial.as_deref())),
+            Errand::Door(work) => {
+                // THE CAMERA starts no work: it draws.
+                if self.vault.planted.is_some() {
+                    return;
+                }
+                let Some(send) = self.vault_channel() else {
+                    return;
+                };
+                self.vault.view.sent(&work);
+                ui.hold(ui.texts.t(ronoctua_i18n::key::SECURITY_PRIVATE_BUSY));
+                // ROOT, ASKED IN THE FOOTER'S SUDO BAR — as this window's.
+                let gesture =
+                    crate::sudo_bar::Gate::window().gesture(crate::sudo_bar::Asker::Files);
+                crate::security::start(Job::Door(work, gesture), move |came| {
+                    let _ = send.send(came);
+                });
+            }
+            Errand::Say(said) => ui.say_for(said, crate::echo::Echo::Long),
+            // THE OPEN VAULT, walked into: this window is the file manager.
+            Errand::Command("private-show") => {
+                self.view
+                    .mounted(std::path::Path::new(ronoctua_private::MOUNT_POINT));
+                self.follow_the_place();
+            }
+            // NO VAULT any more (its row went in that instant): said here.
+            Errand::Show(_) => ui.say_for(
+                ui.texts
+                    .t(crate::vault::refusal(ronoctua_private::Why::Absent)),
+                crate::echo::Echo::Long,
+            ),
+            _ => {}
+        }
+        ui.ask_paint();
+    }
+
+    /// The channel the vault's work answers on, hung on this loop the first
+    /// time it is wanted.
+    fn vault_channel(&mut self) -> Option<channel::Sender<crate::security::Came>> {
+        if let Some(send) = &self.vault.send {
+            return Some(send.clone());
+        }
+        let (send, came) = channel::channel::<crate::security::Came>();
+        let hung = self
+            .handle
+            .insert_source(came, |event, (), door: &mut Door<Self>| {
+                if let channel::Event::Msg(came) = event {
+                    door.content.vault_came(&mut door.ui, came);
+                }
+            });
+        if let Err(e) = hung {
+            tracing::warn!(error = %e, "could not hang the vault's channel");
+            return None;
+        }
+        self.vault.send = Some(send.clone());
+        Some(send)
+    }
+
+    /// What the vault's work came back with: the sentence said here (the
+    /// touch it waits for, held while it waits), and the next question —
+    /// the vault's passphrase — asked here; root is asked in the sudo bar.
+    fn vault_came(&mut self, ui: &mut Ui, came: crate::security::Came) {
+        let waits = matches!(came, crate::security::Came::Step(_));
+        let out = self.vault.view.came(came, &mut self.vault.scene, &ui.texts);
+        if let Some(said) = out.say {
+            if waits {
+                ui.hold(said);
+            } else {
+                ui.say_for(said, crate::echo::Echo::Long);
+            }
+        }
+        self.vault_errand(ui, out.errand);
+    }
+
+    /// Hands the view what a `.age`'s header said, down the path the decrypt
+    /// row's thread takes — what the camera gives it instead of that thread
+    /// (`--sniffed`).
+    pub(crate) fn sniffed_now(
+        &mut self,
+        ui: &mut Ui,
+        path: std::path::PathBuf,
+        kind: ronoctua_pq::Kind,
+    ) {
+        let step = self.view.seal_reported(crate::seal::SealReport::Sniffed {
+            path,
+            kind: Some(kind),
+        });
+        self.apply(ui, step);
     }
 
     /// Asks the panels' question and hands the answer back AT ONCE, down the
@@ -2158,32 +2320,29 @@ impl Content for Files {
 
     /// A SECRET the view asked for, typed on this window's line: the footer's
     /// minibuffer hands the same answer to the same call — an archive's or a
-    /// disk's password — or the password the sudo door asked for, for a
-    /// change of owner, group or permissions.
+    /// disk's password, the vault's passphrase. Root is never asked here: the
+    /// footer's sudo bar asks it (`crate::sudo_bar`).
     fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
-        if crate::files_archive::QUESTIONS.contains(&id) {
+        // THE VAULT'S QUESTIONS.
+        if crate::vault::QUESTIONS.contains(&id) {
+            let errand = self
+                .vault
+                .view
+                .answered(id, text, &self.vault.scene, &ui.texts);
+            self.vault_errand(ui, errand);
+        } else if crate::files_archive::QUESTIONS.contains(&id)
+            || crate::seal::QUESTIONS.contains(&id)
+        {
             let step = self.view.secret_answered(id, text);
             self.apply(ui, step);
-        } else if id == crate::files::ROOT_PASSWORD
-            && let Some(change) = self.root_waiting.take()
-        {
-            let doing =
-                crate::files::Doing::RootProved(change, ronoctua_lookup::keys::Secret::new(text));
-            let clip = self.view.clip().clone();
-            if let crate::files::Errand::Say(e) =
-                crate::files::carry_out(doing, &self.sender, &clip)
-            {
-                let m = ui.texts.t_with(e.key, &e.borrowed());
-                ui.say(m);
-            }
         }
         ui.ask_paint();
     }
 
     /// The secret question was let go: nothing waits for it any more.
     fn unanswered(&mut self, ui: &mut Ui, id: &'static str) {
-        if id == crate::files::ROOT_PASSWORD {
-            self.root_waiting = None;
+        if crate::vault::QUESTIONS.contains(&id) {
+            self.vault.view.unanswered(id);
         } else {
             self.view.secret_let_go(id);
         }
@@ -2664,7 +2823,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     } else if hinting {
         let mut out = s.view.hint(s.texts);
         // AND THE KEYS THAT OPEN AND WALK IT — see `fold::teaching`.
-        out.extend(crate::fold::teaching(s.texts));
+        crate::fold::teach_after(&mut out, s.texts);
         out
     } else {
         second.clone().unwrap_or_default()

@@ -4,7 +4,7 @@
 //!
 //! # The hash never leaves as more than a hash
 //!
-//! The SHA-256 is computed HERE ([`sha256_of`], `ring`, streamed), and the
+//! The SHA-256 is computed HERE ([`sha256_of`], `aws-lc-rs`, streamed), and the
 //! first question is `GET /api/v3/files/{sha256}` with the person's key in
 //! `x-apikey` ([`lookup`]). A file VirusTotal has seen answers its last
 //! analysis; one it has not answers 404, which is [`Checked::Unknown`] — and
@@ -92,7 +92,7 @@ pub fn sha256_of(path: &Path, heard: &mut dyn FnMut(u64, u64) -> bool) -> std::i
     use std::io::Read as _;
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
-    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut context = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
     let mut buffer = vec![0u8; 64 << 10];
     let mut read = 0u64;
     loop {

@@ -18,20 +18,23 @@
 //!
 //! # What is deliberately NOT proxied
 //!
-//! `Format`, `Check`, `Repair`, `Resize`, `SetLabel` and `TakeOwnership`.
-//!
-//! Two reasons, and the second is the binding one. A sidebar is for reaching a
-//! disk, not for administering one. And `nix/modules/disks.nix` builds udisks
-//! with `xfsprogs` removed — 212 MiB of closure, almost all of it `xfs_scrub`'s
+//! `Check`, `Repair`, `Resize`, `SetLabel` and `TakeOwnership`: the verbs that
+//! repair or rename a filesystem. `nix/modules/disks.nix` builds udisks with
+//! `xfsprogs` removed — 212 MiB of closure, almost all of it `xfs_scrub`'s
 //! Python — which is free precisely because MOUNTING is a kernel operation and
-//! none of those verbs exists here. `disks-tools-are-pinned` compares the two
-//! sides, so the day one of them is added the check names it.
+//! none of those verbs exists here. `Format` IS proxied: writing a filesystem
+//! over a stick is a thing this distro does, behind its two refusals.
+//! `disks-tools-are-pinned` compares the two sides, so the day one of the
+//! forbidden verbs is added the check names it.
 //!
-//! # `Serial` and `Id` are not read
+//! # `Serial` is read for one comparison; `Id` is not read
 //!
 //! A drive's serial number is on the bus and this repository is public
-//! (invariant 13). The object path already embeds it, which is why a path is a
-//! KEY here and never something drawn or written down.
+//! (invariant 13). It is read only so the installer stick's root writer can
+//! check, right before it writes, that the drive is still the one the person
+//! chose (`ronoctua-stick`): it travels in that write's staged request under
+//! `/run` and is never drawn. The object path already embeds it, which is why
+//! a path is a KEY here and never something drawn or written down.
 
 // `#[zbus::proxy]` GENERATES a struct per trait, and the workspace's
 // `missing_docs` flags them. There is nowhere to write their documentation: the

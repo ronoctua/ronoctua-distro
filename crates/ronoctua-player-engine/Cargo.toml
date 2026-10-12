@@ -63,7 +63,7 @@ ronoctua-atlas = { path = "../ronoctua-atlas" }
 # The queue's fingerprint (`engine/queue.rs`): SHA-256 of the queue as a
 # file keeps it, to tell "not saved" from a queue that only moved — the TLS
 # stack's own digest, already linked through `ronoctua-http`.
-ring.workspace = true
+aws-lc-rs.workspace = true
 # The lyrics translated (`engine/translate.rs`): the one crate that talks to
 # a translator, asked on a thread of its own with the person's pass for the
 # host.

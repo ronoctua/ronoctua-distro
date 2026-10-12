@@ -22,10 +22,13 @@ anyhow.workspace = true
 # The watching threads outlive whoever asked for them, and when a daemon goes
 # away there is nobody to return an error to — so they say so to the log.
 tracing.workspace = true
-# `power.json`, the person's chosen profile — one field, read without a
-# derive so that a hand-edited file with one wrong key still names it.
+# `power.json`, the person's chosen profile — one field, read by a `Store`:
+# a hand-edited file with one wrong value still names it (the repair says
+# what it held), and a write keeps the fields this machine does not know.
+serde.workspace = true
 serde_json.workspace = true
-# Where `power.json` lives, and how it is written without a torn read.
+ronoctua-store = { path = "../ronoctua-store" }
+# Where `power.json` lives.
 ronoctua-xdg = { path = "../ronoctua-xdg" }
 # THE ONE WALK OF `/sys/class/power_supply`. The brain's `on_battery` and the
 # charge thresholds read different files of the same directories; the walk is

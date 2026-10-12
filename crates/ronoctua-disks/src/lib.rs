@@ -106,6 +106,12 @@ pub struct Drive {
     /// `01hotplug/…`. Taken verbatim rather than re-derived: udisks already
     /// sorted this, and a second ordering is a second truth.
     pub sort_key: String,
+    /// `Drive.Serial`, empty when the drive reports none. Like [`Drive::at`]
+    /// it is never drawn and never written down (invariant 13): it is what
+    /// the installer stick's root writer compares, right before it writes,
+    /// to know the drive is still the one the person chose
+    /// (`ronoctua-stick`).
+    pub serial: String,
 }
 
 impl Drive {
@@ -204,6 +210,11 @@ pub struct Volume {
     pub in_fstab: bool,
     /// Which of udisks' interfaces it carried.
     pub holds: Holding,
+    /// `Block.Symlinks`: every name udev gave the device under `/dev`
+    /// (`/dev/disk/by-id/usb-…`, `/dev/disk/by-path/…`). The stable one is
+    /// what a write to a whole stick is pinned to, so a drive renamed between
+    /// the question and the write is not written (`ronoctua-stick`).
+    pub symlinks: Vec<String>,
 }
 
 impl Volume {
@@ -407,6 +418,10 @@ pub enum Skipped {
     /// It is an encrypted container that is open: what came out of it is the
     /// row, in its place.
     Unlocked,
+    /// It is what came out of the `/private` vault, mounted there: the vault
+    /// has its own row, and a second one as a disk would put formatting one
+    /// key away from it.
+    Vault,
 }
 
 /// Why this block is not a row — `None` means it IS one.
@@ -431,8 +446,17 @@ pub enum Skipped {
 /// not the system's** has no filesystem and is still a row while it is locked
 /// — it is where one asks to open it — and gives its place to what came out of
 /// it while it is open. The system's own stays a holder.
+///
+/// And before every clause, **what came out of the `/private` vault**, mounted
+/// there: the vault is a row of its own (the file manager's), never a disk.
 #[must_use]
 pub fn skipped(v: &Volume, uid: u32) -> Option<Skipped> {
+    if v.mounted_at
+        .iter()
+        .any(|at| std::path::Path::new(at) == std::path::Path::new(ronoctua_private::MOUNT_POINT))
+    {
+        return Some(Skipped::Vault);
+    }
     if v.holds.partition_table {
         return Some(Skipped::WholeDisk);
     }
@@ -612,6 +636,7 @@ impl Manager {
                     ejectable: udisks::flag_of(props.get("Ejectable")),
                     can_power_off: udisks::flag_of(props.get("CanPowerOff")),
                     sort_key: udisks::text_of(props.get("SortKey")),
+                    serial: udisks::text_of(props.get("Serial")),
                 });
             }
             let Some(block) = faces.get(udisks::BLOCK) else {
@@ -647,6 +672,7 @@ impl Manager {
                     swap: faces.contains_key(udisks::SWAPSPACE),
                     loop_back: faces.contains_key(udisks::LOOP),
                 },
+                symlinks: udisks::paths_of(block.get("Symlinks")),
             });
         }
         // udisks' own key, and the device node to break ties. `GetManagedObjects`
@@ -1078,6 +1104,22 @@ pub fn watch_while<F>(on_change: F) -> Result<()>
 where
     F: Fn(Rack) -> bool + Send + 'static,
 {
+    watch_readings(move |reading| reading.map_or(true, &on_change))
+}
+
+/// [`watch_while`], with every reading that FAILED handed over too: the
+/// first one, a later one, and a udisks that gives no stream at all (the
+/// thread then ends). For a screen that waits for its first reading to draw
+/// anything — the installer stick's drives — a failure that is only logged
+/// is a "reading the drives…" drawn for ever over a refusal.
+///
+/// # Errors
+///
+/// As [`watch`].
+pub fn watch_readings<F>(on_reading: F) -> Result<()>
+where
+    F: Fn(Result<Rack>) -> bool + Send + 'static,
+{
     let manager = Manager::fresh()?;
     std::thread::Builder::new()
         .name("ronoctua-disks".to_owned())
@@ -1086,26 +1128,34 @@ where
             // while the first reading is on the wire emits its signal before
             // the rule lands, and the list would miss it until the next
             // unrelated one. The same order `ronoctua-power` records.
-            let Ok(messages) = manager.signals() else {
-                tracing::warn!("no udisks2 stream; the list will not reread on its own");
-                return;
+            let messages = match manager.signals() {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("no udisks2 stream; the list will not reread on its own");
+                    let _ = on_reading(Err(e));
+                    return;
+                }
             };
             match manager.read() {
                 Ok(rack) => {
-                    if !on_change(rack) {
+                    if !on_reading(Ok(rack)) {
                         return;
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "the first reading of the disks failed"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "the first reading of the disks failed");
+                    if !on_reading(Err(e)) {
+                        return;
+                    }
+                }
             }
             for _ in messages {
-                match manager.read() {
-                    Ok(rack) => {
-                        if !on_change(rack) {
-                            return;
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "rereading the disks failed"),
+                let reading = manager.read();
+                if let Err(e) = &reading {
+                    tracing::warn!(error = %e, "rereading the disks failed");
+                }
+                if !on_reading(reading) {
+                    return;
                 }
             }
             // The iterator ending means udisks2 went away. Saying so beats a
@@ -1157,6 +1207,7 @@ mod tests {
             ejectable: false,
             can_power_off: false,
             sort_key: "00coldplug/00fixed/nvme0".to_owned(),
+            serial: String::new(),
         };
         let hotplug = Drive {
             at: "/drive/hotplug".to_owned(),
@@ -1168,6 +1219,7 @@ mod tests {
             ejectable: true,
             can_power_off: true,
             sort_key: "01hotplug/1700000000".to_owned(),
+            serial: String::new(),
         };
 
         let mut volumes = Vec::new();
@@ -1410,6 +1462,17 @@ mod tests {
         assert_eq!(skipped(&v, ME), None);
     }
 
+    /// FAILS IF: what came out of the `/private` vault becomes a row of its
+    /// own, beside the vault's.
+    #[test]
+    fn the_vaults_inside_is_not_a_disk() {
+        let mut v = block("/dev/dm-4", "btrfs");
+        v.mounted_at = vec![ronoctua_private::MOUNT_POINT.to_owned()];
+        assert_eq!(skipped(&v, ME), Some(Skipped::Vault));
+        v.mounted_at = vec!["/private-stuff".to_owned()];
+        assert_eq!(skipped(&v, ME), None);
+    }
+
     #[test]
     fn my_own_loop_is_a_row_and_somebody_elses_is_not() {
         let mut mine = block("/dev/loop20", "ext4");
@@ -1448,6 +1511,7 @@ mod tests {
             ejectable: true,
             can_power_off: true,
             sort_key: "01hotplug/1700000001".to_owned(),
+            serial: String::new(),
         };
         rack.volumes.push(Volume {
             drive: Some(stick.at.clone()),

@@ -52,11 +52,21 @@ pub enum Phase {
     Indexing,
     /// Preparing a source (the Flathub remote, the Android image).
     Preparing,
+    /// Writing the person's declaration (the entry, its pin, its icon).
+    Declaring,
+    /// This machine taking a declaration in: root's applier, and the rebuild
+    /// that follows a removal.
+    Applying,
+    /// Making this machine match the declaration (Android's apps, the copies
+    /// a declared one replaces).
+    Reconciling,
+    /// Sending the declaration to the person's repository.
+    Publishing,
 }
 
 impl Phase {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 16] = [
         Self::Resolving,
         Self::Waiting,
         Self::Downloading,
@@ -69,6 +79,10 @@ impl Phase {
         Self::Starting,
         Self::Indexing,
         Self::Preparing,
+        Self::Declaring,
+        Self::Applying,
+        Self::Reconciling,
+        Self::Publishing,
     ];
 
     /// The stem of its text key (`software-phase-<word>`), and its wire word.
@@ -87,6 +101,10 @@ impl Phase {
             Self::Starting => "starting",
             Self::Indexing => "indexing",
             Self::Preparing => "preparing",
+            Self::Declaring => "declaring",
+            Self::Applying => "applying",
+            Self::Reconciling => "reconciling",
+            Self::Publishing => "publishing",
         }
     }
 

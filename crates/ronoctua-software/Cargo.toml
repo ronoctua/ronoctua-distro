@@ -38,15 +38,24 @@ ronoctua-http = { path = "../ronoctua-http", optional = true }
 # The person's consent, host by host: a web app's page is read on a `Pass`
 # for the host the person typed (`icons::from_site`).
 ronoctua-consent = { path = "../ronoctua-consent" }
+# THE PERSON'S DECLARATION, as its one schema says it: `declared.json` and
+# `declined.json` are read, merged and written in its types and its canonical
+# form, the staged tree laid in the shape its applier reads, and what Nix wrote
+# back read in its reports — never a second spelling of any of them.
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+# The machine's names this crate starts and reads: the unit that applies the
+# machine directory without moving its inputs, and the folder of its record.
+ronoctua-machine = { path = "../ronoctua-machine" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-# Process groups (cancel kills the whole tree) and `flock` (one lane per
-# source, shared by the screen and the update run).
-rustix.workspace = true
+# Process groups (cancel kills the whole tree), `flock` (one lane per
+# source, shared by the screen and the update run) and `uname` (the machine's
+# name a declaration says it was edited on).
+rustix = { workspace = true, features = [ "system" ] }
 # SHA-256 for every integrity check, and the RSA signature of F-Droid's index.
-ring.workspace = true
+aws-lc-rs.workspace = true
 # Already in the lock through the TLS stack; named so a URL is parsed by a
 # grammar and never by `split('/')`.
 url = "2.5"

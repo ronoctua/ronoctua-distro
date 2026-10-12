@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-security"
-description = "The security centre's boundaries: the sudo door (the one caller of sudo), the person's firewall table, the passwordless-sudo window, fingerprints and the device's facts."
+description = "The security centre's boundaries: the sudo door (the one caller of sudo), the person's firewall table, the passwordless-sudo window, security keys, fingerprints and the device's facts."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,25 +15,44 @@ publish.workspace = true
 # the TPM, fwupd).
 [features]
 default = [ ]
-authority = [ ]
+authority = [ "dep:zeroize" ]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 # The typed password is a `Secret`, zeroed when dropped.
 ronoctua-consent = { path = "../ronoctua-consent" }
+# THE LINE THE PASSWORD IS WRITTEN IN, and what the door's terminal said
+# around it, wiped when dropped (`authority`). Already in the tree through
+# `ronoctua-consent`.
+zeroize = { workspace = true, optional = true }
 # fprintd (readers, enrolled fingers, enrolment) and fwupd (HSI, updates)
 # answer on D-Bus; the blocking API, on a thread.
 zbus.workspace = true
 # The root helper's syscalls: who it runs as (`geteuid`, and the tests'
 # `getuid`), the lock on the table (`flock`), and `O_NOFOLLOW` for the staged
 # wish — `unsafe_code` is forbidden here, and these are the safe spellings.
-rustix = { workspace = true, features = [ "fs", "process" ] }
+# `pty`: the terminal the sudo door talks to sudo on, so a security key or a
+# finger may answer (`authority::converse`).
+rustix = { workspace = true, features = [ "fs", "process", "pty" ] }
 # NetworkManager's stored connections, asked by the root helper: which exist
 # (the first time, every one becomes a home network) and which this machine
 # serves (a hotspot, never public). Through the one crate that talks to
 # NetworkManager, never by reading its files.
 ronoctua-network = { path = "../ronoctua-network" }
+# THE VAULT'S ROOT UNIT, by its one name: `private-root` starts it
+# (`ronoctua_private::ROOT_UNIT`), the way `files-root` starts the file
+# manager's.
+ronoctua-private = { path = "../ronoctua-private" }
+# AN APPROVAL'S TWO WORDS, read by the one grammar the approval's unit reads
+# them with, and the pin written in its one format, at its one path
+# (`ronoctua_person::approve::pin_text`, `ronoctua_person::root`). The data
+# alone: no `apply`, so no `rustix` of its own and nothing it writes.
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+# THE PERSON'S PRIVATE BINARY CACHE: root's netrc, written from the copy of
+# the token the gesture staged (`binary-cache-netrc`), by the one crate that
+# knows Cachix — its path, its line, how the staged copy is taken.
+ronoctua-cachix = { path = "../ronoctua-cachix" }
 
 # THE ROOT HELPER, as its own binary, so `nix/rust.nix` can extract JUST this
 # (`securityRoot`): the units that run it as root must not carry the renderer,

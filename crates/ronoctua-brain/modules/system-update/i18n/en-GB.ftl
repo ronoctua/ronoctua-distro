@@ -2,7 +2,7 @@
 # commands, the name and the sentence of every step of the sequence, the
 # closed words the sequence's table carries, and the view that watches a run.
 brain-task-system-update = Update the system
-brain-task-system-update-does = Moves the pinned inputs forward, rebuilds the system and switches to it, and reclaims store space. The switch restarts the services whose definition changed; programs already open keep the version they started with, and a new kernel waits for the next reboot.
+brain-task-system-update-does = Gathers what you declared on your other machines, moves the distro forward, builds the new system and switches to it — the next boot tries it once and comes back to the last good one if it does not start —, updates your own programs and caches, reclaims store space, and publishes what this machine did. The switch restarts the services whose definition changed; programs already open keep the version they started with, and a new kernel waits for the next reboot.
 
 # ITS COMMANDS. The whole sequence now, its rehearsal, and the two doors of
 # the view that watches it — the footer's region and a window.
@@ -21,9 +21,9 @@ cmd-system-update-watch = The update, in a window
 # the SEQUENCE'S order, which is the declaration's: sorting these would put
 # back the second source the table exists to remove.
 system-update-step-flake-update = fetch the new versions
-system-update-step-flake-update-does = nix flake update on /etc/nixos: moves the pinned inputs forward and touches nothing but flake.lock. It needs the network, and on the ISO /etc/nixos is read-only — there the step is skipped and says so.
+system-update-step-flake-update-does = nix flake update of the distro's input, in this machine's own flake: it moves the distro to its newest release and touches nothing but flake.lock — the other inputs are the release's own, as it was tested. It needs the network; it is skipped and says so while the machine is held at a revision, on the ISO, whose machine folder is read-only, and whenever the rebuild would be — on battery below the floor, or with the disk nearly full — so the folder never names a distro the machine did not build.
 system-update-step-system-rebuild = rebuild the system
-system-update-step-system-rebuild-does = nixos-rebuild switch, through the unit that already exists: it compiles, and it can bring a kernel that has never booted. The way back is the previous generation, in the boot menu. If it fails, the sequence stops here.
+system-update-step-system-rebuild-does = ronoctua-machine apply: it builds the new system first and switches only to what built — a build that fails leaves the machine and its folder as they were. After the switch the next boot tries the new system once, and comes back to the last good one by itself if it does not start. It is skipped on battery below the floor unless you said yes, and when the disk is nearly full even after collecting the store's garbage. If it fails, the sequence stops here.
 system-update-step-flatpak-system = update the system's Flatpaks
 system-update-step-flatpak-system-does = flatpak update --system: it moves what the machine's own Flatpak installation holds — the Flathub remote, and whatever the configuration declares — and installs nothing. Your own apps are in your installation and move in your half, further down. Without that installation the step is skipped and says so.
 system-update-step-android-images = update Android's system image
@@ -110,3 +110,87 @@ system-update-verdict-skipped = did not apply
 system-update-verdict-rehearsed = only rehearsed
 system-update-verdict-stopped = it stopped here
 system-update-verdict-pending = still to come
+
+## ── anchor: L03 ──
+
+## ── anchor: L05 ──
+
+## ── anchor: L19 ──
+
+# THE 2026-10-05 WAVE: the steps that gather before the root half, migrate,
+# verify, reconcile and publish — in the sequence's order — and what the
+# view says of the machine's records and of a run on battery.
+system-update-step-person-fetch = bring in what you declared elsewhere
+system-update-step-person-fetch-does = ronoctua-belongings plain pull: the plain part of your belongings — the programs you declared and declined on your other machines, their records — fetched and merged into this machine's copy, with no passphrase and the encrypted part untouched — and only what your key signed: anything else is held, and the view says why. A file changed here and elsewhere is left as this machine has it, and the view says so. Without a repository, or a network, the step is skipped and says so.
+system-update-step-person-pins = move the pins forward
+system-update-step-person-pins-does = ronoctua-software pins refresh: every declared program that follows its releases — an AppImage, an Android app from F-Droid — pinned to the version and the digest it has now. Without a declaration there is nothing to move.
+system-update-step-person-sign = sign what you declared
+system-update-step-person-sign-does = ronoctua-belongings sign: your declarations as they are now — what came from your other machines, the pins just moved — signed on this machine with your key, with no network and no question, so the machine takes them. Without your identity open (no passphrase typed this session), the step declines and the machine keeps the declarations it had until your next sync.
+system-update-step-person-stage = hand your declarations to the machine
+system-update-step-person-stage-does = ronoctua-software person stage: your declarations put where the machine's narrow applier takes them, validated and swapped into the machine's folder whole — as data, never as code. A rehearsal only checks that they would be taken.
+system-update-step-machine-migrate = give the machine its own flake
+system-update-step-machine-migrate-does = ronoctua-machine migrate: a machine that still carries a copy of the distro gets its own flake, with the distro as an input — built beside the old folder and swapped in only when it builds; a failure leaves the machine exactly as it was. Every other machine skips it. If it fails, the sequence stops here.
+system-update-step-person-verify = try what you declared
+system-update-step-person-verify-does = ronoctua-person verify: every program you declared, built on its own against the distro just fetched, so one that no longer builds is held back with its reason instead of taking the whole rebuild down. Its rehearsal tries, and writes nothing.
+system-update-step-person-reconcile = bring in what is declared
+system-update-step-person-reconcile-does = ronoctua-software reconcile: what the system cannot do for you — the Android apps your declarations list, installed from the machine's copy — and the copy you installed by hand of a program now declared, taken out so the two do not shadow each other. It touches only what it put there itself.
+system-update-step-person-record = record what this machine did
+system-update-step-person-record-does = ronoctua-person record: this machine's record — its last good system, its boot trial, a hold, how its last apply ended — copied into your belongings' plain part, so your other machines know. Left alone when nothing changed.
+system-update-step-person-publish = publish what this machine did
+system-update-step-person-publish-does = ronoctua-belongings plain push: the plain part sent to your repository — your declarations and this machine's record — with no passphrase and the encrypted part untouched. Last, so what is sent is what this run ended with.
+
+system-update-needs-file = this file does not exist
+system-update-needs-power = the machine is on battery below the floor, and nobody said yes to this run
+system-update-needs-free-space = the disk is nearly full, even after collecting the store's garbage
+system-update-needs-not-held = the machine is held at a revision: the distro stays where it is
+
+system-update-kind-gather = gathers what you declared
+system-update-kind-migrate = migrates the machine's folder
+system-update-kind-verify = tries what you declared
+system-update-kind-reconcile-declared = brings in what is declared
+system-update-kind-publish = publishes what this machine did
+
+system-update-declined-empty = This machine has not synced its belongings yet: there is no key to sign with, and the update goes on.
+system-update-declined-no-passphrase = Your identity is not open in this session: nothing was signed, and the machine keeps the declarations it had until your next sync signs them.
+system-update-declined-did-not-boot = This is the system that did not start when it was tried: there is nothing new to apply until the distro moves on, and the rest of the update goes on.
+system-update-declined-nothing-to-migrate = This machine already has its own flake: there was nothing to migrate, and the update goes on.
+system-update-verdict-declined = nothing new
+
+# WHAT THE MACHINE'S RECORDS SAY, above the steps, in both doors — only what
+# says something. The boot trial and why there is none are the machine's own
+# words (`machine-trial-…`, `machine-no-trial-…`).
+system-update-records-conflicts = { $count ->
+        [one] One file of your belongings changed here and on another machine, and was left as this machine has it. Open them with { $keys }.
+       *[other] { $count } files of your belongings changed here and on another machine, and were left as this machine has them. Open them with { $keys }.
+    }
+system-update-records-held = { $id } is held back: { $why }. The rebuild leaves it out until it changes.
+system-update-held-eval-failed = it does not evaluate
+system-update-held-fetch-failed = its download could not be fetched
+system-update-held-upstream-changed = its download is there, and it is another file
+system-update-held-build-failed = it did not build
+system-update-records-hold = This machine is held at { $rev } since { $since }: the update leaves the distro where it is.
+
+# A RUN BY HAND ON A LOW BATTERY asks first, with the no first; a scheduled
+# one waits for the charger and asks nobody.
+system-update-ask-on-battery = The battery is at { $percent }%, below the { $floor }% an update needs to build the system. Update on battery anyway?
+system-update-ask-on-battery-unknown = The machine is running off a battery whose charge cannot be read, and an update builds the system. Update on battery anyway?
+system-update-answer-no = no, wait for the charger
+system-update-answer-yes = yes, update on battery
+echo-system-update-on-battery = The update has started on battery, as you said
+echo-system-update-not-started = Not started: plug the machine in, or answer yes
+
+# A RUN BY HAND THAT THE BRAIN HOLDS FOR A METERED WAY OUT asks whether to
+# spend this one, with the no first; the no leaves it waiting in the queue.
+system-update-ask-metered = This connection is metered — paid by the byte — and the update waits for another before it downloads the new system, which can be gigabytes. Update on this connection anyway?
+system-update-answer-no-metered = no, wait for another network
+system-update-answer-yes-metered = yes, update on this connection
+echo-system-update-on-metered = The update has started on this connection, as you said
+echo-system-update-kept-waiting = It stays in the queue, and starts by itself once nothing it waits for is in the way — a metered network, a low battery
+
+# THE 2026-10-11 WAVE: the push to the person's binary cache, last.
+system-update-step-binary-cache-push = push to your binary cache
+system-update-step-binary-cache-push-does = ronoctua-cachix push: what this machine built, sent to your own Cachix cache — only after an update that switched the machine, and only with your token. A public cache receives only the distro's own outputs, never a path of yours nor an unfree program; a private one receives the system; neither receives what cache.nixos.org already serves. Without a cache named, the step is skipped. Its rehearsal says what would go, and pushes nothing.
+system-update-declined-no-token = Your binary cache has no push token on this machine: nothing was pushed. Give it one in the update's binary cache section.
+system-update-declined-not-let = A host the push reaches is not allowed in your consent: nothing was pushed. Naming the cache again allows them.
+system-update-declined-nothing-new = No update switched this machine since the last push: there is nothing new to push.
+system-update-declined-no-cache = This machine names no binary cache of yours: there is nothing to push to.

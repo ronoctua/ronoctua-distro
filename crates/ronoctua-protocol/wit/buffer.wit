@@ -804,6 +804,12 @@ interface types {
         container,
         // The person's belongings: their sync.
         belongings,
+        // Encrypt anything: a file sealed or opened.
+        seal,
+        // Incus: a long operation of the daemon.
+        incus,
+        // The installer image for a stick.
+        stick,
     }
 
     // Where a job is in its life.
@@ -839,6 +845,13 @@ interface types {
         archive-remove,
         archive-test,
         archive-convert,
+        // A file encrypted or opened (the person's post-quantum identity or a
+        // passphrase), an Incus job, the installer written to a stick: none
+        // of them a download, which is what the row used to say.
+        seal,
+        unseal,
+        incus,
+        stick-write,
     }
 
     // What `done` and `total` are counted in.

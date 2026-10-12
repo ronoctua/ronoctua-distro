@@ -2070,6 +2070,14 @@ impl View {
         if now.settings_failed {
             b.told(b.texts.t(ronoctua_i18n::key::DISPLAY_SETTINGS_FAILED));
         }
+        // AND A PART OF IT that did not read: the rows below show the repair
+        // in that place, and the file keeps what it says.
+        if now.settings_repaired {
+            b.told(b.texts.t_with(
+                ronoctua_i18n::key::BELONGINGS_REPAIR_PART_NOT_READ,
+                &[("file", ronoctua_display::prefs::FILE)],
+            ));
+        }
         for s in &now.screens {
             let focused = now.focused.as_deref() == Some(s.at.as_str());
             b.pair(
@@ -3577,6 +3585,7 @@ mod tests {
             screens,
             compositor: true,
             settings_failed: false,
+            settings_repaired: false,
         }
     }
 
@@ -5317,6 +5326,21 @@ mod tests {
             said(&View::fresh(), &now).contains(&sentence),
             "the settings look lost and nothing on the list says why",
         );
+
+        // A PART OF IT REPAIRED is said too — with its own sentence, since
+        // the rest IS shown and an order still writes.
+        now.settings_failed = false;
+        now.settings_repaired = true;
+        let part = t.t_with(
+            ronoctua_i18n::key::BELONGINGS_REPAIR_PART_NOT_READ,
+            &[("file", ronoctua_display::prefs::FILE)],
+        );
+        let words = said(&View::fresh(), &now);
+        assert!(
+            words.contains(&part),
+            "a value of the file was repaired and nothing on the list says so",
+        );
+        assert!(!words.contains(&sentence), "the rest of the file was read");
     }
 
     #[test]

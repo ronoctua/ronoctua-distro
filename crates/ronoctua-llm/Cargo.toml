@@ -1,0 +1,56 @@
+[package]
+name = "ronoctua-llm"
+description = "The person's LLM accounts: Claude Code's and Codex's state, their limits and tokens, and Anthropic's usage endpoint — the one crate that reads them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE CLI IS PART OF THE PRODUCT, not an extra. Claude Code runs
+# `ronoctua-llm statusline --profile <id>` after every answer (the person's
+# own status line chained behind it), and the usage unit runs
+# `ronoctua-llm refresh`. Extracted as `rust.llm` (`nix/rust.nix`) and put on
+# the system's PATH, because `settings.json` outlives a generation and names
+# `/run/current-system/sw/bin/ronoctua-llm`, never a store path.
+[[bin]]
+name = "ronoctua-llm"
+path = "src/bin/cli.rs"
+required-features = [ "fetch" ]
+
+# WHAT READS A LOGIN AND ASKS THE NETWORK — the credentials reader, the usage
+# endpoint (`usage::fetch`) and the refresh that asks it — is `fetch`: on for
+# the CLI and the shell (the default), and OFF for the brain, whose module
+# only reads what was kept and must never carry a TLS client or a token
+# reader (`default-features = false` there).
+[features]
+default = [ "fetch" ]
+fetch = [ "dep:base64", "dep:ronoctua-consent", "dep:ronoctua-http", "dep:zeroize" ]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The credentials are read into memory that is wiped when it is dropped, and
+# the bearer header is built in it (`credentials.rs`, `usage.rs`).
+zeroize = { workspace = true, optional = true }
+# The plan Codex records sits in the claims of its `id_token` (a JWT).
+base64 = { workspace = true, optional = true }
+# The usage endpoint is asked with a consent `Pass`, through the one HTTP
+# writer (`web::request_let`).
+ronoctua-consent = { path = "../ronoctua-consent", optional = true }
+ronoctua-http = { path = "../ronoctua-http", features = [ "tls" ], optional = true }
+# `llm-accounts.json` is a `Store` (written whole and atomically, merged by
+# applying each edit to what the file says now).
+ronoctua-store = { path = "../ronoctua-store" }
+# The four roots (the cache's for the token counts) and the atomic write.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# Codex's compressed logs.
+ruzstd.workspace = true
+
+[dev-dependencies]
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+
+[lints]
+workspace = true

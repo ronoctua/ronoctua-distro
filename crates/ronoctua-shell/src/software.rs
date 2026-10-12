@@ -38,6 +38,9 @@
 use std::path::{Path, PathBuf};
 
 use ronoctua_render::layout;
+use ronoctua_software::declaration::{
+    Declarations, DeclaredRow, DeclineState, DeclinedRow, DistroRow, Standing,
+};
 use ronoctua_software::details::Details;
 use ronoctua_software::found::{Badge, Found, Prefer, Status};
 use ronoctua_software::order::{
@@ -303,6 +306,11 @@ pub enum Opening {
     /// The advanced page (`software advanced` in either door: the window's
     /// command line, and `software-open advanced` in the footer).
     Advanced,
+    /// What the person declared (`software declared`).
+    Declared,
+    /// What the person declined of the distro's, and the distro's programs
+    /// (`software declined`).
+    Declined,
     /// A new web app from this address (`i b`, once it is typed).
     WebNew(String),
     /// One program's sheet (the launcher's `C-i`).
@@ -353,6 +361,15 @@ pub enum Level {
     Consents,
     /// What was done.
     History,
+    /// What the person declared, and how this machine stands to each.
+    Declared,
+    /// One declared entry, by its id (`nix:ripgrep`): its pin, its standing
+    /// and the fixes for it.
+    Declaration(String),
+    /// What the person declined, and the distro's programs.
+    Declined,
+    /// One of the distro's programs, by its registry id.
+    Distro(String),
 }
 
 impl Level {
@@ -371,6 +388,10 @@ impl Level {
             Self::Permissions(_) => "permissions",
             Self::Consents => "consents",
             Self::History => "history",
+            Self::Declared => "declared",
+            Self::Declaration(_) => "declaration",
+            Self::Declined => "declined",
+            Self::Distro(_) => "distro",
         }
     }
 }
@@ -430,6 +451,10 @@ pub enum Ask {
     IconPath,
     /// The path of a file to install.
     FilePath,
+    /// The belongings' passphrase, to sign a change of the declaration
+    /// before it goes (the plain-signature package): asked at the gesture
+    /// when the session keeps no identity — the person is there.
+    Sign,
 }
 
 impl Ask {
@@ -442,13 +467,14 @@ impl Ask {
             Self::WebName => "software-web-name",
             Self::IconPath => "software-icon-path",
             Self::FilePath => "software-file-path",
+            Self::Sign => "software-sign",
         }
     }
 
-    /// Whether the line hides what is typed. Nothing here is a secret.
+    /// Whether the line hides what is typed: the passphrase, and only it.
     #[must_use]
     pub const fn secret(self) -> bool {
-        false
+        matches!(self, Self::Sign)
     }
 
     /// The command an id is, when it is one of these.
@@ -460,6 +486,7 @@ impl Ask {
             Self::WebName,
             Self::IconPath,
             Self::FilePath,
+            Self::Sign,
         ]
         .into_iter()
         .find(|a| a.command() == id)
@@ -612,6 +639,25 @@ pub enum Question {
         /// What changes.
         grant: Grant,
     },
+    /// Remove a declared program for good: the explanation screen — here
+    /// and from the declaration, the other computers at their next update,
+    /// and what it saved kept unless the second yes erases it.
+    Forget {
+        /// Which.
+        key: AppKey,
+        /// Its name.
+        name: String,
+    },
+    /// Keep one of the distro's programs uninstalled: this computer is
+    /// rebuilt without it.
+    Decline {
+        /// The registry's id.
+        id: String,
+        /// Its name.
+        name: String,
+        /// On every computer of the person's, or this one.
+        everywhere: bool,
+    },
 }
 
 /// One answer to a question.
@@ -701,8 +747,48 @@ pub enum Deed {
     Tidy(Option<Source>),
     /// Go back to a version of the Nix list, after a question.
     Rollback(u64),
-    /// Copy the line that makes it permanent.
-    Declare(String),
+    /// Install for this person and KEEP it: declared, on every computer of
+    /// theirs (or the ones named) — "install only for you", one click, the
+    /// consents asked first as an install asks them.
+    DeclareForMe {
+        /// Which.
+        key: AppKey,
+        /// Its name.
+        name: String,
+        /// What was already said yes to.
+        consent: Consent,
+        /// `None` for every computer of the person, or the hostnames.
+        machines: Option<Vec<String>>,
+    },
+    /// Remove for good — here and from the declaration — after the
+    /// explanation.
+    ForgetForever {
+        /// Which.
+        key: AppKey,
+        /// Its name.
+        name: String,
+    },
+    /// Keep one of the distro's programs uninstalled, after a question.
+    KeepUninstalled {
+        /// The registry's id.
+        id: String,
+        /// Its name.
+        name: String,
+        /// On every computer of the person's, or this one.
+        everywhere: bool,
+    },
+    /// Bring a declined program of the distro back.
+    BringBack {
+        /// The registry's id.
+        id: String,
+        /// Its name.
+        name: String,
+    },
+    /// Look for newer downloads of the declared programs.
+    RefreshPins,
+    /// Search for something to take the place of a program this computer
+    /// leaves out.
+    FindReplacement(String),
     /// Change a web app.
     Edit(String),
     /// Make a web app of this address.
@@ -756,7 +842,17 @@ impl Deed {
             Self::EraseAndroid => "erase-android",
             Self::Tidy(_) => "tidy",
             Self::Rollback(_) => "rollback",
-            Self::Declare(_) => "declare",
+            Self::DeclareForMe { .. } => "declare-for-me",
+            Self::ForgetForever { .. } => "forget-forever",
+            Self::KeepUninstalled {
+                everywhere: false, ..
+            } => "keep-uninstalled-here",
+            Self::KeepUninstalled {
+                everywhere: true, ..
+            } => "keep-uninstalled-everywhere",
+            Self::BringBack { .. } => "bring-back",
+            Self::RefreshPins => "refresh-pins",
+            Self::FindReplacement(_) => "find-replacement",
             Self::Edit(_) => "edit",
             Self::WebNew(_) => "web-new",
             Self::OpenOnce(_) => "open-once",
@@ -1111,6 +1207,12 @@ pub enum Spot {
     Status(Source),
     /// A Flatpak in the permissions list.
     Permissions(String),
+    /// A declared entry, by its id.
+    Declared(String),
+    /// A decline, by the registry's id.
+    Declined(String),
+    /// One of the distro's programs, by the registry's id.
+    Distro(String),
 }
 
 /// What the `C-` keys do on a row: each is `Some` where it works, and the hint
@@ -1273,6 +1375,9 @@ pub struct View {
     picking: Option<crate::file_picker::Hosted<Picking>>,
     /// The door's wake, for the file picker ([`View::watch_with`]).
     wake: Option<crate::player_subtitles::Wake>,
+    /// The change of the declaration waiting for the belongings' passphrase
+    /// ([`Ask::Sign`]): queued once it is typed, dropped by an empty answer.
+    signing: Option<Queued>,
 }
 
 impl View {
@@ -1305,6 +1410,7 @@ impl View {
             outside: Vec::new(),
             picking: None,
             wake: None,
+            signing: None,
         };
         let errand = v.reopen(opening, r, texts);
         (v, errand)
@@ -1338,26 +1444,46 @@ impl View {
             Opening::Maintenance => self.go(Level::Maintenance, r),
             Opening::Android => self.go(Level::Android, r),
             Opening::Advanced => self.go(Level::Advanced, r),
+            Opening::Declared => self.go(Level::Declared, r),
+            Opening::Declined => self.go(Level::Declined, r),
             Opening::WebNew(url) => self.web_new(&url, r, texts),
             Opening::Sheet { key, name } => {
                 self.outside.push((key.clone(), name));
                 self.go(Level::Sheet(key), r)
             }
-            // WHAT THE FLAKE INSTALLED IS NOT ASKED ABOUT: the sheet opens
-            // and says why it cannot be removed from here, instead of a
-            // question whose yes the CLI would refuse anyway.
+            // ONE OF THE DISTRO'S PROGRAMS is kept uninstalled, not removed:
+            // the sheet opens with that question, on "no". One the distro
+            // needs, and what the flake installed otherwise, say why not
+            // instead of a question whose yes the CLI would refuse anyway.
             Opening::Remove {
                 key: key @ AppKey::System { .. },
                 name,
             } => {
-                self.outside.push((key.clone(), name));
-                self.go(Level::Sheet(key), r);
-                Errand::Say(texts.t(words::refusal_key(Refusal::DeclaredInTheFlake)))
+                self.outside.push((key.clone(), name.clone()));
+                self.go(Level::Sheet(key.clone()), r);
+                match declarations(r).and_then(|d| d.distro_of(&key, &[])) {
+                    Some(d) if d.app.essential.is_none() => {
+                        self.ask_it(Question::Decline {
+                            id: d.app.id.clone(),
+                            name,
+                            everywhere: false,
+                        });
+                        Errand::Nothing
+                    }
+                    Some(d) => Errand::Say(essential_said(d, texts)),
+                    None => Errand::Say(texts.t(words::refusal_key(Refusal::DeclaredInTheFlake))),
+                }
             }
             Opening::Remove { key, name } => {
                 self.outside.push((key.clone(), name.clone()));
                 let e = self.go(Level::Sheet(key.clone()), r);
-                self.ask_it(Question::Remove { key, name });
+                // A DECLARED PROGRAM goes for good, after the explanation:
+                // removed here alone, the next update would bring it back.
+                if origin_of(r, &key) == Origin::MineDeclared {
+                    self.ask_it(Question::Forget { key, name });
+                } else {
+                    self.ask_it(Question::Remove { key, name });
+                }
                 e
             }
             Opening::File(path) => {
@@ -1365,6 +1491,13 @@ impl View {
                 Errand::Nothing
             }
         }
+    }
+
+    /// Which page is showing — what the footer compares before and after a
+    /// key, so a page it opens starts at its top.
+    #[must_use]
+    pub const fn level(&self) -> &Level {
+        &self.level
     }
 
     /// What was typed into the search — both doors draw it on the search's
@@ -1418,7 +1551,11 @@ impl View {
                 | Level::Advanced
                 | Level::Permissions(_)
                 | Level::Consents
-                | Level::History => true,
+                | Level::History
+                | Level::Declared
+                | Level::Declaration(_)
+                | Level::Declined
+                | Level::Distro(_) => true,
             }
     }
 
@@ -1843,10 +1980,14 @@ impl View {
         r: &Readings,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        let said = said.trim();
         let Some(ask) = Ask::of_command(id) else {
             return Errand::Nothing;
         };
+        // A PASSPHRASE IS TAKEN AS TYPED — spaces are part of one.
+        if ask == Ask::Sign {
+            return self.signed_with(said, r, texts);
+        }
+        let said = said.trim();
         // AN EMPTY ANSWER IS `Esc`, not a mistake.
         if said.is_empty() {
             return Errand::Nothing;
@@ -1880,6 +2021,48 @@ impl View {
                 self.ask_it(Question::Foreign(path));
                 Errand::Nothing
             }
+            // Answered above, as typed.
+            Ask::Sign => Errand::Nothing,
+        }
+    }
+
+    /// The belongings' passphrase, typed to sign the change waiting for it:
+    /// written where `sign` reads it, and the change queued — `apply` signs
+    /// the mirror before it stages it (`ronoctua_software::stage`). An empty
+    /// answer is `Esc`: the change is dropped, and nothing was done.
+    fn signed_with(&mut self, typed: &str, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
+        let Some(waiting) = self.signing.take() else {
+            return Errand::Nothing;
+        };
+        if typed.is_empty() {
+            return Errand::Nothing;
+        }
+        let Some(places) = r.belongings.as_ref() else {
+            return Errand::Queue(vec![waiting]);
+        };
+        match crate::belongings::write_passphrase_to_sign(places, typed) {
+            Ok(()) => Errand::Queue(vec![waiting]),
+            Err(said) => Errand::Say(texts.t(said)),
+        }
+    }
+
+    /// A change of the person's declaration, for the queue — or, when the
+    /// session keeps no identity to sign it with
+    /// ([`crate::belongings::signing_asks`]), the belongings' passphrase
+    /// asked first, at the gesture: signed, the change reaches this machine's
+    /// root and the person's other machines; unsigned, it would wait for
+    /// their next sync.
+    fn queue_signed(&mut self, order: Order, label: String, r: &Readings) -> Errand {
+        let asks = r.belongings.as_ref().is_some_and(|places| {
+            crate::belongings::signing_asks(places, i64::try_from(r.now).unwrap_or(i64::MAX))
+        });
+        if !asks {
+            return queue(order, label);
+        }
+        self.signing = Some(Queued { order, label });
+        Errand::Ask {
+            ask: Ask::Sign,
+            initial: None,
         }
     }
 
@@ -2082,6 +2265,17 @@ impl View {
                         path,
                         consent: kind.granted(consent),
                     },
+                    Deed::DeclareForMe {
+                        key,
+                        name,
+                        consent,
+                        machines,
+                    } => Deed::DeclareForMe {
+                        key,
+                        name,
+                        consent: kind.granted(consent),
+                        machines,
+                    },
                     other => other,
                 };
                 // THE NEXT CONSENT MAY BE ASKED NOW: a package can be both
@@ -2158,6 +2352,33 @@ impl View {
             Question::Permission { id, name, grant } => {
                 queue(Order::Permission { id, grant }, name)
             }
+            Question::Forget { key, name } => self.queue_signed(
+                Order::Forget {
+                    key,
+                    keep_data: answer != Answer::YesAndMore,
+                },
+                name,
+                r,
+            ),
+            Question::Decline {
+                id,
+                name,
+                everywhere,
+            } => self.queue_signed(
+                Order::Decline {
+                    id,
+                    machines: if everywhere {
+                        None
+                    } else {
+                        declarations(r)
+                            .map(|d| d.host.clone())
+                            .filter(|h| !h.is_empty())
+                            .map(|h| vec![h])
+                    },
+                },
+                name,
+                r,
+            ),
         }
     }
 
@@ -2252,7 +2473,42 @@ impl View {
     /// Do a deed: an order for the queue, a question first, or a level.
     fn perform(&mut self, deed: Deed, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
         match deed {
-            Deed::Install { key, name, consent } => self.install(key, name, consent, r, texts),
+            Deed::Install { key, name, consent } => {
+                self.install(key, name, consent, None, r, texts)
+            }
+            Deed::DeclareForMe {
+                key,
+                name,
+                consent,
+                machines,
+            } => self.install(key, name, consent, Some(machines), r, texts),
+            Deed::ForgetForever { key, name } => {
+                self.ask_it(Question::Forget { key, name });
+                Errand::Nothing
+            }
+            Deed::KeepUninstalled {
+                id,
+                name,
+                everywhere,
+            } => {
+                self.ask_it(Question::Decline {
+                    id,
+                    name,
+                    everywhere,
+                });
+                Errand::Nothing
+            }
+            Deed::BringBack { id, name } => self.queue_signed(Order::Undecline { id }, name, r),
+            Deed::RefreshPins => self.queue_signed(
+                Order::RefreshPins,
+                texts.t(ronoctua_i18n::key::SOFTWARE_DECLARED_DOOR),
+                r,
+            ),
+            Deed::FindReplacement(name) => {
+                self.filter = None;
+                self.query = name;
+                self.show_results(r)
+            }
             Deed::InstallFile { path, consent } => {
                 if consent.unverified {
                     let label = path
@@ -2352,7 +2608,6 @@ impl View {
                 self.ask_it(Question::Rollback(n));
                 Errand::Nothing
             }
-            Deed::Declare(line) => Errand::Copy(line),
             Deed::Edit(slug) => {
                 self.draft = Some(WebDraft {
                     slug: Some(slug.clone()),
@@ -2384,12 +2639,14 @@ impl View {
         }
     }
 
-    /// Install, asking first for whatever consent is missing.
+    /// Install — or install and declare (`declare`: the machines, `None` for
+    /// every one) — asking first for whatever consent is missing.
     fn install(
         &mut self,
         key: AppKey,
         name: String,
         consent: Consent,
+        declare: Option<Option<Vec<String>>>,
         r: &Readings,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
@@ -2420,19 +2677,39 @@ impl View {
         )
         .find(|(kind, needed)| *needed && !kind.given(consent));
         if let Some((kind, _)) = wanted {
-            self.ask_it(Question::Consent {
-                kind,
-                deed: Box::new(Deed::Install {
+            let deed = match declare {
+                Some(machines) => Deed::DeclareForMe {
                     key,
                     name: name.clone(),
                     consent,
-                }),
+                    machines,
+                },
+                None => Deed::Install {
+                    key,
+                    name: name.clone(),
+                    consent,
+                },
+            };
+            self.ask_it(Question::Consent {
+                kind,
+                deed: Box::new(deed),
                 name,
                 bytes,
             });
             return Errand::Nothing;
         }
-        queue(Order::Install { key, consent }, name)
+        match declare {
+            Some(machines) => self.queue_signed(
+                Order::Declare {
+                    key,
+                    consent,
+                    machines,
+                },
+                name,
+                r,
+            ),
+            None => queue(Order::Install { key, consent }, name),
+        }
     }
 
     /// Turn a ring.
@@ -2794,6 +3071,28 @@ impl View {
             Level::Permissions(id) => permissions(&mut b, r, id),
             Level::Consents => consents(&mut b, r),
             Level::History => history(&mut b, r),
+            Level::Declared => declared_level(&mut b, r),
+            Level::Declaration(id) => declaration_sheet(&mut b, r, id),
+            Level::Declined => declined_level(&mut b, r),
+            Level::Distro(id) => {
+                // THE DISTRO'S PROGRAM, or a decline of one it no longer
+                // carries — which can still be brought back.
+                let named = declarations(r).and_then(|d| {
+                    d.distro(id)
+                        .map(|x| x.name.clone())
+                        .or_else(|| d.decline_of(id).map(|x| x.name.clone()))
+                });
+                if let Some(name) = named {
+                    b.title(name);
+                    distro_rows(&mut b, r, id);
+                } else {
+                    b.heading(ronoctua_i18n::key::SOFTWARE_DECLARED_HEADING_DISTRO);
+                    b.said(
+                        b.texts.t(words::refusal_key(Refusal::UnknownItem)),
+                        tokens::color::TEXT_DIM,
+                    );
+                }
+            }
         }
         b.out
     }
@@ -2846,6 +3145,18 @@ impl View {
             key::SOFTWARE_UPDATES,
             updates_said(updates, b.texts),
             Level::Maintenance,
+        );
+        // THE DECLARATION: what follows the person, and what of the distro's
+        // they keep away.
+        b.door(
+            key::SOFTWARE_DECLARED_DOOR,
+            declared_said(&s.declarations, b.texts),
+            Level::Declared,
+        );
+        b.door(
+            key::SOFTWARE_DECLARED_DOOR_DECLINED,
+            declined_said(&s.declarations, b.texts),
+            Level::Declined,
         );
         b.heading(key::SOFTWARE_HEADING_MORE);
         let web = b.texts.t(key::SOFTWARE_WEB_NEW_VALUE);
@@ -3079,6 +3390,12 @@ impl View {
                 Spot::Primary,
                 None,
             );
+            // ONE OF THE DISTRO'S PROGRAMS: what it is, and keeping it
+            // uninstalled — or why the distro needs it.
+            if let Some(d) = declarations(r).and_then(|d| d.distro_of(app, &[])) {
+                distro_rows(b, r, &d.app.id);
+                return;
+            }
             b.fact_at(
                 b.texts.t(key::SOFTWARE_ROW_SOURCE),
                 b.texts.t(key::SOFTWARE_SOURCE_SYSTEM),
@@ -3106,7 +3423,7 @@ impl View {
             _ => None,
         };
         match installed {
-            Some(i) => installed_sheet(b, i, details),
+            Some(i) => installed_sheet(b, i, r),
             None => self.found_sheet(b, r, app, &name, trial),
         }
         about(b, found, details, app, installed);
@@ -3180,18 +3497,36 @@ impl View {
             (None, Some(s)) => s,
             (None, None) => String::new(),
         };
+        // INSTALL ONLY FOR YOU, one click: here now, and declared — so the
+        // person's other computers get it, and every update keeps it.
         b.deed_at(
-            key::SOFTWARE_ROW_INSTALL,
-            value,
+            key::SOFTWARE_DECLARED_ROW_FOR_ME,
+            joined(
+                &b.texts.t(key::SOFTWARE_DECLARED_EVERYWHERE),
+                &value,
+                b.texts,
+            ),
+            Deed::DeclareForMe {
+                key: app.clone(),
+                name: name.to_owned(),
+                consent: Consent::default(),
+                machines: None,
+            },
+            if trial.is_some() {
+                Spot::Deed("declare-for-me")
+            } else {
+                Spot::Primary
+            },
+            refused.clone(),
+        );
+        // OR ON THIS COMPUTER ONLY, as before: undeclared, nothing keeps it.
+        b.deed(
+            key::SOFTWARE_DECLARED_ROW_HERE,
+            b.texts.t(key::SOFTWARE_DECLARED_HERE_VALUE),
             Deed::Install {
                 key: app.clone(),
                 name: name.to_owned(),
                 consent: Consent::default(),
-            },
-            if trial.is_some() {
-                Spot::Deed("install")
-            } else {
-                Spot::Primary
             },
             refused,
         );
@@ -3332,6 +3667,14 @@ impl View {
             b.title(self.web_name(r));
         } else {
             b.heading(key::SOFTWARE_HEADING_WEB);
+        }
+        // A DECLARED ONE is changed in the declaration: saving declares it
+        // again, and the person's other computers take the change.
+        if let Some(slug) = &d.slug
+            && declarations(r)
+                .is_some_and(|x| x.declared_as(&AppKey::Web { slug: slug.clone() }).is_some())
+        {
+            b.note(key::SOFTWARE_DECLARED_WEB_EDIT);
         }
         if d.slug.is_some() && !d.adopted {
             match &r.web_app {
@@ -3899,9 +4242,6 @@ impl View {
                 Spot::Fact("dark-forced"),
             ),
         }
-
-        b.heading(key::SOFTWARE_HEADING_DECLARATIVE);
-        b.note(key::SOFTWARE_NOTE_DECLARE);
     }
 }
 
@@ -3921,8 +4261,18 @@ fn installed_row(b: &mut Builder<'_>, i: &Installed, r: &Readings) {
                 )
             })
         })
-        // WHAT THE FLAKE DECLARED SAYS SO, before a person reaches for `C-d`.
-        .or_else(|| (i.origin == Origin::Declared).then(|| b.texts.t(words::origin_key(i.origin))))
+        // WHAT THE FLAKE DECLARED SAYS SO, before a person reaches for `C-d`
+        // — and so does what the PERSON declared, which `C-d` removes for
+        // good and not from here alone.
+        .or_else(|| match i.origin {
+            Origin::Declared => Some(b.texts.t(words::origin_key(i.origin))),
+            Origin::MineDeclared => Some(joined(
+                &i.version,
+                &b.texts.t(words::origin_key(i.origin)),
+                b.texts,
+            )),
+            Origin::Mine | Origin::Distro { .. } => None,
+        })
         .unwrap_or_else(|| i.version.clone());
     b.program(
         words::key_glyph(&i.key),
@@ -3950,13 +4300,22 @@ fn can_of_installed(i: &Installed) -> Can {
             AppKey::Web { slug } => Some(Deed::Edit(slug.clone())),
             _ => None,
         },
-        remove: (i.origin == Origin::Mine && !matches!(i.key, AppKey::System { .. })).then(|| {
-            Deed::Remove {
-                key: i.key.clone(),
-                name: i.name.clone(),
-            }
-        }),
+        remove: removal_of(i),
         stop: None,
+    }
+}
+
+/// What `C-d` does to an installed program, by who put it there: removed
+/// here; removed for good (here and from the declaration); kept
+/// uninstalled (one of the distro's); nothing (what the distro needs, what
+/// the flake installed).
+fn removal_of(i: &Installed) -> Option<Deed> {
+    let key = i.key.clone();
+    let name = i.name.clone();
+    match i.origin {
+        Origin::Mine if !matches!(i.key, AppKey::System { .. }) => Some(Deed::Remove { key, name }),
+        Origin::MineDeclared => Some(Deed::ForgetForever { key, name }),
+        Origin::Mine | Origin::Distro { .. } | Origin::Declared => None,
     }
 }
 
@@ -4032,10 +4391,11 @@ fn group_row(b: &mut Builder<'_>, g: &Group, r: &Readings) {
     });
     let mut can = installed_one.map(can_of_installed).unwrap_or_default();
     if installed.is_none() && best.badges.iter().all(|x| x.refuses().is_none()) {
-        can.install = Some(Deed::Install {
+        can.install = Some(Deed::DeclareForMe {
             key: best.key.clone(),
             name: g.name.clone(),
             consent: Consent::default(),
+            machines: None,
         });
     }
     if installed.is_none()
@@ -4064,11 +4424,7 @@ fn group_row(b: &mut Builder<'_>, g: &Group, r: &Readings) {
 }
 
 /// The sheet of something installed.
-fn installed_sheet(
-    b: &mut Builder<'_>,
-    i: &Installed,
-    details: Option<Result<&Details, &Refusal>>,
-) {
+fn installed_sheet(b: &mut Builder<'_>, i: &Installed, r: &Readings) {
     use ronoctua_i18n::key;
     let can = can_of_installed(i);
     match i.desktop_ids.first() {
@@ -4106,9 +4462,16 @@ fn installed_sheet(
         || b.texts.t(key::SOFTWARE_SOURCE_SYSTEM),
         |s| b.texts.t(words::source_key(s)),
     );
+    // WHAT IS LEAVING is no longer declared by anybody: its source alone,
+    // and why it is still here is said below.
+    let leaving = i.trouble == Some(Refusal::LeavesAtNextApply);
     b.fact_at(
         b.texts.t(key::SOFTWARE_ROW_SOURCE),
-        joined(&source, &b.texts.t(words::origin_key(i.origin)), b.texts),
+        if leaving {
+            source
+        } else {
+            joined(&source, &b.texts.t(words::origin_key(i.origin)), b.texts)
+        },
         Spot::Fact("source"),
     );
     if !i.version.is_empty() {
@@ -4135,48 +4498,704 @@ fn installed_sheet(
     if let Some(edit) = can.edit {
         b.deed(key::SOFTWARE_ROW_EDIT, String::new(), edit, None);
     }
-    // MAKE IT PERMANENT: the line for the machine's `host.nix`, copied —
-    // this view never writes the flake. A source with no declarative form
-    // says so instead of offering nothing.
-    let refused = match details {
-        Some(Ok(d)) if d.declaration.is_some() => None,
-        Some(Ok(_)) => Some(b.texts.t(key::SOFTWARE_NOTHING_TO_DECLARE)),
-        Some(Err(why)) => Some(b.texts.t(words::refusal_key(*why))),
-        None => Some(b.texts.t(key::SOFTWARE_ASKING)),
-    };
-    let line = details
-        .and_then(Result::ok)
-        .and_then(|d| d.declaration.clone())
-        .unwrap_or_default();
-    b.deed(
-        key::SOFTWARE_ROW_DECLARE,
-        b.texts.t(key::SOFTWARE_DECLARE_COPIES),
-        Deed::Declare(line),
-        refused,
-    );
-    // AN UNFREE NIX PACKAGE NEEDS MORE THAN THE LINE: the machine has to
-    // allow that one package too, which is not a line of `host.nix`.
-    if i.unfree && matches!(i.key, AppKey::Nix { .. }) {
-        b.note(key::SOFTWARE_NOTE_DECLARE_UNFREE);
+    // WHO PUT IT THERE decides how it leaves — and whether it stays.
+    match i.origin {
+        Origin::Mine => {
+            // KEEP IT: declared, the update keeps it and the person's other
+            // computers get it — the one click "make it permanent" was a
+            // line to copy for.
+            if i.key.source().is_some() {
+                b.deed(
+                    key::SOFTWARE_DECLARED_ROW_KEEP,
+                    b.texts.t(key::SOFTWARE_DECLARED_KEEP_VALUE),
+                    Deed::DeclareForMe {
+                        key: i.key.clone(),
+                        name: i.name.clone(),
+                        consent: Consent::default(),
+                        machines: None,
+                    },
+                    None,
+                );
+            }
+            b.deed_at(
+                key::SOFTWARE_ROW_REMOVE,
+                String::new(),
+                Deed::Remove {
+                    key: i.key.clone(),
+                    name: i.name.clone(),
+                },
+                Spot::Deed("remove"),
+                None,
+            );
+        }
+        Origin::MineDeclared => {
+            if let Some(row) = declarations(r).and_then(|d| d.declared_as(&i.key)) {
+                b.pair(
+                    b.texts.t(key::SOFTWARE_DECLARED_ROW_DECLARED),
+                    standing_said(row, b.texts),
+                    Target::Door(Level::Declaration(row.entry.id().to_owned())),
+                    Spot::Door("declaration"),
+                    Can::default(),
+                    None,
+                );
+            }
+            forget_row(b, &i.key, &i.name);
+        }
+        Origin::Distro { .. } => {
+            if let Some(d) = declarations(r).and_then(|d| d.distro_of(&i.key, &i.desktop_ids)) {
+                distro_rows(b, r, &d.app.id);
+            }
+        }
+        Origin::Declared => {
+            b.deed_at(
+                key::SOFTWARE_ROW_REMOVE,
+                String::new(),
+                Deed::Remove {
+                    key: i.key.clone(),
+                    name: i.name.clone(),
+                },
+                Spot::Deed("remove"),
+                Some(b.texts.t(words::refusal_key(Refusal::DeclaredInTheFlake))),
+            );
+        }
     }
-    let refused = (i.origin == Origin::Declared)
-        .then(|| b.texts.t(words::refusal_key(Refusal::DeclaredInTheFlake)));
-    b.deed_at(
-        key::SOFTWARE_ROW_REMOVE,
-        String::new(),
-        Deed::Remove {
-            key: i.key.clone(),
-            name: i.name.clone(),
-        },
-        Spot::Deed("remove"),
-        refused,
-    );
     if let Some(why) = i.trouble {
         b.said(
             b.texts.t(words::refusal_key(why)),
             tokens::color::STATE_ERROR,
         );
     }
+}
+
+/// "Remove for good", in the danger tone: here, from the declaration, and
+/// from the person's other computers at their next update — after the
+/// explanation.
+fn forget_row(b: &mut Builder<'_>, key: &AppKey, name: &str) {
+    use ronoctua_i18n::key as k;
+    b.deed_at(
+        k::SOFTWARE_DECLARED_ROW_FORGET,
+        b.texts.t(k::SOFTWARE_DECLARED_FORGET_VALUE),
+        Deed::ForgetForever {
+            key: key.clone(),
+            name: name.to_owned(),
+        },
+        Spot::Deed("remove"),
+        None,
+    );
+    if let Some(row) = b.out.last_mut()
+        && !row.focused
+    {
+        row.fields = crate::chrome::tinted(
+            std::mem::take(&mut row.fields),
+            Some(tokens::color::STATE_ERROR),
+            false,
+        );
+    }
+}
+
+// ─── the declaration ────────────────────────────────────────────────────────
+
+/// The person's declaration and how this machine stands to it, once the
+/// machine was read.
+fn declarations(r: &Readings) -> Option<&Declarations> {
+    r.snapshot.as_ref().map(|s| &s.declarations)
+}
+
+/// Who put a program there, as the reading says: a declared one is the
+/// person's declaration even when it is not on this machine yet.
+fn origin_of(r: &Readings, key: &AppKey) -> Origin {
+    if declarations(r).is_some_and(|d| d.declared_as(key).is_some()) {
+        return Origin::MineDeclared;
+    }
+    r.snapshot
+        .as_ref()
+        .and_then(|s| s.installed.iter().find(|i| i.key == *key))
+        .map_or(Origin::Mine, |i| i.origin)
+}
+
+/// The installed program a declared entry is, when it is on this machine.
+fn installed_of<'a>(r: &'a Readings, row: &DeclaredRow) -> Option<&'a Installed> {
+    let key = ronoctua_software::declaration::key_of(&row.entry);
+    r.snapshot
+        .as_ref()
+        .and_then(|s| s.installed.iter().find(|i| i.key == key))
+}
+
+/// A declared entry's name: the installed program's, else the entry's own.
+fn entry_name(r: &Readings, row: &DeclaredRow) -> String {
+    installed_of(r, row).map_or_else(
+        || ronoctua_software::declaration::name_of(&row.entry),
+        |i| i.name.clone(),
+    )
+}
+
+/// How this machine stands to a declared entry, as a sentence — the hold's
+/// reason after a held one's.
+fn standing_said(row: &DeclaredRow, texts: &ronoctua_i18n::Texts) -> String {
+    let said = texts.t(words::standing_key(&row.standing));
+    match &row.standing {
+        Standing::Skipped {
+            reason: ronoctua_software::person::reports::SkipWhy::Held,
+            detail,
+        } => words::held_key(detail).map_or(said.clone(), |k| joined(&said, &texts.t(k), texts)),
+        _ => said,
+    }
+}
+
+/// Where a declaration says a program goes: every computer, or the named.
+fn machines_said(machines: Option<&[String]>, texts: &ronoctua_i18n::Texts) -> String {
+    match machines {
+        None => texts.t(ronoctua_i18n::key::SOFTWARE_DECLARED_ALL_COMPUTERS),
+        Some(hosts) => hosts.join(", "),
+    }
+}
+
+/// The door's value for the declared: how many, and how many this computer
+/// left out.
+fn declared_said(d: &Declarations, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::{Arg, key};
+    if d.declared.is_empty() {
+        return texts.t(key::SOFTWARE_DECLARED_NONE_YET);
+    }
+    let out = d
+        .declared
+        .iter()
+        .filter(|r| matches!(r.standing, Standing::Skipped { .. }))
+        .count();
+    let all = texts.t_args(
+        key::SOFTWARE_DECLARED_COUNT,
+        &[("count", Arg::Number(count(d.declared.len())))],
+    );
+    if out == 0 {
+        return all;
+    }
+    joined(
+        &all,
+        &texts.t_args(
+            key::SOFTWARE_DECLARED_COUNT_OUT,
+            &[("count", Arg::Number(count(out)))],
+        ),
+        texts,
+    )
+}
+
+/// The door's value for the declined.
+fn declined_said(d: &Declarations, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_i18n::{Arg, key};
+    if d.declined.is_empty() {
+        return texts.t(key::SOFTWARE_DECLARED_NONE_DECLINED_YET);
+    }
+    texts.t_args(
+        key::SOFTWARE_DECLARED_DECLINED_COUNT,
+        &[("count", Arg::Number(count(d.declined.len())))],
+    )
+}
+
+/// What a decline did, as a sentence — with the distro's reason when it
+/// needs the program.
+fn decline_said(row: &DeclinedRow, texts: &ronoctua_i18n::Texts) -> String {
+    let key = words::decline_key(&row.state);
+    match &row.state {
+        DeclineState::Essential { reason } => {
+            joined(&texts.t(key), &words::essential_said(reason, texts), texts)
+        }
+        DeclineState::Elsewhere => texts.t_with(
+            key,
+            &[(
+                "machines",
+                machines_said(row.declining.machines.as_deref(), texts).as_str(),
+            )],
+        ),
+        _ => texts.t(key),
+    }
+}
+
+/// Why one of the distro's programs cannot be kept uninstalled.
+fn essential_said(d: &DistroRow, texts: &ronoctua_i18n::Texts) -> String {
+    d.app
+        .essential
+        .as_deref()
+        .map_or_else(String::new, |r| words::essential_said(r, texts))
+}
+
+/// The latest job about one of the distro's programs (a decline, a
+/// return).
+fn distro_job<'a>(r: &'a Readings, id: &str) -> Option<&'a ronoctua_transfers::Job> {
+    r.jobs
+        .iter()
+        .filter(|j| match &j.work {
+            ronoctua_transfers::Work::Software { order, .. } => matches!(
+                order.as_ref(),
+                Order::Decline { id: x, .. } | Order::Undecline { id: x } if x == id
+            ),
+            _ => false,
+        })
+        .max_by_key(|j| j.id)
+}
+
+/// What the queue is doing to it, or what it said when it last failed.
+fn job_rows(b: &mut Builder<'_>, job: Option<&ronoctua_transfers::Job>) {
+    use ronoctua_i18n::key;
+    let Some(job) = job else { return };
+    if job.stage.afoot() {
+        b.fact_at(
+            b.texts.t(key::SOFTWARE_ROW_WORKING),
+            working_said(job, b.texts),
+            Spot::Fact("working"),
+        );
+    } else if job.stage == ronoctua_transfers::Stage::Failed {
+        b.said(failure_said(job, b.texts), tokens::color::STATE_ERROR);
+    }
+}
+
+/// What the person declared, and how this machine stands to each.
+fn declared_level(b: &mut Builder<'_>, r: &Readings) {
+    use ronoctua_i18n::key;
+    b.heading(key::SOFTWARE_DECLARED_DOOR);
+    b.note(key::SOFTWARE_DECLARED_NOTE);
+    let Some(d) = declarations(r) else {
+        b.note(key::SOFTWARE_READING);
+        return;
+    };
+    unreadable_rows(b, d);
+    if !d.reported {
+        b.note(key::SOFTWARE_DECLARED_NOT_REPORTED);
+    }
+    if d.declared.is_empty() {
+        let t = b.texts.t(key::SOFTWARE_DECLARED_NONE);
+        b.said(t, tokens::color::TEXT_DIM);
+    }
+    for row in &d.declared {
+        let key = ronoctua_software::declaration::key_of(&row.entry);
+        let id = row.entry.id().to_owned();
+        let name = entry_name(r, row);
+        let picture = installed_of(r, row).and_then(|i| i.icon.clone());
+        let value = job_of(&r.jobs, &key)
+            .filter(|j| j.stage.afoot())
+            .map_or_else(|| standing_said(row, b.texts), |j| working_said(j, b.texts));
+        b.program(
+            words::key_glyph(&key),
+            picture.map(Portrait::Program),
+            name.clone(),
+            value,
+            Target::Door(Level::Declaration(id.clone())),
+            Spot::Declared(id),
+            Can {
+                remove: Some(Deed::ForgetForever { key, name }),
+                ..Can::default()
+            },
+            &[],
+        );
+        // LEFT OUT IS A PROBLEM: the row says so in the danger tone.
+        if matches!(row.standing, Standing::Skipped { .. })
+            && let Some(last) = b.out.last_mut()
+            && !last.focused
+        {
+            last.fields = crate::chrome::tinted(
+                std::mem::take(&mut last.fields),
+                Some(tokens::color::STATE_ERROR),
+                false,
+            );
+        }
+    }
+    if !d.android_pending.is_empty() {
+        b.note(key::SOFTWARE_DECLARED_ANDROID_PENDING);
+    }
+    if d.declared
+        .iter()
+        .any(|x| ronoctua_software::declaration::pin_of(&x.entry).is_some())
+    {
+        b.heading(key::SOFTWARE_DECLARED_HEADING_PINS);
+        b.deed(
+            key::SOFTWARE_DECLARED_REFRESH,
+            b.texts.t(key::SOFTWARE_DECLARED_REFRESH_VALUE),
+            Deed::RefreshPins,
+            None,
+        );
+    }
+}
+
+/// The documents of the declaration that do not read here, said.
+fn unreadable_rows(b: &mut Builder<'_>, d: &Declarations) {
+    use ronoctua_i18n::key;
+    for u in &d.unreadable {
+        let file = match u.file {
+            ronoctua_software::declaration::File::Declared => key::SOFTWARE_DECLARED_FILE_DECLARED,
+            ronoctua_software::declaration::File::Declined => key::SOFTWARE_DECLARED_FILE_DECLINED,
+        };
+        let why = if u.why == ronoctua_software::person::Why::Newer {
+            key::SOFTWARE_DECLARED_UNREADABLE_NEWER
+        } else {
+            key::SOFTWARE_DECLARED_UNREADABLE_BROKEN
+        };
+        let said = b.texts.t_with(why, &[("file", b.texts.t(file).as_str())]);
+        b.said(said, tokens::color::STATE_ERROR);
+    }
+}
+
+/// One declared entry: what it is, where it goes, how this computer stands
+/// to it, and what can be done.
+fn declaration_sheet(b: &mut Builder<'_>, r: &Readings, id: &str) {
+    use ronoctua_i18n::key;
+    use ronoctua_software::declaration as decl;
+    let Some(d) = declarations(r) else {
+        b.heading(key::SOFTWARE_DECLARED_DOOR);
+        b.note(key::SOFTWARE_READING);
+        return;
+    };
+    let Some(row) = d.declared.iter().find(|x| x.entry.id() == id) else {
+        // FORGOTTEN MEANWHILE, here or by another computer.
+        b.heading(key::SOFTWARE_DECLARED_DOOR);
+        b.said(
+            b.texts.t(key::SOFTWARE_DECLARED_GONE),
+            tokens::color::TEXT_DIM,
+        );
+        return;
+    };
+    let app = decl::key_of(&row.entry);
+    let name = entry_name(r, row);
+    let installed = installed_of(r, row);
+    b.title_with(
+        words::key_glyph(&app),
+        installed
+            .and_then(|i| i.icon.clone())
+            .map(Portrait::Program),
+        name.clone(),
+    );
+    job_rows(b, job_of(&r.jobs, &app));
+    // WHERE IT GOES, AND HOW THIS COMPUTER STANDS — the standing, and on a
+    // row of its own WHY: a value column cuts what does not fit, and the
+    // reason is the part the person came to read.
+    b.fact_at(
+        b.texts.t(key::SOFTWARE_DECLARED_ROW_HERE_NOW),
+        b.texts.t(words::standing_key(&row.standing)),
+        Spot::Fact("standing"),
+    );
+    if let Standing::Skipped { reason, detail } = &row.standing {
+        let held = (*reason == ronoctua_software::person::reports::SkipWhy::Held)
+            .then(|| words::held_key(detail))
+            .flatten();
+        match held {
+            Some(k) => b.fact_at(
+                b.texts.t(key::SOFTWARE_DECLARED_ROW_WHY),
+                b.texts.t(k),
+                Spot::Fact("why"),
+            ),
+            // WHAT NIX SAID (data), when it said something.
+            None if !detail.trim().is_empty() => b.fact_at(
+                b.texts.t(key::SOFTWARE_DECLARED_ROW_SAID),
+                detail.clone(),
+                Spot::Fact("said"),
+            ),
+            None => {}
+        }
+    }
+    b.fact_at(
+        b.texts.t(key::SOFTWARE_DECLARED_ROW_ON),
+        machines_said(row.entry.machines(), b.texts),
+        Spot::Fact("machines"),
+    );
+    b.fact_at(
+        b.texts.t(key::SOFTWARE_ROW_SOURCE),
+        b.texts.t(words::source_key(decl::source_of(&row.entry))),
+        Spot::Fact("source"),
+    );
+    b.fact_at(
+        b.texts.t(key::SOFTWARE_ROW_REFERENCE),
+        row.entry.source_id().to_owned(),
+        Spot::Fact("reference"),
+    );
+    if let Some((version, url, pinned)) = decl::pin_of(&row.entry) {
+        b.fact_at(
+            b.texts.t(key::SOFTWARE_DECLARED_ROW_PIN),
+            match pinned {
+                Some(at) => joined(
+                    &version,
+                    &crate::chrome::when_text(at.unix_s(), &r.zone, false, b.texts),
+                    b.texts,
+                ),
+                None => version,
+            },
+            Spot::Fact("pin"),
+        );
+        b.fact_at(
+            b.texts.t(key::SOFTWARE_DECLARED_ROW_DOWNLOAD),
+            url,
+            Spot::Fact("download"),
+        );
+    }
+    b.fact_at(
+        b.texts.t(key::SOFTWARE_DECLARED_ROW_EDITED),
+        b.texts.t_with(
+            key::SOFTWARE_DECLARED_EDITED_ON,
+            &[
+                (
+                    "when",
+                    crate::chrome::when_text(
+                        row.entry.edited_at().unix_s(),
+                        &r.zone,
+                        false,
+                        b.texts,
+                    )
+                    .as_str(),
+                ),
+                ("machine", row.entry.edited_on()),
+            ],
+        ),
+        Spot::Fact("edited"),
+    );
+    // WHAT CAN BE DONE, by why it stands as it does.
+    b.heading(key::SOFTWARE_DECLARED_HEADING_FIXES);
+    match &row.standing {
+        Standing::Applied => {
+            if installed.is_some() {
+                b.pair(
+                    b.texts.t(key::SOFTWARE_DECLARED_ROW_PROGRAM),
+                    b.texts.t(key::SOFTWARE_DECLARED_PROGRAM_VALUE),
+                    Target::Program(app.clone()),
+                    Spot::Door("program"),
+                    Can::default(),
+                    None,
+                );
+            }
+        }
+        Standing::Waiting => b.note(key::SOFTWARE_DECLARED_NOTE_WAITING),
+        Standing::Elsewhere => {
+            let mut machines: Vec<String> = row
+                .entry
+                .machines()
+                .map(<[String]>::to_vec)
+                .unwrap_or_default();
+            if !d.host.is_empty() && !machines.contains(&d.host) {
+                machines.push(d.host.clone());
+            }
+            b.deed(
+                key::SOFTWARE_DECLARED_ROW_ALSO_HERE,
+                String::new(),
+                Deed::DeclareForMe {
+                    key: app.clone(),
+                    name: name.clone(),
+                    consent: Consent::default(),
+                    machines: Some(machines),
+                },
+                None,
+            );
+        }
+        Standing::Skipped { reason, detail } => {
+            use ronoctua_software::person::reports::SkipWhy;
+            let refresh = decl::pin_of(&row.entry).is_some()
+                && (*reason == SkipWhy::Held
+                    && matches!(detail.as_str(), "fetch-failed" | "upstream-changed"));
+            if refresh {
+                b.deed(
+                    key::SOFTWARE_DECLARED_REFRESH_ONE,
+                    b.texts.t(key::SOFTWARE_DECLARED_REFRESH_ONE_VALUE),
+                    Deed::RefreshPins,
+                    None,
+                );
+            }
+            match reason {
+                SkipWhy::SourceOff => b.note(key::SOFTWARE_DECLARED_NOTE_SOURCE_OFF),
+                SkipWhy::FormatUnknown => b.note(key::SOFTWARE_DECLARED_NOTE_UPDATE_ME),
+                SkipWhy::OtherMachine => {}
+                SkipWhy::AttrMissing
+                | SkipWhy::NotAPackage
+                | SkipWhy::RefusedByMeta
+                | SkipWhy::Held => b.deed(
+                    key::SOFTWARE_DECLARED_ROW_REPLACE,
+                    b.texts.t(key::SOFTWARE_DECLARED_REPLACE_VALUE),
+                    Deed::FindReplacement(name.clone()),
+                    None,
+                ),
+            }
+        }
+    }
+    forget_row(b, &app, &name);
+}
+
+/// What the person declined, and the rest of the distro's programs.
+fn declined_level(b: &mut Builder<'_>, r: &Readings) {
+    use ronoctua_i18n::key;
+    b.heading(key::SOFTWARE_DECLARED_DOOR_DECLINED);
+    b.note(key::SOFTWARE_DECLARED_NOTE_DECLINED);
+    let Some(d) = declarations(r) else {
+        b.note(key::SOFTWARE_READING);
+        return;
+    };
+    unreadable_rows(b, d);
+    if d.declined.is_empty() {
+        let t = b.texts.t(key::SOFTWARE_DECLARED_NONE_DECLINED);
+        b.said(t, tokens::color::TEXT_DIM);
+    }
+    for row in &d.declined {
+        let id = row.declining.id.clone();
+        let value = distro_job(r, &id)
+            .filter(|j| j.stage.afoot())
+            .map_or_else(|| decline_said(row, b.texts), |j| working_said(j, b.texts));
+        b.program(
+            tokens::icon::SOFTWARE_SOURCE_SYSTEM,
+            None,
+            row.name.clone(),
+            value,
+            Target::Door(Level::Distro(id.clone())),
+            Spot::Declined(id),
+            Can::default(),
+            &[],
+        );
+        // STILL HERE THROUGH ANOTHER PROGRAM: the decline did not do what it
+        // says, and the row is in the danger tone.
+        if row.state == DeclineState::StillPresent
+            && let Some(last) = b.out.last_mut()
+            && !last.focused
+        {
+            last.fields = crate::chrome::tinted(
+                std::mem::take(&mut last.fields),
+                Some(tokens::color::STATE_ERROR),
+                false,
+            );
+        }
+    }
+    // THE REST OF THE DISTRO'S PROGRAMS on this computer: what can be kept
+    // uninstalled, and what the distro needs.
+    let rest: Vec<&DistroRow> = d
+        .distro
+        .iter()
+        .filter(|x| x.app.on_this_machine && d.decline_of(&x.app.id).is_none())
+        .collect();
+    if rest.is_empty() {
+        return;
+    }
+    b.heading(key::SOFTWARE_DECLARED_HEADING_DISTRO);
+    for x in rest {
+        let declinable = x.app.essential.is_none();
+        let value = if declinable {
+            b.texts.t(key::SOFTWARE_DECLARED_DISTRO_INSTALLED)
+        } else {
+            essential_said(x, b.texts)
+        };
+        b.program(
+            tokens::icon::SOFTWARE_SOURCE_SYSTEM,
+            None,
+            x.name.clone(),
+            value,
+            Target::Door(Level::Distro(x.app.id.clone())),
+            Spot::Distro(x.app.id.clone()),
+            Can {
+                remove: declinable.then(|| Deed::KeepUninstalled {
+                    id: x.app.id.clone(),
+                    name: x.name.clone(),
+                    everywhere: false,
+                }),
+                ..Can::default()
+            },
+            &[],
+        );
+    }
+}
+
+/// One of the distro's programs — or the decline of one the distro no
+/// longer carries: what it is, why the distro needs it, and keeping it
+/// uninstalled (here or on every computer) or bringing it back.
+///
+/// A decline is always reachable here, whatever came of it: one the system
+/// refused because the distro needs the program, one of a program the
+/// distro stopped carrying, one of other computers only (and then keeping
+/// it uninstalled HERE too is offered, as the launcher's removal asks).
+fn distro_rows(b: &mut Builder<'_>, r: &Readings, id: &str) {
+    use ronoctua_i18n::key;
+    let decls = declarations(r);
+    let host = decls.map_or("", |x| x.host.as_str());
+    let d = decls.and_then(|x| x.distro(id));
+    let declined = decls.and_then(|x| x.decline_of(id));
+    if let Some(d) = d {
+        b.fact_at(
+            b.texts.t(key::SOFTWARE_ROW_SOURCE),
+            b.texts.t(words::origin_key(Origin::Distro {
+                declinable: d.app.essential.is_none(),
+            })),
+            Spot::Fact("source"),
+        );
+        b.fact_at(
+            b.texts.t(key::SOFTWARE_DECLARED_ROW_GROUP),
+            d.app.group.clone(),
+            Spot::Fact("group"),
+        );
+        if !d.app.on_this_machine {
+            // LEFT OUT BY THE SYSTEM'S DECLINE, and no longer declined here:
+            // the next apply brings it back.
+            let returning =
+                d.app.declined_here && declined.is_none_or(|row| !row.declining.applies_to(host));
+            b.note(if returning {
+                key::SOFTWARE_DECLARED_RETURNING
+            } else {
+                key::SOFTWARE_DECLARED_NOT_ON_THIS_MACHINE
+            });
+        }
+        if d.app.essential.is_some() {
+            let said = essential_said(d, b.texts);
+            b.said(said, tokens::color::TEXT_DIM);
+        }
+    }
+    job_rows(b, distro_job(r, id));
+    let declinable = d.filter(|d| d.app.essential.is_none());
+    match declined {
+        Some(row) => {
+            // THE DISTRO'S REASON is said once: on its own line above, when
+            // the program is one the distro needs.
+            let said = if d.is_some_and(|d| d.app.essential.is_some()) {
+                b.texts.t(words::decline_key(&row.state))
+            } else {
+                decline_said(row, b.texts)
+            };
+            b.fact_at(
+                b.texts.t(key::SOFTWARE_DECLARED_ROW_DECLINED),
+                said,
+                Spot::Fact("declined"),
+            );
+            b.deed(
+                key::SOFTWARE_DECLARED_ROW_BRING_BACK,
+                b.texts.t(key::SOFTWARE_DECLARED_BRING_BACK_VALUE),
+                Deed::BringBack {
+                    id: id.to_owned(),
+                    name: d.map_or_else(|| row.name.clone(), |d| d.name.clone()),
+                },
+                None,
+            );
+            if let Some(d) = declinable {
+                if !row.declining.applies_to(host) {
+                    keep_uninstalled(b, d, false);
+                }
+                if row.declining.machines.is_some() {
+                    keep_uninstalled(b, d, true);
+                }
+            }
+        }
+        None => {
+            if let Some(d) = declinable {
+                keep_uninstalled(b, d, false);
+                keep_uninstalled(b, d, true);
+            }
+        }
+    }
+}
+
+/// "Keep uninstalled here", or "on all your computers".
+fn keep_uninstalled(b: &mut Builder<'_>, d: &DistroRow, everywhere: bool) {
+    use ronoctua_i18n::key;
+    b.deed(
+        if everywhere {
+            key::SOFTWARE_DECLARED_ROW_DECLINE_EVERYWHERE
+        } else {
+            key::SOFTWARE_DECLARED_ROW_DECLINE_HERE
+        },
+        String::new(),
+        Deed::KeepUninstalled {
+            id: d.app.id.clone(),
+            name: d.name.clone(),
+            everywhere,
+        },
+        None,
+    );
 }
 
 /// What a sheet says about the program: its summary, its badges in words, its
@@ -4676,6 +5695,31 @@ fn history(b: &mut Builder<'_>, r: &Readings) {
     }
 }
 
+/// What a question explains before its answers, line by line: the
+/// declaration's two say what happens beyond this computer.
+fn explanation_of(q: &Question) -> Vec<&'static str> {
+    use ronoctua_i18n::key;
+    match q {
+        Question::Forget { .. } => vec![
+            key::SOFTWARE_DECLARED_FORGET_HERE,
+            key::SOFTWARE_DECLARED_FORGET_ELSEWHERE,
+            key::SOFTWARE_DECLARED_FORGET_DATA,
+        ],
+        Question::Decline {
+            everywhere: true, ..
+        } => vec![
+            key::SOFTWARE_DECLARED_DECLINE_REBUILD,
+            key::SOFTWARE_DECLARED_DECLINE_OTHERS,
+            key::SOFTWARE_DECLARED_DECLINE_BACK,
+        ],
+        Question::Decline { .. } => vec![
+            key::SOFTWARE_DECLARED_DECLINE_REBUILD,
+            key::SOFTWARE_DECLARED_DECLINE_BACK,
+        ],
+        _ => Vec::new(),
+    }
+}
+
 /// A question, in place of the rows: the sentence, then "no", then the yeses.
 fn question(b: &mut Builder<'_>, q: &Question) {
     use ronoctua_i18n::key;
@@ -4772,9 +5816,38 @@ fn question(b: &mut Builder<'_>, q: &Question) {
             };
             (t.t_with(sure, &[("app", name.as_str())]), yes, None)
         }
+        Question::Forget { name, .. } => (
+            t.t_with(
+                key::SOFTWARE_DECLARED_SURE_FORGET,
+                &[("app", name.as_str())],
+            ),
+            key::SOFTWARE_DECLARED_YES_FORGET,
+            Some(key::SOFTWARE_YES_REMOVE_DATA),
+        ),
+        Question::Decline {
+            name, everywhere, ..
+        } => (
+            t.t_with(
+                if *everywhere {
+                    key::SOFTWARE_DECLARED_SURE_DECLINE_EVERYWHERE
+                } else {
+                    key::SOFTWARE_DECLARED_SURE_DECLINE_HERE
+                },
+                &[("app", name.as_str())],
+            ),
+            key::SOFTWARE_DECLARED_YES_DECLINE,
+            None,
+        ),
     };
     for line in crate::chrome::note_lines(&sentence, b.room) {
         b.push_heading(line, tokens::color::TEXT_HEADING);
+    }
+    // THE EXPLANATION, before the answers: what the yes does beyond this
+    // computer, and what it keeps.
+    for k in explanation_of(q) {
+        for line in crate::chrome::note_lines(&t.t(k), b.room) {
+            b.push_heading(line, tokens::color::TEXT_DIM);
+        }
     }
     // NO FIRST, AND THE CURSOR IS BORN ON IT.
     b.answer(t.t(key::SOFTWARE_NO), String::new(), Answer::No, false);
@@ -4834,11 +5907,12 @@ pub fn ended_of(job: &ronoctua_transfers::Job) -> Option<Ended> {
         _ => return None,
     }
     match order.as_ref() {
-        Order::Install { .. } | Order::InstallFile { .. } | Order::Keep { .. } => {
-            Some(Ended::Installed)
-        }
+        Order::Install { .. }
+        | Order::InstallFile { .. }
+        | Order::Keep { .. }
+        | Order::Declare { .. } => Some(Ended::Installed),
         Order::WebCreate { .. } => Some(Ended::WebCreated),
-        Order::Remove { .. } => Some(Ended::Removed),
+        Order::Remove { .. } | Order::Forget { .. } => Some(Ended::Removed),
         Order::Upgrade { .. } => Some(Ended::Updated),
         Order::Prepare {
             source: Source::Android,
@@ -4854,7 +5928,12 @@ pub fn ended_of(job: &ronoctua_transfers::Job) -> Option<Ended> {
         | Order::AndroidSession { .. }
         | Order::AndroidErase
         | Order::Permission { .. }
-        | Order::AndroidWindows { .. } => None,
+        | Order::AndroidWindows { .. }
+        // ── anchor: L18 ──
+        | Order::Decline { .. }
+        | Order::Undecline { .. }
+        | Order::Reconcile { .. }
+        | Order::RefreshPins => None,
     }
 }
 
@@ -4992,7 +6071,10 @@ fn last_failure<'a>(r: &'a Readings, key: &AppKey) -> Option<&'a ronoctua_transf
 /// Which program an order is about, when it is about one.
 fn about_key(order: &Order) -> Option<AppKey> {
     match order {
-        Order::Install { key, .. } | Order::Remove { key, .. } => Some(key.clone()),
+        Order::Install { key, .. }
+        | Order::Remove { key, .. }
+        | Order::Declare { key, .. }
+        | Order::Forget { key, .. } => Some(key.clone()),
         Order::Upgrade {
             scope: Scope::One { key },
         } => Some(key.clone()),
@@ -5602,15 +6684,31 @@ impl Builder<'_> {
         let (label_colour, _) = kind.tones(focused);
         let mark = format!("{glyph} ");
         let w = layout::width(&mark);
-        let mut fields = vec![Self::piece(self.left, mark, label_colour)];
+        let mut fields = vec![Self::piece(self.left, mark.clone(), label_colour)];
+        // THE GLYPH IS PART OF THE LABEL'S WIDTH, NOT OF THE ROW'S LEFT: laid
+        // out from after it, the value column moved two cells right of every
+        // other row of the section (`declared by you` under `every source`,
+        // photographed). The pair is laid from the row's left with the glyph
+        // in front, and the glyph is then taken back out into its own piece.
         let mut rest = crate::chrome::field_pair(
-            self.left + w,
-            self.room.saturating_sub(w),
-            &label,
+            self.left,
+            self.room,
+            &format!("{mark}{label}"),
             &value,
             kind,
             focused,
         );
+        match rest.first_mut() {
+            Some(first) if first.at == self.left && first.text.starts_with(&mark) => {
+                first.text = first.text[mark.len()..].to_owned();
+                first.at += w;
+            }
+            // NO ROOM FOR THE GLYPH AND A LABEL: the glyph stays `fields[0]`,
+            // where a door draws the picture.
+            Some(first) => first.text.clear(),
+            None => {}
+        }
+        rest.retain(|f| !f.text.is_empty());
         if !lit.is_empty()
             && let Some(first) = rest.first().cloned()
         {

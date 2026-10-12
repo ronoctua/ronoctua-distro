@@ -5746,7 +5746,7 @@ cmd-software-next-source = Show the next source, or the next shelf of icons
 cmd-software-previous-source = Show the previous source, or the previous shelf of icons
 cmd-software-less = The previous value of this row
 cmd-software-more = The next value of this row
-cmd-software-install = Install it for you, from the source shown
+cmd-software-install = Install it for you, from the source shown: declared, so all your computers have it — a trial is kept here only
 cmd-software-try-it = Run it without installing
 cmd-software-launch = Start the program
 cmd-software-update = Update this one now
@@ -5785,7 +5785,7 @@ software-search = Search
 software-search-empty = type a name, or what it does
 software-filter = Showing
 software-heading-installed = Installed for you
-software-note-yours = What is installed here is yours alone: the system and the repository stay as the flake says.
+software-note-yours = What is installed here is yours alone. What you declare also follows you: each of your computers installs it at its update.
 software-note-none = Nothing installed by you yet. The system's own programs are in the launcher — { $keys }.
 software-note-none-here = Nothing from this source.
 software-heading-trying = Being tried
@@ -5832,7 +5832,6 @@ software-working-now = working
 software-working = { $percent } % · { $phase }
 software-row-launch = Open the program
 software-no-window = no window: it runs in a terminal
-software-row-install = Install for you
 software-install-with = with { $source }
 software-recommended = recommended
 software-size-download = { $size } to download
@@ -5853,10 +5852,6 @@ software-update-to = { $version } is ready
 software-row-permissions = Permissions
 software-permissions-value = what it may reach
 software-row-edit = Change this web app
-software-row-declare = Make it permanent
-software-declare-copies = copies the line for host.nix
-software-nothing-to-declare = This source has no line in the flake; it stays yours as it is.
-software-note-declare-unfree = It is not free software: the line alone is not enough, the machine also has to allow this one package.
 software-row-remove = Remove from this computer
 software-heading-about = About it
 software-heading-details = Details
@@ -5996,8 +5991,6 @@ software-dark-forced = Forcing a theme
 software-dark-none-forced = no app forces GTK_THEME
 software-dark-forces = forces GTK_THEME — see its permissions
 software-note-gtk-theme = GTK_THEME makes a Flatpak lose its own style; nothing here sets it, and an app that carries it is shown in red.
-software-heading-declarative = Declaring it
-software-note-declare = To keep a program across reinstalls, Make it permanent copies its line for host.nix; a Flatpak's goes in ronoctua.software.declaredFlatpaks, which nix-flatpak installs.
 software-heading-permissions = What { $app } may reach
 software-note-no-permissions = It asks for nothing beyond its own window.
 software-note-permissions-restart = A change reaches the app the next time it starts.
@@ -8265,17 +8258,14 @@ cmd-security-right = The next finger to enrol
 cmd-security-rule-add = Add a firewall rule
 cmd-security-rule-delete = Remove the rule or the finger under the cursor
 cmd-security-enrol = Enrol the chosen finger
-cmd-security-password = Your password, for the administrator
 cmd-security-rule = A firewall rule, in words
 cmd-security-vt-key = Keep your VirusTotal key
 cmd-security-vt-forget = Forget your VirusTotal key
 cmd-security-home = Treat the network that just came up as home
-ask-security-password = Your password
 ask-security-rule = Rule (allow tcp 8080 from 192.168.1.0/24 via wlan0 home)
 ask-security-vt-key = Your VirusTotal API key
 # The file manager's changes only the administrator may make (an owner, a
 # group, permissions), through the same sudo door.
-ask-files-root-password = Your password, for what only the administrator may change
 ask-security-check-password = Password to check (only five characters of its fingerprint leave this machine)
 ask-security-check-email = E-mail address to check (it is sent to XposedOrNot)
 ask-security-check-file = File to check (its fingerprint is sent to VirusTotal)
@@ -8361,14 +8351,14 @@ security-sudo-asked = asked every time
 security-sudo-not-asked-until = not asked until { $time }
 security-sudo-end = Ask for it again now
 security-sudo-open-for = Do not ask for { $minutes } minutes
-security-sudo-note = It asks for your password first, and ends by itself at the time chosen, when the machine sleeps, and at the next start.
+security-sudo-note = It asks for your password first, and ends by itself at the time chosen — a restart does not end it — or when you end it.
 security-sudo-recent = This week:
 security-finger-reader = Reader
 security-finger-enrolled = enrolled
 security-finger-enrol = Enrol
 security-finger-ring-note = The arrows to the sides choose the finger; it asks for your password first, then for a few touches.
-security-finger-sudo = Fingers for the administrator in a terminal
-security-finger-sudo-note = Only in a terminal: here, and everywhere else, it is your password.
+security-finger-sudo = Fingers for the administrator
+security-finger-sudo-note = In a terminal and in the sudo bar a finger answers in place of your password, which always answers too; never the login.
 security-finger-ask-remove = Remove your { $finger }? It cannot be used again until it is enrolled again.
 security-finger-left-thumb = left thumb
 security-finger-left-index-finger = left index finger
@@ -8489,7 +8479,7 @@ security-about-rule = Change this rule, in words; the delete key removes it
 security-about-allow-home = Allows this port on home networks, with your password
 security-about-allow-public = Allows this port on public networks too, with your password
 security-about-finger = Removes this finger, after a question
-security-about-finger-sudo = Lets a finger answer the administrator in a terminal, with your password
+security-about-finger-sudo = Lets a finger answer the administrator — in a terminal and in the sudo bar — in place of your password
 security-about-report = Opens the file's report on VirusTotal's page
 security-about-url = Opens the page in your browser
 security-about-answer = Answers the question
@@ -8825,8 +8815,7 @@ belongings-decide-take-remote = Take the repository's
 belongings-decide-keep-both = Keep both
 belongings-diff-title = Difference in { $name }
 belongings-diff-note = The lines that begin with - are this machine's; the ones that begin with + are the repository's.
-belongings-kept = What is kept
-belongings-what-leaks = Everything is encrypted with your passphrase before it leaves this machine. The repository shows how many files there are, their sizes and when each sync happened; never their names, their places or what is in them.
+belongings-what-leaks = Everything but the plain part below is encrypted with your passphrase, post-quantum, before it leaves this machine, cut into pieces. Of that, the repository shows how many pieces there are, their sizes, which content repeats and when each sync happened; never the files' names, their places or what is in them.
 belongings-added-by-you = added by you
 belongings-added-elsewhere = added on another machine
 belongings-taken-out = taken out by you
@@ -8893,7 +8882,7 @@ belongings-refused-needs-access = The repository wants access this machine was n
 belongings-refused-refused = The repository refused this machine's key or token.
 belongings-refused-unreachable = The repository could not be reached.
 belongings-refused-raced = Another machine kept syncing while this one did; try again.
-belongings-refused-not-ours = That repository is not a belongings repository, or is from a newer version.
+belongings-refused-not-ours = That repository is not a belongings repository this system reads.
 belongings-refused-empty = The repository is empty: the first sync sets the passphrase.
 belongings-refused-corrupt = Something in the repository does not decrypt or does not read.
 belongings-refused-undecided = A conflict has no decision yet.
@@ -8919,7 +8908,7 @@ transfers-engine-belongings = belongings
 transfers-work-belongings = belongings
 # The installer's fifteenth question.
 inst-belongings = Belongings repository
-inst-belongings-help = Optional. The private repository your configuration is kept in, encrypted: git@host:path, ssh://… or https://…, never with a password in it. Its first sync after the installation puts your settings back.
+inst-belongings-help = The private repository your configuration is kept in, encrypted: git@host:path, ssh://… or https://…, never with a password in it. Your declarations are installed with the machine, and your settings restored into its home.
 inst-step-belongings = Write the belongings' repository into your home
 
 # A lookup or a directory whose host consent.json does not let: nothing
@@ -9424,3 +9413,1313 @@ player-trouble-tag-remux-would-drop = This file is too big to be written in plac
 player-origin-matroska-track-of = Matroska tags of stream { $index } · { $kind }
 player-origin-matroska-track-lang = Matroska tags of stream { $index } · { $kind } · { $lang }
 player-origin-matroska-track-uid = Matroska tags of the track whose UID is { $uid }
+
+## ── the 2026-10-05 wave ─────────────────────────────────────────────────
+## One region per package, each starting at its anchor.
+
+## ── anchor: L01 ──
+
+## ── anchor: L02 ──
+belongings-refused-not-post-quantum = The repository's server offered no post-quantum key exchange, and the belongings ask for one: nothing was fetched or pushed.
+files-git-why-not-post-quantum = The remote's server offered no post-quantum key exchange, and this connection asks for one: nothing was sent.
+files-git-why-no-common-key-exchange = The remote's server offers only old key exchanges that this machine no longer accepts: it was reached, and nothing was sent.
+
+## ── anchor: L03 ──
+
+## ── anchor: L04 ──
+## Why a program of the distro cannot be declined (`assets/distro-apps.nix`, `essential`).
+software-essential-why-the-login-shell = It is the login shell: without it, nobody could sign in to this machine.
+
+## ── anchor: L05 ──
+## The machine's life (`ronoctua-machine`): why an apply, a migration, a bless or a hold did not do what it was asked (`machine-refused-<why>`).
+machine-refused-not-root = Only root changes the machine: nothing was done.
+machine-refused-busy = Another change to this machine is running: try again when it ends.
+machine-refused-nothing-to-migrate = This machine already has its own flake: there is nothing to migrate.
+machine-refused-build-failed = The new system did not build. Nothing changed: the machine runs what it ran, and its folder says so again.
+machine-refused-switch-failed = The switch to the new system failed. The next start tries it once, and comes back to the last good system if it does not start.
+machine-refused-did-not-boot = This is the system that did not start when it was tried, or that was rolled back. The machine stays on the one it runs until a newer revision of the distro arrives.
+machine-refused-last-good-would-fall-out = One more system would push the last good one out of the boot menu. Restart first, so the system on trial can be confirmed.
+machine-refused-held = The machine is held at another revision than the one its folder names: nothing was built.
+machine-refused-unreadable = A file of the machine's folder cannot be read.
+machine-refused-failed = A program the machine needed failed; the journal says which.
+## How the boot trial stands (`machine-trial-<outcome>`).
+machine-trial-pending = The new system starts for the first time at the next restart. If it does not start, the machine comes back to the last good one by itself.
+machine-trial-good = The new system started well: it is the last good one now.
+machine-trial-failed = The new system did not start, or was rolled back: the machine is back on the last good one.
+machine-trial-boot-identical = The new system starts exactly like the last good one: no restart is needed to trust it.
+## Why the new system has no boot trial, until it has started once (`machine-no-trial-<why>`).
+machine-no-trial-no-efi-variables = This machine's boot variables cannot be written, so the new system has no way back but the boot menu.
+machine-no-trial-not-in-menu = The boot menu does not name the new system or the last good one in a way the trial can use, so the new system has no way back but the boot menu.
+machine-no-trial-no-last-good = No system is known to have started well on this machine yet, so the new system has no way back but the boot menu.
+
+## ── anchor: L06 ──
+
+## ── anchor: L07 ──
+belongings-reason-system-managed = a link the system makes: on another machine it would point nowhere
+belongings-repair-why-unknown-variant = a word this machine does not know — most often a newer machine's
+belongings-repair-why-wrong-type = a value of the wrong kind
+belongings-repair-why-missing = a value that was not there
+belongings-repair-why-invalid = a value that is not allowed
+belongings-repair-part-not-read = Part of { $file } cannot be read here: it stays in the file as written, and this machine goes on without it.
+
+## ── anchor: L08 ──
+belongings-refused-not-let = The repository's host may not be asked yet: allow it on the row under Sync. Nothing was fetched or sent.
+belongings-refused-newer = The repository is in a newer format than this machine reads: update this machine first.
+belongings-op-compact = compacting the history
+belongings-outcome-compacted = The history was compacted: { $before } became { $after } here. The host may keep the old copies until its own cleanup.
+belongings-outcome-nothing-to-compact = There was nothing to compact: every version in the history is from the last { $days ->
+        [one] day
+       *[other] { $days } days
+    }, and no piece is left over.
+belongings-consent-for = Syncing the belongings reaches the repository on this host.
+belongings-invalid-unnamed-host = The host has to be a name or an IPv4 address: an IPv6 address or a name with an underscore cannot be allowed to be asked.
+
+## ── anchor: L09 ──
+belongings-op-sign = signing your plain part
+belongings-held-unsigned = held: the repository's plain part carries no signature
+belongings-held-no-key = held: no key here to check it against — pin yours below
+belongings-held-bad-signature = held: not signed by your key
+belongings-held-rolled-back = held: an older version than this machine already took
+belongings-held-not-as-signed = held: not what your key signed
+belongings-root-refused-not-signed = What was handed over carried no signature, and this machine kept the data it had.
+belongings-root-refused-bad-signature = Not signed by the key this machine trusts, and this machine kept the data it had.
+belongings-root-refused-rolled-back = An older version than this machine already took, and this machine kept the data it had.
+belongings-kept-back-not-as-signed = kept as this machine has it: not what you signed
+belongings-kept-back-no-key-pinned = kept as this machine has it: no key is pinned here
+belongings-unsigned = changed here, waiting for your passphrase to be signed
+belongings-sign = Sign now
+cmd-belongings-sign = Sign what you changed here with your key now, with no network, so this machine and the others take it
+ask-belongings-sign = Passphrase of the belongings, to sign
+cmd-software-sign = Sign a change of what you declared with your belongings' passphrase, so it reaches this machine and your others now
+ask-software-sign = Passphrase of the belongings, to sign this change
+belongings-signature = Your signature
+belongings-signature-note = What travels in clear is signed with your key, made with your repository and kept under your passphrase. A machine takes in by itself only what that key signed — the key it pinned, never the copy in the repository; anything else waits, with the reason.
+belongings-signature-key = Your key
+belongings-signature-key-unknown = not known here yet: a sync with your passphrase shows it
+belongings-signature-machine = This machine
+belongings-signature-pinned = trusts your key
+belongings-signature-pinned-some = trusts a key: a sync with your passphrase says whether it is yours
+belongings-signature-other = trusts another key: pin yours
+belongings-signature-none = trusts no key yet: your options and brain modules wait
+belongings-signature-last = Last delivery
+belongings-signature-refused = refused
+belongings-signature-sync-first = Sync once with your passphrase first: that is what shows your key here.
+belongings-signature-already = This machine already trusts your key.
+belongings-pinning = Pinning
+belongings-pinning-now = asking sudo…
+belongings-pinning-done = this machine trusts your key now
+belongings-pinning-not = not taken: the journal says why
+belongings-pinning-busy = A pin is on its way.
+belongings-pin = Pin your key on this machine
+cmd-belongings-pin = Pin the key your passphrase opened on this machine, through sudo: this machine then takes by itself what that key signed
+inst-step-plain-passphrase = Hand the passphrase to the copy of your declarations
+inst-step-pin = Pin your signing key on this machine
+belongings-refused-plain-too-large = Too large to keep in clear.
+belongings-op-sync-plain = the plain part's sync
+belongings-op-restore = the restore
+belongings-op-probe = checking the access
+belongings-op-init = the first sync
+belongings-op-verify-passphrase = checking the passphrase
+belongings-outcome-plain-synced = The plain part is in step: { $pulled } written here, { $pushed } sent.
+belongings-decided-take-merged-ours = merged, this machine's where they clash
+belongings-decided-take-merged-theirs = merged, the repository's where they clash
+belongings-decide-take-merged-ours = Merge, keeping this machine's where they clash
+belongings-decide-take-merged-theirs = Merge, taking the repository's where they clash
+cmd-belongings-take-merged-ours = Merge the conflict, keeping this machine's side where the two clash
+cmd-belongings-take-merged-theirs = Merge the conflict, taking the repository's side where the two clash
+belongings-reason-person-data = what you declared: programs, machines, options
+belongings-reason-brain-module = your own brain modules
+belongings-plain-note = Kept in clear, not encrypted: the machine reads it before anybody types the passphrase. Whoever can read the repository can read it; whoever can write to it cannot make a machine take a change your key did not sign — that waits, with the reason. A file past { $size } stays out.
+belongings-plain-already = That travels already, in clear, with the plain part.
+belongings-no-merge-here = No merge reached this conflict: keep one side, or take the other.
+belongings-sides-unnamed = here: { $here } · repository: { $there }
+belongings-plain-conflicts = { $n ->
+        [one] One file of it changed here and in the repository: the next sync asks you.
+       *[other] { $n } files of it changed here and in the repository: the next sync asks you.
+    }
+belongings-merge-hunks = { $n ->
+        [one] Merged, but one part of the text changed on both sides.
+       *[other] Merged, but { $n } parts of the text changed on both sides.
+    }
+belongings-merge-fields = { $n ->
+        [one] Merged, but one field changed on both sides: { $fields }
+       *[other] Merged, but { $n } fields changed on both sides: { $fields }
+    }
+
+## ── anchor: L10 ──
+# THE 2026-10-11 WAVE, the sudo door's root side. Why a root gesture
+# did not happen (`ronoctua_security::Why`), beside the others.
+security-refusal-cancelled = Cancelled: nothing was done.
+security-refusal-no-key = No security key is plugged in.
+# The passwordless window's longer spans, and the one with no limit.
+security-sudo-open-for-hours = Do not ask for { $hours } hours
+security-sudo-open-no-limit = Do not ask until I say so
+security-sudo-not-asked-no-limit = not asked until you end it
+security-sudo-until-you-end-it = you end it
+security-sudo-no-limit = no limit
+hint-security-no-limit = The administrator asks for no password until you end it; a click opens where it ends
+belongings-op-forget = forgetting the session's key
+# The predefined targets, by id (`assets/belongings.nix`'s `targets`): what the
+# list of what goes to the repository names them.
+belongings-target-ssh = your SSH keys and settings
+belongings-target-git = git's settings and your registered security keys
+belongings-target-gnupg = your GnuPG keyring
+belongings-target-shell = your shell's own file
+belongings-target-doom = Doom Emacs' local file
+# Beside the targets and the passphrase: what the passphrase guards now.
+belongings-targets-note = Your SSH keys, your GnuPG keyring and your security keys travel encrypted under this passphrase: it now guards them too, so make it a strong one.
+# A name a target leaves out: a socket, a lock, an agent's seed.
+belongings-reason-transient = this machine's moment: a socket, a lock, a seed
+# What a sync that brought a target's files offers ("no" drawn first).
+belongings-offer-ssh-signing = Sign your git commits and tags with { $key }? Every machine that has this key will; the others go on unsigned.
+belongings-offer-pam-u2f = Bring the security keys you registered on your other machines to this one? Each answers sudo here in place of your password, which keeps working.
+# The identity kept for the session (`keep_unlocked`).
+belongings-unlock-switch = Remember the passphrase for this session
+belongings-unlock-note = Kept in the kernel's memory, never on disk, until you log out, the machine sleeps or { $hours } hours pass.
+belongings-unlock-kept = Remembered until { $until }: a sync asks nothing.
+
+## ── anchor: L11 ──
+
+## ── anchor: L12 ──
+cmd-private-open = Open /private, the encrypted folder that is yours alone
+cmd-private-lock = Lock /private now
+cmd-private-show = Show /private in the file manager
+cmd-private-passphrase = The passphrase of /private
+cmd-private-new-passphrase = A new passphrase for /private
+cmd-private-repeat-passphrase = The same passphrase again
+cmd-private-cap = How large /private may grow (64G, 1.5T…)
+security-heading-private = /private
+security-private-about = A folder only you can open: encrypted with a passphrase of its own, it takes on the disk only what it holds, and it locks itself when the machine sleeps.
+security-private-missing = This machine does not have the vault's units, so there is no /private here.
+security-private-unreadable = What /private is doing could not be read.
+security-private-create = Create /private
+security-private-create-value = up to { $size }
+security-private-state = State
+security-private-locked = locked
+security-private-open-at = open, at /private
+security-private-suspended = suspended while in use: its key left memory at sleep
+security-private-open = Open with the passphrase
+security-private-open-key = Open with the security key
+security-private-resume = Resume with the passphrase
+security-private-lock = Lock it now
+security-private-show = Show it in the file manager
+security-private-size = On the disk
+security-private-size-value = { $real } of up to { $cap }
+security-private-grow = Raise the cap
+security-private-cipher = Encryption
+security-private-cipher-value = LUKS2, AES-XTS with a 512-bit key, argon2id
+security-private-key = Security key
+security-private-key-enrolled = enrolled: a touch opens /private
+security-private-enrol = Enrol a security key
+security-private-forget = Forget the security key
+security-private-passphrase = Change the passphrase
+security-private-note = It locks itself when the machine sleeps. Something still using it then is suspended instead: its key leaves memory, and the passphrase resumes it.
+security-private-overcommit = The cap is larger than what this disk has free: if the disk fills up, writing to /private fails.
+security-private-busy = Working on /private…
+security-private-touch = Touch your security key now.
+private-refused-absent = There is no /private yet: create it first.
+private-refused-exists = That is already there.
+private-refused-wrong-passphrase = That is not the passphrase of /private.
+private-refused-no-key = No security key answered: plug it in, and touch it when it blinks.
+private-refused-busy = Something is still using /private: close what is open in it first.
+private-refused-no-room = This disk has not the room that cap asks for.
+private-refused-invalid = That is not something /private accepts.
+private-refused-failed = /private could not do it; the system log says why.
+echo-private-created = /private is ready, and open.
+echo-private-opened = /private is open.
+echo-private-locked = /private is locked.
+echo-private-key-enrolled = The security key opens /private now.
+echo-private-key-forgotten = The security key no longer opens /private.
+echo-private-passphrase-changed = /private has its new passphrase.
+echo-private-grown = The cap of /private is raised.
+echo-private-not-a-size = That is not a size: write it like 64G or 1.5T.
+echo-private-too-small = /private needs a cap of at least { $size }.
+echo-private-mismatch = The two passphrases differ, so nothing was changed.
+echo-private-already-locked = /private is already locked.
+files-private-locked = { $name } is locked: opening it asks for its passphrase, or a touch of its key.
+files-private-open = { $name } is open: locking it closes it until the passphrase opens it again.
+security-about-private-create = Asks how large it may grow and a passphrase for it, then makes it.
+security-about-private-open-key = Opens it with a touch of the enrolled key.
+security-about-private-grow = Asks for a larger cap; it still takes on the disk only what it holds.
+security-about-private-enrol = Asks the passphrase, then a touch of the key it enrols.
+security-about-private-forget = The key stops opening it; the passphrase stays.
+security-about-private-passphrase = Asks the passphrase in force, then the new one twice.
+security-now-private-suspended = /private is suspended while in use
+files-private-withheld-shut = /private is not open: open it, or resume it, with its passphrase to see what is inside.
+files-private-withheld-silent = /private is not answering: it was suspended while in use, and its passphrase resumes it.
+
+## ── anchor: L13 ──
+transfers-engine-incus = Incus
+transfers-work-incus-launch = create an instance
+transfers-work-incus-image-copy = copy an image
+transfers-work-incus-export = export an instance
+transfers-work-incus-import = import an instance
+transfers-work-incus-publish = publish an instance as an image
+transfers-work-incus-push = send a file into an instance
+transfers-work-incus-pull = take a file out of an instance
+transfers-work-incus = Incus
+incus-refused-no-incus = Incus is not part of this installation, or its daemon is not running.
+incus-refused-not-in-group = Incus answers only the incus-admin group; log out and in again for the group to count.
+incus-refused-gone = It is not there any more.
+incus-refused-busy = Incus is still busy with it; try again when it is done.
+incus-refused-not-let = That server, or a host it fetches from, has not been allowed yet; allow them first.
+incus-refused-invalid = Incus does not take that name, path or limit — or the name is taken, or the file is already there.
+incus-refused-failed = Incus could not do it; the system log says why.
+
+## ── anchor: L14 ──
+
+## ── anchor: L15 ──
+cmd-dev-clone = Clone the distro's repository into a folder
+ask-dev-clone = Clone from { $host } into
+dev-clone-cloning = { $host } is now allowed. Cloning the distro from { $host } into { $folder }…
+dev-clone-running = A clone into { $folder } is still running.
+dev-clone-done = The distro is in { $folder }.
+dev-clone-failed = Nothing was cloned into { $folder }: { $why }
+dev-clone-occupied = Something is already at { $folder }: nothing was cloned.
+dev-clone-no-address = This build was not told the distro's address, so there is nothing to clone.
+dev-clone-no-folder = No folder was given: nothing was cloned.
+dev-clone-not-let = { $host } could not be let, so nothing was asked.
+dev-clone-unheard = The footer could not hear the clone's answer, so it was not started.
+dev-clone-unkept-no-home = There is no home folder to keep the consent in: nothing was cloned.
+dev-clone-unkept-unparseable = The consent file (consent.json) will not parse; it was left as it is, and nothing was cloned.
+dev-clone-unkept-unwritable = The consent file could not be written: nothing was cloned.
+
+## ── anchor: L16 ──
+inst-step-cache-token = Read your private binary cache's token for the installation
+inst-step-cache-netrc = Let this machine read your private binary cache
+# THE PERSON'S BINARY CACHE — a page of the update's view (`c`, `LEADER s u c`),
+# in both doors, and what the installation and root's netrc say of it.
+binary-cache-open = binary cache
+cmd-binary-cache-open = Your binary cache: your own Cachix cache, which this machine downloads from and pushes to after each update
+cmd-binary-cache-name = Names your binary cache — its name, then its public key
+cmd-binary-cache-key = Gives your binary cache its public key, exactly as cachix.org shows it
+cmd-binary-cache-token = Gives your binary cache its push token, kept encrypted with your belongings
+cmd-binary-cache-netrc = Lets this machine read your private binary cache: root's netrc, written through sudo
+ask-binary-cache-name = Name of your Cachix cache
+ask-binary-cache-key = Public key of { $name }
+ask-binary-cache-token = Push token (never shown)
+binary-cache-heading = Your binary cache
+binary-cache-row-cache = cache
+binary-cache-row-key = public key
+binary-cache-row-visibility = who reads it
+binary-cache-row-token = push token
+binary-cache-row-access = this machine reads it
+binary-cache-row-machine = on this machine
+binary-cache-row-last = last push
+binary-cache-row-forget-token = forget the push token on this machine
+binary-cache-row-remove = stop using this cache
+binary-cache-about-cache = Your own Cachix cache — never the distro's, which has none. This machine downloads from it before cache.nixos.org, and pushes to it after each update that switched it. The choice travels with your belongings to your other machines. Choosing it asks its name, then its key.
+binary-cache-about-key = The cache's signing key, exactly as cachix.org shows it on the cache's page: every download from it is checked against this key. Choosing it asks it.
+binary-cache-about-visibility = A public cache receives only the distro's own outputs — never a path of yours, never an unfree program; anybody may download them. A private cache receives this machine's whole system, and reading it needs your token. Choosing it switches between the two.
+binary-cache-about-token = The token Cachix gives you to push. It is kept encrypted in your belongings, readable by you alone, and never shown, written on a command line or logged. Choosing it asks a new one.
+binary-cache-about-access = A private cache is read by this machine's Nix through a netrc only root reads, holding your token. It is written through sudo when you set the token or make the cache private; choosing it writes it again.
+binary-cache-about-machine = What this machine uses now. A cache you name here reaches this machine at its next update, when your belongings' signed copy is applied.
+binary-cache-about-last = What the last push carried, or why it was refused. A push follows each update that switched this machine, once.
+binary-cache-about-forget-token = The token goes from this machine and from your belongings at their next sync; nothing more is pushed until you give it a new one.
+binary-cache-about-remove = This machine stops downloading from and pushing to the cache at its next update. The cache itself, on Cachix, stays as it is.
+binary-cache-none = none
+binary-cache-key-none = none
+binary-cache-public = public: the distro's own outputs, for anybody
+binary-cache-private = private: this machine's system, read with your token
+binary-cache-token-none = none: nothing is pushed
+binary-cache-token-kept = kept, encrypted with your belongings
+binary-cache-token-refused = not used
+binary-cache-copy-unreadable = cannot be read
+binary-cache-copy-newer = of a newer format
+binary-cache-down = next row
+about-binary-cache-down = Puts the cursor on the next row of the binary cache's page.
+binary-cache-up = previous row
+about-binary-cache-up = Puts the cursor on the previous row of the binary cache's page.
+binary-cache-enter = change
+about-binary-cache-enter = Does what the row under the cursor says: asks a name, a key or the token, switches who reads the cache, writes root's netrc, or asks before a gesture that does not come back.
+binary-cache-steps = the steps
+about-binary-cache-steps = Back to the update's steps.
+binary-cache-access-written = yes, through root's netrc
+binary-cache-access-missing = no: root's netrc is not written
+binary-cache-machine-in-use = in use, before cache.nixos.org
+binary-cache-machine-next = from the next update
+binary-cache-machine-leaving = still the one before, until the next update
+binary-cache-machine-none = no cache
+binary-cache-last-never = never
+binary-cache-last-pushed = { $when }: { $paths ->
+        [one] one path
+       *[other] { $paths } paths
+    } ({ $size })
+binary-cache-last-refused = { $when }: nothing pushed
+binary-cache-why-no-cache = This machine names no binary cache.
+binary-cache-why-no-token = There is no push token on this machine.
+binary-cache-why-token-open = The token's file is readable by somebody else, so it is not used: give the token again.
+binary-cache-why-not-a-token = That is not a Cachix token.
+binary-cache-why-not-let = A host the push reaches is not allowed in your consent: naming the cache again allows them.
+binary-cache-why-nothing-new = No update switched this machine since the last push: there was nothing new to push.
+binary-cache-why-no-tools = This machine has no cachix or nix where the push looks for them.
+binary-cache-why-store-failed = Nix did not answer about the store.
+binary-cache-why-cachix-failed = Cachix refused the push, or it did not finish: the update's output says why.
+binary-cache-why-unwritable = The file could not be written.
+binary-cache-why-newer = Your options file is of a newer format than this machine reads: update this machine first.
+binary-cache-why-unreadable = Your options file does not read, so it is not rewritten.
+binary-cache-confirm-forget = Forget the push token on this machine? It goes from your belongings too, and nothing is pushed until you give a new one.
+binary-cache-confirm-remove = Stop using this binary cache on your machines? Each stops downloading from it and pushing to it at its next update.
+binary-cache-answer-no = no, keep it
+binary-cache-answer-yes-forget = yes, forget the token
+binary-cache-answer-yes-remove = yes, stop using it
+binary-cache-said-not-a-name = A Cachix name is lower-case letters, digits and dashes, starting with a letter or a digit.
+binary-cache-said-not-the-key = That key is not this cache's: it is the name, .cachix.org-1: and 44 characters, as cachix.org shows it.
+binary-cache-said-not-let = The cache was named, and the consent for its hosts could not be kept: nothing will be pushed until it is.
+binary-cache-said-named = The cache is { $name }; this machine uses it from its next update.
+binary-cache-said-public = The cache is public: it receives only the distro's own outputs.
+binary-cache-said-private = The cache is private: it receives this machine's system, read with your token.
+binary-cache-said-token = The push token is kept, encrypted with your belongings.
+binary-cache-said-forgotten = The push token is forgotten on this machine.
+binary-cache-said-removed = No binary cache any more, from the next update.
+binary-cache-said-netrc-written = This machine reads your private cache now: root's netrc is written.
+binary-cache-said-netrc-removed = Root's netrc for the cache is gone: nothing holds your token there any more.
+binary-cache-said-netrc-footer = Root's netrc is asked for in the sudo bar, above the modeline, if sudo wants you.
+
+## ── anchor: L17 ──
+transfers-engine-stick = installer stick
+transfers-work-stick-fetch = download the installer
+transfers-work-stick-write = write the installer to a stick
+group-stick = installer stick
+mode-stick = installer stick
+cmd-stick-open = The installer on a USB stick: the latest version and your drives
+cmd-stick-window = The installer on a USB stick, in a window
+cmd-stick-down = The next row
+cmd-stick-up = The previous row
+cmd-stick-enter = Does what the row says: allow, download, choose the drive, answer
+cmd-stick-reread = Asks GitHub for the latest version again, and reads the drives again when udisks did not answer
+stick-down = down
+stick-up = up
+stick-enter = choose
+stick-reread = ask again
+sidebar-write-installer = write the installer here
+sidebar-does-write-installer = opens the installer stick on this drive: the whole drive is written, after a question whose first answer is no
+stick-title = Installer stick
+stick-heading-release = The installer
+stick-heading-drives = Drives
+stick-heading-write = The last write
+stick-consent-for = Knowing the latest version and downloading the installer needs GitHub.
+stick-asking = Asking GitHub for the latest version…
+stick-retry = Ask again
+stick-version = Version
+stick-published = Published
+stick-size = Size
+stick-image = Image
+stick-image-cached = downloaded and checked, in the cache
+stick-image-absent = not downloaded yet
+stick-fetch = Download only
+stick-fetch-value = the image, to the cache, without writing a drive
+stick-drives-reading = Reading the drives…
+stick-drives-down = udisks is not answering, so the drives cannot be read.
+stick-drives-none = No USB stick or memory card is plugged in.
+stick-drive-ready = { $size } · can be written
+stick-drive-small = { $size } · too small for this version
+stick-erases = Writing erases the whole drive. You are asked first, and then for your password.
+stick-unfit-bus = { $size } · not on USB nor a memory card
+stick-unfit-system = { $size } · the system runs from it
+stick-unfit-mounted = { $size } · mounted
+stick-unfit-open = { $size } · an encrypted volume is open
+stick-unfit-read-only = { $size } · read-only
+stick-unfit-unnamed = { $size } · no stable name
+stick-why-bus = Only a USB stick or a memory card is written: this drive is on another bus.
+stick-why-system = The running system uses a volume on this drive, so it is never written.
+stick-why-mounted = A volume on this drive is mounted. Unmount it in the file manager, then choose it again.
+stick-why-open = An encrypted volume on this drive is open. Lock it in the file manager, then choose it again.
+stick-why-read-only = The drive is read-only: a stick's or a card's switch may be set.
+stick-why-unnamed = The drive has no stable name under /dev/disk/by-id, so a write could not be pinned to it.
+stick-small-why = The installer does not fit on this drive. Choose a bigger one.
+stick-no-release-yet = The latest version is not known yet, so there is nothing to write.
+stick-sure = Write the installer { $version } to { $drive } ({ $size })?
+stick-sure-note = Everything on the drive is erased, and that cannot be undone.
+stick-no = No, leave the drive as it is
+stick-yes = Yes, erase it and write the installer
+stick-state = State
+stick-phase-waiting = waiting for the download to finish
+stick-phase-writing = writing: { $percent }%
+stick-phase-verifying = reading it back: { $percent }%
+stick-phase-done = written and read back: the stick is ready
+stick-phase-failed = refused
+stick-phase-given-up = given up
+stick-refused-not-let = GitHub was not allowed, so nothing was asked.
+stick-refused-offline = GitHub did not answer. Are you online?
+stick-refused-download = The download did not finish, so nothing was written: GitHub stopped answering, or the cache ran out of room. The queue's row says which.
+stick-refused-no-release = The latest release has no installer this view understands.
+stick-refused-mismatch = What was downloaded does not match the release's checksums, so nothing was written.
+stick-refused-not-writable = The drive could not be written: it was mounted, held, too small, or is not a stick.
+stick-refused-changed = The drive changed after it was chosen, so nothing was written. Choose it again.
+stick-refused-read-back-differs = The stick does not hold what was written to it. It may be failing, or smaller than it says.
+stick-refused-failed = The write did not happen: the queue or the writer failed. The queue's row, or the journal of ronoctua-stick-write.service, says why.
+stick-about-allow = Lets the three GitHub hosts, so the latest version can be asked for and downloaded
+stick-about-retry = Asks GitHub for the latest version again
+stick-about-fetch = Downloads and checks the image now, so a write later starts at once
+stick-about-drive = Writes the installer over this whole drive, after a question
+stick-about-unfit = Says why this drive is not written, and what to do
+stick-about-no = Closes the question and writes nothing
+stick-about-yes = Starts the writer with your password, then downloads, checks and writes
+stick-drive-left = The drive went away, so the question was closed.
+stick-queued-fetch = The image is downloading in the queue.
+stick-queued-write = The writer is waiting: the image downloads in the queue, then the drive is written and read back.
+stick-starting = Starting the writer…
+stick-not-let-host = { $host } is not allowed: allow GitHub in this view first.
+stick-busy-writing = A stick is being written now. Wait for it to finish (the last write, below) before writing another.
+stick-busy-waiting = A write is already waiting for its image to download. Give it up in the queue to choose another drive.
+stick-busy-stopped = A writer was still waiting for an image nobody was downloading; it was told to stop. Choose the drive again in a moment.
+stick-no-writer = This machine has no stick writer installed.
+stick-no-cache = There is no cache folder to download the image into.
+stick-sidebar-drive = { $name } — the whole drive: press for what can be done with it
+
+## ── anchor: L18 ──
+software-order-declare = declared for you
+software-order-forget = removed for good
+software-order-decline = kept uninstalled
+software-order-undecline = brought back
+software-order-reconcile = matched to your declaration
+software-order-refresh-pins = downloads looked for again
+software-declared-refusal-nothing-to-pin = It came from a file with no address, so there is no download to declare it by. Install it from the catalogue to keep it on your other computers.
+software-declared-refusal-declaration-refused = This computer refused your declaration, and nothing of it changed here. The queue's row says why.
+software-declared-refusal-declaration-unreadable = Your declaration's file does not read here — a newer computer of yours wrote it, or it is broken — so it was left as it is. Update this computer.
+software-declared-refusal-essential = The distro needs it, so it cannot be kept uninstalled.
+software-declared-refusal-apply-failed = This computer could not be rebuilt with the change, and runs as it was. The queue's row says what failed.
+software-declared-refusal-machine-unnamed = This computer's name cannot be written in a declaration: its hostname has capitals or spaces.
+software-declared-phase-declaring = writing your declaration
+software-declared-phase-applying = applying it to this computer
+software-declared-phase-reconciling = matching this computer to your declaration
+software-declared-phase-publishing = sending it to your repository
+software-declared-origin-mine-declared = declared by you
+software-declared-origin-distro = comes with the distro
+software-declared-origin-essential = comes with the distro, which needs it
+software-declared-standing-applied = on this computer
+software-declared-standing-waiting = arrives with the next update
+software-declared-standing-elsewhere = on your other computers only
+software-declared-skipped-attr-missing = left out: this computer's packages no longer have that name
+software-declared-skipped-not-a-package = left out: that name is not a program here
+software-declared-skipped-refused-by-meta = left out: refused here — not free and not allowed, broken or insecure
+software-declared-skipped-held = left out: the update held it back
+software-declared-skipped-source-off = left out: this computer has no support for its source
+software-declared-skipped-other-machine = declared for your other computers
+software-declared-skipped-format-unknown = left out: a newer distro than this computer's wrote it
+software-declared-held-eval-failed = it would not evaluate
+software-declared-held-fetch-failed = its download could not be fetched
+software-declared-held-upstream-changed = its download changed under the same address
+software-declared-held-build-failed = it would not build
+software-declared-decline-honoured = not on this computer
+software-declared-decline-still-present = still here, through another program that brings it
+software-declared-decline-essential = kept: the distro needs it
+software-declared-decline-unknown = this distro no longer knows it
+software-declared-decline-elsewhere = declined on { $machines }
+software-declared-decline-waiting = leaves with the next update
+software-declared-door = Declared by you
+software-declared-door-declined = Declined by you
+software-declared-count = { $count ->
+        [one] one program
+       *[other] { $count } programs
+    }
+software-declared-count-out = { $count ->
+        [one] one left out here
+       *[other] { $count } left out here
+    }
+software-declared-declined-count = { $count ->
+        [one] one kept uninstalled
+       *[other] { $count } kept uninstalled
+    }
+software-declared-none-yet = nothing yet
+software-declared-none-declined-yet = nothing
+software-declared-note = What you declare goes to every computer of yours: each update installs it and keeps it, and it travels with your belongings.
+software-declared-not-reported = This computer's system was built before it knew your declarations: the next update applies them.
+software-declared-none = Nothing declared yet. Install only for you, on a program's page, declares it.
+software-declared-android-pending = Some declared Android apps wait for Android to start, and go in then.
+software-declared-heading-pins = Downloads
+software-declared-refresh = Look for newer downloads
+software-declared-refresh-value = the next update builds them, after trying each
+software-declared-refresh-one = Look for a newer download
+software-declared-refresh-one-value = the next update builds it, after trying it
+software-declared-file-declared = your declared programs
+software-declared-file-declined = your declined programs
+software-declared-unreadable-newer = The file of { $file } was written by a newer distro, and is left as it is: update this computer to read it.
+software-declared-unreadable-broken = The file of { $file } does not read, and is left as it is: the next sync of your belongings may mend it.
+software-declared-gone = It is no longer in your declaration.
+software-declared-row-here-now = Here
+software-declared-row-said = What the system said
+software-declared-row-why = Why
+software-declared-row-on = Goes to
+software-declared-all-computers = all your computers
+software-declared-everywhere = on all your computers
+software-declared-row-pin = Pinned version
+software-declared-row-download = Download
+software-declared-row-edited = Last changed
+software-declared-edited-on = { $when }, on { $machine }
+software-declared-heading-fixes = What can be done
+software-declared-row-program = The program
+software-declared-program-value = opens its page
+software-declared-note-waiting = The next update installs it here: nothing has to be done.
+software-declared-row-also-here = Also on this computer
+software-declared-note-source-off = This computer has no support for its source: a reduced profile has no Android and no AppImages.
+software-declared-note-update-me = Update this computer: a newer distro wrote this declaration.
+software-declared-row-replace = Find another
+software-declared-replace-value = searches for programs like it
+software-declared-row-forget = Remove for good
+software-declared-forget-value = here, and from your declaration
+software-declared-note-declined = The distro's programs you keep uninstalled, here or on every computer of yours: each update leaves them out.
+software-declared-none-declined = Nothing declined: every program of the distro is installed.
+software-declared-heading-distro = The distro's programs
+software-declared-distro-installed = installed with the system
+software-declared-row-group = Group
+software-declared-not-on-this-machine = This computer's profile does not carry it.
+software-declared-row-declined = Declined
+software-declared-row-bring-back = Bring it back
+software-declared-bring-back-value = on every computer, and here at once
+software-declared-row-decline-here = Keep it uninstalled here
+software-declared-row-decline-everywhere = Keep it uninstalled on all your computers
+software-declared-row-for-me = Install only for you
+software-declared-row-here = Install on this computer only
+software-declared-here-value = not declared: your other computers do not get it
+software-declared-row-keep = Keep it on all your computers
+software-declared-keep-value = declared: each of your computers installs it at its update
+software-declared-row-declared = Declared
+software-declared-sure-forget = Remove { $app } for good?
+software-declared-forget-here = It leaves this computer and your declaration.
+software-declared-forget-elsewhere = Your other computers remove it at their next update.
+software-declared-forget-data = What it saved stays, unless you choose to erase it.
+software-declared-yes-forget = Yes, remove it for good
+software-declared-sure-decline-here = Keep { $app } uninstalled on this computer?
+software-declared-sure-decline-everywhere = Keep { $app } uninstalled on all your computers?
+software-declared-decline-rebuild = This computer is rebuilt now, without it.
+software-declared-decline-others = Your other computers leave it out at their next update.
+software-declared-decline-back = Declined by you brings it back.
+software-declared-yes-decline = Yes, keep it uninstalled
+software-declared-refusal-leaves-at-next-apply = Leaves at this computer's next update: your declaration no longer has it, and the system here still does.
+software-declared-returning = No longer declined here: this computer's next update brings it back.
+software-declared-web-edit = It is declared: saving changes your declaration, and your other computers take the change at their next update.
+
+## ── anchor: L19 ──
+
+## ── anchor: L20 ──
+inst-belongings-access = Access to the repository
+inst-belongings-access-help = This machine reaches the repository with its own key, made now and kept only in your home. It is asked again until it reads and writes.
+inst-belongings-token-help = Type a token that reads and writes the repository. It stays in your home, readable by you alone.
+inst-belongings-passphrase = Belongings passphrase
+inst-belongings-passphrase-help = The passphrase that opens your belongings. It is checked against the repository before anything is touched.
+inst-belongings-passphrase-new-help = The repository is empty: choose the passphrase that will seal your belongings, at least 12 characters. It is typed twice.
+inst-belongings-passphrase-again = Type the passphrase again
+inst-belongings-passphrase-differs = The two passphrases differ. Type it again from the start.
+inst-belongings-key-intro = Add this key to the repository, with write access:
+inst-belongings-key-where = Where: { $address }
+inst-belongings-key-where-unknown = Where: in the repository's settings, as a deploy key that may write.
+inst-belongings-token-where = A token is made here: { $address }
+inst-access-waiting = The repository does not answer to this key yet.
+inst-access-reads = The key reads the repository but cannot write to it yet: give it write access.
+inst-access-ready = The key reads and writes the repository.
+inst-checking = Checking…
+inst-network-help = The installation needs the network. It reaches { $hosts } and your belongings' repository; choosing a network, or the cable, lets it.
+inst-network-help-unnamed = The installation needs the network: it reaches the distro's release, its binary cache and your belongings' repository.
+inst-gate-checking = Connecting and looking for a way out…
+inst-gate-open = The network reaches out.
+inst-gate-no-daemon = No network service answers on this installer.
+inst-gate-off = Networking is switched off.
+inst-gate-no-link = No network: plug in a cable, or choose a Wi-Fi network.
+inst-gate-unconnected = That network did not take the connection: check its password, or choose another.
+inst-gate-portal = A login page stands between this network and the internet: choose another network.
+inst-release-looking = Asking the release which installer to use…
+inst-release-newer = A newer installer is out ({ $rev }). Enter starts it, with the answers you gave.
+inst-release-ahead = This installer is newer than the release: the machine is installed from the distro it carries, and stays on it.
+inst-release-unreachable = The release did not answer: this machine is installed from this installer's own distro, and stays on it.
+inst-release-development = This installer is a development build: the machine is installed from the distro it carries, and stays on it.
+inst-invalid-blank = It cannot be left empty.
+inst-invalid-hostname = Lowercase letters, digits and hyphens only; not starting or ending with a hyphen.
+inst-invalid-hostname-prefix = The machine's name starts with `{ $prefix }`.
+inst-invalid-passphrase-short = At least 12 characters.
+inst-invalid-disk = That path is not a disk.
+inst-invalid-language = That language is not available.
+inst-invalid-layout = That keyboard layout does not exist.
+inst-invalid-profile = The installation is `full` or `minimal`.
+inst-invalid-access = Name the file that holds the key or the token, by its full path.
+inst-step-template = Write this machine's flake from the template
+inst-step-aim = Point the flake at this installer's distro
+inst-step-lock = Lock the distro this machine is built from
+inst-step-attribute = Ask the flake which system it builds
+inst-step-plain = Fetch your declarations from the repository
+inst-step-person = Apply your declarations to this machine
+inst-step-verify = Try each program you declared
+inst-step-access = Give your home its access to the repository
+inst-step-consent = Let the repository's host in your consent
+inst-step-passphrase = Hand the passphrase to the restore
+inst-step-restore = Restore your belongings into your home
+inst-step-init = Make the repository, keeping this machine's settings in it
+inst-step-skipped = Nothing to do here.
+
+## ── anchor: L21 ──
+# The one listing of what goes to the repository (`inventory`), its groups,
+# its rows and the states of a file.
+belongings-listing = What goes to your repository
+belongings-counting = Counting what goes to the repository…
+belongings-item = { $state } · { $size }
+belongings-state-synced = in step
+belongings-state-changed = changed
+belongings-state-new = new
+belongings-state-conflict = in conflict
+belongings-state-unreadable = unreadable here
+belongings-state-repaired = repaired here
+belongings-state-deleted = deleted here: it leaves the repository and your other machines
+belongings-here-not-here = not on this machine
+belongings-here-nowhere = on no machine
+belongings-never-because = never: { $reason }
+belongings-reason-too-large = too large to keep in clear
+# A predefined target: where it is kept, and what may be done about it.
+belongings-target-everywhere = on every machine
+belongings-target-partly-here = on every machine, part of it not on this one
+belongings-target-asked-nowhere = on no machine, from the next sync
+belongings-target-asked-everywhere = on every machine again, from the next sync
+belongings-target-act-not-here = Not on this machine
+belongings-target-act-nowhere = Not on any machine
+belongings-target-act-here-again = Keep it on this machine again
+belongings-target-act-everywhere = Keep it on every machine again
+belongings-nowhere-question = Stop keeping { $target } on every machine? Its copies leave the repository at the next sync; every other machine forgets them and keeps its own files.
+about-belongings-not-here = Stops keeping it on this machine: the repository's copy stays for the others
+about-belongings-nowhere = Stops keeping it on every machine — asks first
+about-belongings-everywhere = Keeps it on every machine again, from the next sync
+# A question on a page of its own, "no" first.
+belongings-answer-no = No
+belongings-answer-yes = Yes
+about-belongings-answer-no = Leaves everything as it is
+about-belongings-answer-yes = Does what the question says
+# What the last sync offered to turn on.
+belongings-offers = Offered by the last sync
+belongings-offer-turning = Turning it on…
+belongings-offer-taken = Turned on.
+belongings-offer-refused = Not turned on: { $why }
+about-belongings-offer-no = Leaves it off: it is offered again only when the key changes on another machine
+about-belongings-offer-yes = Turns it on, on this machine
+# The files a lenient read repaired.
+belongings-repairs = Repaired when read
+belongings-repairs-note = This machine could not read part of these files. What it could not read stays in each file as written, and the machine went on without it. Write the fix to put this machine's values in its place, or leave the file as it is.
+belongings-repairs-newest = This machine runs the newest system of your machines: the next sync writes these fixes by itself, and sends them.
+belongings-repairs-older = Another of your machines runs a newer system and may know these values: decide here.
+belongings-repair-count = { $n ->
+    [one] one value
+   *[other] { $n } values
+    }
+belongings-repair-line = { $pointer }: { $why }
+belongings-repair-whole-file = the whole file
+belongings-repair-leave = Leave it
+belongings-repair-write = Write the fix
+belongings-repair-written = The fix of { $file } is written.
+belongings-repair-stale = { $file } changed since it was read: what is left to repair is asked again when it is read.
+about-belongings-write-fix = Writes this machine's values in place of what it could not read
+about-belongings-leave-it = Leaves the file as it is, and stops asking until it changes
+# The history: its weight and its compaction.
+belongings-history = History
+belongings-weighs = Weighs
+belongings-weighs-value = { $tree } of files, { $history } with their history
+belongings-weight-heavy = The history weighs { $history }: past { $recommend }, compacting it is recommended.
+belongings-weight-compact = Compacting the history is recommended: it weighs { $history }, much more than what it keeps.
+belongings-compact = Compact the history
+belongings-compact-keeps = keeps { $days ->
+    [one] the last day
+   *[other] the last { $days } days
+    }
+belongings-compact-note = Every file stays as it is now; older versions leave the repository, for every machine. The host may keep the old copies until its own cleanup.
+belongings-compact-question = Older versions leave the repository for good, for every machine; every file as it is now stays, and the host may keep the old copies until its own cleanup. Compact the history to { $days ->
+    [one] its last day?
+   *[other] its last { $days } days?
+    }
+ask-belongings-compact = The passphrase, to compact the history
+about-belongings-compact = Compacts the history — asks first
+# Whether the session remembers the passphrase.
+belongings-unlock-on = yes
+belongings-unlock-off = no
+about-belongings-unlock = Whether a sync asks the passphrase once a session, or every time
+# Every field of a JSON conflict, decided on its own.
+belongings-field-ours = This machine's value
+belongings-field-theirs = The repository's value
+belongings-field-none = none
+belongings-field-chosen = { $value } · chosen
+belongings-field-before = before: { $value }
+belongings-decided-fields = merged field by field
+belongings-fields-decided-of = { $n } of { $of } fields decided
+belongings-field-only-two = A field takes this machine's value or the repository's.
+about-belongings-field = Decides this field on its own: its two values are the rows below
+about-belongings-field-ours = Keeps this machine's value of this field
+about-belongings-field-theirs = Takes the repository's value of this field
+
+## ── anchor: L22 ──
+## THE SUDO BAR (2026-10-11): where every root gesture of every screen is
+## asked, above the modeline — who asks, what for, and what sudo waits for.
+sudo-bar-title = Administrator
+sudo-bar-asks = { $who } asks to { $deed }
+sudo-bar-who-security = The security centre
+sudo-bar-who-security-window = The security centre's window
+sudo-bar-who-files = The file manager
+sudo-bar-who-files-window = The file manager's window
+sudo-bar-who-stick = The installer stick
+sudo-bar-who-stick-window = The installer stick's window
+sudo-bar-who-belongings = The belongings
+sudo-bar-who-belongings-window = The belongings' window
+sudo-bar-who-update = The update
+sudo-bar-who-update-window = The update's window
+sudo-bar-deed-relax-minutes = open the passwordless window for { $minutes ->
+        [one] one minute
+       *[other] { $minutes } minutes
+    }
+sudo-bar-deed-relax-hours = open the passwordless window for { $hours ->
+        [one] an hour
+       *[other] { $hours } hours
+    }
+sudo-bar-deed-relax-no-limit = open the passwordless window until you end it
+sudo-bar-deed-relax-end = end the passwordless window
+sudo-bar-deed-firewall = change the firewall
+sudo-bar-deed-finger-enrol = enrol a fingerprint ({ $finger })
+sudo-bar-deed-finger-delete = remove a fingerprint ({ $finger })
+sudo-bar-deed-finger-delete-all = remove every fingerprint
+sudo-bar-deed-finger-sudo-on = let your fingers answer the administrator
+sudo-bar-deed-finger-sudo-off = stop your fingers answering the administrator
+sudo-bar-deed-files-root = change what only the administrator may change
+sudo-bar-deed-private = use the /private vault
+sudo-bar-deed-private-create = create the /private vault ({ $size })
+sudo-bar-deed-private-open = open the /private vault
+sudo-bar-deed-private-lock = lock the /private vault
+sudo-bar-deed-private-enrol = let a security key open the /private vault
+sudo-bar-deed-private-forget = forget the key that opens the /private vault
+sudo-bar-deed-private-passphrase = change the /private vault's passphrase
+sudo-bar-deed-private-grow = make the /private vault larger ({ $size })
+sudo-bar-deed-stick = write the installer to a stick
+sudo-bar-deed-approve = approve the root part of your brain module { $id }
+sudo-bar-deed-keys = let { $count ->
+        [one] one security key
+       *[other] { $count } security keys
+    } answer the administrator
+sudo-bar-deed-keys-off = stop your security keys answering the administrator
+sudo-bar-deed-signer-pin = pin your signing key on this machine
+sudo-bar-deed-cache-netrc = let this machine read your private binary cache { $name }
+sudo-bar-deed-cache-netrc-remove = take your private binary cache's login off this machine
+sudo-bar-password = Your password
+sudo-bar-password-instead = Your password, instead
+sudo-bar-touch = Touch your security key, or type your password
+sudo-bar-finger = Place your finger on the reader, or type your password
+sudo-bar-wrong = That was not your password. { $asked }
+sudo-bar-checking = Checking…
+sudo-bar-cancelling = Cancelling…
+sudo-bar-answer = answer
+sudo-bar-use-password = use the password
+sudo-bar-cancel = cancel
+about-sudo-bar-answer = Hands what you typed to sudo, for this gesture alone
+about-sudo-bar-use-password = Stops waiting for the key or the finger, and asks your password
+about-sudo-bar-cancel = Does nothing, and the screen that asked says so
+security-refusal-no-footer = The footer, where the administrator is asked, is not running: nothing was done.
+## THE SECURITY CENTRE'S KEYS, and the passwordless window's count.
+security-heading-keys = Security keys
+security-keys-sudo = Answer the administrator
+security-keys-on = yes, { $count ->
+        [one] one key
+       *[other] { $count } keys
+    }
+security-keys-off = no
+security-keys-off-listed = no; your list has { $count ->
+        [one] one key
+       *[other] { $count } keys
+    }
+security-keys-key = Key { $n }
+security-keys-bring = Bring the keys of your other machines
+security-keys-away = { $count ->
+        [one] one key
+       *[other] { $count } keys
+    }
+security-keys-register = Register a key
+security-keys-touch-now = Touch the key you are registering.
+security-keys-stop = Stop registering
+security-keys-full = At most { $count } keys answer the administrator.
+security-keys-note = A key answers the administrator in place of your password — in a terminal and in the sudo bar — never the login; your password always answers too. Off takes them from this machine and keeps them in your list, which travels with the belongings.
+security-keys-not-here = Security keys do not answer the administrator on this machine (ronoctua.yubikey.enable is off).
+security-keys-ask-remove = Remove the key { $key }?
+security-keys-remove-warning = It stops answering the administrator here, and leaves your list, so it answers on no other machine either.
+security-about-key = Removes this key, after asking
+security-about-key-register = Waits for a touch of the key, then lets it answer the administrator — here, and wherever the belongings take it
+security-about-key-stop = Stops waiting for the touch
+security-about-keys-switch = Your keys answer the administrator here, or stop — at once, with no rebuild
+security-about-keys-bring = Lets the keys registered on your other machines answer here too
+security-about-relax-again = Opens the window again for the same time, from now
+security-sudo-left = Time left
+security-sudo-again = Start the count again
+echo-security-relax-again = The count started again.
+echo-security-keys-registered = The key was registered: it answers the administrator now.
+echo-security-keys-removed = The key was removed.
+echo-security-keys-off = Your security keys no longer answer the administrator here.
+echo-security-keys-on = Your security keys answer the administrator here again.
+echo-security-keys-brought = The keys of your other machines answer the administrator here now.
+transfers-engine-seal = encryption
+transfers-work-seal = encrypt
+transfers-work-unseal = decrypt
+files-encrypt = encrypt…
+files-does-encrypt = seals it with age beside the original — for you, with a passphrase or for someone's key; a folder becomes name.tar.age
+files-decrypt = decrypt…
+files-does-decrypt = opens the .age beside it, never over anything — with its passphrase, or with your belongings' key
+cmd-security-encrypt = Encrypt a file or a folder: for you, a passphrase or someone's key
+cmd-security-quantum = The security centre's post-quantum section: what each channel does against a quantum computer
+seal-mode-myself = for you
+seal-mode-passphrase = with a passphrase
+seal-mode-someone = for someone's key (age1pq1…)
+seal-mine-ready = your post-quantum key, from the belongings
+seal-mine-no-belongings = set up the belongings first
+seal-mine-not-synced = the belongings have not synced on this machine yet
+seal-ask-mode = Encrypt { $what } — for whom?
+ask-seal-recipient = Their post-quantum key (age1pq1…)
+ask-seal-passphrase-new = A passphrase to encrypt with
+ask-seal-passphrase-again = The same passphrase again
+ask-seal-passphrase = The passphrase that opens it
+ask-seal-passphrase-wrong = That was not it — the passphrase that opens it
+ask-seal-key-passphrase = Your belongings' passphrase (it opens your key)
+ask-seal-key-passphrase-wrong = That was not it — your belongings' passphrase
+seal-refusal-no-belongings = Encrypting { $name } for you needs your belongings: set them up first.
+seal-refusal-not-synced = Your belongings have not synced on this machine yet: sync them once, then encrypt { $name } for you.
+seal-refusal-not-a-recipient = That is not a post-quantum key (age1pq1…): it was cut short, mistyped, or is another kind of key. Nothing was encrypted.
+seal-refusal-no-key = { $name } is sealed to a key, and this machine has no belongings to open it with.
+seal-refusal-mixed = { $name } mixes post-quantum and classical keys, which age refuses.
+seal-refusal-classical = { $name } is sealed to a classical key, and your key is post-quantum: nothing here opens it.
+seal-refusal-not-sealed = { $name } is not an age file.
+seal-refusal-unreadable = { $name } could not be read.
+seal-refusal-no-name = There is no free name beside { $name } to write into.
+seal-refusal-differ = The two passphrases differ: { $name } was not encrypted.
+seal-refusal-offline = The transfer queue is not running: { $name } was not handed to it.
+seal-refusal-failed = { $name } could not be handed to the queue.
+seal-refused-wrong-key = { $name } is not sealed to this key.
+seal-refused-wrong-passphrase = That passphrase does not open { $name }.
+seal-refused-corrupt = { $name } is damaged, or a key given is not one.
+seal-refused-mixed = { $name } would mix post-quantum and classical keys, which age refuses.
+seal-refused-failed = { $name } could not be read or written; nothing was written over.
+seal-queued-seal = Encrypting { $name } into { $into }: it is on the transfer queue.
+seal-queued-open = Decrypting { $name } into { $into }: it is on the transfer queue.
+seal-queued-many = Encrypting { $n } items: they are on the transfer queue.
+seal-filter-sealed = encrypted (.age)
+security-heading-encrypt = Encrypt
+security-encrypt-for-you = For you
+security-encrypt-file = Encrypt files…
+security-encrypt-folder = Encrypt a folder…
+security-encrypt-open = Decrypt a file…
+security-encrypt-note = Each one goes to the transfer queue. Nothing is written over, and the original stays; a folder becomes name.tar.age. For you and for someone's key are ML-KEM-768 with X25519; a passphrase is scrypt.
+security-encrypt-pick-files = What to encrypt
+security-encrypt-pick-folder = The folder to encrypt
+security-encrypt-pick-open = The .age to decrypt
+security-about-seal-folder = Choose a folder in the file picker; it is sealed as one .tar.age
+security-about-seal-open = Choose a .age in the file picker; its header says what opens it
+security-about-seal-mode = Seals what was chosen this way, on the transfer queue
+security-heading-quantum = Post-quantum
+security-quantum-note = A recording made today can be read the day a quantum computer breaks its key, and a signature can then be forged. Each channel says where it stands.
+security-quantum-status-post-quantum = post-quantum
+security-quantum-status-symmetric = symmetric
+security-quantum-status-classical = classical
+security-quantum-status-unknown = not known
+security-quantum-channel-belongings = Belongings
+security-quantum-channel-belongings-transport = Belongings' transport
+security-quantum-channel-seal-to-key = Encrypting to a key
+security-quantum-channel-seal-passphrase = Encrypting with a passphrase
+security-quantum-channel-private = Private vault
+security-quantum-channel-root-disk = System disk
+security-quantum-channel-https = Our HTTPS
+security-quantum-channel-openssl = OpenSSL
+security-quantum-channel-ssh = SSH
+security-quantum-channel-chrome = Chrome
+security-quantum-channel-syncthing = Syncthing
+security-quantum-channel-tailscale = Tailscale
+security-quantum-channel-tor = Tor
+security-quantum-channel-clipcascade = ClipCascade
+security-quantum-channel-sops = Machine secrets
+security-quantum-channel-extension = Browser extension
+security-quantum-channel-f-droid = F-Droid
+security-quantum-channel-nix-cache = Binary cache
+security-quantum-channel-secure-boot = Secure Boot's keys
+security-quantum-why-belongings-pq = Sealed to your own key: ML-KEM-768 with X25519, and both must fall.
+security-quantum-why-belongings-unsynced = Not synced on this machine yet: the repository is sealed with ML-KEM-768 and X25519, and so is the first sync.
+security-quantum-why-belongings-new = None set up yet; a repository set up now is sealed with ML-KEM-768 and X25519.
+security-quantum-why-belongings-transport = SSH and HTTPS with a post-quantum key exchange only: a server that has none is refused.
+security-quantum-why-seal-to-key = age's mlkem768x25519: for you, or for someone's age1pq1 key.
+security-quantum-why-seal-passphrase = scrypt and ChaCha20-Poly1305: a quantum computer halves a key's strength, and a long passphrase still holds.
+security-quantum-why-private = LUKS2 with AES-XTS and a 512-bit key, the passphrase stretched by argon2id.
+security-quantum-why-root-disk = The same for the system's disk: LUKS2, AES-XTS-512, argon2id.
+security-quantum-why-root-disk-unread = Whether the system's disk is encrypted could not be read.
+security-quantum-why-https-all = { $hosts ->
+        [one] The one host heard agreed X25519MLKEM768.
+       *[other] Every one of the { $hosts } hosts heard agreed X25519MLKEM768.
+    }
+security-quantum-why-https-some = { $hosts ->
+        [one] The one host heard still agrees a classical key: { $names }.
+       *[other] { $classical ->
+            [one] One of the { $hosts } hosts heard still agrees a classical key: { $names }.
+           *[other] { $classical } of the { $hosts } hosts heard still agree a classical key: { $names }.
+        }
+    }
+security-quantum-why-https-none-heard = No host heard yet: each one's first request says what it agrees.
+security-quantum-why-openssl = OpenSSL { $version } offers X25519MLKEM768 first: git over HTTPS, curl and what else links it.
+security-quantum-why-openssl-old = OpenSSL { $version } has no post-quantum group by default.
+security-quantum-why-ssh = OpenSSH { $version } offers { $kex } first, a post-quantum key exchange; a server without one agrees a classical key.
+security-quantum-why-ssh-classical = OpenSSH { $version }, as it is configured, offers no post-quantum key exchange (KexAlgorithms).
+security-quantum-why-ssh-not-first = OpenSSH { $version }, as it is configured, offers { $kex } first and a post-quantum exchange only after it: a server that knows both agrees the classical one (KexAlgorithms).
+security-quantum-why-ssh-unread = ssh did not say what it offers.
+security-quantum-why-chrome = Chrome { $version } agrees X25519MLKEM768 by default.
+security-quantum-why-chrome-old = Chrome { $version } agrees a classical key by default.
+security-quantum-why-syncthing = Built with Go { $go }, which offers X25519MLKEM768, and Syncthing does not narrow it; a device on an older build agrees X25519.
+security-quantum-why-syncthing-pinned = Syncthing { $version } narrows its key exchange to classical curves.
+security-quantum-why-syncthing-old-go = Syncthing { $version } is built with or for a Go older than 1.24: X25519 only.
+security-quantum-why-tailscale = WireGuard agrees its keys with X25519, and Tailscale has no post-quantum mode.
+security-quantum-why-tor = Tor's circuits are agreed with X25519; Tor has no post-quantum handshake yet.
+security-quantum-why-clipcascade = AES-256-GCM with a key from your password, carried over our TLS.
+security-quantum-why-sops = The machine's secrets are sealed to an X25519 key made from the SSH host key.
+security-quantum-why-extension = The browser extension is signed with RSA-2048, and its format has no other signature: a forgery needs a quantum computer at the moment of the attack.
+security-quantum-why-f-droid = F-Droid signs its index with RSA: a forgery, not a reading, is what a quantum computer would make of it.
+security-quantum-why-nix-cache = The binary cache's signatures are ed25519: a forgery needs a quantum computer at the moment of the attack.
+security-quantum-why-secure-boot = Secure Boot's keys are RSA-2048: the firmware verifies nothing else.
+security-quantum-why-not-built = This build did not say which version it ships.
+
+## ── anchor: L23 ──
+# INCUS (LEADER s x) — `incus.rs`, its words (`incus_words.rs`), its threads
+# and its window. A name, an alias, an address, an image's description and a
+# snapshot's name are the daemon's own words and are drawn as they came; a key
+# is never text here: a sequence arrives as `{ $keys }`.
+group-incus = Incus
+mode-incus = Incus
+incus-title = Incus
+cmd-incus-open = Incus: your containers and virtual machines
+cmd-incus-window = Incus, in a window
+cmd-incus-new = A new Incus container or virtual machine
+cmd-incus-images = Incus's images, here and in the catalogues
+incus-down = down
+incus-up = up
+incus-enter = open
+incus-left = left
+incus-right = right
+incus-next-kind = next kind
+incus-previous-kind = previous kind
+incus-next-tab = next tab
+incus-previous-tab = previous tab
+incus-launch = new
+incus-start-stop = start/stop
+incus-restart = restart
+incus-freeze = freeze/thaw
+incus-delete = delete
+incus-console = console
+incus-screen = screen
+incus-shell = shell
+incus-push = send in
+incus-pull = take out
+incus-export = export
+incus-import = import
+incus-copy-image = keep a copy
+cmd-incus-down = The next row
+cmd-incus-up = The row above
+cmd-incus-enter = Open the row; on a fact, copy it
+cmd-incus-left = The column to the left, or back from the detail
+cmd-incus-right = The column to the right, or the detail of the row
+cmd-incus-next-kind = The next kind: instances, images, remotes, profiles, networks, storage, projects
+cmd-incus-previous-kind = The previous kind
+cmd-incus-next-tab = The instance's next tab
+cmd-incus-previous-tab = The instance's previous tab
+cmd-incus-launch = A new instance: its kind, name, image and limits, then launched on the queue
+cmd-incus-start-stop = Start it, or stop it
+cmd-incus-restart = Restart it
+cmd-incus-freeze = Freeze it, or thaw it
+cmd-incus-delete = Delete it — an instance, an image or a snapshot — after a question
+cmd-incus-console = Its text console, in the terminal
+cmd-incus-screen = A virtual machine's screen, in remote-viewer
+cmd-incus-shell = A shell inside it, in the terminal
+cmd-incus-push = Send a file into it, on the queue
+ask-incus-push = File to send in
+cmd-incus-push-to = Where inside the file sent goes
+ask-incus-push-to = Where inside
+cmd-incus-pull = Take a file out of it, on the queue
+ask-incus-pull = Path inside to take out
+cmd-incus-pull-to = Where here the file taken out goes, never over another
+ask-incus-pull-to = Save it as
+cmd-incus-export = Export it to a file, on the queue
+ask-incus-export = Export to a file that is not there yet
+cmd-incus-import = Import an instance from a file, on the queue
+ask-incus-import = File to import
+cmd-incus-copy-image = Keep a copy of the catalogue's image here, on the queue
+cmd-incus-name = The new instance's name
+ask-incus-name = Name of the new instance
+cmd-incus-image = The new instance's image
+ask-incus-image = Image (remote:alias, or a local alias)
+cmd-incus-cpu = Its processors
+ask-incus-cpu = Processors (nothing typed: no limit)
+cmd-incus-memory = Its memory
+ask-incus-memory = Memory, with its unit (nothing typed: no limit)
+cmd-incus-processes = Its processes
+ask-incus-processes = Processes (nothing typed: no limit)
+cmd-incus-snapshot = A snapshot of it, by a name
+ask-incus-snapshot = Name of the snapshot
+cmd-incus-publish = Publish it as an image here, on the queue
+ask-incus-publish = Alias of the new image
+incus-kind-instances = Instances
+incus-kind-images = Images
+incus-kind-remotes = Remotes
+incus-kind-profiles = Profiles
+incus-kind-networks = Networks
+incus-kind-storage = Storage
+incus-kind-projects = Projects
+incus-empty-instances = No instances yet: a new one is made from an image, here or in a remote's catalogue.
+incus-empty-images = No images here. A remote's catalogue keeps a copy of one, and a launch keeps the one it used.
+incus-empty-remotes = No remotes: the client knows no server to take images from.
+incus-empty-profiles = No profiles.
+incus-empty-networks = No networks.
+incus-empty-storage = No storage pools.
+incus-empty-projects = No projects.
+incus-projects-note = This view works in the default project; the incus command reaches the others.
+incus-tab-overview = Overview
+incus-tab-snapshots = Snapshots
+incus-tab-limits = Limits
+incus-tab-actions = Actions
+incus-status-running = running
+incus-status-stopped = stopped
+incus-status-frozen = frozen
+incus-status-error = in error
+incus-status-other = changing
+incus-machine-container = container
+incus-machine-vm = virtual machine
+incus-list-address = { $status } · { $address }
+incus-reading = Asking Incus…
+incus-events-lost = Incus's events stopped (the daemon restarted?), so a change made elsewhere may not show yet; they are opened again on their own.
+incus-working = { $what } { $name }: { $stage }
+incus-row-name = Name
+incus-row-kind = Kind
+incus-row-status = State
+incus-row-ipv4 = IPv4 address
+incus-row-ipv6 = IPv6 address
+incus-row-cpu = Processor time
+incus-row-memory = Memory in use
+incus-row-processes = Processes running
+incus-row-disk = Disk in use
+incus-row-image = Made from
+incus-row-profiles = Profiles
+incus-row-made = Made
+incus-row-project = Project
+incus-row-description = Description
+incus-row-alias = Alias
+incus-row-size = Size
+incus-row-fingerprint = Fingerprint
+incus-row-address = Address
+incus-row-protocol = Speaks
+incus-row-type = Type
+incus-row-managed = Managed by Incus
+incus-row-driver = Driver
+incus-row-nth = { $label } { $n }
+incus-yes = yes
+incus-no = no
+incus-seconds = { $count ->
+        [one] 1 second
+       *[other] { $count } seconds
+    }
+incus-minutes = { $count ->
+        [one] 1 minute
+       *[other] { $count } minutes
+    }
+incus-hours = { $hours } h { $minutes } min
+incus-snapshot-take = Take a snapshot
+incus-snapshot-take-value = by a name
+incus-snapshots-none = No snapshots yet.
+incus-limit-cpu = Processors
+incus-limit-memory = Memory
+incus-limit-processes = Processes
+incus-limit-none = no limit
+incus-limit-from-profile = { $value }, from a profile
+incus-limit-cpus = { $count ->
+        [one] 1 processor
+       *[other] { $count } processors
+    }
+incus-limit-count = { $count ->
+        [one] 1 process
+       *[other] { $count } processes
+    }
+incus-limits-note = A limit set here is the instance's own and wins over its profiles'; answering with nothing typed takes the instance's own away. A limit that comes from a profile is changed in the profile.
+incus-limits-vm-processes = A virtual machine has no limit of processes: its own kernel counts them.
+incus-use-console = Text console
+incus-use-screen = Screen
+incus-use-shell = Shell
+incus-use-push = Send a file in
+incus-use-pull = Take a file out
+incus-use-export = Export to a file
+incus-use-publish = Publish as an image
+incus-use-in-terminal = in the terminal
+incus-use-in-viewer = in remote-viewer
+incus-use-on-queue = on the queue
+incus-use-not-running = only while it runs
+incus-image-launch = Launch an instance from it
+incus-image-launch-value = a new instance
+incus-heading-catalogue = Its images
+incus-catalogue-reading = Asking { $remote } for its images…
+incus-catalogue-empty = It offers nothing for this machine.
+incus-offered-value = { $kind } · { $size }
+incus-consent-catalogue = The remote's list of images comes from there, and so do the images an instance is made from.
+incus-consent-launch = The image the new instance is made from comes from there.
+incus-protocol-simplestreams = simplestreams
+incus-protocol-oci = an OCI registry
+incus-heading-volumes = Its volumes
+incus-volumes-none = No volumes.
+incus-new-title = A new instance
+incus-field-machine = Kind
+incus-field-name = Name
+incus-field-image = Image
+incus-unchosen = not chosen yet
+incus-image-hint = The image is remote:alias — the remotes here are { $remotes } — or the alias of an image here.
+incus-create = Launch it
+incus-create-value = made and started on the queue
+incus-ask-delete = Delete { $name }?
+incus-ask-delete-running = It is running: it is stopped first.
+incus-ask-delete-snapshots = Its snapshots go with it.
+incus-ask-delete-image = Delete the image { $name }?
+incus-ask-delete-snapshot = Delete the snapshot { $snapshot } of { $name }?
+incus-ask-restore = Restore { $name } to { $snapshot }? Whatever changed in it since is lost.
+incus-answer-no = No
+incus-answer-yes = Yes
+incus-did-start = Starting
+incus-did-stop = Stopping
+incus-did-restart = Restarting
+incus-did-freeze = Freezing
+incus-did-unfreeze = Thawing
+incus-did-delete = Deleting
+incus-did-limits = Setting the limits of
+incus-did-snapshot = Taking the snapshot
+incus-did-restore = Restoring
+incus-did-delete-snapshot = Deleting the snapshot
+incus-did-delete-image = Deleting the image
+incus-echo-asked = { $what } { $name }…
+incus-echo-done = { $what } { $name }: done.
+incus-echo-refused = { $what } { $name }: { $why }
+incus-echo-queued = { $what } { $name } went to the queue — { $keys } shows it.
+incus-no-queue = The transfer queue is not answering, so nothing was queued.
+incus-refused-not-here = That is not something one does to { $kind }.
+incus-refused-not-running = It is not running.
+incus-refused-not-vm = Only a virtual machine has a screen.
+incus-refused-unchosen = Choose a name and an image first.
+incus-refused-name = { $name } is not a name Incus takes: letters, digits and hyphens, a letter first.
+incus-refused-name-taken = An instance is already called { $name }.
+incus-refused-no-image = No remote image and no image here is called { $image }.
+incus-refused-number = { $said } is not a whole number above zero.
+incus-refused-size = { $said } is not a size: say its unit, as in 512MiB or 2GiB.
+incus-refused-snapshot-name = { $name } is not a snapshot name Incus takes: no spaces and no slashes.
+incus-refused-no-file = { $path } is not a file here.
+incus-refused-inside = { $path } is not a path inside it: one starts with a slash.
+incus-refused-exists = { $path } is already there; nothing is written over it.
+incus-refused-no-folder = The folder of { $path } is not there.
+incus-refused-alias = { $alias } is not an alias Incus takes: no spaces.
+incus-refused-limit-profile = { $limit }: this limit of { $name } comes from a profile, and { $name } has none of its own to take away.
+
+## ── anchor: L24 ──
+# THE LLM ACCOUNTS (`LEADER m a`, `crate::agents`): Claude Code's and Codex's
+# accounts, their limits, their tokens and their sessions.
+group-agents = LLM accounts
+# The modeline's name for its window (`br.ronoctua.agents`).
+mode-agents = LLM accounts
+agents-title = LLM accounts
+cmd-agents-open = Your LLM accounts: their limits, tokens and sessions
+cmd-agents-window = Your LLM accounts, in a window
+cmd-agents-session = A session of the account under the cursor — or of the default one — in the terminal
+cmd-agents-login = Log the account under the cursor — or the default one — in, in the terminal
+cmd-agents-up = Previous row
+cmd-agents-down = Next row
+cmd-agents-enter = What the row under the cursor does
+cmd-agents-rename = Give the account another name
+cmd-agents-default = Make the account the default of its kind: the one `claude` or `codex` typed in a terminal opens
+cmd-agents-remove = Forget the account — after a question; its folder, sessions and login stay
+cmd-agents-refresh = Count the tokens and ask the usage endpoint again, now
+cmd-agents-add-claude = Add a Claude Code account: its name, its own folder, our status line, its login
+cmd-agents-add-codex = Add a Codex account: its name, its own folder, its login
+cmd-agents-status-line = Put our status line in front of the account's own, or give its own back
+cmd-agents-warn-at = Set how full a window has to be for its bar and its mark to warn
+cmd-agents-danger-at = Set how full a window has to be for its bar and its mark to turn to danger
+agents-up = up
+agents-down = down
+agents-enter = do
+agents-session = session
+agents-login = log in
+agents-rename = rename
+agents-default = default
+agents-remove = remove
+agents-refresh = refresh
+ask-agents-rename = The account's name
+ask-agents-add-claude = The new Claude Code account's name
+ask-agents-add-codex = The new Codex account's name
+ask-agents-warn-at = A warning from what per cent (1–100)
+ask-agents-danger-at = Danger from what per cent (1–100)
+about-agents-window = How full the window is, and when it starts over; its colour is the mark's on the modeline
+about-agents-fact = Copies the value
+agents-heading = Accounts
+agents-reading = Reading your accounts…
+agents-none = No account yet: add one below.
+agents-account = { $glyph } { $place } · { $name }
+agents-row-agent = Agent
+agents-kind-claude = Claude Code
+agents-kind-codex = Codex
+agents-row-folder = Folder
+agents-row-plan = Plan
+agents-plan = { $plan } · { $tier }
+agents-plan-unsaid = Its credentials do not say
+agents-not-logged-in = Not logged in yet — log in below
+agents-row-five-hours = 5 hours
+agents-row-week = Week
+agents-row-week-opus = Week, Opus
+agents-row-week-sonnet = Week, Sonnet
+agents-window = { $bar } { $percent } · starts over { $when }
+agents-window-unknown = Not known yet
+agents-percent = { $percent }%
+agents-from-logs = From Codex's own session logs.
+agents-from-endpoint = From Claude Code's status line and Anthropic's usage endpoint, asked { $when } — an endpoint Anthropic does not document, which may change.
+agents-endpoint-refused = The usage endpoint was not read: { $why }
+agents-endpoint-not-let = From Claude Code's status line only: the usage endpoint is not allowed yet (below).
+agents-endpoint-not-asked = From Claude Code's status line; the usage endpoint was not asked yet.
+agents-row-tokens = Tokens
+agents-tokens = { $bar } { $count }
+agents-tokens-none = None counted yet
+agents-tokens-few = { $n }
+agents-tokens-thousands = { $value }k
+agents-tokens-millions = { $value }M
+agents-tokens-billions = { $value }bn
+agents-model-unnamed = (no model named)
+agents-row-status-line = Status line
+agents-line-ours = Ours, in front of yours — the limits come from it; this row gives yours back
+agents-line-replaced = Changed since we put ours in front — this row puts ours in front again
+agents-line-not = Not ours — this row puts ours in front of yours; the limits come from it
+agents-row-session = Open a session
+agents-row-login = Log in
+agents-row-name = Name
+agents-row-default = Default
+agents-default-yes = The default of its kind
+agents-default-no = No — this row makes it the default
+agents-row-remove = Remove…
+agents-heading-endpoint = Anthropic's usage endpoint
+agents-row-endpoint = Asked
+agents-endpoint-let = Allowed
+agents-consent-for = For how much of each window your Claude Code accounts used, from an endpoint Anthropic does not document (unofficial): it may change or stop answering.
+agents-heading-add = Add an account
+agents-add-claude = Add a Claude Code account…
+agents-add-codex = Add a Codex account…
+agents-add-note = Each account has a folder of its own; the terminal that opens logs it in.
+agents-row-refresh = Count and ask again now
+agents-heading-lines = When a bar and its mark change colour
+agents-row-warn = A warning from
+agents-row-danger = Danger from
+agents-lines-note = The same lines colour the account's mark on the modeline.
+agents-ask-remove = Forget the account “{ $name }”? Its folder stays, with its sessions and its login.
+agents-ask-remove-claude = Forget the account “{ $name }”? Its folder stays, with its sessions and its login; Claude Code's own status line is given back.
+agents-answer-no = No, keep it
+agents-answer-yes = Yes, forget it
+agents-not-on-an-account = The cursor is not on an account.
+agents-already-default = It is already the default of its kind.
+agents-not-a-percent = That is not a whole per cent from 1 to 100.
+agents-lines-cross = The warning has to come before the danger.
+agents-lines-unkept = The lines could not be written.
+agents-lines-unreadable = The lines' file does not read; nothing was written over it.
+agents-added = “{ $name }” added; log it in, in the terminal that opened.
+agents-renamed = Now called “{ $name }”.
+agents-removed = “{ $name }” forgotten; its folder stays.
+agents-made-default = “{ $name }” is the default of its kind now.
+agents-wrapped = Our status line is in front of “{ $name }”'s own.
+agents-unwrapped = “{ $name }” has its own status line back.
+agents-refreshing = Counting the tokens and asking again…
+agents-refreshed = Counted and asked again.
+agents-refreshed-but = Counted, but not all of it: { $id }: { $why }
+agents-refused-not-let = The usage endpoint has not been allowed yet; allow it first.
+agents-refused-expired = The login expired: Claude Code renews it the next time it runs, or log in again.
+agents-refused-no-credentials = The account has never been logged in.
+agents-refused-unreadable = A file of the accounts does not read; nothing was written over it.
+agents-refused-offline = The network did not answer.
+agents-refused-unknown = There is no such account any more.
+agents-refused-invalid = That is not a name, a folder or an account this can take.
+agents-refused-not-installed = The agent is not installed on this machine; it comes with the development profile's agents.
+agents-refused-failed = It could not be done; the system log says why.

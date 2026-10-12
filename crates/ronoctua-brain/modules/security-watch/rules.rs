@@ -151,7 +151,7 @@ pub enum Off {
     Failed,
     /// The person's firewall decides nothing.
     Disabled,
-    /// sudo asks for no password until a time.
+    /// sudo asks for no password, until a time or with no limit.
     SudoOpen,
     /// Every new incoming connection is dropped.
     Shields,
@@ -167,8 +167,10 @@ pub struct Facts {
     pub failed: bool,
     /// `firewall.json` says off.
     pub off: bool,
-    /// The passwordless window's end, when one is open.
+    /// The passwordless window's end, when one is open with an end.
     pub sudo_until: Option<Moment>,
+    /// A passwordless window with no limit is open.
+    pub sudo_no_limit: bool,
     /// `firewall.json` says shields.
     pub shields: bool,
     /// Refused connections in the last [`RECENT_S`].
@@ -197,7 +199,7 @@ pub fn off_at(facts: &Facts, now: Moment) -> Vec<Off> {
     if facts.off {
         out.push(Off::Disabled);
     }
-    if facts.sudo_until.is_some_and(|u| u > now) {
+    if facts.sudo_no_limit || facts.sudo_until.is_some_and(|u| u > now) {
         out.push(Off::SudoOpen);
     }
     if facts.shields {
@@ -303,6 +305,7 @@ mod tests {
             failed: true,
             off: true,
             sudo_until: Some(200),
+            sudo_no_limit: false,
             shields: true,
             recent_refused: 3,
         };
@@ -323,6 +326,12 @@ mod tests {
             ..Facts::default()
         };
         assert_eq!(off_at(&ended, 100), []);
+        // ONE WITH NO LIMIT never ends by itself.
+        let forever = Facts {
+            sudo_no_limit: true,
+            ..Facts::default()
+        };
+        assert_eq!(off_at(&forever, i64::MAX), [Off::SudoOpen]);
     }
 
     #[test]

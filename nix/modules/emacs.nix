@@ -94,88 +94,124 @@ let
   };
 in
 {
+  # The registry this module writes the editor's entry into (see
+  # `browser.nix` for why it is imported here too).
+  imports = [ ./distro-apps.nix ];
+
   options.ronoctua.editor.emacs =
     lib.mkEnableOption "Emacs 30 and Doom's dependencies (~0.6 GiB)"
     // {
       default = true;
+      # A DECLINE TURNS THE EDITOR OFF, daemon, Doom files and update step
+      # included — the package alone would leave a daemon unit starting a
+      # program that is not on the machine's `PATH` and the rest waiting for
+      # it. An `apply`, as Chrome's switch has (`browser.nix` says why).
+      apply = carried: carried && !(lib.elem "emacs" config.ronoctua.distroApps.honoured);
     };
 
-  # EVERYTHING here hangs off the switch, `home-manager` files included: a
-  # machine with no Emacs has no use for a Doom configuration in the home
-  # directory, and the activation script would create `local.el` for a framework
-  # that is not installed.
-  config = lib.mkIf cfg.editor.emacs {
-    environment.systemPackages = [ doomSync ] ++ doomDeps;
-
-    # AND THE UPDATE BRINGS DOOM WITH IT.
-    #
-    # The update's `steps.nix` declares the step and ships it OFF, which it has to:
-    # it names a bare binary, and a bare binary must not ship on (invariant 6).
-    # The module that knows the binary exists is this one, so this is where it
-    # is switched on — the same shape `ronoctua.update.steps` has for every
-    # other per-machine answer, written into `/etc/ronoctua/updates.conf`.
-    #
-    # WHY IT HAS TO HAPPEN AT ALL: the three files below are rewritten from the
-    # repository on every rebuild, and until `doom sync` runs the framework is
-    # still resolving the previous ones. The owner asked for the two to move
-    # together.
-    #
-    # `mkDefault`, so somebody who does not want it says so in one line.
-    ronoctua.update.steps.doom-sync = lib.mkDefault true;
-
-    # WHERE THE FILE MANAGER SENDS TEXT — and it is set HERE, inside this
-    # `mkIf`, rather than baked into the binary.
-    #
-    # `nix/rust.nix` used to hold it as an `option_env!`, and that made the
-    # whole of Emacs a reference the workspace carried into every closure:
-    # `ronoctua.editor.emacs = false` took the package off `systemPackages` and
-    # changed nothing at all. It is the same trap the icon superpack sprang, and
-    # the same answer — read it from the environment, set it where the switch
-    # is. `profile-minimal-closes` is the check that refuses the other way.
-    #
-    # A store PATH and never a name: the footer runs inside a scope whose `PATH`
-    # is minimal, and a bare name fails far from its cause.
-    systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACSCLIENT =
-      "${emacsPkg}/bin/emacsclient";
-
-    services.emacs = {
-      enable = true;
-      package = emacsPkg;
-      # NOT `install = true`. That adds `emacs.desktop` and a `client` entry to the
-      # applications menu, and invariant 14 says the system has no menu — the
-      # locator (`LEADER a`) reads the same `.desktop` files and would list two
-      # Emacsen, one of which does not use the daemon.
-      install = false;
-      defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
-      startWithGraphical = false; # a terminal Emacs must work without a session
-    };
-
-    home-manager.users.${cfg.user} = {
-      xdg.configFile = {
-        "doom/init.el".source = ../../assets/doom/init.el;
-        "doom/packages.el".source = ../../assets/doom/packages.el;
-        "doom/config.el".source = ../../assets/doom/config.el;
+  config = lib.mkMerge [
+    {
+      # EMACS IS A PROGRAM OF THE REGISTRY (`nix/modules/distro-apps.nix`),
+      # with Doom's tools and its sync riding along. Its four launcher entries
+      # are the package's own: `services.emacs.enable` alone puts the package
+      # in `systemPackages` in nixpkgs 26.05 (`install = false` below does not
+      # keep it out), and `emacs.desktop` and `emacsclient.desktop` with it.
+      #
+      # OUTSIDE the `mkIf` below, because the switch reads the registry (its
+      # `apply`, above): an entry inside it would make the registry's names
+      # depend on the switch (see `distro-apps.nix`).
+      ronoctua.apps.emacs = {
+        package = emacsPkg;
+        extraPackages = [ doomSync ] ++ doomDeps;
+        group = "editor";
+        desktopIds = [
+          "emacs.desktop"
+          "emacsclient.desktop"
+          "emacs-mail.desktop"
+          "emacsclient-mail.desktop"
+        ];
       };
-    };
+    }
 
-    # `~/.config/doom/local.el` — identity and anything else personal, created
-    # once and never overwritten. Same arrangement as `~/.shellrc.local`, and the
-    # same reason: invariant 13 keeps a name and an e-mail out of the repository.
-    system.activationScripts.doomLocal = {
-      deps = [
-        "users"
-        "configHome"
-      ];
-      text = ''
-        target=/home/${cfg.user}/.config/doom/local.el
-        if [ ! -d /home/${cfg.user}/.config/doom ]; then
-          install -d -m 0755 -o ${cfg.user} -g users /home/${cfg.user}/.config/doom
-        fi
-        if [ ! -e "$target" ]; then
-          cp ${doomLocalTemplate} "$target"
-          chown ${cfg.user}:users "$target"
-        fi
-      '';
-    };
-  };
+    # EVERYTHING ELSE hangs off the switch, `home-manager` files included: a
+    # machine with no Emacs has no use for a Doom configuration in the home
+    # directory, and the activation script would create `local.el` for a
+    # framework that is not installed.
+    (lib.mkIf cfg.editor.emacs {
+      # AND THE UPDATE BRINGS DOOM WITH IT.
+      #
+      # The update's `steps.nix` declares the step and ships it OFF, which it has to:
+      # it names a bare binary, and a bare binary must not ship on (invariant 6).
+      # The module that knows the binary exists is this one, so this is where it
+      # is switched on — the same shape `ronoctua.update.steps` has for every
+      # other per-machine answer, written into `/etc/ronoctua/updates.conf`.
+      #
+      # WHY IT HAS TO HAPPEN AT ALL: the three files below are rewritten from the
+      # repository on every rebuild, and until `doom sync` runs the framework is
+      # still resolving the previous ones. The owner asked for the two to move
+      # together.
+      #
+      # `mkDefault`, so somebody who does not want it says so in one line.
+      ronoctua.update.steps.doom-sync = lib.mkDefault true;
+
+      # WHERE THE FILE MANAGER SENDS TEXT — and it is set HERE, inside this
+      # `mkIf`, rather than baked into the binary.
+      #
+      # `nix/rust.nix` used to hold it as an `option_env!`, and that made the
+      # whole of Emacs a reference the workspace carried into every closure:
+      # `ronoctua.editor.emacs = false` took the package off `systemPackages` and
+      # changed nothing at all. It is the same trap the icon superpack sprang, and
+      # the same answer — read it from the environment, set it where the switch
+      # is. `profile-minimal-closes` is the check that refuses the other way.
+      #
+      # A store PATH and never a name: the footer runs inside a scope whose `PATH`
+      # is minimal, and a bare name fails far from its cause.
+      systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACSCLIENT =
+        "${emacsPkg}/bin/emacsclient";
+
+      services.emacs = {
+        enable = true;
+        package = emacsPkg;
+        # `install = false`, and it keeps NOTHING out of the launcher. The line
+        # used to say it did: that `install = true` would add `emacs.desktop`
+        # and a `client` entry, two Emacsen in the locator (`LEADER a`), one of
+        # which does not use the daemon. Read in the pinned nixpkgs, the module
+        # puts `package` in `systemPackages` whenever `enable` is on, so both
+        # entries are there either way. The registry owns them now
+        # (`distro-apps-are-registered` reads the built `system.path`), and
+        # `docs/PENDING.md` keeps the question of hiding them.
+        install = false;
+        defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
+        startWithGraphical = false; # a terminal Emacs must work without a session
+      };
+
+      home-manager.users.${cfg.user} = {
+        xdg.configFile = {
+          "doom/init.el".source = ../../assets/doom/init.el;
+          "doom/packages.el".source = ../../assets/doom/packages.el;
+          "doom/config.el".source = ../../assets/doom/config.el;
+        };
+      };
+
+      # `~/.config/doom/local.el` — identity and anything else personal, created
+      # once and never overwritten. Same arrangement as `~/.shellrc.local`, and the
+      # same reason: invariant 13 keeps a name and an e-mail out of the repository.
+      system.activationScripts.doomLocal = {
+        deps = [
+          "users"
+          "configHome"
+        ];
+        text = ''
+          target=/home/${cfg.user}/.config/doom/local.el
+          if [ ! -d /home/${cfg.user}/.config/doom ]; then
+            install -d -m 0755 -o ${cfg.user} -g users /home/${cfg.user}/.config/doom
+          fi
+          if [ ! -e "$target" ]; then
+            cp ${doomLocalTemplate} "$target"
+            chown ${cfg.user}:users "$target"
+          fi
+        '';
+      };
+    })
+  ];
 }

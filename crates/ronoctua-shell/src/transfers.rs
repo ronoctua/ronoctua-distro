@@ -561,7 +561,8 @@ fn detail_lines(job: &Job, width: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line
             crate::files::size_text(answer, texts.decimal_mark()),
         ));
     }
-    if job.trouble.is_some() || job.refusal.is_some() || job.archive.is_some() {
+    if job.trouble.is_some() || job.refusal.is_some() || job.archive.is_some() || job.seal.is_some()
+    {
         out.push(fact(
             key::TRANSFERS_WINDOW_FIELD_TROUBLE,
             under_the_pointer(job, texts),
@@ -867,6 +868,14 @@ pub fn under_the_pointer(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
         );
         return texts.t_with(e.key, &e.borrowed());
     }
+    // A SEAL'S REFUSAL IS A SENTENCE too (`seal-refused-<id>`), naming the
+    // file it was about.
+    if let (Some(why), ronoctua_transfers::Work::Seal { job: sealed, .. }) = (job.seal, &job.work) {
+        return texts.t_with(
+            crate::seal::why_key(why),
+            &[("name", &crate::seal::name_of(&sealed.from))],
+        );
+    }
     if let Some(trouble) = &job.trouble {
         return trouble.clone();
     }
@@ -985,7 +994,20 @@ pub fn what_ended(before: Option<&[Job]>, now: &[Job]) -> Vec<crate::files::Repo
                     Box::new(j.work.clone()),
                 )))
             });
-            std::iter::once(report).chain(let_go)
+            // A SEAL THAT ENDED WITHOUT A REFUSAL — done, stopped, a program
+            // that died with no verdict (said above, as any job's failure) —
+            // is let go of by the view that sent it, so a later refusal of
+            // the same file from another door is not taken for its own.
+            let sealed = match &j.work {
+                ronoctua_transfers::Work::Seal { job, .. } if j.seal.is_none() => Some(
+                    crate::files::Report::Seal(Box::new(crate::seal::SealReport::Ended {
+                        from: job.from.clone(),
+                        opens: crate::seal::opening_of(job).is_some(),
+                    })),
+                ),
+                _ => None,
+            };
+            std::iter::once(report).chain(let_go).chain(sealed)
         })
         .collect()
 }
@@ -1008,6 +1030,15 @@ fn report_of(j: &Job) -> crate::files::Report {
                 why: j.archive.unwrap_or(ronoctua_archive::Why::Failed),
             },
         )),
+        // A SEAL'S REFUSAL goes to the view that sent it: a wrong passphrase
+        // is asked again there, anything else a sentence (`crate::seal`).
+        (ronoctua_transfers::Work::Seal { job, .. }, _, Stage::Failed) if j.seal.is_some() => {
+            crate::files::Report::Seal(Box::new(crate::seal::SealReport::Refused {
+                from: job.from.clone(),
+                opening: crate::seal::opening_of(job),
+                why: j.seal.unwrap_or(ronoctua_pq::Why::Failed),
+            }))
+        }
         // AN ARCHIVE THE QUEUE CHANGED is listed again by a view standing
         // in it.
         (ronoctua_transfers::Work::ArchiveEdit { archive, .. }, _, Stage::Done) => {
@@ -1166,6 +1197,16 @@ const fn errand_of(work: &ronoctua_transfers::Work) -> ronoctua_protocol::Errand
         // THE BELONGINGS' SYNC, for the same reason: its row's subject is the
         // order's word, and the footer's door names it in full.
         W::Belongings { .. } => E::Fetch,
+        // A SEAL, AN INCUS JOB, THE INSTALLER WRITTEN TO A STICK: each its
+        // own word in the window too, because the same word the others take
+        // would say "download" of a file encrypted here — a sentence that is
+        // false, not short (the footer names them by `Work::word`). The
+        // installer's DOWNLOAD is a download.
+        W::Seal { job, .. } if job.seals() => E::Seal,
+        W::Seal { .. } => E::Unseal,
+        W::Incus { .. } => E::Incus,
+        W::Stick { write: None, .. } => E::Fetch,
+        W::Stick { write: Some(_), .. } => E::StickWrite,
     }
 }
 
@@ -1186,6 +1227,9 @@ const fn engine_of(engine: ronoctua_transfers::Engine) -> ronoctua_protocol::Eng
         ronoctua_transfers::Engine::Scan => E::Scan,
         ronoctua_transfers::Engine::Container => E::Container,
         ronoctua_transfers::Engine::Belongings => E::Belongings,
+        ronoctua_transfers::Engine::Seal => E::Seal,
+        ronoctua_transfers::Engine::Incus => E::Incus,
+        ronoctua_transfers::Engine::Stick => E::Stick,
     }
 }
 
@@ -1272,7 +1316,7 @@ pub fn queue_of(jobs: &[Job], texts: &ronoctua_i18n::Texts) -> ronoctua_protocol
                 // sentence each: it crosses as that sentence, in the host's
                 // language — the same one the footer's door says under the
                 // pointer — and never as its bare word.
-                trouble: if j.archive.is_some() {
+                trouble: if j.archive.is_some() || j.seal.is_some() {
                     under_the_pointer(j, texts)
                 } else {
                     j.trouble.clone().unwrap_or_default()

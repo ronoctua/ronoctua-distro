@@ -22,11 +22,12 @@
 # really lives is the package's `share/applications`. Writing it here by hand
 # was a second place deciding it, true until the day upstream renames the
 # file. So the folder is READ while evaluating (`builtins.readDir`), which is
-# import-from-derivation: the evaluation of a system with the workshop on
-# waits for OrcaSlicer to be in the store — substituted once, kept by the
-# system that installs it. A system with the workshop off never asks
-# (`mkIf`). And the package's entries are counted: one entry is THE entry,
-# and none, or two, refuses the evaluation by name rather than picking one.
+# import-from-derivation: the evaluation of a system with OrcaSlicer
+# installed waits for it to be in the store — substituted once, kept by the
+# system that installs it. A system without it (the workshop off, or the
+# person declined it) never asks. And the package's entries are counted: one
+# entry is THE entry, and none, or two, refuses the evaluation by name rather
+# than picking one.
 # `system.checks` still reads the entry at build: it must be an application
 # that claims the model types, and `models-open-in-orca` proves the whole way
 # from a file to the entry.
@@ -77,6 +78,10 @@ let
       '';
 in
 {
+  # The registry this module writes its two programs into (see `browser.nix`
+  # for why it is imported here too).
+  imports = [ ./distro-apps.nix ];
+
   options.ronoctua.workshop.enable = lib.mkOption {
     type = lib.types.bool;
     default = false;
@@ -86,15 +91,37 @@ in
     '';
   };
 
-  config = lib.mkIf cfg.enable {
-    environment.systemPackages = [
-      pkgs.blender
-      orca
-    ];
-    xdg.mime = {
-      enable = true;
-      defaultApplications = lib.genAttrs models (_: orcaEntry);
-    };
-    system.checks = [ entryIsThere ];
-  };
+  config = lib.mkMerge [
+    {
+      # THE TWO ARE PROGRAMS OF THE REGISTRY (`nix/modules/distro-apps.nix`),
+      # in the `workshop` group: this module's switch says the machine has
+      # them, and a person may decline either.
+      ronoctua.apps.blender = {
+        package = pkgs.blender;
+        group = "workshop";
+        desktopIds = [ "blender.desktop" ];
+      };
+      # ITS ENTRY'S NAME ONLY WHERE IT IS INSTALLED: reading it is the
+      # import-from-derivation argued above, and a machine without
+      # OrcaSlicer — the workshop off, or the person declined it — must
+      # never be made to fetch it to say it has none. `installed` reads each
+      # entry's `when` and the declines, never a `desktopIds`, so this does
+      # not go round.
+      ronoctua.apps.orca-slicer = {
+        package = orca;
+        group = "workshop";
+        desktopIds = lib.optional config.ronoctua.distroApps.installed.orca-slicer orcaEntry;
+      };
+    }
+
+    (lib.mkIf cfg.enable { xdg.mime.enable = true; })
+
+    # THE MODEL TYPES FOLLOW ORCASLICER, and not only the switch: a person
+    # who declined it would otherwise keep a default naming an entry that is
+    # not there, and every reader skips such a default in silence.
+    (lib.mkIf config.ronoctua.distroApps.installed.orca-slicer {
+      xdg.mime.defaultApplications = lib.genAttrs models (_: orcaEntry);
+      system.checks = [ entryIsThere ];
+    })
+  ];
 }

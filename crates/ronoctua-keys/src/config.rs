@@ -82,28 +82,31 @@ pub fn render(
     Config { units, models }
 }
 
-/// Reads the file; a missing or broken one is every unit with the distro's
-/// leader and no remaps, which is a keyboard that works.
-#[must_use]
-pub fn read(directory: &str) -> Config {
-    let path = format!("{directory}/{FILE}");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, path, "the keys file does not parse; no remaps");
-            Config::default()
-        }),
-        Err(_) => Config::default(),
-    }
+/// The file as a [`ronoctua_store::Store`] in `directory`.
+///
+/// Not under the person's roots (the machine gives the daemon its own
+/// directory), so it keeps no repair ledger: a repair is said in the journal.
+fn store_in(directory: &str) -> ronoctua_store::Store<Config> {
+    ronoctua_store::Store::at(Some(std::path::PathBuf::from(directory)), FILE)
 }
 
-/// Writes the file, atomically.
+/// Reads the file; a missing one is every unit with the distro's leader and no
+/// remaps, which is a keyboard that works — and a BROKEN one keeps every unit
+/// that still reads: one unit's rules that will not parse cost that unit.
+#[must_use]
+pub fn read(directory: &str) -> Config {
+    store_in(directory).read()
+}
+
+/// Writes the file, atomically, keeping what it holds that this build does
+/// not know.
 ///
 /// # Errors
 ///
 /// The directory is not there or not ours.
 pub fn write(directory: &str, config: &Config) -> anyhow::Result<()> {
-    let text = serde_json::to_string_pretty(config)?;
-    ronoctua_xdg::write_atomically(std::path::Path::new(directory), FILE, text.as_bytes())
+    store_in(directory)
+        .write(config)
         .map_err(|e| anyhow::anyhow!("writing {directory}/{FILE}: {e}"))
 }
 

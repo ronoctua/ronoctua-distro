@@ -28,6 +28,33 @@ let
     files = declared.files // {
       "home/../etc/shadow" = "preference";
     };
+    # A TARGET WHOSE `private` IS NOT A BOOLEAN, and chunk sizes out of order.
+    targets = declared.targets // {
+      ssh = {
+        paths = [ "home/.ssh" ];
+        private = "yes";
+      };
+      # A PATH TWO TARGETS OWN, and the deploy key as a target (the access
+      # would travel).
+      doubled = {
+        paths = [ "home/.shellrc.local" ];
+      };
+      keys = {
+        paths = [ "config/belongings-keys/deploy" ];
+      };
+    };
+    # A PLAIN ROOT INSIDE ANOTHER: one file, two places in the repository.
+    plain = declared.plain // {
+      "state/person/inner" = {
+        at = "inner";
+        reason = "person-data";
+      };
+    };
+    chunk = {
+      minKiB = 4096;
+      avgKiB = 1024;
+      maxKiB = 256;
+    };
     never = declared.never ++ [
       {
         name = "*.lock";
@@ -89,7 +116,17 @@ let
               || { echo "ERROR: it failed, but did not refuse the hard name pattern" >&2; exit 1; }
             grep -q "Not An Id. is not an English kebab id" $out/out_text.txt \
               || { echo "ERROR: it failed, but did not refuse the reason that is not an id" >&2; exit 1; }
-            echo "OK: an unknown field, a climbing path, a hard pattern and a bad reason take the build down"
+            grep -q "targets.ssh: .private. is a boolean" $out/out_text.txt \
+              || { echo "ERROR: it failed, but did not refuse the target whose private is not a boolean" >&2; exit 1; }
+            grep -q "chunk: the sizes are not ordered" $out/out_text.txt \
+              || { echo "ERROR: it failed, but did not refuse the chunk sizes out of order" >&2; exit 1; }
+            grep -q "plain: .state/person. and .state/person/inner. overlap" $out/out_text.txt \
+              || { echo "ERROR: it failed, but did not refuse the plain root inside another" >&2; exit 1; }
+            grep -q "targets: .home/.shellrc.local. of .doubled. and .home/.shellrc.local. of .shell. overlap" $out/out_text.txt \
+              || { echo "ERROR: it failed, but did not refuse a path two targets own" >&2; exit 1; }
+            grep -q "targets.keys: .config/belongings-keys/deploy. overlaps .config/belongings-keys., which is never kept" $out/out_text.txt \
+              || { echo "ERROR: it failed, but did not refuse the deploy key as a target" >&2; exit 1; }
+            echo "OK: an unknown field, a climbing path, a hard pattern, a bad reason, a bad target, unordered chunks, overlapping plain roots and overlapping targets take the build down"
             runHook postBuild
           ''
         else

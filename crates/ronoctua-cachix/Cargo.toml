@@ -1,0 +1,47 @@
+[package]
+name = "ronoctua-cachix"
+description = "The person's binary cache on Cachix: its push token (sealed, 0600), the netrc root keeps for a private one, what a push may carry, the push after each successful update and what it said — the one crate that talks to Cachix."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE PUSH IS PART OF THE PRODUCT: the update's last `publish` step runs
+# `ronoctua-cachix push` as the person (the update brain module's
+# `steps.nix`). Extracted as `rust.cachix` (`nix/rust.nix`) and wrapped by
+# `nix/modules/binary-cache.nix` with the paths of `cachix` and of the
+# machine's `nix`, which reach it by the environment — never `option_env!`:
+# the shell links this crate to read the token and the record, and a store
+# path baked here would put the whole of `cachix` in the footer's closure.
+[[bin]]
+name = "ronoctua-cachix"
+path = "src/bin/cli.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The token is held in a `Secret` (never printed, wiped) and kept in a file
+# `0600` from its first byte; every network program this crate runs goes
+# only with a `Pass` for each host it reaches.
+ronoctua-consent = { path = "../ronoctua-consent" }
+# The person's options (the cache's name, key and visibility, judged by the
+# one validator), their stamps, and the machine's record a push follows.
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+# The record of the last push, under the state root, written whole and
+# atomically; the token's folder under the configuration root.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# ROOT'S HALF opens the token the person staged with `openat` + `O_NOFOLLOW`
+# in their runtime folder and checks who owns it (`netrc::take_staged`).
+rustix = { workspace = true, features = [ "fs", "process" ] }
+# The netrc's text holds the token: built in memory that is wiped.
+zeroize.workspace = true
+
+[dev-dependencies]
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+ronoctua-store = { path = "../ronoctua-store" }
+
+[lints]
+workspace = true

@@ -18,6 +18,11 @@
   ...
 }:
 
+let
+  # WHERE THE DISTRO'S TREE IS on the ISO — named once, here; the installer
+  # reads it from `RONOCTUA_FLAKE_DIR`.
+  distroDir = "/etc/ronoctua/distro";
+in
 {
   imports = [
     "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
@@ -32,17 +37,9 @@
     ../modules/network.nix
   ];
 
-  # THE FLAKE TRAVELS ON THE ISO.
-  #
-  # The installer's plan runs `nixos-install --flake /mnt/etc/nixos#noctua`,
-  # and the `inst-step-flake` step copies this there. Without this line
-  # `nixos-install` does not find `flake.nix` and stops — and DRY RUN mode never
-  # showed that, because it prints the command instead of running it.
-  #
-  # The tree is small: the fonts are a Release asset and never enter git
-  # (see AGENTS.md), so what goes in here are the `.nix` files, the Rust and the
-  # text assets.
-  environment.etc."nixos".source = ronoctua.flake;
+  # THE DISTRO'S TREE TRAVELS ON THE ISO — see the L20 region below, where it
+  # is put (it is not the machine directory any more: a machine has its own
+  # flake, made from the tree's template).
 
   # THE SEED — what the target machine would otherwise COMPILE.
   #
@@ -58,6 +55,8 @@
   # `iso-image.nix` registers everything in `storeContents` with
   # `nix-store --load-db` at boot, so these arrive as VALID store paths and not
   # as files that happen to be on the medium.
+  #
+  # ALWAYS, whole (see the note after the SSH settings below).
   isoImage.storeContents = ronoctua.seed;
 
   # -------------------------------------------------------------------
@@ -150,6 +149,16 @@
     # installer reaches the second-to-last step and stops — after the disk has
     # already been erased, which is the worst place to be missing a dependency.
     mkpasswd
+
+    # THE PERSON'S TWO PROGRAMS, which the installer runs by name: the
+    # belongings' CLI (the plain part copied out, the deploy key, the probe,
+    # the passphrase's check, the restore) and root's applier and verifier of
+    # the person's declarations — extracted (`nix/rust.nix`), so the ISO does
+    # not carry the workspace. And `ssh`, which git reaches an SSH repository
+    # through.
+    ronoctua.belongingsCli
+    ronoctua.personCli
+    openssh
   ];
 
   # TPM2 available on the ISO already: the installer needs to detect presence and
@@ -202,6 +211,55 @@
     "nix-command"
     "flakes"
   ];
+
+  # THE 2026-10-05 WAVE: one region per package, after its anchor.
+  # ── anchor: L02 ──
+  # SSH POST-QUANTUM FIRST, the installer's sshd and client both — the same
+  # table as the installed system (`assets/ssh.nix`, `nix/modules/ssh.nix`),
+  # which this ISO does not import. The sshd takes a root login, so after the
+  # hybrids it keeps a server's narrower list, not the client's. And the sshd
+  # that lets a person install from another machine keeps ONE host key,
+  # ed25519: NixOS would also make an RSA one at boot (`no-rsa-host-key`).
+  programs.ssh.kexAlgorithms =
+    (import ../../assets/ssh.nix).postQuantum ++ (import ../../assets/ssh.nix).classical;
+  services.openssh.settings.KexAlgorithms =
+    (import ../../assets/ssh.nix).postQuantum ++ (import ../../assets/ssh.nix).serverClassical;
+  services.openssh.hostKeys = (import ../../assets/ssh.nix).hostKeys;
+  # ── anchor: L16 ──
+  # THE ISO ALWAYS CARRIES ITS SEED (the `storeContents` line above): the
+  # distro has no binary cache of its own, so what only this repository makes
+  # — the shell, the compositor, the fonts, the icons, the index — and the
+  # flake inputs' sources that evaluating a machine's flake needs travel on
+  # the medium, and the target compiles none of it.
+  #
+  # THE PERSON'S CACHE IS NOT THE ISO'S: this ISO knows no person. When the
+  # person's options name one, the installer hands it to `nixos-install` on
+  # its command line — the cache and its key, and the netrc of a private one
+  # (`ronoctua-installer`'s plan) — and the installed machine declares it
+  # itself (`nix/modules/binary-cache.nix`). So nothing here declares a
+  # substituter or a key (`binary-cache-declared-once`).
+  # ── anchor: L20 ──
+  # THE DISTRO'S TREE, and what the installer is told about it.
+  #
+  # The installer makes the machine's OWN flake from the tree's template
+  # (`templates/machine`) and installs the distro as an input of it; it reads
+  # where the tree is, and which revision it is, from these three variables
+  # — the login shell's, where the installer is run. The revision is what it
+  # compares with the `release` branch: a release at another revision starts
+  # the release's installer instead (`crates/ronoctua-installer/src/release.rs`).
+  # A tree with changes says `-dirty`, and a development installer never
+  # follows the release.
+  #
+  # NOT the machine directory's name: the ISO's own `/etc/nixos` is nobody's
+  # machine, and the template is what becomes one.
+  environment.etc.${lib.removePrefix "/etc/" distroDir}.source = ronoctua.flake;
+  environment.variables = {
+    RONOCTUA_FLAKE_DIR = distroDir;
+    RONOCTUA_FLAKE_REV = ronoctua.flake.rev or ronoctua.flake.dirtyRev or "unknown";
+    RONOCTUA_FLAKE_LAST_MODIFIED = toString (ronoctua.flake.lastModified or 0);
+  };
+  # (The person's two programs and `ssh` are in `environment.systemPackages`
+  # above: one list, defined once.)
 
   system.stateVersion = "26.05";
 }

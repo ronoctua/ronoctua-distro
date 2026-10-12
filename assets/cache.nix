@@ -397,4 +397,31 @@
   # many. Two hundred is months of what one person opens by searching.
   fastAccessRecentMost = 200;
 
+  # THE LLM ACCOUNTS' TOKEN COUNTS (`$XDG_CACHE_HOME/ronoctua/llm/<id>/`,
+  # `ronoctua_llm::tokens`): how far back the count reaches, in days, and how
+  # many answers it remembers so each is counted once, in answers.
+  #
+  # Thirty-one days: Claude Code deletes a transcript a month after it was
+  # last written (`cleanupPeriodDays`), so a longer window would count days
+  # whose files may already be gone, and the count would shrink as they go.
+  #
+  # A hundred thousand answers: a resumed session copies the earlier answers
+  # into its new file, and only remembering each one (its `message.id` and
+  # `requestId`, hashed to eight bytes) keeps it from being counted twice. A
+  # heavy month is tens of thousands; past the bound the oldest hours are
+  # forgotten first — about two megabytes on disk at the bound.
+  llmTokenDays = 31;
+  llmSeenMost = 100000;
+
+  # WHAT EACH HOST AGREED IN ITS TLS HANDSHAKE (`tls-groups.json` under
+  # `$XDG_STATE_HOME/ronoctua`, `crates/ronoctua-http/src/groups.rs`), in
+  # hosts: the key-exchange group, whether it holds against a quantum
+  # computer, and when it was heard — what the security view's quantum section
+  # reads. Past this, the host heard longest ago goes first. Five hundred and
+  # twelve is every host a person's month reaches several times over (the
+  # lookups, the directories, the catalogues and the searches together ask a
+  # few dozen), and each entry is a line of JSON that every process speaking
+  # TLS rewrites — whole — when it learns something new.
+  tlsGroupsHosts = 512;
+
 }

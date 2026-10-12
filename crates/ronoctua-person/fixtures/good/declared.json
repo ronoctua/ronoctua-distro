@@ -1,0 +1,77 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "source": "nix",
+      "id": "nix:ripgrep",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:00Z",
+      "edited-on": "noctua",
+      "attr": "ripgrep",
+      "unfree": false
+    },
+    {
+      "source": "flatpak",
+      "id": "flatpak:org.gnome.Calculator",
+      "machines": [
+        "noctua",
+        "vm"
+      ],
+      "edited-at": "2026-10-05T12:00:01Z",
+      "edited-on": "vm",
+      "app-id": "org.gnome.Calculator",
+      "origin": "flathub"
+    },
+    {
+      "source": "appimage",
+      "id": "appimage:obsidian",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:02Z",
+      "edited-on": "noctua",
+      "key": "obsidian",
+      "name": "Obsidian",
+      "pin": {
+        "url": "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.9.0/Obsidian-1.9.0.AppImage",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+        "version": "1.9.0",
+        "pinned-at": "2026-10-05T12:00:02Z"
+      },
+      "follows": {
+        "github": {
+          "repo": "obsidianmd/obsidian-releases",
+          "asset-pattern": "Obsidian-*.AppImage"
+        }
+      },
+      "icon": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "web",
+      "id": "web:whatsapp",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:03Z",
+      "edited-on": "noctua",
+      "slug": "whatsapp",
+      "name": "WhatsApp",
+      "url": "https://web.whatsapp.com/",
+      "profile": "Default",
+      "icon": null,
+      "category": "Network"
+    },
+    {
+      "source": "android",
+      "id": "android:org.fdroid.fdroid",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:04Z",
+      "edited-on": "noctua",
+      "package": "org.fdroid.fdroid",
+      "pin": {
+        "url": "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+        "version": "1.21.0",
+        "version-code": 1021050
+      },
+      "from": "f-droid",
+      "image": "vanilla"
+    }
+  ]
+}

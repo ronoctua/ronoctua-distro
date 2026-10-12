@@ -28,6 +28,9 @@ rustix = { workspace = true, features = [ "fs", "event", "process" ] }
 # The vocabulary, the units and their preferences.
 ronoctua-keyboards = { path = "../ronoctua-keyboards" }
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# `keys.json` is a `Store`: one unit's rules that will not read cost that
+# unit and not every remap, and a write keeps what this build does not know.
+ronoctua-store = { path = "../ronoctua-store" }
 
 [lints]
 workspace = true

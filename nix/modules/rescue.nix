@@ -42,6 +42,14 @@ let
   cfg = config.ronoctua.rescue;
   user = config.ronoctua.user;
 
+  # THE MACHINE'S LIFE (`nix/modules/machine.nix`), which this module needs
+  # beside it — a test machine imports both: the rebuild is its apply, and the
+  # rollback disarms its boot trial. The machine's own flake comes by its one
+  # name (`machine-dir-has-one-name`): where the edited `host.nix` goes. The
+  # rebuild's flake and attribute travel in `ronoctua.machine.environment`.
+  machine = config.ronoctua.machine;
+  machineDir = machine.dir;
+
   # WHERE THE EDITOR LEAVES WHAT IT WROTE.
   #
   # The same path the crate holds in `edit::STAGED`, and `rescue-staging-agrees`
@@ -56,10 +64,20 @@ let
   # with no flake, no network and no `nix` evaluation at all — which matters,
   # because the generation one is rolling back FROM may be the reason evaluation
   # is broken.
+  #
+  # AND THE BOOT TRIAL IS DISARMED (`ronoctua-machine disarm`). An update arms
+  # one in two EFI variables the rollback does not touch: the one-shot would
+  # take the next boot straight back into the system rolled away from, and the
+  # default would keep every boot after it off `loader.conf`. The system left
+  # is recorded as one that did not boot, so the next update does not switch
+  # into it again. A disarm that is refused (another change holds the lock)
+  # is said, and the rollback goes on.
   rollback = pkgs.writeShellScript "ronoctua-rescue-rollback" ''
     set -eu
     profile=/nix/var/nix/profiles/system
     ${pkgs.nix}/bin/nix-env --profile "$profile" --rollback
+    ${machine.package}/bin/ronoctua-machine disarm \
+      || echo "the boot trial was not disarmed: the next boot may still try the system rolled away from" >&2
     case "$1" in
       switch) "$profile"/bin/switch-to-configuration switch ;;
       boot)   "$profile"/bin/switch-to-configuration boot ;;
@@ -77,7 +95,7 @@ let
     test -s ${staged} || { echo "nothing was edited" >&2; exit 1; }
     ${pkgs.nix}/bin/nix-instantiate --parse ${staged} > /dev/null \
       || { echo "the edited file is not valid Nix; nothing was installed" >&2; exit 1; }
-    ${pkgs.coreutils}/bin/install -m 0644 ${staged} /etc/nixos/host.nix
+    ${pkgs.coreutils}/bin/install -m 0644 ${staged} ${machineDir}/host.nix
     echo "written; a nixos-rebuild switch is still needed"
   '';
 
@@ -204,14 +222,29 @@ in
       };
     };
 
+    # THE REBUILD IS THE MACHINE'S APPLY (`ronoctua-machine apply`): built
+    # first, the profile and the switch only then, the boot trial armed, and
+    # a build that fails puts back the lock the running system was built
+    # from. The machine directory and the attribute come in the machine's
+    # one table (`ronoctua.machine.environment`), which
+    # `machine-flake-target-exists` reads off this unit. And the update's own
+    # lock first, as the software centre's apply takes it: a rebuild beside a
+    # running update would build the folder while the update rewrites its
+    # lock — busy is the answer (exit 75), said in the console.
     systemd.services.ronoctua-rescue-rebuild = {
-      description = "Applies /etc/nixos on this machine";
+      description = "Applies the machine's own flake on this machine";
+      environment = machine.environment;
       serviceConfig = {
         Type = "oneshot";
-        # The attribute is named after the person, and `rescue-flake-target-exists`
-        # is what proves that is still true rather than a coincidence.
-        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild switch --flake /etc/nixos#${user}";
+        # A build compiles; the default start timeout is 90 seconds.
+        TimeoutStartSec = "infinity";
+        ExecStart = machine.applyCommand;
+        RuntimeDirectory = baseNameOf machine.runDir;
+        RuntimeDirectoryPreserve = "yes";
       };
+      # The switch it runs must not stop or restart the unit running it.
+      restartIfChanged = false;
+      stopIfChanged = false;
     };
 
     systemd.services.ronoctua-rescue-host = {

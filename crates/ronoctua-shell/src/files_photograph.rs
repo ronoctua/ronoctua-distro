@@ -54,7 +54,11 @@ usage: ronoctua-shell photograph --door files --dir <folder> [options] [steps]
   --scale <n>           physical px per logical        (default: 1)
   --luks <label>        a stick holding a LOCKED encrypted partition
   --luks-open <label>   a stick whose encrypted partition is open and mounted
+  --blank <model>       a BLANK stick: no table, no filesystem — only its
+                        drive's heading on the sidebar
                         (the sidebar's devices, in place of a bus)
+  --private <state>     the /private vault: locked, open or suspended-in-use
+                        (its status, and its mount when open)
   --list                prints the frame instead of drawing it
 
 Steps — walked in the order they appear:
@@ -62,6 +66,10 @@ Steps — walked in the order they appear:
   --key <notation>      a key, as the keymap writes it: <down>, RET, C-i
   --hover <col,line>    rests the pointer on a cell of the surface
   --click <col,line[,right|double]>  a press and a release there
+  --sniffed <path>=<kind>
+                        a .age's header read, as the decrypt row's thread
+                        hands it back: pq, classical, passphrase, mixed or
+                        not-age — the question it asks, in the header
 
 The panels' answer is asked for after every step, and the frame is drawn
 once it has arrived.";
@@ -76,6 +84,8 @@ enum Step {
     /// A press and a release on a cell, with the button, and twice when
     /// `double`.
     Click(u16, u16, u32, bool),
+    /// What a `.age`'s header said — the decrypt row's thread, answered here.
+    Sniffed(std::path::PathBuf, ronoctua_pq::Kind),
 }
 
 /// A length the person gave.
@@ -101,6 +111,10 @@ struct Asked {
     list: bool,
     /// Encrypted sticks for the sidebar: the label, and whether it is open.
     luks: Vec<(String, bool)>,
+    /// The `/private` vault's state (`--private`).
+    private: Option<ronoctua_private::State>,
+    /// Blank sticks, by model.
+    blank: Vec<String>,
     steps: Vec<Step>,
 }
 
@@ -164,6 +178,8 @@ fn parse(words: &[String]) -> Result<Asked> {
         scale: 1,
         list: false,
         luks: Vec::new(),
+        private: None,
+        blank: Vec::new(),
         steps: Vec::new(),
     };
     let mut words = words.iter();
@@ -185,7 +201,15 @@ fn parse(words: &[String]) -> Result<Asked> {
             }
             "--dir" => {
                 let d = std::path::PathBuf::from(value()?);
-                ensure!(d.is_dir(), "`--dir {}` is not a folder", d.display());
+                // A FOLDER OF THE /private VAULT is not looked at here (its
+                // vault may be shut, or not on this machine at all): what
+                // the frame shows is the listing's refusal (`run` makes sure
+                // this machine's own vault is not open).
+                ensure!(
+                    ronoctua_private::inside(&d) || d.is_dir(),
+                    "`--dir {}` is not a folder",
+                    d.display()
+                );
                 dir = Some(d);
             }
             "--home" => {
@@ -251,11 +275,37 @@ fn parse(words: &[String]) -> Result<Asked> {
             "--list" => me.list = true,
             "--luks" => me.luks.push((value()?, false)),
             "--luks-open" => me.luks.push((value()?, true)),
+            "--private" => {
+                let word = value()?;
+                me.private = Some(
+                    ronoctua_private::State::ALL
+                        .into_iter()
+                        .find(|s| {
+                            serde_json::to_value(s).ok()
+                                == Some(serde_json::Value::from(word.as_str()))
+                        })
+                        .with_context(|| {
+                            format!("`--private {word}` is not a state of the vault")
+                        })?,
+                );
+            }
+            "--blank" => me.blank.push(value()?),
             "--key" => {
                 let notation = value()?;
                 let key = ronoctua_keymap::Key::parse(&notation)
                     .map_err(|e| anyhow::anyhow!("`--key {notation}` is not a key: {e}"))?;
                 me.steps.push(Step::Key(key));
+            }
+            "--sniffed" => {
+                let said = value()?;
+                let (path, kind) = said
+                    .rsplit_once('=')
+                    .with_context(|| format!("`--sniffed` wants `path=kind`, not `{said}`"))?;
+                let kind: ronoctua_pq::Kind = serde_json::from_str(&format!("\"{kind}\""))
+                    .with_context(|| {
+                        format!("`{kind}` is not pq, classical, passphrase, mixed or not-age")
+                    })?;
+                me.steps.push(Step::Sniffed(path.into(), kind));
             }
             "--hover" => {
                 let (column, line, rest) = cell_of("--hover", &value()?)?;
@@ -359,9 +409,40 @@ pub fn run(words: &[String]) -> Result<()> {
         ronoctua_files::sidebar::Preferences::fresh(),
         None,
     );
+    // NEVER THIS MACHINE'S VAULT: a folder inside `/private` is photographed
+    // only while the real one is not open, so what the frame shows is the
+    // refusal (`listing::Withheld`) and never what the person keeps there.
+    anyhow::ensure!(
+        !(ronoctua_private::inside(&asked.dir) && ronoctua_private::open_now()),
+        "`--dir {}` is inside this machine's open /private: the camera does not list it",
+        asked.dir.display()
+    );
     let mut files = crate::files_window::Files::detached(&asked.dir, side, ui.texts.clone())?;
-    if !asked.luks.is_empty() {
-        files.racked_now(&sticks(&asked.luks));
+    if !asked.luks.is_empty() || !asked.blank.is_empty() || asked.private.is_some() {
+        let mut rack = sticks(&asked.luks, &asked.blank);
+        // THE VAULT, planted: its status, and what came out of it mounted at
+        // `/private` while it is open or suspended — as udisks would say.
+        let vault = asked.private.map(|state| ronoctua_private::Status {
+            state,
+            ..ronoctua_private::Status::absent()
+        });
+        if matches!(
+            asked.private,
+            Some(ronoctua_private::State::Open | ronoctua_private::State::SuspendedInUse)
+        ) {
+            rack.volumes.push(ronoctua_disks::Volume {
+                at: "/block/dm-9".to_owned(),
+                node: "/dev/dm-9".to_owned(),
+                id_type: "btrfs".to_owned(),
+                mounted_at: vec![ronoctua_private::MOUNT_POINT.to_owned()],
+                holds: ronoctua_disks::Holding {
+                    filesystem: true,
+                    ..ronoctua_disks::Holding::default()
+                },
+                ..ronoctua_disks::Volume::default()
+            });
+        }
+        files.racked_now_with_vault(&rack, vault);
     }
     let mut d = Detached::new(ui, files);
     shoot(&mut d, &asked)
@@ -371,9 +452,36 @@ pub fn run(words: &[String]) -> Result<()> {
 /// one partition an encrypted container — locked, or open with what came out
 /// of it mounted. The object paths are made up and name no machine
 /// (invariant 13); they are what the disk border would key the rows by.
-fn sticks(asked: &[(String, bool)]) -> ronoctua_disks::Rack {
+fn sticks(asked: &[(String, bool)], blank: &[String]) -> ronoctua_disks::Rack {
     use ronoctua_disks::{Bus, Drive, Holding, Rack, Volume};
     let mut rack = Rack::default();
+    // A BLANK STICK: its drive and the whole disk's block udisks publishes,
+    // nothing on it — what only the drive's heading shows.
+    for (n, model) in blank.iter().enumerate() {
+        let drive = format!("/drive/blank{n}");
+        rack.drives.push(Drive {
+            at: drive.clone(),
+            vendor: "SanDisk".to_owned(),
+            model: model.clone(),
+            bytes: 16_000_000_000,
+            bus: Bus::Usb,
+            removable: true,
+            ejectable: true,
+            can_power_off: true,
+            sort_key: format!("01hotplug/blank{n}"),
+            serial: String::new(),
+        });
+        rack.volumes.push(Volume {
+            at: format!("/block/blank{n}"),
+            node: format!(
+                "/dev/sd{}",
+                char::from(b'v' + u8::try_from(n % 4).unwrap_or(0))
+            ),
+            bytes: 16_000_000_000,
+            drive: Some(drive),
+            ..Volume::default()
+        });
+    }
     for (n, (label, open)) in asked.iter().enumerate() {
         let drive = format!("/drive/stick{n}");
         let node = format!(
@@ -390,6 +498,7 @@ fn sticks(asked: &[(String, bool)]) -> ronoctua_disks::Rack {
             ejectable: true,
             can_power_off: true,
             sort_key: format!("01hotplug/{n}"),
+            serial: String::new(),
         });
         let container = format!("/block/stick{n}p1");
         let clear = format!("/block/dm-{n}");
@@ -561,6 +670,7 @@ fn shoot(d: &mut Detached<crate::files_window::Files>, asked: &Asked) -> Result<
         );
         match *step {
             Step::Key(key) => d.press(key),
+            Step::Sniffed(ref path, kind) => d.content.sniffed_now(&mut d.ui, path.clone(), kind),
             Step::Hover(column, line) => {
                 for events in frames_of((column, line), None, &mut entered, &d.ui)? {
                     d.pointer(&events);

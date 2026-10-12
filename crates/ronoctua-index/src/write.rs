@@ -490,6 +490,18 @@ impl Writer {
             .map_or(0, |n| n as u64)
     }
 
+    /// The folder's bytes once the merges in flight have ended and their
+    /// inputs are collected: what the disk holds at rest. A test's reading —
+    /// mid-merge the folder is briefly both a merge's inputs and its output,
+    /// and how long depends on the machine's load, not on the index.
+    #[cfg(test)]
+    pub(crate) fn settled_size_bytes(&mut self) -> Result<u64, Refusal> {
+        self.settle()?;
+        self.reader.reload()?;
+        self.collect();
+        Ok(self.size_bytes())
+    }
+
     /// The bytes of the index's folder, as the disk counts them (the files
     /// tantivy wrote; a reader in another process may still map a removed
     /// one, which the disk gives back when it lets go).

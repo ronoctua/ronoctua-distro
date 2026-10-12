@@ -462,6 +462,15 @@ fn cursors(b: &mut Builder<'_>, s: &Snapshot) {
     if s.settings_failed {
         b.note(ronoctua_i18n::key::POINTERS_SETTINGS_FAILED);
     }
+    // A PART OF THE FILE REPAIRED: the choices below show the repair in that
+    // place, and the file keeps what it says.
+    if s.settings_repaired {
+        let said = b.texts.t_with(
+            ronoctua_i18n::key::BELONGINGS_REPAIR_PART_NOT_READ,
+            &[("file", ronoctua_pointers::prefs::FILE)],
+        );
+        b.note_said(&said);
+    }
     b.pair(
         b.texts.t(ronoctua_i18n::key::POINTERS_TOGETHER),
         on_off(s.prefs.together, b.texts),
@@ -1102,7 +1111,12 @@ impl Builder<'_> {
     /// A sentence that stands for a whole section. It WRAPS.
     fn note(&mut self, key: &str) {
         let text = self.texts.t(key);
-        for line in crate::chrome::note_lines(&text, self.room) {
+        self.note_said(&text);
+    }
+
+    /// [`Self::note`], of a sentence already said (one with arguments).
+    fn note_said(&mut self, text: &str) {
+        for line in crate::chrome::note_lines(text, self.room) {
             self.inert(vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)]);
         }
     }
@@ -1180,6 +1194,7 @@ mod tests {
             prefs,
             plan,
             settings_failed: false,
+            settings_repaired: false,
             connected: true,
             keyboards: Vec::new(),
         }
@@ -1206,6 +1221,36 @@ mod tests {
         ] {
             assert!(spots.contains(&want), "no row for {want}: {spots:?}");
         }
+    }
+
+    /// FAILS IF: a `pointers.json` with a value the store repaired is drawn
+    /// as if the file said what the view shows, with no word — or that word
+    /// is the "could not be read" one, when the rest of it was read.
+    #[test]
+    fn a_part_of_the_file_repaired_is_said() {
+        let t = texts();
+        let words = |s: &Snapshot| {
+            View::fresh()
+                .rows(Some(s), 300, &t)
+                .iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let part = t.t_with(
+            ronoctua_i18n::key::BELONGINGS_REPAIR_PART_NOT_READ,
+            &[("file", ronoctua_pointers::prefs::FILE)],
+        );
+        let failed = t.t(ronoctua_i18n::key::POINTERS_SETTINGS_FAILED);
+        let mut s = a_laptop();
+        assert!(
+            !words(&s).contains(&part),
+            "a file read whole is warned about"
+        );
+        s.settings_repaired = true;
+        let said = words(&s);
+        assert!(said.contains(&part), "the repair is not said: {said}");
+        assert!(!said.contains(&failed), "the rest of the file was read");
     }
 
     #[test]

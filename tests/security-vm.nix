@@ -11,11 +11,16 @@
 #      prefix, and a rule the person allowed through the door lets the
 #      neighbour in — the marks crossing from one table to the other;
 #   2. sudo and PAM: the password on stdin opens the door and a wrong one does
-#      not; the window's line lets `sudo -n` (and `sudo -E`) in and every lock
-#      closes it (`relax-end`, an expired `NOTAFTER`, the sleep hook, the
-#      timer's own unit); fingers answer sudo only in a terminal and only for
-#      a listed user, and the door — which has no terminal — never waits for
-#      one;
+#      not; the window's line lets `sudo -n` (and `sudo -E`) in, for every
+#      span up to no limit, and what ends it ends it (`relax-end`, an expired
+#      `NOTAFTER`, the timer's own unit) while sleeping does not; the boot's
+#      look closes an expired window and gives a live one its timer back;
+#      fingers answer sudo only in a terminal and only for a listed user, the
+#      door's password-only run — which has no terminal — never waits for
+#      one, and on a terminal the stack says the sentinels the door's
+#      conversation listens for; root's list of security keys is written by
+#      the door alone, and a key listed but absent never keeps the password
+#      from answering;
 #   3. polkit: the person raises the shields with no agent in the session, and
 #      the same rule starts nothing else;
 #   4. NetworkManager: its dispatcher hands every link to the helper, the
@@ -49,6 +54,47 @@ let
   # Where the virtual reader listens: fprintd's own state directory, the one
   # place its sandbox (`ProtectSystem=strict`, `PrivateTmp`) lets it bind.
   reader = "/var/lib/fprint/virtual-device";
+  # THE SENTENCES THE DOOR LISTENS FOR (`ronoctua_security::authority`):
+  # sudo's `-p` prompt, `pam_u2f`'s cue, the line before `pam_fprintd`.
+  # `sudo-door-reads-its-own-sentinels` holds the Rust and the PAM stack
+  # equal; here they are what the machine's sudo is asked to say.
+  passwordPrompt = "Password (ronoctua-sudo:password): ";
+  fingerCue = "A fingerprint may answer for the password (ronoctua-sudo:finger)";
+  # A CREDENTIAL AS `pamu2fcfg -n` WRITES ONE — for a key nobody plugs in.
+  credential = "owBYtXj1Pq+Zb5c1Kd/AbQ==,04d6f1aa,es256,+presence";
+  # SUDO ON A TERMINAL, the way the door's conversation runs it: a pty made
+  # the controlling terminal (`pty.fork`), an empty environment but
+  # `LC_ALL=C`, `-k -p <prompt>`, and the answer written only after the
+  # prompt (sudo flushes the terminal's input when it asks) — the password,
+  # or the end of input. Everything the terminal said is printed.
+  talker = pkgs.writeScript "sudo-talker" ''
+    #!${pkgs.python3}/bin/python3
+    import os, pty, select, sys, time
+
+    prompt, answer, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv("${pkgs.coreutils}/bin/env", ["env", "-i", "LC_ALL=C", "/run/wrappers/bin/sudo", "-k", "-p", prompt, "--"] + args)
+    said, seen, ends = b"", b"", time.monotonic() + 90
+    while True:
+        ready, _, _ = select.select([fd], [], [], max(0.0, ends - time.monotonic()))
+        if not ready:
+            break
+        try:
+            chunk = os.read(fd, 1024)
+        except OSError:
+            break
+        if not chunk:
+            break
+        said += chunk
+        seen += chunk
+        if prompt.encode() in seen:
+            seen = seen.split(prompt.encode(), 1)[1]
+            os.write(fd, answer.encode() + b"\n" if answer else b"\x04")
+    _, status = os.waitpid(pid, 0)
+    sys.stdout.write(said.decode(errors="replace"))
+    sys.exit(os.waitstatus_to_exitcode(status))
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-security";
@@ -56,7 +102,10 @@ pkgs.testers.runNixOSTest {
   nodes.machine =
     { ... }:
     {
-      imports = [ ../nix/modules/security.nix ];
+      imports = [
+        ../nix/modules/security.nix
+        ../nix/modules/yubikey.nix
+      ];
 
       # The module reads `config.ronoctua.user`, which belongs to `base.nix` —
       # and base brings the whole system with it. Declaring the one option it
@@ -78,6 +127,9 @@ pkgs.testers.runNixOSTest {
           extraGroups = [ "wheel" ];
           password = password;
         };
+
+        # THE SECURITY KEYS' MODULE, as every machine has it.
+        ronoctua.yubikey.enable = true;
 
         # Something for the neighbour to knock on: a port the declared firewall
         # does not open.
@@ -165,6 +217,11 @@ pkgs.testers.runNixOSTest {
     password = "${password}"
     helper = "${helper}"
     reader = "${reader}"
+    prompt = "${passwordPrompt}"
+    finger_cue = "${fingerCue}"
+    credential = "${credential}"
+    window_state = "/var/lib/ronoctua-security/sudo-window"
+    window_line = "/var/lib/ronoctua-sudo/relax"
     knock = "curl --silent --fail --max-time 3 http://machine:8080/"
 
 
@@ -192,6 +249,16 @@ pkgs.testers.runNixOSTest {
             + "-- ${pkgs.coreutils}/bin/env -i LC_ALL=C ${pkgs.util-linux}/bin/setsid --wait "
             + f"/run/wrappers/bin/sudo -S -k -p ''' -- {helper} {verb}"
         )
+
+
+    def on_a_terminal(verb, answer=password):
+        # sudo as the door's conversation runs it: on a terminal, the answer
+        # after the prompt (the end of input for "").
+        return as_user(f"${talker} {shlex.quote(prompt)} {shlex.quote(answer)} {helper} {verb}")
+
+
+    def window():
+        return json.loads(machine.succeed(f"cat {window_state}"))
 
 
     def stage(settings):
@@ -288,7 +355,7 @@ pkgs.testers.runNixOSTest {
         # and the shields do not stop from here.
         machine.fail(as_user("systemctl start ronoctua-firewall.service"))
         machine.fail(as_user("systemctl restart ronoctua-firewall-shields.service"))
-        machine.fail(as_user("systemctl start ronoctua-sudo-close.service"))
+        machine.fail(as_user("systemctl start ronoctua-sudo-window.service"))
 
     with subtest("lowering them is a loosening, and goes through the door"):
         stage(settings(shields=False))
@@ -310,47 +377,97 @@ pkgs.testers.runNixOSTest {
         # With the wheel rule's SETENV: the window takes the password away,
         # and not `sudo -E`.
         machine.succeed(as_user("sudo -n -E true"))
-        until = int(machine.succeed("cat /run/ronoctua-security/sudo-until").strip())
-        assert until > int(time.time()) - 600, until
+        opened = window()
+        until = opened["until-unix-s"]
+        assert opened["span"] == "five" and until > int(time.time()) - 600, opened
         machine.succeed(f"systemctl list-timers --all --no-pager | grep -q ronoctua-sudo-expire-{until}")
-        machine.succeed("test \"$(stat -c '%a %U' /run/ronoctua-sudo/relax)\" = '440 root'")
-        machine.fail("test -e /run/ronoctua-sudo/.relax")
+        machine.succeed(f"test \"$(stat -c '%a %U' {window_line})\" = '440 root'")
+        machine.succeed(f"test \"$(stat -c '%a %U' {window_state})\" = '644 root'")
+        machine.fail("test -e /var/lib/ronoctua-sudo/.relax")
+        # NOT TMPFS: the folder sudo includes is on the machine's disk.
+        fstype = machine.succeed("findmnt -no FSTYPE -T /var/lib/ronoctua-sudo").strip()
+        assert fstype != "tmpfs", fstype
+
+    with subtest("starting the count again needs nothing typed, and moves the end"):
+        before = window()["until-unix-s"]
+        time.sleep(2)
+        machine.succeed(as_user(f"sudo -n -- {helper} relax 5"))
+        after = window()["until-unix-s"]
+        assert after > before, (before, after)
+        timers = machine.succeed("systemctl list-timers --all --no-pager")
+        assert f"ronoctua-sudo-expire-{after}" in timers and f"ronoctua-sudo-expire-{before}" not in timers, timers
 
     with subtest("ending it now needs nothing typed, and closes it"):
         machine.succeed(as_user(f"sudo -n -- {helper} relax-end"))
         machine.fail(as_user("sudo -n true"))
-        machine.fail("test -e /run/ronoctua-sudo/relax")
-        machine.fail("test -e /run/ronoctua-security/sudo-until")
+        machine.fail(f"test -e {window_line}")
+        machine.fail(f"test -e {window_state}")
         machine.fail("systemctl list-timers --all --no-pager | grep -q ronoctua-sudo-expire")
 
     with subtest("an expired line lets nobody in, with no timer at all"):
         line = machine.succeed(f"{helper} print relax-line {user} 1000000000").strip()
-        machine.succeed(f"install -m 0440 /dev/null /run/ronoctua-sudo/relax && printf '%s\\n' {shlex.quote(line)} > /run/ronoctua-sudo/relax")
+        machine.succeed(f"install -m 0440 /dev/null {window_line} && printf '%s\\n' {shlex.quote(line)} > {window_line}")
         machine.fail(as_user("sudo -n true"))
-        machine.succeed("rm /run/ronoctua-sudo/relax")
+        machine.succeed(f"rm {window_line}")
 
     with subtest("the timer's own unit closes the window"):
         machine.succeed(door("relax 5"))
-        until = int(machine.succeed("cat /run/ronoctua-security/sudo-until").strip())
+        until = window()["until-unix-s"]
         machine.succeed(f"systemctl start ronoctua-sudo-expire-{until}.service")
         machine.fail(as_user("sudo -n true"))
+        machine.fail(f"test -e {window_state}")
 
-    with subtest("sleeping closes it"):
-        machine.succeed(door("relax 15"))
+    with subtest("a day, two days, and no limit"):
+        for span, minutes in [("1440", 1440), ("2880", 2880)]:
+            started = int(time.time())
+            machine.succeed(door(f"relax {span}"))
+            until = window()["until-unix-s"]
+            assert abs(until - started - minutes * 60) < 120, (span, until, started)
+            machine.succeed(as_user("sudo -n true"))
+        machine.succeed(door("relax no-limit"))
+        opened = window()
+        assert opened["until-unix-s"] is None and opened["span"] == "no-limit", opened
+        machine.fail(f"grep -q NOTAFTER {window_line}")
+        machine.fail("systemctl list-timers --all --no-pager | grep -q ronoctua-sudo-expire")
         machine.succeed(as_user("sudo -n true"))
-        # `sleep.target` refuses to be started by hand (RefuseManualStart), and
-        # a guest that really suspends needs a firmware that offers S3. So the
-        # hook's WIRING is read from systemd — the target pulls it in and
-        # waits for it — and its WORK is run the way the target runs it.
-        for prop in ["WantedBy", "Before"]:
-            value = machine.succeed(f"systemctl show -p {prop} --value ronoctua-sudo-close.service")
-            assert "sleep.target" in value.split(), (prop, value)
-        wants = machine.succeed("systemctl show -p Wants --value sleep.target")
-        assert "ronoctua-sudo-close.service" in wants.split(), wants
-        machine.succeed("systemctl start ronoctua-sudo-close.service")
+
+    with subtest("sleeping no longer closes it"):
+        # It ends at its end or by the person (owner, 2026-10-11): nothing
+        # sleep.target pulls in runs the helper.
+        wants = machine.succeed("systemctl show -p Wants --value sleep.target").split()
+        for unit in wants:
+            run = machine.succeed(f"systemctl show -p ExecStart --value {unit} || true")
+            assert "ronoctua-security-root" not in run, (unit, run)
+        machine.succeed(as_user("sudo -n true"))
+
+    with subtest("the boot keeps a window with no limit, and closes an expired one"):
+        # A REBOOT, AS THE BOOT SEES IT: the unit the boot runs, run again
+        # (`RemainAfterExit`: a restart). The files live on the disk, which
+        # a reboot keeps (`findmnt` above).
+        machine.succeed("systemctl is-active ronoctua-sudo-window.service")
+        machine.succeed("systemctl restart ronoctua-sudo-window.service")
+        machine.succeed(as_user("sudo -n true"))
+        assert window()["until-unix-s"] is None
+        machine.succeed(as_user(f"sudo -n -- {helper} relax-end"))
+        line = machine.succeed(f"{helper} print relax-line {user} 1000000000").strip()
+        machine.succeed(f"install -m 0440 /dev/null {window_line} && printf '%s\\n' {shlex.quote(line)} > {window_line}")
+        expired = json.dumps({"format": 1, "until-unix-s": 1000000000, "span": "five"})
+        machine.succeed(f"printf '%s\\n' {shlex.quote(expired)} > {window_state}")
+        machine.succeed("systemctl restart ronoctua-sudo-window.service")
+        machine.fail(f"test -e {window_line}")
+        machine.fail(f"test -e {window_state}")
+
+    with subtest("the boot gives a live window back its timer"):
+        machine.succeed(door("relax 1440"))
+        until = window()["until-unix-s"]
+        # THE TIMER DIES WITH THE MACHINE: a transient unit is not kept.
+        machine.succeed("systemctl stop 'ronoctua-sudo-expire-*.timer'")
+        machine.fail(f"systemctl list-timers --all --no-pager | grep -q ronoctua-sudo-expire-{until}")
+        machine.succeed("systemctl restart ronoctua-sudo-window.service")
+        machine.succeed(f"systemctl list-timers --all --no-pager | grep -q ronoctua-sudo-expire-{until}")
+        machine.succeed(as_user("sudo -n true"))
+        machine.succeed(as_user(f"sudo -n -- {helper} relax-end"))
         machine.fail(as_user("sudo -n true"))
-        machine.fail("test -e /run/ronoctua-sudo/relax")
-        machine.fail("test -e /run/ronoctua-security/sudo-until")
 
     with subtest("a finger is enrolled through the door, touch by touch"):
         machine.wait_until_succeeds("fprintd-list root 2>&1 | grep -qi 'virtual'", timeout=30)
@@ -373,15 +490,27 @@ pkgs.testers.runNixOSTest {
         machine.succeed(door("finger-sudo on"))
         machine.succeed(f"grep -qx {user} /var/lib/ronoctua-security/fingerprint-sudo")
         machine.succeed("test \"$(stat -c '%a %U' /var/lib/ronoctua-security/fingerprint-sudo)\" = '644 root'")
-        # Listed, and a terminal: the finger alone is enough.
+        # Listed, and a terminal: the finger alone is enough — and the line
+        # before it says the cue the door listens for.
         status, said = while_scanning(pam_with_tty, "/tmp/pam-tty")
         assert status == 0, said
+        assert finger_cue in said, said
         # Listed, and NO terminal — the door's case: the finger is never asked,
         # the password is, and there is none.
         status, said = while_scanning(pam_without, "/tmp/pam-no-tty")
         assert status != 0, said
         # And the password still works there.
         machine.succeed(f"printf '%s\\n' {shlex.quote(password)} | pamtester sudo {user} authenticate")
+
+    with subtest("on the door's terminal, a finger answers sudo, and the cue comes first"):
+        # Listed, a print enrolled: sudo on a terminal says the cue, then
+        # waits for the finger, which answers — no password typed, and the
+        # verb ran.
+        status, said = while_scanning(on_a_terminal("relax-end", answer=""), "/tmp/talk-finger")
+        assert status == 0, said
+        assert finger_cue in said, said
+        assert prompt not in said, "the password was asked before the finger"
+        assert said.strip().endswith("done"), said
 
     with subtest("the door never waits for a finger, even for a listed user"):
         # Listed, a print enrolled, and nobody touching the reader: in a
@@ -398,6 +527,30 @@ pkgs.testers.runNixOSTest {
             machine.fail(f"grep -q pam_fprintd /etc/pam.d/{service}")
         machine.succeed("grep -q pam_fprintd /etc/pam.d/sudo")
 
+    with subtest("root's list of keys is written by the door alone, and the password still answers"):
+        machine.succeed(door(f"u2f-keys {credential}"))
+        listed = machine.succeed("cat /var/lib/ronoctua-security/u2f_keys").strip()
+        assert listed == f"{user}:{credential}", listed
+        machine.succeed("test \"$(stat -c '%a %U' /var/lib/ronoctua-security/u2f_keys)\" = '644 root'")
+        machine.fail(as_user("printf 'x\\n' >> /var/lib/ronoctua-security/u2f_keys"))
+        # pam_u2f IS IN SUDO, AND ONLY THERE, sufficient.
+        machine.succeed("grep -q 'sufficient.*pam_u2f.so' /etc/pam.d/sudo")
+        for service in ["login", "su", "polkit-1", "passwd", "ronoctua-unlock"]:
+            machine.fail(f"grep -q pam_u2f /etc/pam.d/{service} 2>/dev/null")
+        # A KEY LISTED AND NOT PLUGGED IN: on a terminal pam_u2f finds no
+        # device and gives up at once, and the password answers at the
+        # door's prompt.
+        started = time.monotonic()
+        said = machine.succeed(on_a_terminal("relax-end"))
+        assert time.monotonic() - started < 30, "the key's wait kept the password back"
+        assert prompt in said and said.strip().endswith("done"), said
+        # A WRONG PASSWORD is refused, and nothing runs.
+        said = machine.fail(on_a_terminal("relax-end", answer="not it"))
+        assert "done" not in said, said
+        # Taken out: the list has no line for the person.
+        machine.succeed(door("u2f-keys"))
+        machine.fail(f"grep -q '^{user}:' /var/lib/ronoctua-security/u2f_keys")
+
     with subtest("the finger goes away through the door"):
         machine.succeed(door("finger-delete right-index-finger"))
         listed = machine.succeed(f"fprintd-list {user} 2>&1 || true")
@@ -412,6 +565,11 @@ pkgs.testers.runNixOSTest {
         # Nothing it does not name.
         said = machine.fail(door("relax 7"))
         assert "refused invalid" in said, said
+        # The window's unit verbs, through sudo.
+        said = machine.fail(door("relax-boot"))
+        assert "refused not-allowed" in said, said
+        said = machine.fail(door("relax-expire 1000000000"))
+        assert "refused not-allowed" in said, said
 
     with subtest("firmware is read, and never refreshed on a clock"):
         machine.fail("systemctl list-dependencies timers.target --plain --no-pager | grep -q fwupd-refresh")

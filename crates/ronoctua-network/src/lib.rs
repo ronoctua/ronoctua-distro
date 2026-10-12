@@ -373,6 +373,18 @@ impl Saved {
     }
 }
 
+/// NetworkManager's `NMMetered` as an answer: yes and guessed yes are
+/// metered, no and guessed no are not, and unknown (or a number the daemon
+/// does not define) is no answer at all.
+#[must_use]
+pub const fn metered_of(value: u32) -> Option<bool> {
+    match value {
+        1 | 3 => Some(true),
+        2 | 4 => Some(false),
+        _ => None,
+    }
+}
+
 /// The whole of what NetworkManager knows, as of one reading.
 ///
 /// A SNAPSHOT and never a delta, the shape `ronoctua-disks`, `-power` and
@@ -829,6 +841,21 @@ impl Manager {
             });
         }
         out
+    }
+
+    /// Whether the way out is METERED — paid by the byte, a phone's
+    /// hotspot — as the daemon says of the primary connection, its guesses
+    /// included (a hotspot it recognises is a guessed yes). `None` when the
+    /// daemon is not there or does not know: that is not a "no", and a
+    /// caller that waits on a metered network must not take it for one
+    /// without saying so.
+    ///
+    /// What waits on it: the brain's update, which never spends a metered
+    /// connection on a scheduled run.
+    #[must_use]
+    pub fn metered(&self) -> Option<bool> {
+        let manager = self.manager().ok()?;
+        metered_of(manager.metered().ok()?)
     }
 
     /// Turns every device off, or back on — the aeroplane.
@@ -1687,6 +1714,19 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// A GUESS IS AN ANSWER, AND UNKNOWN IS NOT: the daemon guesses a phone's
+    /// hotspot is metered, and a caller that waits on a metered network must
+    /// wait on that too — while "it does not know" must not read as "no".
+    #[test]
+    fn metered_reads_the_guesses_and_not_the_unknown() {
+        assert_eq!(metered_of(1), Some(true));
+        assert_eq!(metered_of(3), Some(true), "a guessed yes is metered");
+        assert_eq!(metered_of(2), Some(false));
+        assert_eq!(metered_of(4), Some(false));
+        assert_eq!(metered_of(0), None, "unknown is no answer");
+        assert_eq!(metered_of(9), None, "a number the daemon does not define");
+    }
 
     #[test]
     fn the_aeroplane_is_networking_off_and_nothing_else() {

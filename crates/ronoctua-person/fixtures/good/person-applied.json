@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "machine": "noctua",
+  "distro-rev": "613862c0ffee",
+  "applied": [
+    "nix:ripgrep",
+    "flatpak:org.gnome.Calculator"
+  ],
+  "skipped": [
+    {
+      "id": "nix:gone-from-nixpkgs",
+      "reason": "attr-missing",
+      "detail": ""
+    },
+    {
+      "id": "appimage:obsidian",
+      "reason": "held",
+      "detail": "upstream-changed"
+    }
+  ],
+  "declined": {
+    "honoured": [
+      "gimp"
+    ],
+    "refused": [
+      {
+        "id": "ronoctua-shell",
+        "reason": "the-desktop"
+      }
+    ],
+    "unknown": [],
+    "still-present": []
+  },
+  "brain": {
+    "included": [
+      "my-reminders"
+    ],
+    "awaiting-approval": [
+      {
+        "id": "my-backups",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+      }
+    ]
+  },
+  "signature": {
+    "pinned": "0b4ef1fc7b155a61c973ba98b02ca7ec929b197e3f0db68570fc670976be57af",
+    "counter": 12,
+    "refused": null,
+    "kept-back": [
+      {
+        "at": "person/software/declared.json",
+        "why": "not-as-signed"
+      }
+    ]
+  }
+}

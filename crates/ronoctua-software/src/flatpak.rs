@@ -668,6 +668,23 @@ pub fn installed_of(
         .collect()
 }
 
+/// The remote an installed app came from (`flathub`), from the user
+/// installation's list; `None` when it is not installed or the list fails.
+/// Runs `flatpak list`: call it on a thread.
+#[must_use]
+pub fn origin_of(ctx: &Context, id: &str) -> Option<String> {
+    let program = ctx.tools.flatpak.as_deref()?;
+    let ran = plain(Call::new(program, list_argv()))
+        .keep_stdout()
+        .quietly(ctx)
+        .ok()
+        .filter(|r| r.code == Some(0))?;
+    parse_list(&ran.stdout)
+        .into_iter()
+        .find(|r| r.id == id && r.installation == "user" && !r.origin.is_empty())
+        .map(|r| r.origin)
+}
+
 /// The applications in the user installation, and whether nix-flatpak's user
 /// installation declared them ([`Origin::Declared`]). Runs `flatpak list`:
 /// call it on a thread. Empty when there is no Flatpak or the list fails

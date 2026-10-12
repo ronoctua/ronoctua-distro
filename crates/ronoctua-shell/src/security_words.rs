@@ -24,6 +24,9 @@ pub const fn refusal(why: Why) -> &'static str {
         Why::Unreadable => key::SECURITY_REFUSAL_UNREADABLE,
         Why::Busy => key::SECURITY_REFUSAL_BUSY,
         Why::TimedOut => key::SECURITY_REFUSAL_TIMED_OUT,
+        Why::Cancelled => key::SECURITY_REFUSAL_CANCELLED,
+        Why::NoKey => key::SECURITY_REFUSAL_NO_KEY,
+        Why::NoFooter => key::SECURITY_REFUSAL_NO_FOOTER,
     }
 }
 

@@ -553,6 +553,66 @@ pub fn at(
 /// is `brain:<module>/<mark>`, and nothing in the shell names a module.
 pub const MARK_PREFIX: &str = "brain:";
 
+// THE 2026-10-05 WAVE: a mark's instance (`brain:<module>/<mark>.<n>`) and
+// its digit, after its anchor.
+// ── anchor: L11 ──
+
+/// What a mark's segment says: its glyph, and a space after it the
+/// instance's digit or the count — the count's path for both numbers, each
+/// from its own field ([`Drawn::instance`], [`Drawn::count`]).
+///
+/// A SPACE, NOT A DIGIT AGAINST THE GLYPH: a Nerd Font icon fills its cell to
+/// the edge, and a digit in the next cell touched it — measured on the
+/// footer's own photograph. And ONE number: the core refuses a count on an
+/// instance (`Manifest::refusal_of`), since two numbers after one glyph would
+/// read as one; a mind that carried both anyway draws the instance, which is
+/// what the segment's id and its click are made of.
+#[must_use]
+pub fn mark_text(glyph: char, instance: u8, count: u32) -> String {
+    let number = if instance > 0 {
+        u32::from(instance)
+    } else {
+        count
+    };
+    if number > 0 {
+        format!("{glyph} {number}")
+    } else {
+        glyph.to_string()
+    }
+}
+
+/// The order the modeline PUSHES a mind's marks in, so that a mark's
+/// instances read from the first to the last, left to right.
+///
+/// The right side is laid out FROM THE EDGE INWARDS (`layout::resolve`): the
+/// first segment pushed sits against the edge and the next one to its left.
+/// Pushed as published, three accounts read `3 2 1`. So each mark's
+/// instances are pushed from the last to the first, together, where its
+/// first published one was; every other mark keeps its place.
+///
+/// The price, said: at one rung the segment farthest from the edge is the
+/// first to go when the line is short, so the FIRST instance is the one that
+/// leaves first. Reading `1 2 3` is the order a person counts in; the line
+/// keeps its one rule of which segment goes.
+#[must_use]
+pub fn from_the_edge(drawn: &[Drawn]) -> Vec<&Drawn> {
+    // A MARK, whichever of its instances: `brain:<module>/<name>` — the id
+    // without `.<n>`. Neither a module's id nor a mark's name has a dot.
+    let mark = |d: &Drawn| -> &str {
+        if d.instance > 0 {
+            d.id.rsplit_once('.').map_or(d.id, |(mark, _)| mark)
+        } else {
+            d.id
+        }
+    };
+    let first = |d: &Drawn| drawn.iter().position(|e| mark(e) == mark(d));
+    let mut order: Vec<&Drawn> = drawn.iter().collect();
+    // STABLE, so marks of one place keep the order they were published in.
+    order.sort_by_key(|d| (first(d), std::cmp::Reverse(d.instance)));
+    order
+}
+// ── anchor: L24 ──
+
 /// How many DIFFERENT names of the brain's modules this process will ever
 /// make static.
 ///
@@ -585,6 +645,13 @@ pub struct Drawn {
     /// The shell's command a click runs instead, when the module's mark
     /// opens an app of the shell (`MarkId::opens`) — by name, as `LEADER :`.
     pub opens: Option<&'static str>,
+    /// Which of its mark's instances it is, from 1 (`MarkId::instance`);
+    /// `0` for a mark that is one. Drawn as the digit beside the glyph, and
+    /// handed to [`Drawn::opens`] as its argument on a click.
+    pub instance: u8,
+    /// The instance's name as the person gave it — data, drawn as it is in
+    /// the hint (`$label`, the instance's number when they gave none).
+    pub label: Option<String>,
 }
 
 /// The marks one mind publishes, in the order the modules published them.
@@ -607,17 +674,19 @@ pub fn remember(drawn: &[Drawn]) {
 /// One published mark, drawn — or none, past [`NAMES_KEPT`].
 fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
     let mark = &posted.what;
-    let id = interned(&format!("{MARK_PREFIX}{}/{}", posted.module, mark.id.name))?;
+    // `brain:<module>/<mark>`, and `brain:<module>/<mark>.<n>` for one of its
+    // instances — each its own segment, hint and click.
+    let id = interned(&format!(
+        "{MARK_PREFIX}{}/{}",
+        posted.module,
+        mark.id.local()
+    ))?;
     // THE GLYPH IS A TOKEN, by the name the module declared — merged into the
     // measured icon table. One the table does not know draws the brain's own
     // mark rather than nothing: a mark exists only when it says something, so
     // it must at least be seen.
     let glyph = glyph_of(&mark.id.glyph).unwrap_or(tokens::icon::BRAIN);
-    let text = if mark.count > 0 {
-        format!("{glyph} {}", mark.count)
-    } else {
-        glyph.to_string()
-    };
+    let text = mark_text(glyph, mark.id.instance, mark.count);
     Some(Drawn {
         id,
         module: posted.module.clone(),
@@ -629,6 +698,8 @@ fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
         // A COMMAND BY NAME, interned like the segment's id: the click hands
         // it to `run_with`, which takes `&'static str`.
         opens: mark.id.opens.as_deref().and_then(interned),
+        instance: mark.id.instance,
+        label: mark.id.label.as_deref().map(ToOwned::to_owned),
     })
 }
 
@@ -705,7 +776,8 @@ pub fn colour_of(id: &str) -> tokens::Color {
 }
 
 /// What the minibuffer says while the pointer rests on a mark: the module's
-/// own hint, with the mark's count for a sentence that counts.
+/// own hint, with the mark's count for a sentence that counts — and, for one
+/// of its instances, the instance's number and the person's name for it.
 #[must_use]
 pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
     hint_in(&drawn_mark(id)?, texts)
@@ -715,16 +787,39 @@ pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
 #[must_use]
 pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<String> {
     (!d.hint.is_empty()).then(|| {
-        texts.t_args(
-            &d.hint,
-            &[("count", ronoctua_i18n::Arg::Number(i64::from(d.count)))],
-        )
+        let number = d.instance.to_string();
+        texts.t_args(&d.hint, &hint_args(d, &number))
     })
+}
+
+/// The values a mark's hint is made with: `$count`; for one of its
+/// instances `$instance` — A NUMBER, so a selector can branch on it — and
+/// `$label`, the person's own word for it, or the instance's `number` when
+/// they gave none: a Fluent selector cannot ask whether a text is empty, so
+/// a sentence that names the instance always has something to name it by.
+/// A BLANK word is none (`MarkId::numbered` drops one already; a mind written
+/// by hand may still carry it): "Seat  is taken" would be a hole.
+#[must_use]
+pub fn hint_args<'a>(d: &'a Drawn, number: &'a str) -> [(&'static str, ronoctua_i18n::Arg<'a>); 3] {
+    let label = d
+        .label
+        .as_deref()
+        .filter(|l| !l.trim().is_empty())
+        .unwrap_or(number);
+    [
+        ("count", ronoctua_i18n::Arg::Number(i64::from(d.count))),
+        (
+            "instance",
+            ronoctua_i18n::Arg::Number(i64::from(d.instance)),
+        ),
+        ("label", ronoctua_i18n::Arg::Text(label)),
+    ]
 }
 
 /// What a click on a mark runs, and with what: a command of the registry the
 /// mark's id names (`MarkId::opens` — the ONE way a mark opens an app of the
-/// shell), with nothing after it; else the mark's own action through
+/// shell), with the instance's number after it for one of a mark's
+/// instances and nothing otherwise; else the mark's own action through
 /// `brain-act`, or the module's page through `brain-open` — all reachable by
 /// name, and `brain-open` is `LEADER b`.
 #[must_use]
@@ -736,9 +831,15 @@ pub fn click_of(d: &Drawn) -> (&str, String) {
         return ("security-open", section.word().to_owned());
     }
     // AN APP OF THE SHELL, when the module's mark opens one: the command the
-    // module named, with nothing after it.
+    // module named — with the instance's number after it for one of its
+    // instances (the third account opens on the third), nothing otherwise.
     if let Some(command) = d.opens {
-        return (command, String::new());
+        let argument = if d.instance > 0 {
+            d.instance.to_string()
+        } else {
+            String::new()
+        };
+        return (command, argument);
     }
     match d.act.as_deref() {
         Some(act) => ("brain-act", format!("{} {act}", d.module)),
@@ -1792,6 +1893,138 @@ mod tests {
         };
         let drawn = marks(Some(&m));
         assert_eq!(click_of(&drawn[0]), ("fixture-open", String::new()));
+    }
+
+    /// FAILS IF: one of a mark's instances is not its own segment
+    /// (`brain:<module>/<mark>.<n>`), its digit is not drawn a space after
+    /// the glyph, its hint lacks the instance or the person's name for it,
+    /// or a click does not hand the command the instance — the third account
+    /// opening on the first.
+    #[test]
+    fn an_instance_is_its_own_segment_drawn_with_its_digit_and_clicked_with_it() {
+        let seat = MarkId::declared("seat", "fixture-seat", "fixture-mark-seat", 9, true)
+            .opening("fixture-open");
+        let posted = |n: u8, label: Option<&str>, count: u32| Posted {
+            module: "fixture".to_owned(),
+            what: Mark {
+                id: seat.numbered(n, label.map(ToOwned::to_owned)),
+                tone: Tone::Quiet,
+                count,
+                act: None,
+            },
+        };
+        let m = Mind {
+            marks: vec![posted(1, Some("home"), 0), posted(3, None, 0)],
+            ..Mind::default()
+        };
+        let drawn = marks(Some(&m));
+        assert_eq!(
+            drawn.iter().map(|d| d.id).collect::<Vec<_>>(),
+            ["brain:fixture/seat.1", "brain:fixture/seat.3"]
+        );
+        assert!(drawn.iter().all(|d| is_mark(d.id)));
+        let glyph = tokens::icon::BRAIN;
+        assert_eq!(drawn[0].text, format!("{glyph} 1"));
+        assert_eq!(drawn[1].text, format!("{glyph} 3"));
+        assert_eq!(click_of(&drawn[0]), ("fixture-open", "1".to_owned()));
+        assert_eq!(click_of(&drawn[1]), ("fixture-open", "3".to_owned()));
+        // THE HINT'S VALUES: the number and the person's word, or nothing
+        // where they gave none.
+        let text = |d: &Drawn, name: &str| {
+            let number = d.instance.to_string();
+            hint_args(d, &number)
+                .into_iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| format!("{v:?}"))
+        };
+        assert_eq!(text(&drawn[0], "label").as_deref(), Some(r#"Text("home")"#));
+        assert_eq!(text(&drawn[0], "instance").as_deref(), Some("Number(1)"));
+        assert_eq!(text(&drawn[1], "label").as_deref(), Some(r#"Text("3")"#));
+        assert_eq!(text(&drawn[1], "count").as_deref(), Some("Number(0)"));
+        // A BLANK WORD, from a mind written by hand, is none: the number
+        // fills the sentence, never a hole.
+        for blank in ["", "  "] {
+            let unnamed = Drawn {
+                label: Some(blank.to_owned()),
+                ..drawn[1].clone()
+            };
+            assert_eq!(text(&unnamed, "label").as_deref(), Some(r#"Text("3")"#));
+        }
+        // A MARK THAT IS ONE draws its count where an instance draws its
+        // digit, and nothing when it counts nothing; a mind carrying both
+        // draws the instance.
+        assert_eq!(mark_text(glyph, 0, 0), glyph.to_string());
+        assert_eq!(mark_text(glyph, 0, 7), format!("{glyph} 7"));
+        assert_eq!(mark_text(glyph, 2, 7), format!("{glyph} 2"));
+    }
+
+    /// FAILS IF: a mark's instances read on the modeline in any order but
+    /// their own from the left — `3 2 1`, which the first photograph showed —
+    /// or the marks around them change places.
+    #[test]
+    fn a_marks_instances_read_from_the_first_to_the_last() {
+        let seat = MarkId::declared("seat", "fixture-seat", "fixture-mark-seat", 9, true);
+        let posted = |module: &str, id: MarkId| Posted {
+            module: module.to_owned(),
+            what: Mark {
+                id,
+                tone: Tone::Warning,
+                count: 0,
+                act: None,
+            },
+        };
+        let m = Mind {
+            marks: vec![
+                posted(
+                    "fixture",
+                    MarkId::of("full", "fixture-full", "fixture-mark-full"),
+                ),
+                posted("fixture", seat.numbered(1, None)),
+                posted("fixture", seat.numbered(2, None)),
+                posted("fixture", seat.numbered(3, None)),
+                posted(
+                    "other",
+                    MarkId::of("unseen", "other-unseen", "other-mark-unseen"),
+                ),
+            ],
+            ..Mind::default()
+        };
+        let drawn = marks(Some(&m));
+        let pushed: Vec<&str> = from_the_edge(&drawn).iter().map(|d| d.id).collect();
+        assert_eq!(
+            pushed,
+            [
+                "brain:fixture/full",
+                "brain:fixture/seat.3",
+                "brain:fixture/seat.2",
+                "brain:fixture/seat.1",
+                "brain:other/unseen",
+            ]
+        );
+        // AND ON THE LINE ITSELF, where the layout puts them: the column of
+        // each instance, from the left.
+        let segments = crate::segments(
+            "",
+            "",
+            "",
+            0,
+            &crate::Marks {
+                brain: &drawn,
+                ..crate::Marks::default()
+            },
+        );
+        let placed = ronoctua_render::layout::resolve(200, &segments);
+        let column = |id: &str| {
+            placed
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.column)
+                .unwrap_or_else(|| panic!("{id} was not placed"))
+        };
+        let seats: Vec<u16> = (1..=3)
+            .map(|n| column(&format!("brain:fixture/seat.{n}")))
+            .collect();
+        assert!(seats.windows(2).all(|w| w[0] < w[1]), "{seats:?}");
     }
 
     /// FAILS IF: a notice appearing or going ON ITS OWN leaves the footer's

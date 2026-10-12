@@ -295,7 +295,7 @@ pub fn head_of(path: &Path, most: usize) -> std::io::Result<Vec<u8>> {
 /// When the file cannot be read.
 pub fn sha256_of(path: &Path) -> std::io::Result<String> {
     let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
-    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut context = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
     loop {
         let buffer = file.fill_buf()?;
         if buffer.is_empty() {
@@ -311,7 +311,7 @@ pub fn sha256_of(path: &Path) -> std::io::Result<String> {
 /// SHA-256 of bytes, in lower-case hex.
 #[must_use]
 pub fn sha256(bytes: &[u8]) -> String {
-    hex(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
+    hex(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes).as_ref())
 }
 
 /// Lower-case hex.

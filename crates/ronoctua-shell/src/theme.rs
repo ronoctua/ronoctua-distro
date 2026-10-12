@@ -643,24 +643,30 @@ impl std::fmt::Display for Complaint {
 #[must_use]
 pub fn resolve_in(dir: Option<&Path>, env: Option<&str>) -> (Choice, Source, Vec<Complaint>) {
     let mut complaints = Vec::new();
-    let written = match dir.map(|dir| read_choice(&dir.join(FILE))) {
-        Some(Ok(written)) => written,
-        Some(Err(e)) => {
-            complaints.push(Complaint::Unreadable(e));
-            None
+    let (written, mut of_the_file) = match dir.map(|dir| read_file(dir, env)) {
+        Some(FileSays::Read { written, refused }) => (Some(written), refused),
+        Some(FileSays::Broken(c)) => {
+            complaints.push(c);
+            (None, Vec::new())
         }
-        None => None,
+        Some(FileSays::Absent) | None => (None, Vec::new()),
     };
-    let from_the_file = written.as_ref().and_then(|w| {
-        let found = theme::by_id(&w.theme);
-        if found.is_none() {
-            complaints.push(Complaint::Unknown {
-                field: "theme",
-                value: w.theme.clone(),
-            });
-        }
-        found
-    });
+    // THE THEME'S OWN COMPLAINT FIRST, then the machine's default's, then the
+    // answers' — the order the footer's line has always said them in.
+    let theme_refused = of_the_file
+        .iter()
+        .position(|c| matches!(c, Complaint::Unknown { field: "theme", .. }));
+    if let Some(i) = theme_refused {
+        complaints.push(of_the_file.remove(i));
+    }
+    let from_the_file = if theme_refused.is_some() {
+        None
+    } else {
+        written
+            .as_ref()
+            .and_then(Written::theme_id)
+            .and_then(theme::by_id)
+    };
     let (t, source) = if let Some(t) = from_the_file {
         (t, Source::File)
     } else if let Some(t) = env.and_then(|id| {
@@ -674,21 +680,24 @@ pub fn resolve_in(dir: Option<&Path>, env: Option<&str>) -> (Choice, Source, Vec
     } else {
         (theme::default_one(), Source::Default)
     };
+    complaints.extend(of_the_file);
     let choice = match written {
-        Some(w) => answered(t, w, &mut complaints),
+        Some(w) => answered(t, &w),
         None => Choice::with_theme(t),
     };
     (choice, source, complaints)
 }
 
-/// The four answers the file gave, looked up, on `theme`.
-fn answered(theme: Theme, w: Written, complaints: &mut Vec<Complaint>) -> Choice {
+/// The four answers the file gave, looked up, on `theme` — an answer the
+/// store repaired is absent here, so it is its default (and the repair is a
+/// complaint, said by [`resolve_in`]).
+fn answered(theme: Theme, w: &Written) -> Choice {
     Choice {
         theme,
-        backdrop: answer(complaints, "backdrop", w.backdrop, Backdrop::by_id),
-        footer: answer(complaints, "footer", w.footer, Ground::by_id),
-        windows: answer(complaints, "windows", w.windows, Ground::by_id),
-        borders: answer(complaints, "borders", w.borders, Borders::by_id),
+        backdrop: answer(w.backdrop.as_ref(), Backdrop::by_id),
+        footer: answer(w.footer.as_ref(), Ground::by_id),
+        windows: answer(w.windows.as_ref(), Ground::by_id),
+        borders: answer(w.borders.as_ref(), Borders::by_id),
     }
 }
 
@@ -704,26 +713,28 @@ fn answered(theme: Theme, w: Written, complaints: &mut Vec<Complaint>) -> Choice
 /// Because `resolve_in` is a READER's answer, and a reader degrades: a field
 /// it refuses is its default, and the footer says so. A writer that took that
 /// default and wrote the whole choice back would turn the person's refused
-/// `"Discreet"` into `"standard"`, and a file that did not parse into a file
-/// of defaults — the first keystroke in the chooser erasing what the footer
-/// had just told the person it could not read. The rule is the one
-/// `ronoctua_store::Store::parsed` states for every preference file: a reader
-/// degrades, a writer must refuse.
+/// `"Discreet"` into `"standard"` the moment they turned another column — the
+/// first keystroke in the chooser erasing what the footer had just told the
+/// person it could not read. The store's write would put an UNTOUCHED answer
+/// back, but the chooser writes all five on every arrow and the preview is
+/// a write; so the chooser keeps refusing, and the refusal now points
+/// somewhere: the repair is in the ledger the belongings' page shows, where
+/// "write the fix" makes the file read whole.
 fn read_whole(dir: &Path) -> Result<Option<Choice>, Complaint> {
-    let written = match read_choice(&dir.join(FILE)) {
-        Ok(None) => return Ok(None),
-        Ok(Some(written)) => written,
-        Err(e) => return Err(Complaint::Unreadable(e)),
-    };
-    let Some(t) = theme::by_id(&written.theme) else {
-        return Err(Complaint::Unknown {
-            field: "theme",
-            value: written.theme,
-        });
-    };
-    let mut complaints = Vec::new();
-    let choice = answered(t, written, &mut complaints);
-    complaints.into_iter().next().map_or(Ok(Some(choice)), Err)
+    let env = std::env::var(theme::ENV).ok();
+    match read_file(dir, env.as_deref()) {
+        FileSays::Absent => Ok(None),
+        FileSays::Broken(c) => Err(c),
+        FileSays::Read { written, refused } => {
+            if let Some(c) = refused.into_iter().next() {
+                return Err(c);
+            }
+            let Some(t) = written.theme_id().and_then(theme::by_id) else {
+                return Err(Complaint::Unreadable(NO_THEME.to_owned()));
+            };
+            Ok(Some(answered(t, &written)))
+        }
+    }
 }
 
 /// Why the file was not written.
@@ -785,60 +796,178 @@ pub enum Before {
     Unreadable,
 }
 
-/// One answer the file gave, looked up: absent is the default, known is
-/// itself, and unknown is the default WITH a complaint that names it.
-fn answer<T: Default>(
-    complaints: &mut Vec<Complaint>,
-    field: &'static str,
-    said: Option<String>,
-    by_id: fn(&str) -> Option<T>,
-) -> T {
-    let Some(value) = said else {
-        return T::default();
-    };
-    by_id(&value).unwrap_or_else(|| {
-        complaints.push(Complaint::Unknown { field, value });
-        T::default()
-    })
+/// One answer the file gave, looked up: absent is the default, and known is
+/// itself. An answer this system does not know never reaches here — the
+/// store repaired it, and [`read_file`] made it a complaint.
+fn answer<T: Default>(said: Option<&ronoctua_store::Node>, by_id: fn(&str) -> Option<T>) -> T {
+    match said {
+        Some(ronoctua_store::Node::String(id)) => by_id(id).unwrap_or_default(),
+        _ => T::default(),
+    }
 }
 
-/// The file's fields as it spells them, before any is looked up. An answer
-/// that is not a string is kept as the JSON it is, so it is refused by name
-/// rather than read as absent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What a file that names no theme is refused with.
+const NO_THEME: &str = "no `theme` field";
+
+/// The file's fields as it spells them, before any is looked up — read by the
+/// store ([`store_at`]). Each is the JSON it holds, so an answer that is not
+/// a string (`3`, `null`) is refused BY NAME, never read as absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 struct Written {
-    theme: String,
-    backdrop: Option<String>,
-    footer: Option<String>,
-    windows: Option<String>,
-    borders: Option<String>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    theme: Option<ronoctua_store::Node>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    backdrop: Option<ronoctua_store::Node>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    footer: Option<ronoctua_store::Node>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    windows: Option<ronoctua_store::Node>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    borders: Option<ronoctua_store::Node>,
 }
 
-/// `Ok(None)` when there is no file; `Err` when there is one and it does not
-/// say a theme.
-fn read_choice(path: &Path) -> Result<Option<Written>, String> {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.to_string()),
-    };
-    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let theme = value
-        .get("theme")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "no `theme` field".to_owned())?;
-    let said = |key: &str| {
-        value
-            .get(key)
-            .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
-    };
-    Ok(Some(Written {
-        theme: theme.to_owned(),
-        backdrop: said("backdrop"),
-        footer: said("footer"),
-        windows: said("windows"),
-        borders: said("borders"),
-    }))
+/// A field that is THERE is `Some`, whatever it holds — `null` included,
+/// which serde's `Option` would read as absent.
+fn present<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<ronoctua_store::Node>, D::Error> {
+    <ronoctua_store::Node as serde::Deserialize>::deserialize(d).map(Some)
+}
+
+impl Written {
+    /// The file as a choice writes it: all five, by id.
+    fn of(choice: Choice) -> Self {
+        let id = |s: &str| Some(ronoctua_store::Node::String(s.to_owned()));
+        Self {
+            theme: id(choice.theme.id()),
+            backdrop: id(choice.backdrop.id()),
+            footer: id(choice.footer.id()),
+            windows: id(choice.windows.id()),
+            borders: id(choice.borders.id()),
+        }
+    }
+
+    /// The theme's id, when it is a word.
+    fn theme_id(&self) -> Option<&str> {
+        match &self.theme {
+            Some(ronoctua_store::Node::String(id)) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// The five fields, as the file names them, in the order a complaint is said.
+const FIELDS: [&str; 5] = ["theme", "backdrop", "footer", "windows", "borders"];
+
+/// What the store refuses in the file: a theme that is not declared, an
+/// answer this system does not know, a value that is not a word. Each is a
+/// REPAIR — read as absent (the default answer), kept in the file, and
+/// written into the ledger; a theme's is read as the machine's default theme,
+/// which is what "write the fix" puts in its place.
+fn refusals(w: &Written, env: Option<&str>) -> Vec<ronoctua_store::Refused> {
+    let mut out = Vec::new();
+    for field in FIELDS {
+        let value = match field {
+            "theme" => &w.theme,
+            "backdrop" => &w.backdrop,
+            "footer" => &w.footer,
+            "windows" => &w.windows,
+            _ => &w.borders,
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        let known = match (field, value) {
+            ("theme", ronoctua_store::Node::String(id)) => theme::by_id(id).is_some(),
+            ("backdrop", ronoctua_store::Node::String(id)) => Backdrop::by_id(id).is_some(),
+            ("footer" | "windows", ronoctua_store::Node::String(id)) => Ground::by_id(id).is_some(),
+            ("borders", ronoctua_store::Node::String(id)) => Borders::by_id(id).is_some(),
+            _ => false,
+        };
+        if known {
+            continue;
+        }
+        let why = if matches!(value, ronoctua_store::Node::String(_)) {
+            ronoctua_store::repair::Why::UnknownVariant
+        } else {
+            ronoctua_store::repair::Why::WrongType
+        };
+        let kept = (field == "theme").then(|| {
+            let fallback = env
+                .and_then(theme::by_id)
+                .unwrap_or_else(theme::default_one);
+            ronoctua_store::Node::String(fallback.id().to_owned())
+        });
+        out.push(ronoctua_store::Refused {
+            pointer: format!("/{field}"),
+            why,
+            kept,
+        });
+    }
+    out
+}
+
+/// `theme.json` as a [`ronoctua_store::Store`] in `dir`, judged by
+/// [`refusals`] — on every read and every write alike, which is why the
+/// check travels with the store (`ronoctua_store::Store::checked`).
+fn store_at(dir: &Path, env: Option<&str>) -> ronoctua_store::Store<Written> {
+    let env = env.map(str::to_owned);
+    ronoctua_store::Store::at(Some(dir.to_path_buf()), FILE)
+        .checked(move |w| refusals(w, env.as_deref()))
+}
+
+/// What the person's file says, as the store read it.
+enum FileSays {
+    /// There is no file.
+    Absent,
+    /// It gives nothing: not JSON, unreadable, nothing like a choice, or no
+    /// theme in it — every answer refused with it.
+    Broken(Complaint),
+    /// It was read: the fields that were taken, and a complaint for each
+    /// that was refused (repaired), in the order of [`FIELDS`].
+    Read {
+        /// The fields, a refused one absent (a theme's at the fallback).
+        written: Written,
+        /// What was refused.
+        refused: Vec<Complaint>,
+    },
+}
+
+/// Reads the file through the store — which keeps what reads, repairs what
+/// does not (into the ledger) and says so in the log — and names what it
+/// refused.
+fn read_file(dir: &Path, env: Option<&str>) -> FileSays {
+    let reading = store_at(dir, env).reading();
+    if !reading.found {
+        return FileSays::Absent;
+    }
+    if let Some(trouble) = &reading.trouble {
+        return FileSays::Broken(Complaint::Unreadable(trouble.to_string()));
+    }
+    if reading.lost_everything() {
+        return FileSays::Broken(Complaint::Unreadable(NO_THEME.to_owned()));
+    }
+    let mut refused = Vec::new();
+    for field in FIELDS {
+        let pointer = format!("/{field}");
+        if let Some(r) = reading.repairs.iter().find(|r| r.pointer == pointer) {
+            let value = match &r.found {
+                ronoctua_store::Node::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            refused.push(Complaint::Unknown { field, value });
+        }
+    }
+    // A FILE THAT NAMES NO THEME gives nothing, as it always has: its answers
+    // are about a theme nobody named.
+    if reading.value.theme.is_none() && refused.is_empty() {
+        return FileSays::Broken(Complaint::Unreadable(NO_THEME.to_owned()));
+    }
+    FileSays::Read {
+        written: reading.value,
+        refused,
+    }
 }
 
 /// What the file says, whole, for this process — the footer asks when its
@@ -943,15 +1072,10 @@ fn persist_with(
     dress: &mut dyn FnMut(bool),
 ) -> Result<(), NotWritten> {
     read_whole(dir).map_err(NotWritten::Kept)?;
-    let text = serde_json::json!({
-        "theme": choice.theme.id(),
-        "backdrop": choice.backdrop.id(),
-        "footer": choice.footer.id(),
-        "windows": choice.windows.id(),
-        "borders": choice.borders.id(),
-    })
-    .to_string();
-    ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())?;
+    // THROUGH THE STORE: a field a newer machine added to the file survives
+    // this write, and the file keeps the order its person wrote it in.
+    let env = std::env::var(theme::ENV).ok();
+    store_at(dir, env.as_deref()).write(&Written::of(choice))?;
     if let Some(root) = root {
         copy_fragments(root, choice, dir, &fragments(choice));
         dress_foreign_apps(root, choice, dress);
@@ -1090,7 +1214,8 @@ fn before_in(dir: &Path) -> Before {
 /// footer has said — and with no file there are no fragments. `theme.json`
 /// itself is never written or removed here.
 fn put_back_in(dir: &Path, root: Option<&Path>, committed: Choice) {
-    if matches!(read_choice(&dir.join(FILE)), Ok(Some(_))) {
+    let env = std::env::var(theme::ENV).ok();
+    if matches!(read_file(dir, env.as_deref()), FileSays::Read { .. }) {
         if let Some(root) = root {
             copy_fragments(root, committed, dir, &fragments(committed));
             dress_foreign_apps(root, committed, &mut crate::toolkits::wear);
@@ -1641,11 +1766,52 @@ mod tests {
         assert!(complaints.is_empty(), "{complaints:?}");
         assert_eq!(c.backdrop, Backdrop::Absolute);
         persist_in(&dir, None, c).unwrap();
-        let written = read_choice(&dir.join(FILE)).unwrap().unwrap();
-        assert_eq!(written.backdrop.as_deref(), Some("absolute"));
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!(written["backdrop"], "absolute");
         assert_eq!(
             Backdrop::by_id(Backdrop::LEGACY_ABSOLUTE),
             Some(Backdrop::Absolute)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the chooser's write erases a field a newer machine added to
+    /// `theme.json`, or reorders the file — the theme moved into the store,
+    /// and the store keeps what it does not know.
+    #[test]
+    fn a_field_a_newer_machine_wrote_survives_the_choosers_write() {
+        let dir = scratch("newer-field");
+        let owl = theme::default_one().id();
+        std::fs::write(
+            dir.join(FILE),
+            format!("{{\"shade\":{{\"warmth\":7}},\"theme\":\"{owl}\"}}"),
+        )
+        .unwrap();
+        let (c, _, complaints) = resolve_in(Some(&dir), None);
+        assert!(
+            complaints.is_empty(),
+            "an unknown FIELD is not a complaint: {complaints:?}"
+        );
+        persist_in(
+            &dir,
+            None,
+            Choice {
+                borders: Borders::Discreet,
+                ..c
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            raw["shade"]["warmth"], 7,
+            "the newer field was erased: {text}"
+        );
+        assert_eq!(raw["borders"], "discreet");
+        assert!(
+            text.find("shade") < text.find("borders"),
+            "the file's own order was not kept: {text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

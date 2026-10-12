@@ -53,7 +53,24 @@ EXEMPT = re.compile(
     # URL is written with (`user:pw@iptv.example`). The LAST label only:
     # `mail.example.com.br` is somebody's.
     r"@[A-Za-z0-9.-]*\.example(?![A-Za-z0-9.-])|"
+    # AND THE OTHER TWO RESERVED NAMES OF RFC 2606, `.invalid` and `.test`,
+    # with the second-level ones in any case (`Example.org` is the same
+    # nobody's domain; a test of a case-insensitive host comparison writes it
+    # that way).
+    r"@[A-Za-z0-9.-]*\.(invalid|test)(?![A-Za-z0-9.-])|"
+    r"(?i:@example\.(com|org|net))(?![A-Za-z0-9.-])|"
     r"your-user|user@|noreply@|"
+    # AN SSH ALGORITHM'S NAME, which RFC 4250 writes `name@domain` for an
+    # extension: `sntrup761x25519-sha512@openssh.com` names a key exchange,
+    # and the domain is the one that defined it. Only these two definers,
+    # and only after an algorithm-shaped name — every one carries a digit (a
+    # curve, a hash size, a version) — so an `admin` at openssh.com trips.
+    r"\b[a-z0-9-]*[0-9][a-z0-9-]*@(openssh\.com|libssh\.org)\b|"
+    # A GIT HOST'S SERVICE ACCOUNT in an SSH remote: `git@github.com:a/b.git`
+    # and `ssh://git@gitlab.com/a/b.git`. `git` is the account every git host
+    # answers on, nobody's name; the `:` or `/` after the host is what makes
+    # it a remote and not an address.
+    r"\bgit@[A-Za-z0-9.-]+\.[A-Za-z]{2,}[:/]|"
     # `user@1000.service` is a systemd UNIT name, and it appears in every
     # cgroup path. Without this exemption, any test that mentions a
     # session cgroup becomes "e-mail in the repository".

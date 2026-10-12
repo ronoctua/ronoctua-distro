@@ -88,6 +88,10 @@ pub enum Order {
         /// What it asks.
         act: crate::clipboard_wire::Act,
     },
+    /// A window's root gesture, for the sudo bar (`crate::sudo_bar::serve`):
+    /// the connection it came on stays open for the verdict, and for the
+    /// gesture's next verbs.
+    Sudo(Follower, String),
 }
 
 /// A connection kept open to be written to — the clipboard's window's.
@@ -468,6 +472,22 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                 if line.trim() == crate::clipboard_wire::FOLLOW {
                     if channel
                         .send(Order::Follow(Follower(std::sync::Arc::new(stream))))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                // A WINDOW'S ROOT GESTURE, for the sudo bar: the connection
+                // kept for the verdict, and the deed never logged.
+                if let Some(deed) = line
+                    .trim()
+                    .strip_prefix(crate::sudo_bar::ORDER)
+                    .filter(|rest| rest.starts_with(' '))
+                {
+                    let follower = Follower(std::sync::Arc::new(stream));
+                    if channel
+                        .send(Order::Sudo(follower, deed.trim().to_owned()))
                         .is_err()
                     {
                         return;
@@ -1337,6 +1357,9 @@ pub const BY_NAME_ONLY: &[&str] = &[
     "software-web-name",
     "software-icon-path",
     "software-file-path",
+    // And the belongings' passphrase a change of the declaration asks first
+    // when no identity is kept: the answer to the view's own question.
+    "software-sign",
     // AND WHAT A NOTIFICATION OFFERS once something was installed: open it.
     // A key of its own would open whatever was installed last, which is a
     // key that means something different every day.
@@ -1457,6 +1480,16 @@ pub const BY_NAME_ONLY: &[&str] = &[
     // command's argument. A key of its own would ask for a password with no
     // login to give it to.
     "containers-login-password",
+    // THE PERSON'S BINARY CACHE (`crate::binary_cache`, a page of the
+    // update's view): the three questions its rows ask — each opens its
+    // door's line (`ask-<id>`) and the answer comes back as the same
+    // command's argument — and root's netrc, which the page's row runs (its
+    // password is the sudo bar's to ask). The page is `LEADER s u c`; a key
+    // of each of these would ask a key of a cache nobody named.
+    crate::binary_cache::NAME,
+    crate::binary_cache::KEY,
+    crate::binary_cache::TOKEN,
+    crate::binary_cache::NETRC,
 ];
 
 /// And for the button a standing notice offers.
@@ -3840,10 +3873,6 @@ pub fn default_of() -> Result<(Trees, Registry)> {
             label: key::CMD_SECURITY_ENROL,
         },
         Command {
-            id: "security-password",
-            label: key::CMD_SECURITY_PASSWORD,
-        },
-        Command {
             id: "security-rule",
             label: key::CMD_SECURITY_RULE,
         },
@@ -4128,6 +4157,312 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         Command {
             id: "clipboard-window",
             label: key::CMD_CLIPBOARD_WINDOW,
+        },
+        // THE 2026-10-05 WAVE'S COMMANDS — registered and bound now, each
+        // saying "not yet" until its package lands (`surface::run_with`).
+        // ── anchor: L09 ──
+        Command {
+            id: "belongings-pin",
+            label: key::CMD_BELONGINGS_PIN,
+        },
+        Command {
+            id: "belongings-sign",
+            label: key::CMD_BELONGINGS_SIGN,
+        },
+        // THE SOFTWARE CENTRE'S PASSPHRASE: a change of the declaration made
+        // with no identity kept asks it first, and the answer comes back as
+        // this command's argument (`software::Ask::Sign`).
+        Command {
+            id: "software-sign",
+            label: key::CMD_SOFTWARE_SIGN,
+        },
+        Command {
+            id: "belongings-take-merged-ours",
+            label: key::CMD_BELONGINGS_TAKE_MERGED_OURS,
+        },
+        Command {
+            id: "belongings-take-merged-theirs",
+            label: key::CMD_BELONGINGS_TAKE_MERGED_THEIRS,
+        },
+        // ── anchor: L12 ──
+        Command {
+            id: "private-open",
+            label: key::CMD_PRIVATE_OPEN,
+        },
+        Command {
+            id: "private-lock",
+            label: key::CMD_PRIVATE_LOCK,
+        },
+        // THE VAULT'S ROW THAT SHOWS IT, and its four questions
+        // (`crate::vault`).
+        Command {
+            id: "private-show",
+            label: key::CMD_PRIVATE_SHOW,
+        },
+        Command {
+            id: "private-passphrase",
+            label: key::CMD_PRIVATE_PASSPHRASE,
+        },
+        Command {
+            id: "private-new-passphrase",
+            label: key::CMD_PRIVATE_NEW_PASSPHRASE,
+        },
+        Command {
+            id: "private-repeat-passphrase",
+            label: key::CMD_PRIVATE_REPEAT_PASSPHRASE,
+        },
+        Command {
+            id: "private-cap",
+            label: key::CMD_PRIVATE_CAP,
+        },
+        // ── anchor: L15 ──
+        Command {
+            id: "dev-clone",
+            label: key::CMD_DEV_CLONE,
+        },
+        // ── anchor: L17 ──
+        Command {
+            id: "stick-open",
+            label: key::CMD_STICK_OPEN,
+        },
+        Command {
+            id: "stick-window",
+            label: key::CMD_STICK_WINDOW,
+        },
+        // THE STICK VIEW'S KEYS, which its hint line teaches.
+        Command {
+            id: "stick-down",
+            label: key::CMD_STICK_DOWN,
+        },
+        Command {
+            id: "stick-up",
+            label: key::CMD_STICK_UP,
+        },
+        Command {
+            id: "stick-enter",
+            label: key::CMD_STICK_ENTER,
+        },
+        Command {
+            id: "stick-reread",
+            label: key::CMD_STICK_REREAD,
+        },
+        // ── anchor: L22 ──
+        Command {
+            id: "security-encrypt",
+            label: key::CMD_SECURITY_ENCRYPT,
+        },
+        Command {
+            id: "security-quantum",
+            label: key::CMD_SECURITY_QUANTUM,
+        },
+        // ── anchor: L23 ──
+        Command {
+            id: "incus-open",
+            label: key::CMD_INCUS_OPEN,
+        },
+        Command {
+            id: "incus-window",
+            label: key::CMD_INCUS_WINDOW,
+        },
+        Command {
+            id: "incus-new",
+            label: key::CMD_INCUS_NEW,
+        },
+        Command {
+            id: "incus-images",
+            label: key::CMD_INCUS_IMAGES,
+        },
+        // THE VIEW'S OWN KEYS (`incus::OF_THE_VIEW`) AND THE QUESTIONS ITS
+        // ROWS AND KEYS ASK (`incus::QUESTIONS`).
+        Command {
+            id: "incus-down",
+            label: key::CMD_INCUS_DOWN,
+        },
+        Command {
+            id: "incus-up",
+            label: key::CMD_INCUS_UP,
+        },
+        Command {
+            id: "incus-enter",
+            label: key::CMD_INCUS_ENTER,
+        },
+        Command {
+            id: "incus-left",
+            label: key::CMD_INCUS_LEFT,
+        },
+        Command {
+            id: "incus-right",
+            label: key::CMD_INCUS_RIGHT,
+        },
+        Command {
+            id: "incus-next-kind",
+            label: key::CMD_INCUS_NEXT_KIND,
+        },
+        Command {
+            id: "incus-previous-kind",
+            label: key::CMD_INCUS_PREVIOUS_KIND,
+        },
+        Command {
+            id: "incus-next-tab",
+            label: key::CMD_INCUS_NEXT_TAB,
+        },
+        Command {
+            id: "incus-previous-tab",
+            label: key::CMD_INCUS_PREVIOUS_TAB,
+        },
+        Command {
+            id: "incus-launch",
+            label: key::CMD_INCUS_LAUNCH,
+        },
+        Command {
+            id: "incus-start-stop",
+            label: key::CMD_INCUS_START_STOP,
+        },
+        Command {
+            id: "incus-restart",
+            label: key::CMD_INCUS_RESTART,
+        },
+        Command {
+            id: "incus-freeze",
+            label: key::CMD_INCUS_FREEZE,
+        },
+        Command {
+            id: "incus-delete",
+            label: key::CMD_INCUS_DELETE,
+        },
+        Command {
+            id: "incus-console",
+            label: key::CMD_INCUS_CONSOLE,
+        },
+        Command {
+            id: "incus-screen",
+            label: key::CMD_INCUS_SCREEN,
+        },
+        Command {
+            id: "incus-shell",
+            label: key::CMD_INCUS_SHELL,
+        },
+        Command {
+            id: "incus-push",
+            label: key::CMD_INCUS_PUSH,
+        },
+        Command {
+            id: "incus-pull",
+            label: key::CMD_INCUS_PULL,
+        },
+        Command {
+            id: "incus-export",
+            label: key::CMD_INCUS_EXPORT,
+        },
+        Command {
+            id: "incus-import",
+            label: key::CMD_INCUS_IMPORT,
+        },
+        Command {
+            id: "incus-copy-image",
+            label: key::CMD_INCUS_COPY_IMAGE,
+        },
+        Command {
+            id: "incus-name",
+            label: key::CMD_INCUS_NAME,
+        },
+        Command {
+            id: "incus-image",
+            label: key::CMD_INCUS_IMAGE,
+        },
+        Command {
+            id: "incus-cpu",
+            label: key::CMD_INCUS_CPU,
+        },
+        Command {
+            id: "incus-memory",
+            label: key::CMD_INCUS_MEMORY,
+        },
+        Command {
+            id: "incus-processes",
+            label: key::CMD_INCUS_PROCESSES,
+        },
+        Command {
+            id: "incus-snapshot",
+            label: key::CMD_INCUS_SNAPSHOT,
+        },
+        Command {
+            id: "incus-push-to",
+            label: key::CMD_INCUS_PUSH_TO,
+        },
+        Command {
+            id: "incus-pull-to",
+            label: key::CMD_INCUS_PULL_TO,
+        },
+        Command {
+            id: "incus-publish",
+            label: key::CMD_INCUS_PUBLISH,
+        },
+        // ── anchor: L24 ──
+        Command {
+            id: "agents-open",
+            label: key::CMD_AGENTS_OPEN,
+        },
+        Command {
+            id: "agents-window",
+            label: key::CMD_AGENTS_WINDOW,
+        },
+        Command {
+            id: "agents-session",
+            label: key::CMD_AGENTS_SESSION,
+        },
+        Command {
+            id: "agents-login",
+            label: key::CMD_AGENTS_LOGIN,
+        },
+        // THE VIEW'S KEYS AND ROWS (`agents::OF_THE_VIEW`, `OF_THE_ROWS`).
+        Command {
+            id: "agents-up",
+            label: key::CMD_AGENTS_UP,
+        },
+        Command {
+            id: "agents-down",
+            label: key::CMD_AGENTS_DOWN,
+        },
+        Command {
+            id: "agents-enter",
+            label: key::CMD_AGENTS_ENTER,
+        },
+        Command {
+            id: "agents-rename",
+            label: key::CMD_AGENTS_RENAME,
+        },
+        Command {
+            id: "agents-default",
+            label: key::CMD_AGENTS_DEFAULT,
+        },
+        Command {
+            id: "agents-remove",
+            label: key::CMD_AGENTS_REMOVE,
+        },
+        Command {
+            id: "agents-refresh",
+            label: key::CMD_AGENTS_REFRESH,
+        },
+        Command {
+            id: "agents-add-claude",
+            label: key::CMD_AGENTS_ADD_CLAUDE,
+        },
+        Command {
+            id: "agents-add-codex",
+            label: key::CMD_AGENTS_ADD_CODEX,
+        },
+        Command {
+            id: "agents-status-line",
+            label: key::CMD_AGENTS_STATUS_LINE,
+        },
+        Command {
+            id: "agents-warn-at",
+            label: key::CMD_AGENTS_WARN_AT,
+        },
+        Command {
+            id: "agents-danger-at",
+            label: key::CMD_AGENTS_DANGER_AT,
         },
     ];
 
@@ -4624,6 +4959,31 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         // folded, `LEADER c` is still the footer and `LEADER LEADER c` the
         // window (`folds`).
         ("c w", "clipboard-window", None),
+        // THE 2026-10-05 WAVE'S KEYS (features.md §0), checked against this
+        // table: `s x` Incus and `s z` the installer stick fold like every
+        // group with a doubled key and a `w`; `s e o|l|c|q` join the security
+        // centre's; `m a` the LLM accounts; `/ c` the development group.
+        // ── anchor: L12 ──
+        ("s e o", "private-open", None),
+        ("s e l", "private-lock", None),
+        // ── anchor: L15 ──
+        ("/ c", "dev-clone", None),
+        // ── anchor: L17 ──
+        ("s z z", "stick-open", None),
+        ("s z w", "stick-window", None),
+        // ── anchor: L22 ──
+        ("s e c", "security-encrypt", None),
+        ("s e q", "security-quantum", None),
+        // ── anchor: L23 ──
+        ("s x x", "incus-open", None),
+        ("s x w", "incus-window", None),
+        ("s x n", "incus-new", None),
+        ("s x i", "incus-images", None),
+        // ── anchor: L24 ──
+        ("m a a", "agents-open", None),
+        ("m a w", "agents-window", None),
+        ("m a n", "agents-session", None),
+        ("m a l", "agents-login", None),
     ];
 
     /// The digits as `&'static str`, so the binding can carry them.
@@ -4694,6 +5054,12 @@ pub fn default_of() -> Result<(Trees, Registry)> {
         ("s v", key::GROUP_BELONGINGS),
         ("d", key::GROUP_FAST_ACCESS),
         ("c", key::GROUP_CLIPBOARD),
+        // ── anchor: L17 ──
+        ("s z", key::GROUP_STICK),
+        // ── anchor: L23 ──
+        ("s x", key::GROUP_INCUS),
+        // ── anchor: L24 ──
+        ("m a", key::GROUP_AGENTS),
     ];
 
     let mut registry = Registry::fresh();
@@ -5065,9 +5431,19 @@ pub fn reachable(tree: &Tree) -> std::collections::BTreeSet<&'static str> {
     // THE CONTAINERS' KEYS, one table (`containers::OF_THE_VIEW`).
     out.extend(crate::containers::reached());
 
+    // INCUS'S KEYS AND QUESTIONS (`incus::reached`).
+    out.extend(crate::incus::reached());
+
     // THE BELONGINGS' KEYS AND ROWS, one table each (`belongings::OF_THE_VIEW`,
     // `OF_THE_ROWS`).
     out.extend(crate::belongings::reached());
+
+    // THE INSTALLER STICK'S KEYS, one table (`stick::OF_THE_VIEW`).
+    out.extend(crate::stick::OF_THE_VIEW.iter().map(|(_, id)| *id));
+
+    // THE LLM ACCOUNTS' KEYS AND ROWS, one table each (`agents::OF_THE_VIEW`,
+    // `OF_THE_ROWS`).
+    out.extend(crate::agents::reached());
 
     // THE SEARCH'S COMMANDS: its doors, and what a door of it hands the
     // footer (`fast_access::COMMANDS`).
@@ -6041,6 +6417,12 @@ mod tests {
             ("s v", "belongings-open", "belongings-window"),
             ("d", "fast-access-open", "fast-access-window"),
             ("c", "clipboard-open", "clipboard-window"),
+            // ── anchor: L17 ──
+            ("s z", "stick-open", "stick-window"),
+            // ── anchor: L23 ──
+            ("s x", "incus-open", "incus-window"),
+            // ── anchor: L24 ──
+            ("m a", "agents-open", "agents-window"),
         ]
         .into_iter()
         .map(|(g, f, w)| (g.to_owned(), f, w))
@@ -6808,7 +7190,6 @@ mod tests {
             "security-rule-add",
             "security-rule-delete",
             "security-enrol",
-            "security-password",
             "security-rule",
             "security-vt-key",
             "security-vt-forget",
@@ -6880,6 +7261,87 @@ mod tests {
             "display-rise",
             "display-sink",
             "clipboard-window",
+            // THE 2026-10-05 WAVE'S, each an arm of `run_with` that says
+            // "not yet" until its package lands.
+            // ── anchor: L09 ──
+            "belongings-pin",
+            "belongings-sign",
+            "software-sign",
+            "belongings-take-merged-ours",
+            "belongings-take-merged-theirs",
+            // ── anchor: L12 ──
+            "private-open",
+            "private-lock",
+            "private-show",
+            "private-passphrase",
+            "private-new-passphrase",
+            "private-repeat-passphrase",
+            "private-cap",
+            // ── anchor: L15 ──
+            "dev-clone",
+            // ── anchor: L17 ──
+            "stick-open",
+            "stick-window",
+            "stick-down",
+            "stick-up",
+            "stick-enter",
+            "stick-reread",
+            // ── anchor: L22 ──
+            "security-encrypt",
+            "security-quantum",
+            // ── anchor: L23 ──
+            "incus-open",
+            "incus-window",
+            "incus-new",
+            "incus-images",
+            "incus-down",
+            "incus-up",
+            "incus-enter",
+            "incus-left",
+            "incus-right",
+            "incus-next-kind",
+            "incus-previous-kind",
+            "incus-next-tab",
+            "incus-previous-tab",
+            "incus-launch",
+            "incus-start-stop",
+            "incus-restart",
+            "incus-freeze",
+            "incus-delete",
+            "incus-console",
+            "incus-screen",
+            "incus-shell",
+            "incus-push",
+            "incus-pull",
+            "incus-export",
+            "incus-import",
+            "incus-copy-image",
+            "incus-name",
+            "incus-image",
+            "incus-cpu",
+            "incus-memory",
+            "incus-processes",
+            "incus-snapshot",
+            "incus-push-to",
+            "incus-pull-to",
+            "incus-publish",
+            // ── anchor: L24 ──
+            "agents-open",
+            "agents-window",
+            "agents-session",
+            "agents-login",
+            "agents-up",
+            "agents-down",
+            "agents-enter",
+            "agents-rename",
+            "agents-default",
+            "agents-remove",
+            "agents-refresh",
+            "agents-add-claude",
+            "agents-add-codex",
+            "agents-status-line",
+            "agents-warn-at",
+            "agents-danger-at",
         ];
         let (tree, registry) = default_of().unwrap();
         for id in super::reachable(&tree.full) {

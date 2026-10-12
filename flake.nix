@@ -546,6 +546,103 @@
       };
       belongingsRs = belongingsTable.table;
 
+      # ── anchor: L01 ──
+      # ── anchor: L03 ──
+      # THE MACHINE'S OWN FLAKE: `lib.machine` and `lib.machineFlake`, given
+      # this distro — its revision, its inputs and its modules. A machine's
+      # `flake.nix` reaches them as `ronoctua.lib`; see `nix/machine.nix`.
+      machineLib = (import ./nix/machine.nix).lib {
+        inherit
+          self
+          inputs
+          distroModules
+          system
+          ;
+      };
+
+      # THE REFERENCE MACHINE: what `noctua` and `minimal` are built from.
+      #
+      # Through `lib.machine` and nothing else, so the reference is built the
+      # way every installed machine builds itself; over `tests/fixtures/machine/`,
+      # whose `host.nix` is exactly what the installer writes
+      # (`host-nix-golden-evaluates`) and whose hardware report is a synthetic
+      # one — nothing of anybody's machine.
+      #
+      # A `host.nix` at this tree's ROOT is the old installer's layout — a copy
+      # of the distro with the machine's file beside it — and it is REFUSED,
+      # not ignored: built as before, that machine would be this reference one,
+      # its disk included.
+      referenceMachine =
+        {
+          extraModules ? [ ],
+        }:
+        if builtins.pathExists ./host.nix then
+          throw (
+            "flake.nix: there is a host.nix at the distro's root. `nixosConfigurations.noctua` is "
+            + "the distro's REFERENCE machine now, built from tests/fixtures/machine; an installed "
+            + "machine has a flake of its own (`nix flake init -t <distro>#machine`) beside its host.nix."
+          )
+        else
+          machineLib.machine {
+            dir = ./tests/fixtures/machine;
+            inherit extraModules;
+          };
+      # ── anchor: L04 ──
+      # ── anchor: L11 ──
+      # THE PERSON'S BRAIN MODULES (`my-…`), compiled into their machine: the
+      # chain above — loader, texts, glyphs, WIT, buffers, notifications,
+      # registry, workspace — built again with the person's folder beside the
+      # distro's. A function of that folder (`dir`, the machine directory's
+      # `person/brain/`) and of the folders to read (`only`, the included
+      # ones), for `lib.machine`, whose modules are
+      # `(withPersonModules { dir; only; }).machineModules <approved ids>` and
+      # whose report lists `.refused`. See `nix/person-brain.nix`.
+      withPersonModules =
+        {
+          dir,
+          only ? null,
+        }:
+        import ./nix/person-brain.nix {
+          inherit
+            lib
+            languages
+            dir
+            only
+            distroModulesFor
+            glyphdb
+            tokensRs
+            wit
+            buffers
+            i18nRs
+            notificationsRs
+            brainModulesRs
+            rust
+            ;
+        };
+      # ── anchor: L15 ──
+      # ── anchor: L16 ──
+      # THE DISTRO'S OWN OUTPUTS A PERSON'S PUBLIC BINARY CACHE MAY RECEIVE:
+      # the store paths of the ISO's seed (the compositor, the shell, the
+      # fonts, the icons, the index), AS THE DISTRO EVALUATES THEM — never a
+      # machine's, which may carry the person's brain modules — and without
+      # their string context, so a machine's system does not come to
+      # reference (and build) a seed it does not use
+      # (`nix/modules/binary-cache.nix`).
+      seedRoots = map (d: builtins.unsafeDiscardStringContext d.outPath) (
+        builtins.filter lib.isDerivation self.nixosConfigurations.installer._module.args.ronoctua.seed
+      );
+      # THE RELEASE and the three programs around it (`nix/release.nix`):
+      # what `apps` offers as `release`, `fetch-iso`, `adopt-machine` and
+      # `apply-here`, and what `release-refuses-dirty-tree` builds again with
+      # stand-ins for the programs it drives. The reference machine is read
+      # only by the two that change a machine — its wrapped `ronoctua-machine`
+      # and its record's folder.
+      releaseApps = pkgs.callPackage ./nix/release.nix {
+        gate = "${gateApp}/bin/ronoctua-gate";
+        machineDir = (import ./nix/machine.nix).machineDir;
+        machine = self.nixosConfigurations.noctua.config.ronoctua.machine;
+      };
+
       rust = pkgs.callPackage ./nix/rust.nix {
         inherit (inputs) crane;
         inherit
@@ -931,7 +1028,10 @@
         left = slowNames;
       };
 
-      distroModules = [
+      # THE DISTRO'S MODULES AS A FUNCTION OF THE WORKSPACE THEY RUN — the
+      # distro's own `rust`, or a machine's built with the person's brain
+      # modules (`withPersonModules`). Every `rust.*` below is the argument.
+      distroModulesFor = rust: [
         ./nix/modules/base.nix
         # The table that turns `ronoctua.profile` into the eight switches. It
         # comes right after `base.nix` because that is where the option it reads
@@ -1081,6 +1181,87 @@
         # model types in `/etc/xdg/mimeapps.list`. On in the full profile.
         ./nix/modules/workshop.nix
 
+        # THE 2026-10-05 WAVE: the machine's own flake, the person's
+        # declarations and the distro's program registry — options only until
+        # their packages land (they change nothing yet). One region per
+        # package, after its anchor.
+        ./nix/modules/machine.nix
+        ./nix/modules/person.nix
+        ./nix/modules/distro-apps.nix
+        # ── anchor: L01 ──
+        # ── anchor: L02 ──
+        # SSH: the key exchange post-quantum first, an sshd with ed25519
+        # alone — the table is `assets/ssh.nix`, shared with the ISO.
+        ./nix/modules/ssh.nix
+        # ── anchor: L03 ──
+        # ── anchor: L04 ──
+        # ── anchor: L05 ──
+        # The machine's life — the boot trial, the apply the rescue and the
+        # software centre start, the migration of the old layout — runs the
+        # EXTRACTED `ronoctua-machine`, set next to the module that wraps it.
+        { ronoctua.machine.tool = rust.machine; }
+        # ── anchor: L06 ──
+        # The person's declarations, copied into the machine directory by a
+        # narrow root unit, and a brain module's root part approved through
+        # the sudo door. Its program comes EXTRACTED, next to the import: a
+        # unit that runs as root must not carry the desktop.
+        ./nix/modules/person-apply.nix
+        { ronoctua.person.tool = rust.person; }
+        # ── anchor: L10 ──
+        # Security keys: smart cards, GnuPG's agent, and pam_u2f for sudo —
+        # always `sufficient` — trusting root's list of the person's keys.
+        ./nix/modules/yubikey.nix
+        # ── anchor: L11 ──
+        # ── anchor: L12 ──
+        # /private, the person's encrypted folder, and the root side its
+        # four units run (`nix/rust.nix`, extracted).
+        ./nix/modules/private.nix
+        { ronoctua.private.helper = rust.privateRoot; }
+        # ── anchor: L13 ──
+        # INCUS, containers and virtual machines of the person's (full
+        # profile), and the queue's child for its long work: extracted, so
+        # the queue carries only the job's wire.
+        ./nix/modules/incus.nix
+        { ronoctua.incus.job = rust.incusJob; }
+        # ── anchor: L14 ──
+        # The LLM accounts' CLI on the system's PATH: Claude Code runs an
+        # account's status line from `/run/current-system/sw/bin`, and the
+        # usage unit runs its `refresh`. Extracted (`rust.llm`), like the
+        # belongings' CLI.
+        ./nix/modules/llm.nix
+        { ronoctua.llm.cli = rust.llm; }
+        # ── anchor: L15 ──
+        # ── anchor: L16 ──
+        # THE PERSON'S BINARY CACHE (their `options.json`, root's validated
+        # copy): a substituter before `cache.nixos.org` and its key, root's
+        # netrc for a private one, and what the update's push reads — the
+        # push's program (EXTRACTED, `rust.cachix`) and the distro's own
+        # outputs a public cache may receive.
+        ./nix/modules/binary-cache.nix
+        {
+          ronoctua.binaryCache = {
+            tool = rust.cachix;
+            publicRoots = seedRoots;
+          };
+        }
+        # ── anchor: L17 ──
+        # The installer stick's root writer: its unit (a function of the
+        # EXTRACTED binary, so the unit that writes a whole drive as root
+        # carries the writer and never the desktop) and its staging folder.
+        (import ./nix/modules/stick.nix { stickWrite = rust.stickWrite; })
+        # ── anchor: L19 ──
+        # ── anchor: L22 ──
+        # Encrypt anything: the queue runs `ronoctua-seal`, EXTRACTED so that
+        # `age` stays out of the queue and the footer; the module hands its
+        # path to the queue's unit.
+        ./nix/modules/seal.nix
+        { ronoctua.seal.cli = rust.seal; }
+        # ── anchor: L24 ──
+        # THE LLM ACCOUNTS' VIEW: the agents' programs handed to the footer by
+        # store path, each following its program in the registry (the usage
+        # unit is the LLM accounts' brain module's own).
+        ./nix/modules/agents.nix
+
         inputs.home-manager.nixosModules.home-manager
         {
           # Injects the packages built by this flake into the modules.
@@ -1175,6 +1356,7 @@
           };
         }
       ];
+      distroModules = distroModulesFor rust;
     in
     {
       # =================================================================
@@ -1313,6 +1495,35 @@
         belongings-table = belongingsRs;
         belongings-table-refuses = belongingsTable.refuses;
 
+        # ── anchor: L01 ──
+        # The sealer the queue runs for `Work::Seal`, extracted
+        # (`nix/rust.nix`): what `pq-age-interop` hands the Go `age`.
+        ronoctua-seal = rust.seal;
+        # ── anchor: L03 ──
+        # ── anchor: L05 ──
+        # The machine's life, buildable on its own — what its checks run, and
+        # what the units run as root.
+        ronoctua-machine = rust.machine;
+        # ── anchor: L06 ──
+        # Root's half of the person's data, buildable on its own — what the
+        # person-apply checks run, and what its units run as root.
+        ronoctua-person = rust.person;
+        # ── anchor: L12 ──
+        # The /private vault's root side, buildable on its own — what its
+        # units run as root.
+        ronoctua-private-root = rust.privateRoot;
+        # ── anchor: L13 ──
+        # The Incus job, extracted (`nix/rust.nix`).
+        ronoctua-incus-job = rust.incusJob;
+        # ── anchor: L14 ──
+        # The LLM accounts' CLI, extracted — what `statusline-chains` runs.
+        ronoctua-llm = rust.llm;
+        # ── anchor: L16 ──
+        # The push to the person's binary cache, extracted (`nix/rust.nix`).
+        ronoctua-cachix = rust.cachix;
+        # ── anchor: L17 ──
+        # The installer stick's root writer, extracted (`nix/rust.nix`).
+        ronoctua-stick-write = rust.stickWrite;
       }
       // {
 
@@ -1323,6 +1534,26 @@
       # nixosConfigurations
       # =================================================================
       nixosConfigurations = {
+        # ── anchor: L03 ──
+        # THE REFERENCE PRODUCTION SYSTEM — the full profile — and what the
+        # gate builds as "the machine somebody installs" (`m2`). It is no
+        # longer the name the installer installs: a machine installs its own
+        # flake, whose attribute is named after the person.
+        noctua = referenceMachine { };
+
+        # THE SEED — the reduced system, and it is not what gets installed.
+        #
+        # What this attribute is for is being BUILT, so its closure can travel
+        # on the ISO: everything the reduced profile needs, already realised,
+        # so the target machine compiles nothing. See `nix/installer/iso.nix`.
+        # The same reference machine as `noctua`, so the store paths line up
+        # with the ones an installed system asks for; the fixture's `host.nix`
+        # says `full`, as the installer's default does, and this says the
+        # other.
+        minimal = referenceMachine {
+          extraModules = [ { ronoctua.profile = lib.mkForce "minimal"; } ];
+        };
+        # ── anchor: L20 ──
         # Installer ISO — built by the flake itself (section 7.1).
         installer = nixpkgs.lib.nixosSystem {
           inherit system;
@@ -1343,6 +1574,11 @@
                 # what its bytes mention — `ronoctua-shell` was putting Zig,
                 # clang, LLVM and the icon superpack on an ISO with no desktop.
                 installerCrate = rust.installer;
+                # THE PERSON'S TWO PROGRAMS the installer runs (`nix/installer/iso.nix`):
+                # the belongings' CLI and root's applier of the person's
+                # declarations, extracted.
+                belongingsCli = rust.belongings;
+                personCli = rust.person;
 
                 # THE SEED — WHAT NO PUBLIC CACHE HAS, and nothing else.
                 #
@@ -1421,55 +1657,11 @@
                 # evaluation needs nixpkgs, disko and the compositor's source, which `flake.lock`
                 # names but does not contain.
                 ++ builtins.filter (p: p != null) (map (i: i.outPath or null) (builtins.attrValues inputs));
-                # The flake's own tree, for the ISO to carry in
-                # `/etc/nixos` — see the comment over there.
+                # The distro's tree, which the ISO carries for the installer to
+                # make a machine's flake from — see the comment over there.
                 flake = self;
               };
             }
-          ];
-        };
-
-        # THE PRODUCTION SYSTEM. This is the name the installer builds:
-        # `disko --flake …#noctua` and `nixos-install --flake …#noctua`.
-        #
-        # It did not exist. The installer's plan had been naming it since milestone 8, and
-        # nothing flagged it — DRY RUN mode prints the commands without running them, and
-        # `nix flake check` does not evaluate an attribute nobody references.
-        #
-        # `host.nix` is OPTIONAL: on the first `disko` run it has not been
-        # written yet, and without `optional` evaluation would fail before the disk
-        # existed. When it does exist, it brings `ronoctua.disk`, the hostname and the
-        # `resume_offset`.
-        noctua = nixpkgs.lib.nixosSystem {
-          inherit system;
-          specialArgs = { inherit inputs; };
-          modules =
-            distroModules
-            ++ [
-              ./nix/modules/host.nix
-              inputs.nixos-facter-modules.nixosModules.facter
-            ]
-            ++ nixpkgs.lib.optional (builtins.pathExists ./host.nix) ./host.nix;
-        };
-
-        # THE SEED — the reduced system, and it is not what gets installed.
-        #
-        # `nixos-install` still targets `#noctua` in both profiles; the profile
-        # is a line in `host.nix`, so a machine can change its mind with a
-        # rebuild instead of a reinstall. What this attribute is for is being
-        # BUILT, so its closure can travel on the ISO: everything the reduced
-        # profile needs, already realised, so the target machine compiles
-        # nothing. See `nix/installer/iso.nix`.
-        #
-        # The same modules as `noctua` — including `host.nix`, so the store
-        # paths line up with the ones the installed system will ask for.
-        minimal = nixpkgs.lib.nixosSystem {
-          inherit system;
-          specialArgs = { inherit inputs; };
-          modules = distroModules ++ [
-            ./nix/modules/host.nix
-            inputs.nixos-facter-modules.nixosModules.facter
-            { ronoctua.profile = "minimal"; }
           ];
         };
 
@@ -1481,11 +1673,28 @@
         };
       };
 
+      # `default` IS GONE, and that is the point: the distro's modules read
+      # `inputs` (`specialArgs`) and the module arguments the flake hands
+      # them, so a bare `imports = distroModules` broke in any flake but this
+      # one. A machine reaches the distro through `lib.machine`, which gives
+      # them all three.
       nixosModules = {
-        default = {
-          imports = distroModules;
-        };
         fonts = ./nix/modules/fonts.nix;
+      };
+
+      # ── anchor: L03 ──
+      # THE MACHINE'S FLAKE. `lib.machineFlake { dir = ./.; }` is the whole of
+      # a machine's `outputs` (`templates/machine/flake.nix`); `lib.machine`
+      # is the system alone, for whoever wants to add modules to it.
+      lib = {
+        inherit (machineLib) machine machineFlake;
+      };
+
+      # `nix flake init -t github:ronoctua/ronoctua-distro#machine` — what the
+      # installer writes a new machine's directory from.
+      templates.machine = {
+        path = ./templates/machine;
+        description = "A machine's own flake: the ronoctua distro as an input, beside this machine's host.nix";
       };
 
       # =================================================================
@@ -1545,6 +1754,26 @@
           brainModules
           brainModulesRs
 
+          # ── anchor: L01 ──
+          # ── anchor: L02 ──
+          # ── anchor: L03 ──
+          machineLib
+          # ── anchor: L04 ──
+          # ── anchor: L05 ──
+          # ── anchor: L06 ──
+          # ── anchor: L08 ──
+          # ── anchor: L09 ──
+          # ── anchor: L11 ──
+          withPersonModules
+          # ── anchor: L12 ──
+          # ── anchor: L13 ──
+          # ── anchor: L15 ──
+          # ── anchor: L16 ──
+          releaseApps
+          # ── anchor: L17 ──
+          # ── anchor: L19 ──
+          # ── anchor: L20 ──
+          # ── anchor: L22 ──
           ;
       };
 
@@ -2199,8 +2428,18 @@
         # The real installer. Without `--execute` it does a DRY RUN: it shows the
         # `host.nix` it would generate and the steps it would run, and exits. That is the default
         # on purpose — the first step erases an entire disk.
+        #
+        # THE PERSON'S TWO PROGRAMS ON ITS PATH, the ones built with it: the
+        # installer runs them by name, and a release's installer started by
+        # `nix run <release>#install` must run the release's, not the ISO's.
         install = mkScriptApp "ronoctua-install" "installs the production version" ''
-          exec ${rust.workspace}/bin/ronoctua-install "$@"
+          export PATH=${
+            lib.makeBinPath [
+              rust.belongings
+              rust.person
+            ]
+          }:$PATH
+          exec ${rust.installer}/bin/ronoctua-install "$@"
         '';
 
         # Measures performance on real hardware (section 9.3 of the plan: section 5.2's
@@ -2288,6 +2527,69 @@
           exec ${rust.workspace}/bin/ronoctua-render-png "$@"
         '';
 
+        # ── anchor: L04 ──
+        # THE DISTRO'S OWN PINS MOVE HERE, and only here: the AppImages and
+        # Android apps of `assets/distro-apps.nix` that follow a source (a
+        # GitHub repository, F-Droid) get the newest release's address and
+        # hash in `assets/distro-pins.json`. The owner runs it, reads the
+        # diff and commits by hand — a pin is what the gate tested, so it
+        # never moves on a machine by itself. `--check` writes nothing.
+        distro-pins =
+          mkScriptApp "ronoctua-distro-pins" "moves the pins of the distro's own AppImages and Android apps"
+            ''
+              exec ${pkgs.python3}/bin/python3 ${./nix/scripts/distro-pins.py} "$@"
+            '';
+        # ── anchor: L05 ──
+        # ── anchor: L15 ──
+        # ── anchor: L16 ──
+        # THE RELEASE — the owner's, and the only thing that moves the
+        # `release` branch every machine follows. It refuses unless this is
+        # `main`, clean and equal to `origin/main`; then the gate, the two
+        # reference systems and the ISO (which carries its seed), the branch
+        # (forward only) and the GitHub release. It never commits. The distro
+        # has no binary cache: a person's own is theirs (`nix/modules/binary-cache.nix`).
+        # `--dry-run` checks and says, `--rollback-to <rev>` is the one way back.
+        release = {
+          type = "app";
+          program = lib.getExe releaseApps.release;
+          meta = {
+            description = "publishes the distro: gate, the release branch and the ISO";
+            platforms = [ system ];
+          };
+        };
+
+        # ANYBODY'S: the latest release's ISO, every part and the whole
+        # checked against its SHA256SUMS, joined.
+        fetch-iso = {
+          type = "app";
+          program = lib.getExe releaseApps.fetchIso;
+          meta = {
+            description = "downloads a release's ISO, checks it and joins its parts";
+            platforms = [ system ];
+          };
+        };
+
+        # A machine of the OLD layout (a copy of the distro in its machine
+        # directory), whose own update cannot migrate it: migrate, then apply.
+        adopt-machine = {
+          type = "app";
+          program = lib.getExe releaseApps.adoptMachine;
+          meta = {
+            description = "moves a machine of the old layout to a flake of its own that follows the release";
+            platforms = [ system ];
+          };
+        };
+
+        # The owner's checkout on the owner's machine, without a release:
+        # `--override-input`, and the machine directory untouched.
+        apply-here = {
+          type = "app";
+          program = lib.getExe releaseApps.applyHere;
+          meta = {
+            description = "builds this machine with the checkout in place of the distro input, and switches";
+            platforms = [ system ];
+          };
+        };
       };
 
       # =================================================================
@@ -2416,7 +2718,8 @@
             # AND THE BRAIN'S MODULES, which `cargo fmt` never reaches: the
             # crate loads each `module.rs` by a `#[path]` inside an `include!`
             # of a generated file, and `rustfmt` does not expand macros. The
-            # sample under `tests/modules/` is loaded the same way. `rustfmt`
+            # sample under `tests/modules/` is loaded the same way, and so are
+            # the person's fixtures under `tests/person*/`. `rustfmt`
             # on the file itself, with the edition the manifest would have told
             # it — `brain-modules-fmt` checks the same files the same way.
             #
@@ -2424,7 +2727,7 @@
             # module yet `modules/` does not exist, and `fd` told about it
             # fails — the trap the file/directory split above records.
             brain_dirs=()
-            for d in crates/ronoctua-brain/modules crates/ronoctua-brain/tests/modules; do
+            for d in crates/ronoctua-brain/modules crates/ronoctua-brain/tests/modules crates/ronoctua-brain/tests/person crates/ronoctua-brain/tests/person-refused; do
               if [ -d "$d" ]; then
                 brain_dirs+=("$d")
               fi

@@ -1007,6 +1007,13 @@
   security-shield = "md-shield";
   security-shield-off = "md-shield_off";
   security-fingerprint = "md-fingerprint";
+  # A SECURITY KEY, beside each key that answers the administrator in the
+  # centre's keys section — the key itself, not a lock.
+  security-key = "md-key_variant";
+  # THE SUDO BAR (`crate::sudo_bar`): a shield with a key in it, in the bar's
+  # margin while a root gesture is asked — the administrator being asked,
+  # which the key or the password answers.
+  sudo-bar = "md-shield_key";
 
   # THE PERSON'S CONTAINERS (`LEADER s o`, `crate::containers`): the view's
   # own glyph, and one per kind in its first column. Plain drawings of what
@@ -1039,5 +1046,27 @@
   engine-software = "md-package_variant";
   engine-scan = "md-shield_search";
   engine-belongings = "md-archive_lock";
+  # THE 2026-10-05 WAVE'S THREE ENGINES: a file sealed is a lock, Incus's
+  # operation a server, the installer image the stick it is written to.
+  engine-seal = "md-lock";
+  engine-incus = "cod-server";
+  engine-stick = "md-usb_flash_drive";
+
+  # INCUS (`LEADER s x`, `crate::incus`): the view's own glyph, one per kind in
+  # its first column, and the two kinds of instance before their names — a
+  # box for a container, as the containers' view draws one, and a screen for a
+  # virtual machine, which has one. Plain drawings of what each thing is, and
+  # no brand: a catalogue is a cloud things come down from, a profile a set of
+  # dials, a project a briefcase.
+  incus = "md-server";
+  incus-kind-instances = "md-server";
+  incus-kind-images = "md-package_variant_closed";
+  incus-kind-remotes = "md-cloud_download_outline";
+  incus-kind-profiles = "md-tune_variant";
+  incus-kind-networks = "md-lan";
+  incus-kind-storage = "md-harddisk";
+  incus-kind-projects = "md-briefcase_outline";
+  incus-container = "md-cube_outline";
+  incus-vm = "md-monitor";
 
 }

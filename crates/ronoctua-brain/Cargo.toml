@@ -77,6 +77,19 @@ ronoctua-belongings = { path = "../ronoctua-belongings", default-features = fals
 # shapes and two small files, WITHOUT its engine — the brain never links
 # tantivy; the unit it starts is the one writer.
 ronoctua-index = { path = "../ronoctua-index", default-features = false }
+# THE LLM ACCOUNTS' module reads their list, their limits and what to watch
+# through the one crate that reads the agents' state — WITHOUT `fetch`: the
+# module only reads what was kept, so the brain links no TLS client, no
+# consent pass and no credentials reader (the usage unit is the one that asks).
+ronoctua-llm = { path = "../ronoctua-llm", default-features = false }
+# THE MACHINE'S RECORD (`state.json`), as the crate that writes it reads it,
+# for the module that says a boot trial failed. Pure: serde, the person
+# crate's schemas and `geteuid`; nothing of it runs as part of the brain.
+ronoctua-machine = { path = "../ronoctua-machine" }
+# THE PERSON'S DECLARED DATA, as its crate reads it — the schemas alone
+# (`default-features = false`: no root applier, no lock): the update's view
+# says which declared programs the verification held (`local/held.json`).
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
 anyhow.workspace = true
 tracing.workspace = true
 # The wire, and the two files. One JSON object per line on the socket, for the

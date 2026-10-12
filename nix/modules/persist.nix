@@ -264,6 +264,13 @@ in
         # the rules the person made are gone and every network is back on the
         # profile it was first given.
         "/var/lib/ronoctua-security"
+        # THE PASSWORDLESS SUDO WINDOW'S LINE, the folder sudo includes: the
+        # window survives a reboot and ends only at its end or by the
+        # person's gesture (owner, 2026-10-11). Lost, an open window closes
+        # with the wipe — the safe side — but the state beside it in
+        # `/var/lib/ronoctua-security` would say it is open until the boot's
+        # look (`ronoctua-sudo-window`) closes it.
+        "/var/lib/ronoctua-sudo"
         # The enrolled fingerprints (fprintd's). Lost, every finger has to be
         # enrolled again, through the password.
         "/var/lib/fprint"
@@ -286,7 +293,33 @@ in
         # lives in `/persist/etc/ronoctua/wifi`, and the wipe only renames `@root`.
         # A bind mount here would create an empty `/etc/ronoctua` that nobody reads.
         # The directory is created by `nix/modules/network.nix`.
+        # THE 2026-10-05 WAVE: one region per package, after its anchor.
+        # ── anchor: L03 ──
+        # THE MACHINE'S OWN FLAKE: `host.nix`, the hardware report, the lock
+        # that pins the distro, the person's declarations and root's `local/`.
+        # Wiped, the machine could not rebuild itself at all — it would boot
+        # the generation it has and have nothing to describe the next one.
+        # By the option and not a path written again (`machine-dir-has-one-name`);
+        # `or` because a test machine may import this module alone.
+        (config.ronoctua.machine.dir or (import ../machine.nix).machineDir)
+        # The machine's life (`ronoctua-machine`): the last good generation,
+        # the boot trial, a hold and the old layout a migration set aside.
+        "/var/lib/ronoctua-machine"
+        # ── anchor: L05 ──
+        # ── anchor: L12 ──
+        # ── anchor: L13 ──
+        # ROOT'S NETRC FOR THE PERSON'S PRIVATE BINARY CACHE (the 2026-10-11
+        # wave): written through the sudo door when the person set the token,
+        # and by the installer. Lost, the machine reads the private cache no
+        # more until the person sets the token again.
+        (import ../binary-cache.nix).netrcDir
       ]
+      # INCUS'S STATE — its database, its images, every instance and its
+      # snapshots — where Incus is on (the full profile). On btrfs the
+      # persisted copy is a subvolume of its own (`nix/modules/incus.nix`
+      # makes it before this bind), so a snapshot of `/persist` never holds
+      # it. Lost, every instance the person made is gone.
+      ++ lib.optional (config.ronoctua.incus.enable or false) "/var/lib/incus"
       # THE PERSON'S PROGRAMS THAT LIVE OUTSIDE THE HOME, and only where the
       # machine has the support. Written HERE and not in `nix/modules/flatpak.nix`
       # or `android.nix`: this option has a DEFAULT, and a definition in another
@@ -331,8 +364,11 @@ in
         "/etc/machine-id"
         "/etc/ssh/ssh_host_ed25519_key"
         "/etc/ssh/ssh_host_ed25519_key.pub"
-        "/etc/ssh/ssh_host_rsa_key"
-        "/etc/ssh/ssh_host_rsa_key.pub"
+        # ── anchor: L02 ──
+        # NO RSA HOST KEY (2026-10-05): an sshd of ours has ed25519 alone
+        # (`assets/ssh.nix`), and the RSA pair this list used to keep is
+        # removed from `/persist` by `nix/modules/ssh.nix` (`no-rsa-host-key`).
+        # ── anchor: L03 ──
       ];
     };
   };
@@ -433,9 +469,9 @@ in
     #
     # # `boot.initrd.systemd`, not `postDeviceCommands`
     #
-    # The distro uses the systemd initrd (required by lanzaboote and by the TPM2
-    # unlock). `boot.initrd.postDeviceCommands` belongs to the shell initrd and
-    # is IGNORED there — silently. The wipe simply would not happen, and the
+    # The distro uses the systemd initrd (`boot.initrd.systemd.enable`, in
+    # `nix/modules/host.nix`). `boot.initrd.postDeviceCommands` belongs to the
+    # shell initrd and is IGNORED there — silently. The wipe simply would not happen, and the
     # only symptom would be state surviving when it should not.
     boot.initrd.systemd.services.ronoctua-wipe = lib.mkIf cfg.persist.wipeRoot {
       description = "Renews @root (impermanence)";

@@ -18,8 +18,10 @@
 //! word for a machine. The program's own trouble, when there is one, travels
 //! beside the sentence as data (`Job::trouble`), and is never looked up.
 
+use ronoctua_software::declaration::{DeclineState, Standing};
 use ronoctua_software::found::{Badge, Prefer, Status};
 use ronoctua_software::order::{AndroidImage, Display, Grant, Reach, Traces};
+use ronoctua_software::person::reports::SkipWhy;
 use ronoctua_software::progress::Phase;
 use ronoctua_software::state::Origin;
 use ronoctua_software::{Refusal, Source};
@@ -169,6 +171,13 @@ pub const fn refusal_key(why: Refusal) -> &'static str {
         Refusal::WillNotParse => key::SOFTWARE_REFUSAL_WILL_NOT_PARSE,
         Refusal::WrongUser => key::SOFTWARE_REFUSAL_WRONG_USER,
         Refusal::NotLet => key::SOFTWARE_REFUSAL_NOT_LET,
+        Refusal::NothingToPin => key::SOFTWARE_DECLARED_REFUSAL_NOTHING_TO_PIN,
+        Refusal::DeclarationRefused => key::SOFTWARE_DECLARED_REFUSAL_DECLARATION_REFUSED,
+        Refusal::DeclarationUnreadable => key::SOFTWARE_DECLARED_REFUSAL_DECLARATION_UNREADABLE,
+        Refusal::Essential => key::SOFTWARE_DECLARED_REFUSAL_ESSENTIAL,
+        Refusal::ApplyFailed => key::SOFTWARE_DECLARED_REFUSAL_APPLY_FAILED,
+        Refusal::MachineUnnamed => key::SOFTWARE_DECLARED_REFUSAL_MACHINE_UNNAMED,
+        Refusal::LeavesAtNextApply => key::SOFTWARE_DECLARED_REFUSAL_LEAVES_AT_NEXT_APPLY,
     }
 }
 
@@ -190,6 +199,10 @@ pub const fn phase_key(phase: Phase) -> &'static str {
         Phase::Starting => key::SOFTWARE_PHASE_STARTING,
         Phase::Indexing => key::SOFTWARE_PHASE_INDEXING,
         Phase::Preparing => key::SOFTWARE_PHASE_PREPARING,
+        Phase::Declaring => key::SOFTWARE_DECLARED_PHASE_DECLARING,
+        Phase::Applying => key::SOFTWARE_DECLARED_PHASE_APPLYING,
+        Phase::Reconciling => key::SOFTWARE_DECLARED_PHASE_RECONCILING,
+        Phase::Publishing => key::SOFTWARE_DECLARED_PHASE_PUBLISHING,
     }
 }
 
@@ -222,6 +235,12 @@ pub const fn order_key(order: &ronoctua_software::Order) -> &'static str {
         Order::AndroidErase => key::SOFTWARE_ORDER_ANDROID_ERASE,
         Order::Permission { .. } => key::SOFTWARE_ORDER_PERMISSION,
         Order::AndroidWindows { .. } => key::SOFTWARE_ORDER_ANDROID_WINDOWS,
+        Order::Declare { .. } => key::SOFTWARE_ORDER_DECLARE,
+        Order::Forget { .. } => key::SOFTWARE_ORDER_FORGET,
+        Order::Decline { .. } => key::SOFTWARE_ORDER_DECLINE,
+        Order::Undecline { .. } => key::SOFTWARE_ORDER_UNDECLINE,
+        Order::Reconcile { .. } => key::SOFTWARE_ORDER_RECONCILE,
+        Order::RefreshPins => key::SOFTWARE_ORDER_REFRESH_PINS,
     }
 }
 
@@ -252,6 +271,13 @@ pub fn order_key_of_word(word: &str) -> Option<&'static str> {
         "android-erase" => key::SOFTWARE_ORDER_ANDROID_ERASE,
         "permission" => key::SOFTWARE_ORDER_PERMISSION,
         "android-windows" => key::SOFTWARE_ORDER_ANDROID_WINDOWS,
+        "declare" => key::SOFTWARE_ORDER_DECLARE,
+        "forget" => key::SOFTWARE_ORDER_FORGET,
+        "decline" => key::SOFTWARE_ORDER_DECLINE,
+        "undecline" => key::SOFTWARE_ORDER_UNDECLINE,
+        "reconcile" => key::SOFTWARE_ORDER_RECONCILE,
+        "refresh-pins" => key::SOFTWARE_ORDER_REFRESH_PINS,
+        // ── anchor: L18 ──
         _ => return None,
     })
 }
@@ -362,7 +388,90 @@ pub const fn origin_key(origin: Origin) -> &'static str {
     use ronoctua_i18n::key;
     match origin {
         Origin::Mine => key::SOFTWARE_ORIGIN_MINE,
+        Origin::MineDeclared => key::SOFTWARE_DECLARED_ORIGIN_MINE_DECLARED,
+        Origin::Distro { declinable: true } => key::SOFTWARE_DECLARED_ORIGIN_DISTRO,
+        Origin::Distro { declinable: false } => key::SOFTWARE_DECLARED_ORIGIN_ESSENTIAL,
         Origin::Declared => key::SOFTWARE_ORIGIN_DECLARED,
+    }
+}
+
+// ─── the declaration's words ─────────────────────────────────────────────────
+
+/// How this machine stands to a declared entry, as a phrase: applied,
+/// waiting, elsewhere, or the reason it was left out.
+#[must_use]
+pub const fn standing_key(standing: &Standing) -> &'static str {
+    use ronoctua_i18n::key;
+    match standing {
+        Standing::Applied => key::SOFTWARE_DECLARED_STANDING_APPLIED,
+        Standing::Waiting => key::SOFTWARE_DECLARED_STANDING_WAITING,
+        Standing::Elsewhere => key::SOFTWARE_DECLARED_STANDING_ELSEWHERE,
+        Standing::Skipped { reason, .. } => skip_key(*reason),
+    }
+}
+
+/// Why this machine left a declared entry out, as a sentence.
+#[must_use]
+pub const fn skip_key(reason: SkipWhy) -> &'static str {
+    use ronoctua_i18n::key;
+    match reason {
+        SkipWhy::AttrMissing => key::SOFTWARE_DECLARED_SKIPPED_ATTR_MISSING,
+        SkipWhy::NotAPackage => key::SOFTWARE_DECLARED_SKIPPED_NOT_A_PACKAGE,
+        SkipWhy::RefusedByMeta => key::SOFTWARE_DECLARED_SKIPPED_REFUSED_BY_META,
+        SkipWhy::Held => key::SOFTWARE_DECLARED_SKIPPED_HELD,
+        SkipWhy::SourceOff => key::SOFTWARE_DECLARED_SKIPPED_SOURCE_OFF,
+        SkipWhy::OtherMachine => key::SOFTWARE_DECLARED_SKIPPED_OTHER_MACHINE,
+        SkipWhy::FormatUnknown => key::SOFTWARE_DECLARED_SKIPPED_FORMAT_UNKNOWN,
+    }
+}
+
+/// Why the update held an entry back (`local/held.json`'s reasons, which
+/// `person-applied.json` carries as the detail of a `held` skip). `None` for
+/// a word this build does not know, which the row draws as it is: it is
+/// data the machine wrote.
+#[must_use]
+pub fn held_key(reason: &str) -> Option<&'static str> {
+    use ronoctua_i18n::key;
+    Some(match reason {
+        "eval-failed" => key::SOFTWARE_DECLARED_HELD_EVAL_FAILED,
+        "fetch-failed" => key::SOFTWARE_DECLARED_HELD_FETCH_FAILED,
+        "upstream-changed" => key::SOFTWARE_DECLARED_HELD_UPSTREAM_CHANGED,
+        "build-failed" => key::SOFTWARE_DECLARED_HELD_BUILD_FAILED,
+        _ => return None,
+    })
+}
+
+/// What a decline did here, as a phrase.
+#[must_use]
+pub const fn decline_key(state: &DeclineState) -> &'static str {
+    use ronoctua_i18n::key;
+    match state {
+        DeclineState::Honoured => key::SOFTWARE_DECLARED_DECLINE_HONOURED,
+        DeclineState::StillPresent => key::SOFTWARE_DECLARED_DECLINE_STILL_PRESENT,
+        DeclineState::Essential { .. } => key::SOFTWARE_DECLARED_DECLINE_ESSENTIAL,
+        DeclineState::Unknown => key::SOFTWARE_DECLARED_DECLINE_UNKNOWN,
+        DeclineState::Elsewhere => key::SOFTWARE_DECLARED_DECLINE_ELSEWHERE,
+        DeclineState::Waiting => key::SOFTWARE_DECLARED_DECLINE_WAITING,
+    }
+}
+
+/// The stem of the sentence that says why the distro needs a program: the
+/// registry's reason (`assets/distro-apps.nix`, `essential`) is its id, and
+/// `essential-apps-say-why` holds every reason to a sentence in every
+/// language — so the key is the reason's own, and a reason added there needs
+/// no arm here.
+pub const ESSENTIAL_WHY: &str = "software-essential-why-";
+
+/// Why the distro needs a program, as its sentence. A reason with no
+/// sentence in this build (a system newer than the texts it was built with)
+/// is said by its id: data the machine wrote, never a made-up phrase.
+#[must_use]
+pub fn essential_said(reason: &str, texts: &ronoctua_i18n::Texts) -> String {
+    let key = format!("{ESSENTIAL_WHY}{reason}");
+    if texts.has(&key) {
+        texts.t(&key)
+    } else {
+        reason.to_owned()
     }
 }
 
@@ -488,9 +597,45 @@ mod tests {
             for p in Prefer::ALL {
                 said_well(&t, prefer_key(p));
             }
-            for o in [Origin::Mine, Origin::Declared] {
+            for o in Origin::ALL {
                 said_well(&t, origin_key(o));
             }
+            for s in [Standing::Applied, Standing::Waiting, Standing::Elsewhere] {
+                said_well(&t, standing_key(&s));
+            }
+            for r in SkipWhy::ALL {
+                said_well(&t, skip_key(r));
+            }
+            for h in [
+                "eval-failed",
+                "fetch-failed",
+                "upstream-changed",
+                "build-failed",
+            ] {
+                said_well(
+                    &t,
+                    held_key(h).unwrap_or_else(|| panic!("no sentence for {h}")),
+                );
+            }
+            for d in [
+                DeclineState::Honoured,
+                DeclineState::StillPresent,
+                DeclineState::Essential {
+                    reason: "the-login-shell".into(),
+                },
+                DeclineState::Unknown,
+                DeclineState::Elsewhere,
+                DeclineState::Waiting,
+            ] {
+                said_well(&t, decline_key(&d));
+            }
+            // THE REGISTRY'S REASON is read by its own key, and that key is
+            // the one `essential-apps-say-why` holds to a sentence.
+            assert_eq!(
+                essential_said("the-login-shell", &t),
+                t.t(ronoctua_i18n::key::SOFTWARE_ESSENTIAL_WHY_THE_LOGIN_SHELL)
+            );
+            assert_eq!(essential_said("not-a-reason-yet", &t), "not-a-reason-yet");
             for s in Shelf::ALL {
                 said_well(&t, shelf_key(s));
             }

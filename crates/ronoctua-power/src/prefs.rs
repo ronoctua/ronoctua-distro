@@ -36,7 +36,7 @@ pub enum Source {
 pub fn resolve_in(dir: Option<&Path>, env: Option<&str>) -> (Profile, Source, Vec<String>) {
     let mut complaints = Vec::new();
     if let Some(dir) = dir {
-        match read_choice(&dir.join(FILE)) {
+        match read_choice(dir) {
             Ok(None) => {}
             Ok(Some(p)) => return (p, Source::File, complaints),
             Err(e) => complaints.push(format!("{FILE}: {e}")),
@@ -51,36 +51,75 @@ pub fn resolve_in(dir: Option<&Path>, env: Option<&str>) -> (Profile, Source, Ve
     (Profile::Performance, Source::Default, complaints)
 }
 
-/// The file's one field, looked up.
+/// `power.json` as it is written: `{ "profile": "balanced" }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Written {
+    /// The profile's id; absent is "nobody chose".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+}
+
+/// The file as a [`ronoctua_store::Store`] in `dir`, judged by [`refused`]
+/// on every read and write.
+fn store_at(dir: &Path) -> ronoctua_store::Store<Written> {
+    ronoctua_store::Store::at(Some(dir.to_path_buf()), FILE).checked(refused)
+}
+
+/// The profile ids this system knows — an id it does not is REPAIRED (out of
+/// the value read, into the ledger), never taken for a profile.
+fn refused(w: &Written) -> Vec<ronoctua_store::Refused> {
+    match &w.profile {
+        Some(id) if Profile::by_id(id).is_none() => vec![ronoctua_store::Refused {
+            pointer: "/profile".to_owned(),
+            why: ronoctua_store::repair::Why::UnknownVariant,
+            kept: None,
+        }],
+        _ => Vec::new(),
+    }
+}
+
+/// The file's one field, looked up — `power.json` in `dir`.
 ///
 /// # Errors
 ///
 /// The file is not JSON, has no `profile`, or names a profile that does not
-/// exist. A MISSING file is `Ok(None)`: nobody chose yet.
-pub fn read_choice(path: &Path) -> Result<Option<Profile>, String> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.to_string()),
-    };
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let id = value
-        .get("profile")
-        .and_then(serde_json::Value::as_str)
+/// exist (or one that is not a word). A MISSING file is `Ok(None)`: nobody
+/// chose yet.
+pub fn read_choice(dir: &Path) -> Result<Option<Profile>, String> {
+    let reading = store_at(dir).reading();
+    if !reading.found {
+        return Ok(None);
+    }
+    if let Some(trouble) = reading.trouble {
+        return Err(trouble.to_string());
+    }
+    if let Some(repair) = reading.repairs.iter().find(|r| r.pointer == "/profile") {
+        let said = match &repair.found {
+            ronoctua_store::Node::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        return Err(format!("unknown profile `{said}`"));
+    }
+    let id = reading
+        .value
+        .profile
         .ok_or_else(|| "no `profile` field".to_owned())?;
-    Profile::by_id(id)
+    Profile::by_id(&id)
         .map(Some)
         .ok_or_else(|| format!("unknown profile `{id}`"))
 }
 
-/// Writes the choice, atomically.
+/// Writes the choice, atomically — keeping what the file holds that this
+/// machine does not know.
 ///
 /// # Errors
 ///
 /// The directory cannot be written.
 pub fn persist(dir: &Path, profile: Profile) -> std::io::Result<()> {
-    let text = serde_json::json!({ "profile": profile.id() }).to_string();
-    ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())
+    store_at(dir).write(&Written {
+        profile: Some(profile.id().to_owned()),
+    })
 }
 
 /// The directory the file lives in — `$XDG_CONFIG_HOME/ronoctua`.

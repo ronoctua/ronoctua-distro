@@ -55,8 +55,8 @@ pub fn split(password: Secret) -> Result<Split, Refusal> {
     if password.is_empty() {
         return Err(Refusal::new(Service::PwnedPasswords, Why::NothingToAsk));
     }
-    let digest = ring::digest::digest(
-        &ring::digest::SHA1_FOR_LEGACY_USE_ONLY,
+    let digest = aws_lc_rs::digest::digest(
+        &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY,
         password.expose().as_bytes(),
     );
     drop(password);

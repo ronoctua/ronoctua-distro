@@ -9,15 +9,19 @@
 #           @persist   -> /persist
 #           @log       -> /var/log
 #           @snapshots -> /.snapshots
-#           @swap      -> swapfile, nodatacow, no compression, >= RAM
+#           @swap      -> swapfile, NOCOW, no compression, >= RAM
+#           @private   -> /var/lib/ronoctua-private  (the /private vault's image)
 #
-# Consumed by the installer (section 7.1). The installer NEVER interprets,
-# generates or reimplements Nix logic: it fills in `device` and `swapSize` and
-# calls disko. Invariant 5.
+# Consumed through `nix/modules/host.nix`, which hands it `ronoctua.disk` and
+# `ronoctua.swapSize`; the installer writes those into the machine's
+# `host.nix` and runs disko on that flake. It NEVER interprets, generates or
+# reimplements Nix logic. Invariant 5.
 {
-  # Filled in by the installer, in the local host.nix (gitignored, section 9).
+  # `ronoctua.disk`, from the machine's host.nix (outside the repository,
+  # invariant 13).
   device ? "/dev/vda",
-  # >= RAM, for hibernation (section 7.2).
+  # `ronoctua.swapSize`: the machine's RAM, for hibernation (section 7.2).
+  # Every caller passes it; the default is the size every machine had before.
   swapSize ? "16G",
   # File holding the LUKS passphrase.
   #
@@ -29,7 +33,8 @@
   # subshell).
   #
   # The file NEVER enters the repository (section 9) and does not survive the
-  # installation: the passphrase exists only in the TPM and in the user's head.
+  # installation: the passphrase exists only in the person's head — the TPM
+  # holds nothing for the disk (see the LUKS settings below).
   passwordFile ? "/tmp/disko-luks.key",
   ...
 }:
@@ -171,6 +176,27 @@
                     mountOptions = [ "noatime" ];
                     swap.swapfile.size = swapSize;
                   };
+                  # THE 2026-10-05 WAVE: one region per package, after its anchor.
+                  # ── anchor: L12 ──
+                  # THE /private VAULT'S IMAGE (`nix/modules/private.nix`): a
+                  # subvolume of its own, so a snapshot of `@root` never holds
+                  # it and the wipe never takes it. NOCOW comes from the
+                  # folder's attribute (tmpfiles `+C`), never from a mount
+                  # option — on btrfs the first mount's win, as `@swap` above
+                  # says. `nofail` and the subvolume unit: a machine installed
+                  # before this line existed has no `@private` yet, and the
+                  # unit makes it before the mount needs it — never a boot
+                  # stopped for want of it.
+                  "@private" = {
+                    mountpoint = "/var/lib/ronoctua-private";
+                    mountOptions = [
+                      "noatime"
+                      "nofail"
+                      "x-systemd.requires=ronoctua-private-subvolume.service"
+                    ];
+                  };
+                  # ── anchor: L13 ──
+                  # ── anchor: L20 ──
                 };
               };
             };

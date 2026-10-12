@@ -890,7 +890,10 @@ fn edits_at_the_ceiling_find_room_and_do_not_rewrite_the_index_each_time() {
         std::fs::write(&path, words_of(100 + k, 30_000, 300)).unwrap();
         crawler.recheck(&root, &path).unwrap();
         crawler.commit().unwrap();
-        largest = largest.max(crawler.writer.size_bytes());
+        // AT REST: a merge still in flight under a loaded machine holds its
+        // inputs and its output at once (`Writer::committed_bytes` says so),
+        // and reading the folder in that instant measured the load.
+        largest = largest.max(crawler.writer.settled_size_bytes().unwrap());
     }
     let held = crawler.held();
     let sheds = held.sheds - built.sheds;
@@ -903,7 +906,8 @@ fn edits_at_the_ceiling_find_room_and_do_not_rewrite_the_index_each_time() {
         rewritten <= 3 * ceiling,
         "twelve saves rewrote {rewritten} bytes of a {ceiling}-byte ceiling"
     );
-    // And the folder, as the disk counts it, stayed under the ceiling.
+    // And the folder, as the disk counts it once its merges end, stayed
+    // under the ceiling.
     assert!(largest <= ceiling, "the folder held {largest} > {ceiling}");
     let _ = std::fs::remove_dir_all(&base);
 }

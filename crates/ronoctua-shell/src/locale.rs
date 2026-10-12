@@ -2101,15 +2101,92 @@ pub mod prefs {
         }
     }
 
+    /// `locale.json` as it is WRITTEN: the rings' ids, so an answer this
+    /// build does not know — a newer machine's ring — is a repair the store
+    /// keeps on disk, never a default written over it.
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Written {
+        clock: String,
+        date: String,
+        decimal: String,
+        units: String,
+        zone: String,
+    }
+
+    impl Default for Written {
+        /// The defaults' ids — what a repair puts where a value will not
+        /// read, and so exactly what a writer writes for a ring it did not
+        /// turn: the store then puts the file's own answer back.
+        fn default() -> Self {
+            Self::of(&Choice::default())
+        }
+    }
+
+    impl Written {
+        fn of(choice: &Choice) -> Self {
+            Self {
+                clock: choice.clock.id().to_owned(),
+                date: choice.order.id().to_owned(),
+                decimal: choice.decimal.id().to_owned(),
+                units: choice.units.id().to_owned(),
+                zone: choice.zone.clone().unwrap_or_default(),
+            }
+        }
+
+        fn choice(&self) -> Choice {
+            Choice {
+                clock: Clock::by_id(&self.clock).unwrap_or_default(),
+                order: Order::by_id(&self.date).unwrap_or_default(),
+                decimal: Decimal::by_id(&self.decimal).unwrap_or_default(),
+                units: Units::by_id(&self.units).unwrap_or_default(),
+                // A ZONE IS A NAME AND NOT A CHOICE OF FEW, so it is kept as it
+                // was written and checked when it is READ — a zone that has
+                // gone from the tzdata should say so on the screen, not vanish
+                // out of the file.
+                zone: Some(self.zone.clone()).filter(|z| !z.is_empty()),
+            }
+        }
+    }
+
+    /// The ids this build does not know, as repairs: each read as its
+    /// default, and kept in the file.
+    fn refused(w: &Written) -> Vec<ronoctua_store::Refused> {
+        let unknown = |pointer: &str| ronoctua_store::Refused {
+            pointer: pointer.to_owned(),
+            why: ronoctua_store::repair::Why::UnknownVariant,
+            kept: None,
+        };
+        let mut out = Vec::new();
+        if Clock::by_id(&w.clock).is_none() {
+            out.push(unknown("/clock"));
+        }
+        if Order::by_id(&w.date).is_none() {
+            out.push(unknown("/date"));
+        }
+        if Decimal::by_id(&w.decimal).is_none() {
+            out.push(unknown("/decimal"));
+        }
+        if Units::by_id(&w.units).is_none() {
+            out.push(unknown("/units"));
+        }
+        out
+    }
+
+    /// The file as a [`ronoctua_store::Store`] in `dir`, judged by
+    /// [`refused`] on every read and write.
+    fn store_in(dir: &std::path::Path) -> ronoctua_store::Store<Written> {
+        ronoctua_store::Store::at(Some(dir.to_path_buf()), FILE).checked(refused)
+    }
+
     /// What the file says, or the defaults.
     ///
-    /// It never fails: a file that will not parse costs the preferences in
-    /// it and says so at `warn`. A writer reads it too ([`with`]), and that
-    /// is the one place where the rule that a writer refuses a broken file
-    /// is not kept, on purpose: every field of this file is one of the rings
-    /// on the screen, so what a broken file loses is what the screen already
-    /// shows as the default — and refusing would leave the four rings
-    /// unturnable until somebody mended the file by hand.
+    /// It never fails: a value that will not read costs that value — the
+    /// store repairs it, says so at `warn` and in the repair ledger — and a
+    /// file that is not JSON costs the preferences in it. A writer reads it
+    /// too ([`with`]), and that is safe now: the store's write puts back every
+    /// repaired answer the writer did not turn, so turning one ring never
+    /// erases another ring's answer this build could not read.
     #[must_use]
     pub fn read() -> Choice {
         let Some(dir) = ronoctua_store::config_dir() else {
@@ -2118,46 +2195,13 @@ pub mod prefs {
         read_at(&dir.join(FILE))
     }
 
-    /// [`read`], with its path as a parameter.
+    /// [`read`], with its path as a parameter — `<dir>/locale.json`.
     #[must_use]
     pub fn read_at(path: &std::path::Path) -> Choice {
-        let raw = match std::fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Choice::default(),
-            Err(e) => {
-                tracing::warn!(error = %e, "the locale file could not be read");
-                return Choice::default();
-            }
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            tracing::warn!("the locale file will not parse; the dates are back at their defaults");
+        let Some(dir) = path.parent() else {
             return Choice::default();
         };
-        let field = |name: &str| {
-            parsed
-                .get(name)
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        };
-        Choice {
-            clock: field("clock")
-                .and_then(|s| Clock::by_id(&s))
-                .unwrap_or_default(),
-            order: field("date")
-                .and_then(|s| Order::by_id(&s))
-                .unwrap_or_default(),
-            decimal: field("decimal")
-                .and_then(|s| Decimal::by_id(&s))
-                .unwrap_or_default(),
-            units: field("units")
-                .and_then(|s| Units::by_id(&s))
-                .unwrap_or_default(),
-            // A ZONE IS A NAME AND NOT A CHOICE OF FEW, so it is kept as it
-            // was written and checked when it is READ — a zone that has gone
-            // from the tzdata should say so on the screen, not vanish out of
-            // the file.
-            zone: field("zone").filter(|z| !z.is_empty()),
-        }
+        store_in(dir).read().choice()
     }
 
     /// Writes the pair, atomically.
@@ -2178,18 +2222,12 @@ pub mod prefs {
     ///
     /// The directory cannot be written.
     pub fn keep_in(dir: &std::path::Path, choice: &Choice) -> std::io::Result<()> {
-        // THE WHOLE RECORD, both fields. Writing one would take the other back
-        // to its default, which is the defect `display.json`'s merge exists
-        // because of — here it is cheap to avoid, because there are two.
-        let text = serde_json::json!({
-            "clock": choice.clock.id(),
-            "date": choice.order.id(),
-            "decimal": choice.decimal.id(),
-            "units": choice.units.id(),
-            "zone": choice.zone.clone().unwrap_or_default(),
-        })
-        .to_string();
-        ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())
+        // THE WHOLE RECORD, every field. Writing one would take the others
+        // back to their default, which is the defect `display.json`'s merge
+        // exists because of — here it is cheap to avoid, because there are
+        // five. The store keeps what the file holds that this build does not
+        // know, and every answer it could not read that was not turned.
+        store_in(dir).write(&Written::of(choice))
     }
 }
 
@@ -3152,6 +3190,49 @@ mod tests {
 
         std::fs::write(&path, b"{ not json").unwrap();
         assert_eq!(prefs::read_at(&path), Choice::default());
+    }
+
+    /// FAILS IF: an answer of a ring this build does not know — a newer
+    /// machine's — costs the other rings, or is erased when the person turns
+    /// a DIFFERENT ring (the store puts an untouched repair back).
+    #[test]
+    fn an_unknown_ring_answer_is_kept_through_a_turn_of_another() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-locale-newer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(prefs::FILE);
+        std::fs::write(
+            &path,
+            br#"{"clock": "36h", "date": "mdy", "units": "imperial", "shade": "warm"}"#,
+        )
+        .unwrap();
+        let read = prefs::read_at(&path);
+        assert_eq!(
+            read.clock,
+            Clock::default(),
+            "an unknown answer is its default"
+        );
+        assert_eq!(read.order, Order::MonthFirst, "the other rings were lost");
+        assert_eq!(read.units, Units::Imperial);
+        // THE PERSON TURNS THE DECIMAL RING.
+        let turned = Choice {
+            decimal: Decimal::Comma,
+            ..read
+        };
+        prefs::keep_in(&dir, &turned).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            raw["clock"], "36h",
+            "the untouched ring's answer was written over"
+        );
+        assert_eq!(
+            raw["shade"], "warm",
+            "a field this build does not know was lost"
+        );
+        assert_eq!(prefs::read_at(&path).decimal, Decimal::Comma);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A zone name that climbs out of the directory is refused before it

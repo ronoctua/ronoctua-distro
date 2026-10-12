@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "modules": {
+    "my-reminders": {
+      "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+      "approved-at": "2026-10-05T12:00:00Z"
+    }
+  }
+}

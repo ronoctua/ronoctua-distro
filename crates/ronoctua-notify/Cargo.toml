@@ -13,6 +13,9 @@ publish.workspace = true
 [dependencies]
 # The two XDG roots, in the one crate that owns them (zero dependencies).
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# The person's filters are a `Store`: a filter that will not read costs that
+# filter, said in the repair ledger, and a write keeps what it did not change.
+ronoctua-store = { path = "../ronoctua-store" }
 zbus.workspace = true
 tracing.workspace = true
 # The history outlives the session and the person's filters outlive a rebuild.

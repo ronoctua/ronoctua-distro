@@ -147,42 +147,33 @@ pub struct Preferences {
 /// answer in.
 #[must_use]
 pub fn read_preferences_from(dir: &Path) -> Preferences {
-    let path = dir.join(PREFERENCES_FILE);
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Preferences::default();
-    };
-    match serde_json::from_str::<Preferences>(&raw) {
-        Ok(p) => {
-            tracing::info!(
-                path = %path.display(),
-                rules = p.rules.len(),
-                adjustments = p.adjustments.len(),
-                "notification preferences read"
-            );
-            p
-        }
-        Err(e) => {
-            // LOUD, and not silent. A hand-edited file that stopped parsing
-            // means every filter the person wrote is gone, and the symptom
-            // would be notifications reappearing with no explanation.
-            tracing::error!(
-                path = %path.display(),
-                error = %e,
-                "the notification preferences are unreadable; carrying on with the distro's"
-            );
-            Preferences::default()
-        }
-    }
+    // A `Store`, so ONE filter that will not read costs that filter and not
+    // every one the person wrote: the rest is read, the repair goes into the
+    // ledger the belongings' page shows, and the store says it in the log.
+    let p = preferences_at(dir).read();
+    tracing::info!(
+        dir = %dir.display(),
+        rules = p.rules.len(),
+        adjustments = p.adjustments.len(),
+        "notification preferences read"
+    );
+    p
 }
 
-/// Writes the person's preferences.
+/// The person's filters as a [`ronoctua_store::Store`] in `dir`.
+fn preferences_at(dir: &Path) -> ronoctua_store::Store<Preferences> {
+    ronoctua_store::Store::at(Some(dir.to_path_buf()), PREFERENCES_FILE)
+}
+
+/// Writes the person's preferences — whole and atomically, keeping what the
+/// file holds that this machine does not know (a newer machine's field, a
+/// filter it could not read).
 ///
 /// # Errors
 ///
 /// When the directory cannot be created or the file cannot be written.
 pub fn write_preferences_to(dir: &Path, p: &Preferences) -> std::io::Result<()> {
-    let text = serde_json::to_string_pretty(p)?;
-    ronoctua_xdg::write_atomically(dir, PREFERENCES_FILE, text.as_bytes())
+    preferences_at(dir).write(p)
 }
 
 /// Reads the history, already pruned to [`HISTORY_DAYS`].

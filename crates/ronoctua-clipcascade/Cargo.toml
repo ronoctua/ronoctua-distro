@@ -43,21 +43,22 @@ ronoctua-store = { path = "../ronoctua-store" }
 # password off the network lives at the boundary rather than in a view.
 ronoctua-clipboard = { path = "../ronoctua-clipboard" }
 
-# PBKDF2 AND RANDOMNESS come from `ring`, which rustls already put in the lock.
-ring.workspace = true
+# PBKDF2 AND RANDOMNESS come from `aws-lc-rs`, which rustls already put in the lock.
+aws-lc-rs.workspace = true
 
 # AND THE CIPHER DOES NOT, WHICH WAS MEASURED RATHER THAN ASSUMED.
 #
 # The plan for this work said the cryptography would cost nothing new, because
-# `ring` has AES-256-GCM. It does, with a TWELVE-byte nonce, hard-coded:
-# `ring::aead::NONCE_LEN` is 12 and there is no other constructor.
+# the provider has AES-256-GCM. It does — `ring` then, `aws-lc-rs` now — with a
+# TWELVE-byte nonce, hard-coded: `aead::NONCE_LEN` is 12 in both and there is
+# no other constructor.
 #
 # ClipCascade's nonces are SIXTEEN bytes. Its client calls
 # `AES.new(key, AES.MODE_GCM)` with no nonce, and pycryptodome's default for
 # GCM is 16 — measured on the 3.2.0 installed on this machine, five times, all
 # 16. GCM with a nonce that is not 96 bits derives its counter block through
 # GHASH instead of by concatenation, so this is not a length check to relax:
-# `ring` would compute a different J0 and every message would fail to
+# the provider would compute a different J0 and every message would fail to
 # authenticate, with nothing on either side saying why.
 #
 # `aes-gcm` is generic over the nonce length and does the GHASH derivation.

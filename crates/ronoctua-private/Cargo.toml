@@ -1,0 +1,33 @@
+[package]
+name = "ronoctua-private"
+description = "The /private vault: a sparse LUKS2 image, its loop device and its inner btrfs — the one crate that runs cryptsetup and losetup for it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+# The request, the status and the verdict are JSON files, and the header's
+# tokens come out of `cryptsetup luksDump --dump-json-metadata`.
+serde_json.workspace = true
+# `O_NOFOLLOW` for every staged file, `statvfs` for the room the cap asks
+# for, `statx` for "is the image folder a mount of its own", `geteuid`, and
+# `FS_IOC_SETFLAGS` for the image's NOCOW bit — the safe spellings, since
+# `unsafe` is forbidden here.
+rustix = { workspace = true, features = [ "fs", "process" ] }
+# A passphrase read by the root side is wiped when it is dropped.
+zeroize.workspace = true
+
+# THE ROOT SIDE, as its own binary, so `nix/rust.nix` can extract JUST this
+# (`privateRoot`): the three units that run it as root must not carry the
+# renderer, wgpu and the wasm runtime the whole workspace would bring. It cites
+# no store path of its own — the programs it runs reach it by the units'
+# environment (`nix/modules/private.nix`).
+[[bin]]
+name = "ronoctua-private-root"
+path = "src/bin/root.rs"
+
+[lints]
+workspace = true

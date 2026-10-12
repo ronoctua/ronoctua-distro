@@ -75,8 +75,9 @@ ronoctua-files = { path = "../ronoctua-files" }
 ronoctua-inspect = { path = "../ronoctua-inspect" }
 # THE BORDER WITH GIT, for the file manager's git line and the history `C-h`
 # opens (`git_line.rs`, `git_browser.rs`): the CLI by its store path, every
-# call hardened, nothing written. No dependency of its own.
-ronoctua-git = { path = "../ronoctua-git" }
+# call hardened, nothing written. And `clone`, for `LEADER / c`
+# (`dev_clone.rs`): the one call that makes a repository, with a `Pass`.
+ronoctua-git = { path = "../ronoctua-git", features = ["clone"] }
 # THE POLL THE PLAYER READS ITS PIPE WITH — `rustix` and not `libc` because its
 # API is SAFE, which is the same argument the terminal's pty makes one table
 # down. The `event` feature is what `ronoctua-inspect` already enables for
@@ -91,6 +92,9 @@ rustix = { workspace = true, features = [ "event", "process" ] }
 # a binary that runs as root, and would give that crate a second border. The
 # host owns both and splices the device rows into the sidebar.
 ronoctua-disks = { path = "../ronoctua-disks" }
+# THE INSTALLER STICK: the releases (its `net`: GitHub on the person's pass),
+# which drives may be written, the staging the root writer reads.
+ronoctua-stick = { path = "../ronoctua-stick", features = [ "net" ] }
 # THE POWER BORDER — UPower, power-profiles-daemon, logind — for the modeline's
 # battery and profile marks, the power view and the three battery alarms.
 ronoctua-power = { path = "../ronoctua-power" }
@@ -181,11 +185,20 @@ ronoctua-resolve = { path = "../ronoctua-resolve" }
 # The queue. The shell asks it for work and listens for the list; it never
 # copies anything itself.
 ronoctua-transfers = { path = "../ronoctua-transfers" }
+# ENCRYPT ANYTHING'S WIRE: the queue's `Job`, `sniff` (what a `.age`'s header
+# says) and `is_recipient` (a pasted key checked before it is queued) —
+# WITHOUT features: `age` is `ronoctua-seal`'s, never the footer's
+# (`transfers-never-link-age`).
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false }
 ronoctua-memory = { path = "../ronoctua-memory" }
 # WHEN the machine does something to itself. The shell holds no schedule of its
 # own: it watches the daemon's socket, draws the countdown and sends back the
 # two answers to it — the same arrangement as the transfer queue one line up.
 ronoctua-brain = { path = "../ronoctua-brain" }
+# THE PERSON'S LLM ACCOUNTS (`LEADER m a`): the list, each account's plan,
+# limits, usage and tokens, read through the one crate that reads the agents'
+# state — on the view's threads; and the refresh, asked from a door.
+ronoctua-llm = { path = "../ronoctua-llm" }
 # THE PERSON'S OWN PROGRAMS (`LEADER i`). The shell links the library for what
 # is quick and read-only — the installed list, the search, a sheet's details,
 # a picture — on its own threads; every order that changes the machine goes to
@@ -232,14 +245,34 @@ ronoctua-http = { path = "../ronoctua-http", default-features = false, features 
 # status, fingerprints and the device's facts — and, read as the person, the
 # firewall's verdict on a container's published port.
 ronoctua-security = { path = "../ronoctua-security", features = [ "authority" ] }
+# THE /private VAULT: its status and verdict files read, its request staged
+# (`crate::vault`). Nothing of its root side runs here: that is its unit's.
+ronoctua-private = { path = "../ronoctua-private" }
+# THE SUDO BAR's password line, wiped when answered, cancelled or dropped
+# (`crate::sudo_bar`), and a pasted one with it.
+zeroize.workspace = true
 # THE PERSON'S CONTAINERS (`LEADER s o`). The one crate that runs podman —
 # the listing, the actions, the log and the stats as children only while
 # shown; pulls, builds and compose go to the queue.
 ronoctua-containers = { path = "../ronoctua-containers" }
+# THE BORDER WITH INCUS (`LEADER s x`, `crate::incus`): its REST socket, its
+# events and its CLI — the one crate that talks to it (`one-incus-boundary`).
+ronoctua-incus = { path = "../ronoctua-incus", default-features = false, features = [ "client" ] }
 # THE PERSON'S BELONGINGS (`LEADER s v`): their SHAPES only — the settings,
 # what is kept, the plan and its decisions, the orders. `age` is the CLI's,
 # behind `crypt`, which the queue runs as a child; the footer never links it.
-ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+# `offers`: saying yes to what a sync brought (SSH signing through git's
+# configuration, a security key in the person's options) — still no `age`.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs", "offers" ] }
+# THE PERSON'S BINARY CACHE (`crate::binary_cache`, a page of the update's
+# view): their copy of the choice, the token (sealed, `0600`), the record of
+# the last push and what root's netrc should be — through the one crate that
+# knows Cachix; and the person's options, by the one validator.
+ronoctua-cachix = { path = "../ronoctua-cachix" }
+# The person's options, and THE KEY ROOT PINNED (`local/signer.json` in the
+# machine directory), as the belongings view shows it: read with the person
+# crate's one reader, the data alone (no `apply`: nothing of root's is linked).
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
 
 # Integration with the compositor through wlr-layer-shell and IPC (invariant 3),
 # and the virtual keyboard and pointer the owner approved as its exceptions —

@@ -484,5 +484,66 @@ in
         )
       );
     })
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L12 ──
+    # THE /private VAULT'S IMAGE IS NO SNAPSHOT'S. A snapshot of a NOCOW file
+    # makes its next write copy-on-write again — the loop's backing file
+    # fragmenting under every write — and keeps every block the vault gave
+    # back by discard: the image would stop shrinking, and nothing would say
+    # so. `@private` is a top-level subvolume, so a snapshot of `@root` never
+    # holds it; this refuses one aimed at it by name or by path.
+    {
+      assertions = [
+        {
+          assertion =
+            !lib.any (
+              t: t.target == "/var/lib/ronoctua-private" || lib.hasPrefix "/var/lib/ronoctua-private/" t.target
+            ) cfg.snapshotTargets;
+          message =
+            "ronoctua.filesystem: a snapshot may not hold the /private vault's image "
+            + "(/var/lib/ronoctua-private): it would make the image copy-on-write again and keep "
+            + "every block the vault gave back. Refused: "
+            + lib.concatMapStringsSep "; " (t: "${t.target} (${t.by})") (
+              lib.filter (t: lib.hasPrefix "/var/lib/ronoctua-private" t.target) cfg.snapshotTargets
+            );
+        }
+      ];
+    }
+    # ── anchor: L13 ──
+    # INCUS'S STORAGE IS NO SNAPSHOT'S EITHER: every instance's disk, every
+    # snapshot the daemon keeps of its own and every image — a snapshot of it
+    # would pin all of them, and a VM's disk rewritten under it doubles. A
+    # target at or under the daemon's folder (or its persisted copy, which is
+    # a subvolume of its own: `nix/modules/incus.nix`) is refused, and so is
+    # `/` where Incus is on and its folder is no mount of its own. Everywhere,
+    # as the store's rule is: a machine without Incus has no such target.
+    (
+      let
+        storage = [
+          "/var/lib/incus"
+          "/persist/var/lib/incus"
+        ];
+        holds =
+          t:
+          lib.any (root: t == root || lib.hasPrefix "${root}/" t) storage
+          || (
+            t == "/" && (config.ronoctua.incus.enable or false) && !(config.fileSystems ? "/var/lib/incus")
+          );
+        refusedIncus = lib.filter (t: holds t.target) targets;
+      in
+      {
+        assertions = [
+          {
+            assertion = refusedIncus == [ ];
+            message =
+              "ronoctua.filesystem: a snapshot may not hold Incus's storage — it would pin every "
+              + "instance's disk and every image. Refused: "
+              + lib.concatMapStringsSep "; " (
+                t: "${t.target} (${t.by}): it is the instances' storage"
+              ) refusedIncus;
+          }
+        ];
+      }
+    )
   ];
 }

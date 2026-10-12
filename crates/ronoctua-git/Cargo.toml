@@ -12,7 +12,18 @@ publish.workspace = true
 # repositories are mature there. gix would add hundreds of crates and an HTTP
 # stack of its own (which `one-http-writer` refuses). So: no dependency at
 # all — `std::process` and the parsers here.
+#
+# ONE OPTIONAL ONE, behind `clone`: the consent crate, for the one call that
+# reaches a host nobody named before — `Repo::clone` takes a `Pass` for the
+# host its address names. Optional because the askpass helper is built from
+# this crate's sources by `rustc` alone (`nix/git-askpass.nix`), with no
+# feature and so no dependency; the shell turns `clone` on.
+[features]
+default = []
+clone = ["dep:ronoctua-consent"]
+
 [dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", optional = true }
 
 # THE ASKPASS HELPER. git runs it for a remote over HTTPS with a token; it
 # prints the user name or the token, read from the `0600` file whose PATH is
@@ -23,6 +34,11 @@ publish.workspace = true
 [[bin]]
 name = "ronoctua-git-askpass"
 path = "src/bin/askpass.rs"
+
+# A TEST MINTS ITS PASS over a consent file of its own (`test-support`), and
+# only here: a product mints from the person's file alone.
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = ["test-support"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "id": "gimp",
+      "source": "nix",
+      "desktop-ids": [
+        "gimp.desktop"
+      ],
+      "essential": null,
+      "group": "media",
+      "on-this-machine": true,
+      "declined-here": true
+    },
+    {
+      "id": "chrome",
+      "source": "nix",
+      "desktop-ids": [
+        "google-chrome.desktop"
+      ],
+      "essential": "the-browser",
+      "group": "base",
+      "on-this-machine": true,
+      "declined-here": false
+    }
+  ]
+}

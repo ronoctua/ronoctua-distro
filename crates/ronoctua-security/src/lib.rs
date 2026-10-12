@@ -4,14 +4,15 @@
 //!
 //! There is no polkit agent in the session, and there will not be one. When
 //! a person's gesture needs root (open the passwordless window, loosen the
-//! firewall, enrol a finger, the file manager's root helper), the person
-//! types their password in our own secret question and
-//! [`authority::run`] (feature `authority`, the shell's only) pipes it to
-//! `sudo -S -k -p "" -- <store>/ronoctua-security-root <verb>` — after first
-//! trying `sudo -n` (an open window, sudo's own timestamp). It reuses the
-//! authority the person already has, adds none, and sudo logs every use. The
-//! verbs are a closed set ([`verb::RootVerb`]); the helper refuses uid 0 in
-//! `SUDO_UID`.
+//! firewall, enrol a finger, the file manager's root helper), the door
+//! (feature `authority`, the shell's only) first tries `sudo -n` (an open
+//! window, sudo's own timestamp), then either pipes a typed password to
+//! `sudo -S -k -p "" -- <store>/ronoctua-security-root <verb>`
+//! ([`authority::run`]) or talks to sudo on a terminal of its own, where a
+//! security key or a finger may answer before the password
+//! ([`authority::converse`]). It reuses the authority the person already
+//! has, adds none, and sudo logs every use. The verbs are a closed set
+//! ([`verb::RootVerb`]); the helper refuses uid 0 in `SUDO_UID`.
 //!
 //! # The root helper
 //!
@@ -31,14 +32,23 @@
 //!
 //! # The passwordless window
 //!
-//! `/run/ronoctua-sudo/relax`, one line with sudo's own `NOTAFTER`, and three
-//! more locks: a transient timer, `/run` being tmpfs, and a unit that removes
-//! it before sleep ([`relax`]).
+//! `/var/lib/ronoctua-sudo/relax`, one line — with sudo's own `NOTAFTER`
+//! for a timed window, none for no limit — that survives a reboot and ends
+//! at its end or by the person's gesture: a timer by the wall clock, and the
+//! boot's look at it ([`relax`]).
+//!
+//! # Security keys
+//!
+//! Root's list of the keys `pam_u2f` trusts for sudo, and registering one by
+//! a touch, as the person ([`u2f`]).
 //!
 //! # Facts
 //!
 //! Fingerprint readers and enrolled fingers ([`fprint`]); Secure Boot, the
-//! TPM and fwupd's HSI level and updates, read only ([`platform`]).
+//! TPM and fwupd's HSI level and updates, read only ([`platform`]); what
+//! each channel does against a quantum computer ([`quantum`]: a pure table
+//! over facts, what `ssh -G` says it would offer, by store path, and what
+//! the build wrote).
 
 #![forbid(unsafe_code)]
 
@@ -49,9 +59,11 @@ pub mod authority;
 pub mod firewall;
 pub mod fprint;
 pub mod platform;
+pub mod quantum;
 pub mod relax;
 pub mod shields;
 pub mod tools;
+pub mod u2f;
 pub mod users;
 pub mod verb;
 
@@ -84,11 +96,19 @@ pub enum Why {
     Busy,
     /// Nothing happened for too long (no finger on the reader).
     TimedOut,
+    /// The person cancelled, and nothing was done.
+    Cancelled,
+    /// No security key is plugged in.
+    NoKey,
+    /// A window asked for root and the footer, whose sudo bar is where every
+    /// root gesture of a screen is asked, did not answer (it is not running,
+    /// or went away before it said how it ended).
+    NoFooter,
 }
 
 impl Why {
     /// Every one, in the order the keys are written.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
         Self::NoHelper,
         Self::WrongPassword,
         Self::NeedsPassword,
@@ -100,6 +120,9 @@ impl Why {
         Self::Unreadable,
         Self::Busy,
         Self::TimedOut,
+        Self::Cancelled,
+        Self::NoKey,
+        Self::NoFooter,
     ];
 
     /// Its kebab-case name, the suffix of its key.
@@ -117,6 +140,9 @@ impl Why {
             Self::Unreadable => "unreadable",
             Self::Busy => "busy",
             Self::TimedOut => "timed-out",
+            Self::Cancelled => "cancelled",
+            Self::NoKey => "no-key",
+            Self::NoFooter => "no-footer",
         }
     }
 
@@ -205,9 +231,13 @@ pub(crate) mod scratch {
             Self(dir)
         }
 
-        /// A program here, written with `text` and made executable.
+        /// A program here, written with `text` and made executable — with
+        /// no child forked meanwhile (`crate::tools::FORKS`).
         pub fn program(&self, name: &str, text: &str) -> PathBuf {
             use std::os::unix::fs::PermissionsExt as _;
+            let _alone = crate::tools::FORKS
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let path = self.0.join(name);
             std::fs::write(&path, text).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();

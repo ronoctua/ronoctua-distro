@@ -1,0 +1,87 @@
+[
+  {
+    "case": "a public cache",
+    "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": true
+  },
+  {
+    "case": "a private cache whose key uses the whole alphabet",
+    "binary-cache": {"name": "my-cache-2", "public-key": "my-cache-2.cachix.org-1:abcdefghijklmnopqrstuvwxyzABCDEFGHIJ+/01234=", "visibility": "private"},
+    "valid": true
+  },
+  {
+    "case": "a name that starts with a digit",
+    "binary-cache": {"name": "0cache", "public-key": "0cache.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": true
+  },
+  {
+    "case": "no cache at all",
+    "binary-cache": null,
+    "valid": true
+  },
+  {
+    "case": "a name with upper-case letters",
+    "binary-cache": {"name": "Someone", "public-key": "Someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a name that starts with a dash",
+    "binary-cache": {"name": "-someone", "public-key": "-someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a name with an underscore",
+    "binary-cache": {"name": "some_one", "public-key": "some_one.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "an empty name",
+    "binary-cache": {"name": "", "public-key": ".cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a name of 64 characters",
+    "binary-cache": {"name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "public-key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "another cache's key",
+    "binary-cache": {"name": "someone", "public-key": "somebody-else.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a key that is too short",
+    "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:QQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a key with no padding",
+    "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a key of another host",
+    "binary-cache": {"name": "someone", "public-key": "someone.example.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a key with a character outside base64",
+    "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ-=", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a visibility the distro does not know",
+    "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "shared"},
+    "valid": false
+  },
+  {
+    "case": "a cache without its key",
+    "binary-cache": {"name": "someone", "visibility": "public"},
+    "valid": false
+  },
+  {
+    "case": "a field the distro does not know",
+    "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=", "visibility": "public", "token": "hunter2"},
+    "valid": false
+  }
+]

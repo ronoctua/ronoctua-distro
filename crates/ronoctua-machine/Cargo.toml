@@ -1,0 +1,30 @@
+[package]
+name = "ronoctua-machine"
+description = "The machine's own flake and its life: migrating the old layout, building before switching, the boot trial and its bless, holding a revision — bootctl, EFI variables and the machine directory."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# `state.json` is the person crate's schema (it is published to the plain part
+# as `machines/<hostname>.json`), and root's lock of the person's data is its
+# `root::Lock` (feature `apply`, a default one): a build reads that data.
+ronoctua-person = { path = "../ronoctua-person" }
+# `geteuid`, for the refusal a person who is not root gets before anything
+# runs. The safe spelling; `unsafe_code` is forbidden here.
+rustix = { workspace = true, features = [ "process" ] }
+
+# THE CLI THE UNITS RUN, as its own binary so `nix/rust.nix` can extract JUST
+# this (`machine`): it runs as root on every update, every rescue rebuild and
+# every boot, and must not carry the renderer, wgpu and the wasm runtime the
+# whole workspace would bring.
+[[bin]]
+name = "ronoctua-machine"
+path = "src/bin/machine.rs"
+
+[lints]
+workspace = true

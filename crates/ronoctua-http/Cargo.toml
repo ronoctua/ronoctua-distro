@@ -37,14 +37,25 @@ publish.workspace = true
 # `ronoctua_consent::Pass`, which only that crate mints, so a request to a
 # host nobody let is a program that does not compile. The loopback transports
 # ask no host and need none.
+#
+# `tls` also wipes what it sends: a request to another machine is built in
+# memory that is zeroed when it is dropped (`zeroize`, already in the lock
+# under the consent file, the archives and the PAM door), because a header
+# may carry a bearer token or an API key, and a copy left in a long-lived
+# process's heap outlives the request (`llm-tokens-never-linger`).
+#
+# And it keeps what each host agreed (`groups`): the key-exchange group of
+# every handshake, in a file of the person's (`ronoctua-store`, serde), bound
+# by `tlsGroupsHosts` in `assets/cache.nix` — which is why this crate has a
+# build script, and why the script only wants the policy when `tls` is on.
 
 [features]
 default = [ ]
-tls = [ "dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:tracing", "dep:url", "dep:flate2", "dep:ronoctua-consent" ]
+tls = [ "dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:tracing", "dep:url", "dep:flate2", "dep:ronoctua-consent", "dep:zeroize", "dep:ronoctua-store", "dep:serde" ]
 # A WebSocket is an HTTP handshake that never ends, so `ws` implies nothing
 # about TLS: `ws://` over plain TCP is the same framing as `wss://` over a TLS
 # stream, and the frame code is generic over what it writes into.
-ws = [ "dep:ring", "dep:base64" ]
+ws = [ "dep:aws-lc-rs", "dep:base64" ]
 
 [dependencies]
 anyhow.workspace = true
@@ -54,14 +65,19 @@ rustls-pki-types = { workspace = true, optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 url = { version = "2.5", optional = true }
 flate2 = { version = "1.1", optional = true }
-ring = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 ronoctua-consent = { path = "../ronoctua-consent", optional = true }
+zeroize = { workspace = true, optional = true }
+ronoctua-store = { path = "../ronoctua-store", optional = true }
+serde = { workspace = true, optional = true }
 
 # A test mints its passes from a consent file of its own; the helpers that
 # read one are `test-support`, never a product's.
 [dev-dependencies]
 ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+# The key the test server signs its handshakes with (`tls-is-post-quantum-first`).
+aws-lc-rs = { workspace = true }
 
 [lints]
 workspace = true

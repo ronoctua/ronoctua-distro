@@ -1,0 +1,59 @@
+[package]
+name = "ronoctua-incus"
+description = "Incus: its REST API over the unix socket, its events, and its CLI where a terminal or the client's configuration is needed — the one crate that talks to it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# TWO LAYERS, the post-quantum crate's shape.
+#
+# Without features this is the WIRE: the queue's `Job`, the lines
+# `ronoctua-incus-job` prints, `Why`, the instance's shapes and the pure
+# argument builders. The transfer queue asks for only that
+# (`default-features = false`), so its SOURCE cannot name the daemon's client:
+# built alone (`cargo check -p ronoctua-transfers`) the client is not there.
+# The workspace build is not alone: Cargo unifies features across it, so
+# the queue's binary is compiled against this crate with `default`, and the
+# client stays out of it only as code nobody calls.
+#
+# `client` is the daemon itself: REST over its unix socket, the events over a
+# WebSocket on the same socket, the CLI for the client's remotes and a
+# remote's catalogue — and every call that makes the daemon reach a remote
+# takes a consent `Pass`. `cli` is the `ronoctua-incus-job` binary the queue
+# runs as a child (extracted by `nix/rust.nix`).
+[features]
+default = [ "client", "cli" ]
+client = [ "dep:ronoctua-http", "dep:ronoctua-consent", "dep:serde_json", "dep:tracing" ]
+cli = [ "client", "dep:tracing-subscriber", "dep:signal-hook" ]
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+# The daemon's own words for a refusal go to the log; the screen says a
+# closed sentence (`Why`) and sends the person there.
+tracing = { workspace = true, optional = true }
+# THE FRAMER, with its WebSocket: the REST calls, the streamed bodies of a
+# backup or a file, and `/1.0/events` — all over the unix socket.
+ronoctua-http = { path = "../ronoctua-http", features = [ "ws" ], optional = true }
+# Every call that makes the daemon reach a remote takes a consent `Pass`.
+ronoctua-consent = { path = "../ronoctua-consent", optional = true }
+# The job's log, on its stderr, which the queue keeps as the row's trouble.
+tracing-subscriber = { workspace = true, optional = true }
+# `SIGTERM` from the queue cancels the daemon's operation before the job
+# leaves (a flag, in its safe spelling).
+signal-hook = { workspace = true, optional = true }
+
+# A test mints its passes from a consent file of its own.
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+serde_json.workspace = true
+
+[[bin]]
+name = "ronoctua-incus-job"
+path = "src/bin/job.rs"
+required-features = [ "cli" ]
+
+[lints]
+workspace = true

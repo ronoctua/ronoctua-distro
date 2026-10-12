@@ -13,10 +13,13 @@
 //! raw key, which is the shape invariant 8 exists to refuse.
 
 use ronoctua_belongings::Why;
+use ronoctua_belongings::inventory::State;
 use ronoctua_belongings::order::Op;
+use ronoctua_belongings::plain::HeldWhy;
 use ronoctua_belongings::plan::Decision;
 use ronoctua_belongings::prefs::{Auth, Invalid};
 use ronoctua_i18n::key;
+use ronoctua_person::tree::TreeWhy;
 
 /// The sentence of a refusal of a sync.
 #[must_use]
@@ -37,6 +40,10 @@ pub const fn refusal_key(why: Why) -> &'static str {
         Why::NoTools => key::BELONGINGS_REFUSED_NO_TOOLS,
         Why::Failed => key::BELONGINGS_REFUSED_FAILED,
         Why::Busy => key::BELONGINGS_REFUSED_BUSY,
+        Why::NotLet => key::BELONGINGS_REFUSED_NOT_LET,
+        Why::Newer => key::BELONGINGS_REFUSED_NEWER,
+        Why::PlainTooLarge => key::BELONGINGS_REFUSED_PLAIN_TOO_LARGE,
+        Why::NotPostQuantum => key::BELONGINGS_REFUSED_NOT_POST_QUANTUM,
     }
 }
 
@@ -48,6 +55,7 @@ pub const fn invalid_key(why: Invalid) -> &'static str {
         Invalid::CredentialsInAddress => key::BELONGINGS_INVALID_CREDENTIALS_IN_ADDRESS,
         Invalid::PlainHttp => key::BELONGINGS_INVALID_PLAIN_HTTP,
         Invalid::NotRemote => key::BELONGINGS_INVALID_NOT_REMOTE,
+        Invalid::UnnamedHost => key::BELONGINGS_INVALID_UNNAMED_HOST,
         Invalid::Unknown => key::BELONGINGS_INVALID_UNKNOWN,
     }
 }
@@ -59,6 +67,8 @@ pub const fn decided_key(d: Decision) -> &'static str {
         Decision::KeepLocal => key::BELONGINGS_DECIDED_KEEP_LOCAL,
         Decision::TakeRemote => key::BELONGINGS_DECIDED_TAKE_REMOTE,
         Decision::KeepBoth => key::BELONGINGS_DECIDED_KEEP_BOTH,
+        Decision::TakeMergedOurs => key::BELONGINGS_DECIDED_TAKE_MERGED_OURS,
+        Decision::TakeMergedTheirs => key::BELONGINGS_DECIDED_TAKE_MERGED_THEIRS,
     }
 }
 
@@ -69,6 +79,8 @@ pub const fn decide_key(d: Decision) -> &'static str {
         Decision::KeepLocal => key::BELONGINGS_DECIDE_KEEP_LOCAL,
         Decision::TakeRemote => key::BELONGINGS_DECIDE_TAKE_REMOTE,
         Decision::KeepBoth => key::BELONGINGS_DECIDE_KEEP_BOTH,
+        Decision::TakeMergedOurs => key::BELONGINGS_DECIDE_TAKE_MERGED_OURS,
+        Decision::TakeMergedTheirs => key::BELONGINGS_DECIDE_TAKE_MERGED_THEIRS,
     }
 }
 
@@ -80,6 +92,8 @@ pub const fn decide_command(d: Decision) -> &'static str {
         Decision::KeepLocal => "belongings-keep-local",
         Decision::TakeRemote => "belongings-take-remote",
         Decision::KeepBoth => "belongings-keep-both",
+        Decision::TakeMergedOurs => "belongings-take-merged-ours",
+        Decision::TakeMergedTheirs => "belongings-take-merged-theirs",
     }
 }
 
@@ -102,7 +116,51 @@ pub const fn op_key(op: Op) -> &'static str {
         Op::Abandon => key::BELONGINGS_OP_ABANDON,
         Op::Keygen => key::BELONGINGS_OP_KEYGEN,
         Op::Rekey => key::BELONGINGS_OP_REKEY,
+        Op::Compact => key::BELONGINGS_OP_COMPACT,
+        Op::SyncPlain => key::BELONGINGS_OP_SYNC_PLAIN,
+        Op::Forget => key::BELONGINGS_OP_FORGET,
+        Op::Restore => key::BELONGINGS_OP_RESTORE,
+        Op::Probe => key::BELONGINGS_OP_PROBE,
+        Op::Init => key::BELONGINGS_OP_INIT,
+        Op::VerifyPassphrase => key::BELONGINGS_OP_VERIFY_PASSPHRASE,
+        Op::Sign => key::BELONGINGS_OP_SIGN,
     }
+}
+
+/// Why a change of the repository's to a signed file was held, as the value
+/// of its row.
+#[must_use]
+pub const fn held_key(why: HeldWhy) -> &'static str {
+    match why {
+        HeldWhy::Unsigned => key::BELONGINGS_HELD_UNSIGNED,
+        HeldWhy::NoKey => key::BELONGINGS_HELD_NO_KEY,
+        HeldWhy::BadSignature => key::BELONGINGS_HELD_BAD_SIGNATURE,
+        HeldWhy::RolledBack => key::BELONGINGS_HELD_ROLLED_BACK,
+        HeldWhy::NotAsSigned => key::BELONGINGS_HELD_NOT_AS_SIGNED,
+    }
+}
+
+/// Why root refused a staging for its signature, as a sentence; `None` for
+/// a reason that is not the signature's.
+#[must_use]
+pub const fn root_refused_key(why: TreeWhy) -> Option<&'static str> {
+    Some(match why {
+        TreeWhy::NotSigned => key::BELONGINGS_ROOT_REFUSED_NOT_SIGNED,
+        TreeWhy::BadSignature => key::BELONGINGS_ROOT_REFUSED_BAD_SIGNATURE,
+        TreeWhy::RolledBack => key::BELONGINGS_ROOT_REFUSED_ROLLED_BACK,
+        _ => return None,
+    })
+}
+
+/// Why root kept a file back (its own copy kept), as the value of its row;
+/// `None` for a reason that does not keep one back.
+#[must_use]
+pub const fn kept_back_key(why: TreeWhy) -> Option<&'static str> {
+    Some(match why {
+        TreeWhy::NotAsSigned => key::BELONGINGS_KEPT_BACK_NOT_AS_SIGNED,
+        TreeWhy::NoKeyPinned => key::BELONGINGS_KEPT_BACK_NO_KEY_PINNED,
+        _ => return None,
+    })
 }
 
 /// The sentence of a reason of what is kept, by its id — the table's
@@ -111,6 +169,27 @@ pub const fn op_key(op: Op) -> &'static str {
 #[must_use]
 pub fn reason_key(reason: &str) -> String {
     format!("belongings-reason-{reason}")
+}
+
+/// A file's state in the listing of what goes to the repository.
+#[must_use]
+pub const fn state_key(state: State) -> &'static str {
+    match state {
+        State::Synced => key::BELONGINGS_STATE_SYNCED,
+        State::Changed => key::BELONGINGS_STATE_CHANGED,
+        State::New => key::BELONGINGS_STATE_NEW,
+        State::Conflict => key::BELONGINGS_STATE_CONFLICT,
+        State::Unreadable => key::BELONGINGS_STATE_UNREADABLE,
+        State::Repaired => key::BELONGINGS_STATE_REPAIRED,
+        State::Deleted => key::BELONGINGS_STATE_DELETED,
+    }
+}
+
+/// A predefined target's name, by its id — the table's, so the key is
+/// assembled; the census test below reads every target in every language.
+#[must_use]
+pub fn target_key(id: &str) -> String {
+    format!("belongings-target-{id}")
 }
 
 /// A period, as a value: "every 7 days", "never".
@@ -148,6 +227,7 @@ mod tests {
                 Invalid::CredentialsInAddress,
                 Invalid::PlainHttp,
                 Invalid::NotRemote,
+                Invalid::UnnamedHost,
                 Invalid::Unknown,
             ] {
                 has(invalid_key(why));
@@ -168,8 +248,49 @@ mod tests {
             for op in Op::ALL {
                 has(op_key(op));
             }
+            // THE SIGNATURE'S: every reason a file is held, every reason
+            // root refused or kept back — and none of those silently missing.
+            for why in HeldWhy::ALL {
+                has(held_key(why));
+            }
+            let mut refusing = 0;
+            let mut keeping = 0;
+            for why in TreeWhy::ALL {
+                if let Some(k) = root_refused_key(why) {
+                    has(k);
+                    refusing += 1;
+                }
+                if let Some(k) = kept_back_key(why) {
+                    has(k);
+                    keeping += 1;
+                }
+                assert_eq!(root_refused_key(why).is_some(), why.refuses_the_signature());
+                assert_eq!(kept_back_key(why).is_some(), why.keeps_back());
+            }
+            assert_eq!((refusing, keeping), (3, 2));
             for reason in ronoctua_belongings::kept::REASONS {
                 has(&reason_key(reason));
+            }
+            // AND THE WALK'S OWN: what a file IS (a link into the system's
+            // store, the access key under another name).
+            for reason in ronoctua_belongings::sift::REASONS {
+                has(&reason_key(reason));
+            }
+            // AND THE REPAIR LEDGER'S, by the id each reason is written with.
+            for why in ronoctua_store::repair::Why::ALL {
+                has(&format!("belongings-repair-why-{}", why.id()));
+            }
+            // AND THE LISTING'S: what a target skips, a plain file past the
+            // line, every state, every target by its id.
+            has(&reason_key(ronoctua_belongings::kept::SKIPPED_REASON));
+            for reason in ronoctua_belongings::inventory::REASONS {
+                has(&reason_key(reason));
+            }
+            for state in State::ALL {
+                has(state_key(state));
+            }
+            for target in ronoctua_belongings::scope::targets() {
+                has(&target_key(target.id));
             }
             for days in ronoctua_belongings::prefs::PERIODS {
                 let text = period_text(days, &texts);

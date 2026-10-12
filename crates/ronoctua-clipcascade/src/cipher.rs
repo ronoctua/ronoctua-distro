@@ -18,15 +18,16 @@
 //! derived a different key would simply fail to decrypt everything, and the
 //! only symptom would be a clipboard that stays empty.
 //!
-//! # The nonce is sixteen bytes, and it is why `ring` is not the cipher here
+//! # The nonce is sixteen bytes, and it is why the provider is not the cipher here
 //!
 //! `AES.new(key, AES.MODE_GCM)` with no nonce takes pycryptodome's default,
 //! which is 16 bytes — measured on the installed 3.2.0, five times, all 16.
-//! `ring::aead::NONCE_LEN` is 12 and there is no other constructor.
+//! `aws_lc_rs::aead::NONCE_LEN` is 12 (as `ring`'s was) and there is no other
+//! constructor.
 //!
 //! GCM with a nonce that is not 96 bits does not simply pad: it derives its
-//! first counter block through GHASH instead of by concatenation. So `ring`
-//! would compute a different J0, every message would fail to authenticate, and
+//! first counter block through GHASH instead of by concatenation. So the
+//! provider would compute a different J0, every message would fail to authenticate, and
 //! nothing on either side would say why. `aes-gcm` is generic over the length
 //! and does the derivation, which is the whole reason it is in the manifest.
 //!
@@ -88,8 +89,8 @@ impl Key {
         let rounds = std::num::NonZeroU32::new(rounds)
             .unwrap_or_else(|| std::num::NonZeroU32::new(ROUNDS).expect("a positive default"));
         let material = format!("{username}{password}{salt}");
-        ring::pbkdf2::derive(
-            ring::pbkdf2::PBKDF2_HMAC_SHA256,
+        aws_lc_rs::pbkdf2::derive(
+            aws_lc_rs::pbkdf2::PBKDF2_HMAC_SHA256,
             rounds,
             material.as_bytes(),
             password.as_bytes(),
@@ -121,7 +122,7 @@ impl Key {
     /// The system refused to give random bytes, or the cipher refused.
     pub fn seal(&self, plaintext: &str) -> Result<Sealed> {
         let mut nonce = [0u8; NONCE_LEN];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
+        aws_lc_rs::rand::SecureRandom::fill(&aws_lc_rs::rand::SystemRandom::new(), &mut nonce)
             .map_err(|_| anyhow::anyhow!("the system refused to give random bytes"))?;
         let cipher = Cipher::new_from_slice(&self.0)
             // `InvalidLength` IS NOT `std::error::Error`, so `context` cannot see
@@ -296,7 +297,7 @@ mod tests {
 
     #[test]
     fn the_nonce_is_sixteen_bytes_and_that_is_not_negotiable() {
-        // `ring::aead::NONCE_LEN` IS 12. GCM with a nonce that is not 96 bits
+        // `aws_lc_rs::aead::NONCE_LEN` IS 12. GCM with a nonce that is not 96 bits
         // derives J0 through GHASH rather than by concatenation, so a
         // twelve-byte implementation does not "almost" work — it authenticates
         // nothing, silently. The vector's own nonce is what holds this down.

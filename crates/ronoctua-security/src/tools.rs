@@ -111,7 +111,15 @@ pub(crate) fn run(
 /// between, until that child's `exec`. Tests write their stand-ins and run
 /// them in parallel, and a machine may write a store path while a unit
 /// starts; a few tries, milliseconds apart, outlast it.
+///
+/// The tries cover what this process runs, and not what its child runs in
+/// turn (`setsid` running sudo): so in the tests no child is forked while a
+/// stand-in is being written ([`FORKS`]).
 pub(crate) fn spawn(command: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    #[cfg(test)]
+    let _no_stand_in_open = FORKS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut tries = 0;
     loop {
         match command.spawn() {
@@ -123,6 +131,12 @@ pub(crate) fn spawn(command: &mut std::process::Command) -> std::io::Result<std:
         }
     }
 }
+
+/// The tests' stand-ins are written alone (the write lock) and children are
+/// forked together (the read lock), so no child ever holds a stand-in open
+/// for writing — a program it runs in turn would find it busy.
+#[cfg(test)]
+pub(crate) static FORKS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 #[cfg(test)]
 mod tests {

@@ -75,6 +75,14 @@ stdenvNoCC.mkDerivation {
 
   dontInstall = true;
 
+  # THE PERSON'S FOLDER TRAVELS WITH ITS TABLE: `nix/rust.nix` sets
+  # `RONOCTUA_BRAIN_PERSON_MODULES_DIR` from here, so the table that lists a
+  # person's module and the folder its `module.rs` is read from are one copy
+  # — never a table of one build and a folder of another. It is the loader's
+  # copy with only the folders that load (`personRefused` are not in it), or
+  # `null` for none.
+  passthru.personModulesDir = brainModules.personModulesDir or null;
+
   meta = {
     description = "The brain's modules as Rust, generated from their manifests";
     platforms = lib.platforms.all;

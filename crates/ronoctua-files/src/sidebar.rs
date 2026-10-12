@@ -52,6 +52,18 @@ pub enum Target {
     /// it. Never configured, never written to the file: it is here so that a
     /// device and a folder are one kind of row on screen and in the keyboard.
     Device(String),
+    // ── anchor: L12 ──
+    /// The `/private` vault — the person's encrypted folder. Never
+    /// configured: the host hands its row in with the devices, open or
+    /// locked as the vault's status says, and `m` and `l` open and lock it.
+    Private,
+    // ── anchor: L17 ──
+    /// A whole REMOVABLE drive, by the id the host's disk border gave it: the
+    /// heading the host draws above a stick's volumes — and the one row a
+    /// BLANK stick has, since nothing on it is a volume to be a row. It is
+    /// where writing the installer is offered (`sidebar_menu::Applies::Drive`).
+    /// Never configured, never written to the file.
+    Drive(String),
 }
 
 /// Which block of the sidebar a row belongs to.
@@ -101,7 +113,7 @@ pub struct Adjustment {
 }
 
 /// The file: `$XDG_CONFIG_HOME/ronoctua/files-sidebar.json`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     /// What the person put there, in the order they put it.
@@ -125,14 +137,25 @@ const fn yes() -> bool {
     true
 }
 
+impl Default for Preferences {
+    /// What somebody has before they have ever changed anything — the
+    /// sidebar SHOWING. Written out, not derived: a derived `bool` is `false`,
+    /// and this is what a store reads for a file that is not there, and what
+    /// a repair puts in place of a value that will not read.
+    fn default() -> Self {
+        Self {
+            added: Vec::new(),
+            adjustments: BTreeMap::new(),
+            showing: true,
+        }
+    }
+}
+
 impl Preferences {
     /// What somebody has before they have ever changed anything.
     #[must_use]
     pub fn fresh() -> Self {
-        Self {
-            showing: true,
-            ..Self::default()
-        }
+        Self::default()
     }
 }
 
@@ -530,7 +553,7 @@ impl Sidebar {
                 label: item.label.clone().or_else(|| match &item.target {
                     Target::Place(p) | Target::File(p) => Some(leaf_of(p)),
                     Target::Application(id) => Some(id.clone()),
-                    Target::Device(_) | Target::Trash => None,
+                    Target::Device(_) | Target::Drive(_) | Target::Trash | Target::Private => None,
                 }),
                 target: item.target.clone(),
                 section: Section::Pinned,
@@ -613,41 +636,32 @@ pub mod store {
     /// (`ronoctua-xdg`, which says why it exists).
     pub use ronoctua_xdg::config_dir;
 
-    /// Reads the preferences from an explicit directory — the form a test uses.
-    ///
-    /// A missing file is a fresh sidebar. A BROKEN one is fresh too, and it
-    /// says so loudly: a hand-edited file that stopped parsing means every row
-    /// the person added is gone, and the symptom would be a sidebar quietly
-    /// back to the distro's defaults.
-    #[must_use]
-    pub fn read_from(dir: &Path) -> Preferences {
-        let path = dir.join(FILE);
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            return Preferences::fresh();
-        };
-        match serde_json::from_str::<Preferences>(&raw) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(
-                    path = %path.display(),
-                    error = %e,
-                    "the sidebar is unreadable; carrying on with the distro's"
-                );
-                Preferences::fresh()
-            }
-        }
+    /// The file as a [`ronoctua_store::Store`] in `dir`.
+    fn store_at(dir: &Path) -> ronoctua_store::Store<Preferences> {
+        ronoctua_store::Store::at(Some(dir.to_path_buf()), FILE)
     }
 
-    /// Writes them.
+    /// Reads the preferences from an explicit directory — the form a test uses.
+    ///
+    /// A missing file is a fresh sidebar. A BROKEN one keeps what still
+    /// reads: a row the person added that will not parse costs that row, and
+    /// the store says so — loudly, and in the repair ledger the belongings'
+    /// page shows. A file that is not JSON at all is a fresh sidebar, said
+    /// the same way.
+    #[must_use]
+    pub fn read_from(dir: &Path) -> Preferences {
+        store_at(dir).read()
+    }
+
+    /// Writes them — whole and renamed over, so a full disk or a kill
+    /// mid-write leaves the previous file rather than half of this one, and
+    /// keeping what the file holds that this machine does not know.
     ///
     /// # Errors
     ///
     /// The directory cannot be created, or the file cannot be written.
     pub fn write_to(dir: &Path, p: &Preferences) -> std::io::Result<()> {
-        let text = serde_json::to_string_pretty(p)?;
-        // Written whole and renamed over, so a full disk or a kill mid-write
-        // leaves the previous file rather than half of this one.
-        ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())
+        store_at(dir).write(p)
     }
 
     /// When the file last changed, for "has somebody edited it".

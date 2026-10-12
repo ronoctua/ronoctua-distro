@@ -421,7 +421,7 @@ pub fn installed(ctx: &Context, android: &Android) -> Vec<Installed> {
 }
 
 /// The packages inside Android right now.
-fn listed(ctx: &Context) -> Result<Vec<Listed>, Failure> {
+pub(crate) fn listed(ctx: &Context) -> Result<Vec<Listed>, Failure> {
     let ran = ask(ctx, app_list_argv())?;
     if let Some(refusal) = trouble_in(&ran.tail) {
         return Err(Failure {
@@ -447,6 +447,27 @@ fn tell(ctx: &Context, args: Vec<String>) -> Result<(), Failure> {
     ran.ok().map(|_| ())
 }
 
+/// Put an apk of the STORE into Android: what the reconciler does with a
+/// declared one. No question and no check of its own — Nix fetched it by its
+/// pin's hash, which is the check — and a CHANGE, rehearsed in `.#dev`.
+///
+/// # Errors
+///
+/// No Waydroid, or what waydroid said.
+pub(crate) fn install_apk(ctx: &Context, apk: &Path) -> Result<(), Failure> {
+    tell(ctx, app_install_argv(apk))
+}
+
+/// Take a package out of Android: what the reconciler does with one its
+/// ledger put in and nobody declares any more.
+///
+/// # Errors
+///
+/// No Waydroid, or what waydroid said.
+pub(crate) fn remove_package(ctx: &Context, package: &str) -> Result<(), Failure> {
+    tell(ctx, app_remove_argv(package))
+}
+
 /// Start a system unit and wait for it (a oneshot's start returns when it ends).
 fn start_unit(ctx: &Context, unit: &str) -> Result<(), Failure> {
     let systemctl = run::tool(ctx.tools.systemctl.as_ref())?;
@@ -458,7 +479,7 @@ fn start_unit(ctx: &Context, unit: &str) -> Result<(), Failure> {
 }
 
 /// Whether a session runs now.
-fn running(ctx: &Context) -> bool {
+pub(crate) fn running(ctx: &Context) -> bool {
     ask(ctx, status_argv()).is_ok_and(|r| session_running(&r.stdout))
 }
 

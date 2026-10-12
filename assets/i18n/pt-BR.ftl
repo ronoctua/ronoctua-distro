@@ -5714,7 +5714,7 @@ cmd-software-next-source = Mostrar a próxima fonte, ou a próxima prateleira de
 cmd-software-previous-source = Mostrar a fonte anterior, ou a prateleira de ícones anterior
 cmd-software-less = O valor anterior desta linha
 cmd-software-more = O próximo valor desta linha
-cmd-software-install = Instalar só para você, pela fonte mostrada
+cmd-software-install = Instalar só para você, pela fonte mostrada: declarado, para todos os seus computadores o terem — um teste fica só aqui
 cmd-software-try-it = Rodar sem instalar
 cmd-software-launch = Iniciar o programa
 cmd-software-update = Atualizar este agora
@@ -5753,7 +5753,7 @@ software-search = Procurar
 software-search-empty = digite um nome, ou o que ele faz
 software-filter = Mostrando
 software-heading-installed = Instalados para você
-software-note-yours = O que se instala aqui é só seu: o sistema e o repositório continuam como o flake diz.
+software-note-yours = O que se instala aqui é só seu. O que você declara também segue você: cada computador seu o instala na atualização dele.
 software-note-none = Nada instalado por você ainda. Os programas do sistema estão no lançador — { $keys }.
 software-note-none-here = Nada desta fonte.
 software-heading-trying = Em experiência
@@ -5800,7 +5800,6 @@ software-working-now = trabalhando
 software-working = { $percent } % · { $phase }
 software-row-launch = Abrir o programa
 software-no-window = sem janela: roda num terminal
-software-row-install = Instalar para você
 software-install-with = pelo { $source }
 software-recommended = recomendado
 software-size-download = { $size } para baixar
@@ -5821,10 +5820,6 @@ software-update-to = { $version } está pronta
 software-row-permissions = Permissões
 software-permissions-value = o que ele pode acessar
 software-row-edit = Mudar este web app
-software-row-declare = Tornar permanente
-software-declare-copies = copia a linha para o host.nix
-software-nothing-to-declare = Esta fonte não tem linha no flake; ele continua seu como está.
-software-note-declare-unfree = Não é software livre: só a linha não basta, a máquina também precisa permitir este pacote.
 software-row-remove = Remover deste computador
 software-heading-about = Sobre ele
 software-heading-details = Detalhes
@@ -5964,8 +5959,6 @@ software-dark-forced = Forçando um tema
 software-dark-none-forced = nenhum app força o GTK_THEME
 software-dark-forces = força o GTK_THEME — veja as permissões
 software-note-gtk-theme = O GTK_THEME faz um Flatpak perder o próprio estilo; nada aqui o define, e um app que o carrega aparece em vermelho.
-software-heading-declarative = Declarar
-software-note-declare = Para manter um programa depois de reinstalar, Tornar permanente copia a linha dele para o host.nix; a de um Flatpak vai em ronoctua.software.declaredFlatpaks, que o nix-flatpak instala.
 software-heading-permissions = O que { $app } pode acessar
 software-note-no-permissions = Não pede nada além da própria janela.
 software-note-permissions-restart = Uma mudança chega ao app na próxima vez que ele abrir.
@@ -8236,17 +8229,14 @@ cmd-security-right = O próximo dedo a cadastrar
 cmd-security-rule-add = Acrescentar uma regra de firewall
 cmd-security-rule-delete = Tirar a regra ou o dedo sob o cursor
 cmd-security-enrol = Cadastrar o dedo escolhido
-cmd-security-password = Sua senha, para o administrador
 cmd-security-rule = Uma regra de firewall, em palavras
 cmd-security-vt-key = Guardar sua chave do VirusTotal
 cmd-security-vt-forget = Esquecer sua chave do VirusTotal
 cmd-security-home = Tratar como de casa a rede que acabou de se conectar
-ask-security-password = Sua senha
 ask-security-rule = Regra (permitir tcp 8080 de 192.168.1.0/24 em wlan0 casa)
 ask-security-vt-key = Sua chave de API do VirusTotal
 # As mudanças do gerenciador de arquivos que só o administrador faz (dono,
 # grupo, permissões), pela mesma porta do sudo.
-ask-files-root-password = Sua senha, para o que só o administrador pode mudar
 ask-security-check-password = Senha a checar (só cinco caracteres da impressão dela saem desta máquina)
 ask-security-check-email = Endereço de e-mail a checar (ele vai para o XposedOrNot)
 ask-security-check-file = Arquivo a checar (a impressão dele vai para o VirusTotal)
@@ -8332,14 +8322,14 @@ security-sudo-asked = pedida toda vez
 security-sudo-not-asked-until = não pedida até { $time }
 security-sudo-end = Voltar a pedir agora
 security-sudo-open-for = Não pedir por { $minutes } minutos
-security-sudo-note = Pede sua senha antes, e se encerra sozinha na hora escolhida, quando a máquina dorme e na próxima partida.
+security-sudo-note = Pede sua senha antes, e se encerra sozinha na hora escolhida — reiniciar não a encerra — ou quando você a encerra.
 security-sudo-recent = Nesta semana:
 security-finger-reader = Leitor
 security-finger-enrolled = cadastrado
 security-finger-enrol = Cadastrar
 security-finger-ring-note = As setas para os lados escolhem o dedo; pede sua senha antes, depois alguns toques.
-security-finger-sudo = Dedos para o administrador num terminal
-security-finger-sudo-note = Só num terminal: aqui, e em qualquer outro lugar, é a sua senha.
+security-finger-sudo = Dedos para o administrador
+security-finger-sudo-note = Num terminal e na barra do sudo um dedo responde no lugar da sua senha, que sempre responde também; nunca no login.
 security-finger-ask-remove = Remover seu { $finger }? Ele não poderá ser usado até ser cadastrado de novo.
 security-finger-left-thumb = polegar esquerdo
 security-finger-left-index-finger = indicador esquerdo
@@ -8460,7 +8450,7 @@ security-about-rule = Mudar esta regra, em palavras; a tecla de apagar a tira
 security-about-allow-home = Permite esta porta nas redes de casa, com sua senha
 security-about-allow-public = Permite esta porta também nas redes públicas, com sua senha
 security-about-finger = Remove este dedo, depois de uma pergunta
-security-about-finger-sudo = Deixa um dedo responder ao administrador num terminal, com sua senha
+security-about-finger-sudo = Deixa um dedo responder ao administrador — num terminal e na barra do sudo — no lugar da sua senha
 security-about-report = Abre o relatório do arquivo na página do VirusTotal
 security-about-url = Abre a página no seu navegador
 security-about-answer = Responde à pergunta
@@ -8740,6 +8730,7 @@ belongings-due-now = agora
 belongings-no-reminder = sem lembretes
 belongings-kept-now = Guardado agora
 belongings-files-weigh = { $n ->
+    [0] nenhum arquivo, { $size }
     [one] um arquivo, { $size }
    *[other] { $n } arquivos, { $size }
     }
@@ -8747,7 +8738,7 @@ belongings-last-run = Última execução
 belongings-first-run = Esta máquina ainda não sincronizou com este repositório. A primeira sincronização restaura o que o repositório guarda; onde um arquivo daqui difere, o lado do repositório já vem escolhido.
 belongings-prefs-refused = O belongings.json não se lê como configuração, então nada é escrito por cima dele: corrija à mão, ou apague.
 belongings-no-places = Esta sessão não tem home ou diretório de runtime, e os pertences não têm onde morar.
-belongings-outcome-synced = Em dia: { $pulled } escritos aqui, { $pushed } enviados, { $deleted } apagados.
+belongings-outcome-synced = Em dia — escritos aqui: { $pulled }; enviados: { $pushed }; apagados: { $deleted }.
 belongings-outcome-waiting = { $n ->
     [one] Esperando sua decisão sobre um conflito.
    *[other] Esperando suas decisões sobre { $n } conflitos.
@@ -8796,8 +8787,7 @@ belongings-decide-take-remote = Levar o do repositório
 belongings-decide-keep-both = Manter os dois
 belongings-diff-title = Diferença em { $name }
 belongings-diff-note = As linhas que começam com - são desta máquina; as que começam com + são do repositório.
-belongings-kept = O que é guardado
-belongings-what-leaks = Tudo é cifrado com a sua senha antes de sair desta máquina. O repositório mostra quantos arquivos há, os tamanhos e quando cada sincronização aconteceu; nunca os nomes, os lugares ou o conteúdo.
+belongings-what-leaks = Tudo, menos a parte em claro mais abaixo, é cifrado com a sua senha, de forma pós-quântica, antes de sair desta máquina, cortado em pedaços. Disso, o repositório mostra quantos pedaços há, os tamanhos, que conteúdo se repete e quando cada sincronização aconteceu; nunca os nomes dos arquivos, os lugares ou o conteúdo.
 belongings-added-by-you = acrescentado por você
 belongings-added-elsewhere = acrescentado em outra máquina
 belongings-taken-out = tirado por você
@@ -8864,7 +8854,7 @@ belongings-refused-needs-access = O repositório quer um acesso que esta máquin
 belongings-refused-refused = O repositório recusou a chave ou o token desta máquina.
 belongings-refused-unreachable = Não foi possível chegar ao repositório.
 belongings-refused-raced = Outra máquina continuou sincronizando enquanto esta sincronizava; tente de novo.
-belongings-refused-not-ours = Esse repositório não é de pertences, ou é de uma versão mais nova.
+belongings-refused-not-ours = Esse repositório não é um repositório de pertences que este sistema lê.
 belongings-refused-empty = O repositório está vazio: a primeira sincronização define a senha.
 belongings-refused-corrupt = Algo no repositório não se decifra ou não se lê.
 belongings-refused-undecided = Um conflito ainda está sem decisão.
@@ -8890,7 +8880,7 @@ transfers-engine-belongings = pertences
 transfers-work-belongings = pertences
 # A décima quinta pergunta do instalador.
 inst-belongings = Repositório dos pertences
-inst-belongings-help = Opcional. O repositório privado em que sua configuração fica guardada, cifrada: git@servidor:caminho, ssh://… ou https://…, nunca com senha dentro. A primeira sincronização depois da instalação devolve as suas configurações.
+inst-belongings-help = O repositório privado em que sua configuração fica guardada, cifrada: git@servidor:caminho, ssh://… ou https://…, nunca com senha dentro. As suas declarações são instaladas com a máquina, e as suas configurações restauradas na home dela.
 inst-step-belongings = Escrever o repositório dos pertences na sua home
 
 # A lookup or a directory whose host consent.json does not let: nothing
@@ -9389,3 +9379,1313 @@ player-trouble-tag-remux-would-drop = Este arquivo é grande demais para ser gra
 player-origin-matroska-track-of = Etiquetas Matroska do fluxo { $index } · { $kind }
 player-origin-matroska-track-lang = Etiquetas Matroska do fluxo { $index } · { $kind } · { $lang }
 player-origin-matroska-track-uid = Etiquetas Matroska da trilha de UID { $uid }
+
+## ── the 2026-10-05 wave ─────────────────────────────────────────────────
+## One region per package, each starting at its anchor.
+
+## ── anchor: L01 ──
+
+## ── anchor: L02 ──
+belongings-refused-not-post-quantum = O servidor do repositório não ofereceu troca de chaves pós-quântica, e os pertences exigem uma: nada foi buscado nem enviado.
+files-git-why-not-post-quantum = O servidor do remoto não ofereceu troca de chaves pós-quântica, e esta conexão exige uma: nada foi enviado.
+files-git-why-no-common-key-exchange = O servidor do remoto só oferece trocas de chaves antigas, que esta máquina não aceita mais: ele foi alcançado, e nada foi enviado.
+
+## ── anchor: L03 ──
+
+## ── anchor: L04 ──
+## Why a program of the distro cannot be declined (`assets/distro-apps.nix`, `essential`).
+software-essential-why-the-login-shell = É o shell de login: sem ele, ninguém conseguiria entrar nesta máquina.
+
+## ── anchor: L05 ──
+## The machine's life (`ronoctua-machine`): why an apply, a migration, a bless or a hold did not do what it was asked (`machine-refused-<why>`).
+machine-refused-not-root = Só root muda a máquina: nada foi feito.
+machine-refused-busy = Outra mudança nesta máquina está em andamento: tente de novo quando ela acabar.
+machine-refused-nothing-to-migrate = Esta máquina já tem o próprio flake: não há o que migrar.
+machine-refused-build-failed = O sistema novo não foi construído. Nada mudou: a máquina roda o que rodava, e a pasta dela volta a dizer isso.
+machine-refused-switch-failed = A troca para o sistema novo falhou. A próxima partida o tenta uma vez, e volta ao último sistema bom se ele não subir.
+machine-refused-did-not-boot = Este é o sistema que não subiu quando foi tentado, ou que foi desfeito. A máquina fica no que roda até chegar uma revisão mais nova da distro.
+machine-refused-last-good-would-fall-out = Mais um sistema tiraria o último bom do menu de boot. Reinicie antes, para o sistema em teste ser confirmado.
+machine-refused-held = A máquina está retida numa revisão diferente da que a pasta dela nomeia: nada foi construído.
+machine-refused-unreadable = Um arquivo da pasta da máquina não pode ser lido.
+machine-refused-failed = Um programa de que a máquina precisava falhou; o diário diz qual.
+## How the boot trial stands (`machine-trial-<outcome>`).
+machine-trial-pending = O sistema novo sobe pela primeira vez no próximo reinício. Se ele não subir, a máquina volta sozinha ao último sistema bom.
+machine-trial-good = O sistema novo subiu bem: agora ele é o último bom.
+machine-trial-failed = O sistema novo não subiu, ou foi desfeito: a máquina está de volta no último sistema bom.
+machine-trial-boot-identical = O sistema novo sobe exatamente como o último bom: não precisa de reinício para merecer confiança.
+## Why the new system has no boot trial, until it has started once (`machine-no-trial-<why>`).
+machine-no-trial-no-efi-variables = As variáveis de boot desta máquina não podem ser escritas: o sistema novo não tem volta além do menu de boot.
+machine-no-trial-not-in-menu = O menu de boot não nomeia o sistema novo ou o último bom de um jeito que o teste possa usar: o sistema novo não tem volta além do menu de boot.
+machine-no-trial-no-last-good = Ainda não se sabe de nenhum sistema que tenha subido bem nesta máquina: o sistema novo não tem volta além do menu de boot.
+
+## ── anchor: L06 ──
+
+## ── anchor: L07 ──
+belongings-reason-system-managed = um link que o sistema cria: em outra máquina ele apontaria para o nada
+belongings-repair-why-unknown-variant = uma palavra que esta máquina não conhece — quase sempre de uma máquina mais nova
+belongings-repair-why-wrong-type = um valor do tipo errado
+belongings-repair-why-missing = um valor que faltava
+belongings-repair-why-invalid = um valor que não é permitido
+belongings-repair-part-not-read = Parte do { $file } não se lê aqui: ela continua no arquivo como está escrita, e esta máquina segue sem ela.
+
+## ── anchor: L08 ──
+belongings-refused-not-let = O host do repositório ainda não pode ser consultado: permita-o na linha abaixo de Sincronizar. Nada foi buscado nem enviado.
+belongings-refused-newer = O repositório está num formato mais novo do que esta máquina lê: atualize esta máquina primeiro.
+belongings-op-compact = a compactação do histórico
+belongings-outcome-compacted = O histórico foi compactado: { $before } viraram { $after } aqui. O host pode guardar as cópias antigas até a própria limpeza.
+belongings-outcome-nothing-to-compact = Não havia o que compactar: todas as versões do histórico são { $days ->
+        [one] do último dia
+       *[other] dos últimos { $days } dias
+    }, e não sobrou nenhum pedaço.
+belongings-consent-for = Sincronizar os pertences consulta o repositório neste host.
+belongings-invalid-unnamed-host = O host precisa ser um nome ou um endereço IPv4: um endereço IPv6 ou um nome com sublinhado não pode ter permissão de consulta.
+
+## ── anchor: L09 ──
+belongings-op-sign = a assinatura da sua parte em claro
+belongings-held-unsigned = retido: a parte em claro do repositório não traz assinatura
+belongings-held-no-key = retido: não há aqui chave para conferir — fixe a sua abaixo
+belongings-held-bad-signature = retido: não foi assinado pela sua chave
+belongings-held-rolled-back = retido: uma versão mais antiga que a que esta máquina já aceitou
+belongings-held-not-as-signed = retido: não é o que a sua chave assinou
+belongings-root-refused-not-signed = O que foi entregue não trazia assinatura, e esta máquina ficou com os dados que tinha.
+belongings-root-refused-bad-signature = Não foi assinado pela chave em que esta máquina confia, e ela ficou com os dados que tinha.
+belongings-root-refused-rolled-back = Uma versão mais antiga que a que esta máquina já aceitou, e ela ficou com os dados que tinha.
+belongings-kept-back-not-as-signed = mantido como esta máquina o tem: não é o que você assinou
+belongings-kept-back-no-key-pinned = mantido como esta máquina o tem: não há chave fixada aqui
+belongings-unsigned = mudou aqui e espera a sua senha para ser assinado
+belongings-sign = Assinar agora
+cmd-belongings-sign = Assinar agora, com a sua chave e sem rede, o que você mudou aqui, para que esta máquina e as outras o aceitem
+ask-belongings-sign = Senha dos pertences, para assinar
+cmd-software-sign = Assinar com a senha dos pertences uma mudança do que você declarou, para que ela chegue agora a esta máquina e às outras
+ask-software-sign = Senha dos pertences, para assinar esta mudança
+belongings-signature = A sua assinatura
+belongings-signature-note = O que viaja em claro é assinado com a sua chave, criada com o seu repositório e guardada sob a sua senha. Uma máquina só aceita sozinha o que essa chave assinou — a chave que ela fixou, nunca a cópia que está no repositório; o resto espera, com o motivo.
+belongings-signature-key = A sua chave
+belongings-signature-key-unknown = ainda não conhecida aqui: uma sincronização com a sua senha a mostra
+belongings-signature-machine = Esta máquina
+belongings-signature-pinned = confia na sua chave
+belongings-signature-pinned-some = confia numa chave: uma sincronização com a sua senha diz se é a sua
+belongings-signature-other = confia em outra chave: fixe a sua
+belongings-signature-none = ainda não confia em nenhuma chave: as suas opções e os seus módulos do cérebro esperam
+belongings-signature-last = Última entrega
+belongings-signature-refused = recusada
+belongings-signature-sync-first = Sincronize antes uma vez com a sua senha: é isso que mostra a sua chave aqui.
+belongings-signature-already = Esta máquina já confia na sua chave.
+belongings-pinning = Fixação
+belongings-pinning-now = perguntando ao sudo…
+belongings-pinning-done = esta máquina agora confia na sua chave
+belongings-pinning-not = não aceita: o diário diz por quê
+belongings-pinning-busy = Uma fixação já está a caminho.
+belongings-pin = Fixar a sua chave nesta máquina
+cmd-belongings-pin = Fixar nesta máquina, pelo sudo, a chave que a sua senha abriu: a máquina passa a aceitar sozinha o que essa chave assinou
+inst-step-plain-passphrase = Passar a senha à cópia das suas declarações
+inst-step-pin = Fixar a sua chave de assinatura nesta máquina
+belongings-refused-plain-too-large = Grande demais para guardar em claro.
+belongings-op-sync-plain = a sincronização da parte em claro
+belongings-op-restore = a restauração
+belongings-op-probe = a verificação do acesso
+belongings-op-init = a primeira sincronização
+belongings-op-verify-passphrase = a verificação da senha
+belongings-outcome-plain-synced = A parte em claro está em dia — escritos aqui: { $pulled }; enviados: { $pushed }.
+belongings-decided-take-merged-ours = mesclado, o desta máquina onde conflitam
+belongings-decided-take-merged-theirs = mesclado, o do repositório onde conflitam
+belongings-decide-take-merged-ours = Mesclar, mantendo o desta máquina onde conflitam
+belongings-decide-take-merged-theirs = Mesclar, pegando o do repositório onde conflitam
+cmd-belongings-take-merged-ours = Mesclar o conflito, mantendo o lado desta máquina onde os dois conflitam
+cmd-belongings-take-merged-theirs = Mesclar o conflito, pegando o lado do repositório onde os dois conflitam
+belongings-reason-person-data = o que você declarou: programas, máquinas, opções
+belongings-reason-brain-module = seus próprios módulos do cérebro
+belongings-plain-note = Guardado em claro, sem cifra: a máquina lê isso antes de alguém digitar a senha. Quem lê o repositório lê isso; quem escreve nele não consegue fazer uma máquina aceitar uma mudança que a sua chave não assinou — ela espera, com o motivo. Um arquivo acima de { $size } fica de fora.
+belongings-plain-already = Isso já viaja, em claro, com a parte em claro.
+belongings-no-merge-here = Nenhuma mescla chegou a este conflito: mantenha um lado, ou pegue o outro.
+belongings-sides-unnamed = aqui: { $here } · repositório: { $there }
+belongings-plain-conflicts = { $n ->
+        [one] Um arquivo dela mudou aqui e no repositório: a próxima sincronização pergunta a você.
+       *[other] { $n } arquivos dela mudaram aqui e no repositório: a próxima sincronização pergunta a você.
+    }
+belongings-merge-hunks = { $n ->
+        [one] Mesclado, mas uma parte do texto mudou dos dois lados.
+       *[other] Mesclado, mas { $n } partes do texto mudaram dos dois lados.
+    }
+belongings-merge-fields = { $n ->
+        [one] Mesclado, mas um campo mudou dos dois lados: { $fields }
+       *[other] Mesclado, mas { $n } campos mudaram dos dois lados: { $fields }
+    }
+
+## ── anchor: L10 ──
+# THE 2026-10-11 WAVE, the sudo door's root side. Why a root gesture
+# did not happen (`ronoctua_security::Why`), beside the others.
+security-refusal-cancelled = Cancelado: nada foi feito.
+security-refusal-no-key = Nenhuma chave de segurança está conectada.
+# The passwordless window's longer spans, and the one with no limit.
+security-sudo-open-for-hours = Não pedir por { $hours } horas
+security-sudo-open-no-limit = Não pedir até eu mandar
+security-sudo-not-asked-no-limit = não pedida até você encerrar
+security-sudo-until-you-end-it = você encerrar
+security-sudo-no-limit = sem prazo
+hint-security-no-limit = O administrador não pede senha até você encerrar; um clique abre onde isso se encerra
+belongings-op-forget = o esquecimento da chave da sessão
+# The predefined targets, by id (`assets/belongings.nix`'s `targets`): what the
+# list of what goes to the repository names them.
+belongings-target-ssh = suas chaves e configurações de SSH
+belongings-target-git = as configurações do git e suas chaves de segurança registradas
+belongings-target-gnupg = seu chaveiro do GnuPG
+belongings-target-shell = o arquivo próprio do seu shell
+belongings-target-doom = o arquivo local do Doom Emacs
+# Beside the targets and the passphrase: what the passphrase guards now.
+belongings-targets-note = Suas chaves de SSH, seu chaveiro do GnuPG e suas chaves de segurança viajam cifrados sob esta senha: agora ela os guarda também, então escolha uma senha forte.
+# A name a target leaves out: a socket, a lock, an agent's seed.
+belongings-reason-transient = o momento desta máquina: um socket, uma trava, uma semente
+# What a sync that brought a target's files offers ("no" drawn first).
+belongings-offer-ssh-signing = Assinar seus commits e tags do git com { $key }? Toda máquina que tem esta chave vai assinar; as outras seguem sem assinatura.
+belongings-offer-pam-u2f = Trazer para esta máquina as chaves de segurança que você registrou nas outras? Cada uma responde ao sudo aqui no lugar da senha, que continua valendo.
+# The identity kept for the session (`keep_unlocked`).
+belongings-unlock-switch = Lembrar a senha durante esta sessão
+belongings-unlock-note = Guardada na memória do kernel, nunca no disco, até você sair, a máquina dormir ou passarem { $hours } horas.
+belongings-unlock-kept = Lembrada até { $until }: a sincronização não pergunta nada.
+
+## ── anchor: L11 ──
+
+## ── anchor: L12 ──
+cmd-private-open = Abrir o /private, a pasta cifrada só sua
+cmd-private-lock = Trancar o /private agora
+cmd-private-show = Mostrar o /private no gerenciador de arquivos
+cmd-private-passphrase = A senha do /private
+cmd-private-new-passphrase = Uma senha nova para o /private
+cmd-private-repeat-passphrase = A mesma senha outra vez
+cmd-private-cap = Até quanto o /private pode crescer (64G, 1,5T…)
+security-heading-private = /private
+security-private-about = Uma pasta que só você abre: cifrada com uma senha só dela, ela ocupa no disco só o que guarda e se tranca sozinha quando a máquina dorme.
+security-private-missing = Esta máquina não tem as unidades do cofre, então aqui não existe /private.
+security-private-unreadable = Não deu para ler o que o /private está fazendo.
+security-private-create = Criar o /private
+security-private-create-value = até { $size }
+security-private-state = Estado
+security-private-locked = trancado
+security-private-open-at = aberto, em /private
+security-private-suspended = suspenso em uso: a chave saiu da memória ao dormir
+security-private-open = Abrir com a senha
+security-private-open-key = Abrir com a chave de segurança
+security-private-resume = Retomar com a senha
+security-private-lock = Trancar agora
+security-private-show = Mostrar no gerenciador de arquivos
+security-private-size = No disco
+security-private-size-value = { $real } de até { $cap }
+security-private-grow = Aumentar o teto
+security-private-cipher = Cifra
+security-private-cipher-value = LUKS2, AES-XTS com chave de 512 bits, argon2id
+security-private-key = Chave de segurança
+security-private-key-enrolled = cadastrada: um toque abre o /private
+security-private-enrol = Cadastrar uma chave de segurança
+security-private-forget = Esquecer a chave de segurança
+security-private-passphrase = Trocar a senha
+security-private-note = Ele se tranca sozinho quando a máquina dorme. Se algo ainda o estiver usando, ele é suspenso: a chave sai da memória, e a senha o retoma.
+security-private-overcommit = O teto é maior que o espaço livre neste disco: se o disco encher, gravar no /private falha.
+security-private-busy = Trabalhando no /private…
+security-private-touch = Toque agora na sua chave de segurança.
+private-refused-absent = Ainda não existe /private: crie primeiro.
+private-refused-exists = Isso já existe.
+private-refused-wrong-passphrase = Essa não é a senha do /private.
+private-refused-no-key = Nenhuma chave de segurança respondeu: conecte-a e toque nela quando piscar.
+private-refused-busy = Algo ainda está usando o /private: feche o que estiver aberto nele primeiro.
+private-refused-no-room = Este disco não tem o espaço que esse teto pede.
+private-refused-invalid = Isso não é algo que o /private aceita.
+private-refused-failed = O /private não conseguiu; o log do sistema diz por quê.
+echo-private-created = O /private está pronto, e aberto.
+echo-private-opened = O /private está aberto.
+echo-private-locked = O /private está trancado.
+echo-private-key-enrolled = A chave de segurança agora abre o /private.
+echo-private-key-forgotten = A chave de segurança não abre mais o /private.
+echo-private-passphrase-changed = O /private está com a senha nova.
+echo-private-grown = O teto do /private subiu.
+echo-private-not-a-size = Isso não é um tamanho: escreva como 64G ou 1,5T.
+echo-private-too-small = O /private precisa de um teto de pelo menos { $size }.
+echo-private-mismatch = As duas senhas são diferentes, então nada mudou.
+echo-private-already-locked = O /private já está trancado.
+files-private-locked = { $name } está trancado: abrir pede a senha, ou um toque na chave.
+files-private-open = { $name } está aberto: trancar o fecha até a senha abri-lo de novo.
+security-about-private-create = Pergunta até quanto pode crescer e uma senha para ele, e então o cria.
+security-about-private-open-key = Abre com um toque na chave cadastrada.
+security-about-private-grow = Pede um teto maior; no disco ele continua ocupando só o que guarda.
+security-about-private-enrol = Pede a senha, e então um toque na chave que vai cadastrar.
+security-about-private-forget = A chave deixa de abri-lo; a senha continua.
+security-about-private-passphrase = Pede a senha atual, e depois a nova duas vezes.
+security-now-private-suspended = O /private está suspenso em uso
+files-private-withheld-shut = O /private não está aberto: abra-o, ou retome-o, com a senha dele para ver o que há dentro.
+files-private-withheld-silent = O /private não está respondendo: foi suspenso em uso, e a senha dele o retoma.
+
+## ── anchor: L13 ──
+transfers-engine-incus = Incus
+transfers-work-incus-launch = criar uma instância
+transfers-work-incus-image-copy = copiar uma imagem
+transfers-work-incus-export = exportar uma instância
+transfers-work-incus-import = importar uma instância
+transfers-work-incus-publish = publicar uma instância como imagem
+transfers-work-incus-push = enviar um arquivo para uma instância
+transfers-work-incus-pull = tirar um arquivo de uma instância
+transfers-work-incus = Incus
+incus-refused-no-incus = O Incus não faz parte desta instalação, ou o daemon dele não está rodando.
+incus-refused-not-in-group = O Incus só responde ao grupo incus-admin; saia da sessão e entre de novo para o grupo valer.
+incus-refused-gone = Não está mais lá.
+incus-refused-busy = O Incus ainda está ocupado com isso; tente de novo quando terminar.
+incus-refused-not-let = Esse servidor, ou um host de onde ele baixa, ainda não foi permitido; permita-os primeiro.
+incus-refused-invalid = O Incus não aceita esse nome, caminho ou limite — ou o nome já está em uso, ou o arquivo já existe.
+incus-refused-failed = O Incus não conseguiu; o log do sistema diz por quê.
+
+## ── anchor: L14 ──
+
+## ── anchor: L15 ──
+cmd-dev-clone = Clonar o repositório da distro numa pasta
+ask-dev-clone = Clonar de { $host } em
+dev-clone-cloning = { $host } agora está permitido. Clonando a distro de { $host } em { $folder }…
+dev-clone-running = Um clone em { $folder } ainda está rodando.
+dev-clone-done = A distro está em { $folder }.
+dev-clone-failed = Nada foi clonado em { $folder }: { $why }
+dev-clone-occupied = Já há algo em { $folder }: nada foi clonado.
+dev-clone-no-address = Esta construção não sabe o endereço da distro, então não há o que clonar.
+dev-clone-no-folder = Nenhuma pasta foi dada: nada foi clonado.
+dev-clone-not-let = { $host } não pôde ser permitido, então nada foi consultado.
+dev-clone-unheard = O rodapé não ouviria a resposta do clone, então ele não começou.
+dev-clone-unkept-no-home = Não há pasta pessoal onde guardar o consentimento: nada foi clonado.
+dev-clone-unkept-unparseable = O arquivo de consentimento (consent.json) não lê; ficou como estava, e nada foi clonado.
+dev-clone-unkept-unwritable = O arquivo de consentimento não pôde ser gravado: nada foi clonado.
+
+## ── anchor: L16 ──
+inst-step-cache-token = Ler o token do seu cache binário privado para a instalação
+inst-step-cache-netrc = Deixar esta máquina ler o seu cache binário privado
+# O CACHE BINÁRIO DA PESSOA — uma página da vista da atualização (`c`, `LEADER s u c`),
+# nas duas portas, e o que a instalação e o netrc do root dizem dele.
+binary-cache-open = cache binário
+cmd-binary-cache-open = O seu cache binário: o seu próprio cache no Cachix, do qual esta máquina baixa e para o qual envia depois de cada atualização
+cmd-binary-cache-name = Nomeia o seu cache binário — o nome, depois a chave pública
+cmd-binary-cache-key = Dá ao seu cache binário a chave pública, exatamente como o cachix.org a mostra
+cmd-binary-cache-token = Dá ao seu cache binário o token de envio, guardado cifrado com os seus pertences
+cmd-binary-cache-netrc = Deixa esta máquina ler o seu cache binário privado: o netrc do root, gravado pelo sudo
+ask-binary-cache-name = Nome do seu cache no Cachix
+ask-binary-cache-key = Chave pública de { $name }
+ask-binary-cache-token = Token de envio (nunca aparece)
+binary-cache-heading = O seu cache binário
+binary-cache-row-cache = cache
+binary-cache-row-key = chave pública
+binary-cache-row-visibility = quem lê
+binary-cache-row-token = token de envio
+binary-cache-row-access = esta máquina lê
+binary-cache-row-machine = nesta máquina
+binary-cache-row-last = último envio
+binary-cache-row-forget-token = esquecer o token de envio nesta máquina
+binary-cache-row-remove = deixar de usar este cache
+binary-cache-about-cache = O seu próprio cache no Cachix — nunca o da distro, que não tem um. Esta máquina baixa dele antes do cache.nixos.org, e envia para ele depois de cada atualização que a trocou. A escolha viaja com os seus pertences para as suas outras máquinas. Escolhê-la pede o nome, depois a chave.
+binary-cache-about-key = A chave de assinatura do cache, exatamente como o cachix.org a mostra na página dele: cada download dele é conferido contra esta chave. Escolhê-la a pede.
+binary-cache-about-visibility = Um cache público recebe só as saídas da própria distro — nunca um caminho seu, nunca um programa não livre; qualquer um pode baixá-las. Um cache privado recebe o sistema inteiro desta máquina, e lê-lo exige o seu token. Escolhê-la alterna entre os dois.
+binary-cache-about-token = O token que o Cachix dá para enviar. Fica cifrado nos seus pertences, legível só por você, e nunca aparece, nunca vai numa linha de comando nem num log. Escolhê-la pede um novo.
+binary-cache-about-access = Um cache privado é lido pelo Nix desta máquina por um netrc que só o root lê, com o seu token. Ele é gravado pelo sudo quando você dá o token ou torna o cache privado; escolhê-la o grava de novo.
+binary-cache-about-machine = O que esta máquina usa agora. Um cache nomeado aqui chega a esta máquina na próxima atualização, quando a cópia assinada dos seus pertences é aplicada.
+binary-cache-about-last = O que o último envio levou, ou por que foi recusado. Um envio segue cada atualização que trocou esta máquina, uma vez.
+binary-cache-about-forget-token = O token sai desta máquina e dos seus pertences na próxima sincronização; nada mais é enviado até você dar um novo.
+binary-cache-about-remove = Esta máquina deixa de baixar do cache e de enviar para ele na próxima atualização. O cache em si, no Cachix, fica como está.
+binary-cache-none = nenhum
+binary-cache-key-none = nenhuma
+binary-cache-public = público: as saídas da própria distro, para qualquer um
+binary-cache-private = privado: o sistema desta máquina, lido com o seu token
+binary-cache-token-none = nenhum: nada é enviado
+binary-cache-token-kept = guardado, cifrado com os seus pertences
+binary-cache-token-refused = não usado
+binary-cache-copy-unreadable = não lê
+binary-cache-copy-newer = de um formato mais novo
+binary-cache-down = próxima linha
+about-binary-cache-down = Põe o cursor na próxima linha da página do cache binário.
+binary-cache-up = linha anterior
+about-binary-cache-up = Põe o cursor na linha anterior da página do cache binário.
+binary-cache-enter = mudar
+about-binary-cache-enter = Faz o que a linha sob o cursor diz: pede um nome, uma chave ou o token, alterna quem lê o cache, grava o netrc do root, ou pergunta antes de um gesto que não volta.
+binary-cache-steps = os passos
+about-binary-cache-steps = De volta aos passos da atualização.
+binary-cache-access-written = sim, pelo netrc do root
+binary-cache-access-missing = não: o netrc do root não está gravado
+binary-cache-machine-in-use = em uso, antes do cache.nixos.org
+binary-cache-machine-next = a partir da próxima atualização
+binary-cache-machine-leaving = ainda o de antes, até a próxima atualização
+binary-cache-machine-none = nenhum cache
+binary-cache-last-never = nunca
+binary-cache-last-pushed = { $when }: { $paths ->
+        [one] um caminho
+       *[other] { $paths } caminhos
+    } ({ $size })
+binary-cache-last-refused = { $when }: nada enviado
+binary-cache-why-no-cache = Esta máquina não nomeia cache binário.
+binary-cache-why-no-token = Não há token de envio nesta máquina.
+binary-cache-why-token-open = O arquivo do token é legível por outra pessoa, então não é usado: dê o token de novo.
+binary-cache-why-not-a-token = Isso não é um token do Cachix.
+binary-cache-why-not-let = Um host que o envio alcança não está permitido no seu consentimento: nomear o cache de novo os permite.
+binary-cache-why-nothing-new = Nenhuma atualização trocou esta máquina desde o último envio: não havia nada novo para enviar.
+binary-cache-why-no-tools = Esta máquina não tem cachix ou nix onde o envio os procura.
+binary-cache-why-store-failed = O Nix não respondeu sobre o store.
+binary-cache-why-cachix-failed = O Cachix recusou o envio, ou ele não terminou: a saída da atualização diz por quê.
+binary-cache-why-unwritable = O arquivo não pôde ser gravado.
+binary-cache-why-newer = O seu arquivo de opções é de um formato mais novo do que esta máquina lê: atualize esta máquina primeiro.
+binary-cache-why-unreadable = O seu arquivo de opções não lê, então não é regravado.
+binary-cache-confirm-forget = Esquecer o token de envio nesta máquina? Ele sai dos seus pertences também, e nada é enviado até você dar um novo.
+binary-cache-confirm-remove = Deixar de usar este cache binário nas suas máquinas? Cada uma deixa de baixar dele e de enviar para ele na próxima atualização.
+binary-cache-answer-no = não, manter
+binary-cache-answer-yes-forget = sim, esquecer o token
+binary-cache-answer-yes-remove = sim, deixar de usar
+binary-cache-said-not-a-name = Um nome do Cachix é letras minúsculas, dígitos e hífens, começando por letra ou dígito.
+binary-cache-said-not-the-key = Essa chave não é deste cache: ela é o nome, .cachix.org-1: e 44 caracteres, como o cachix.org a mostra.
+binary-cache-said-not-let = O cache foi nomeado, e o consentimento para os hosts dele não pôde ser guardado: nada será enviado até ser.
+binary-cache-said-named = O cache é { $name }; esta máquina o usa a partir da próxima atualização.
+binary-cache-said-public = O cache é público: recebe só as saídas da própria distro.
+binary-cache-said-private = O cache é privado: recebe o sistema desta máquina, lido com o seu token.
+binary-cache-said-token = O token de envio está guardado, cifrado com os seus pertences.
+binary-cache-said-forgotten = O token de envio foi esquecido nesta máquina.
+binary-cache-said-removed = Nenhum cache binário mais, a partir da próxima atualização.
+binary-cache-said-netrc-written = Esta máquina lê o seu cache privado agora: o netrc do root está gravado.
+binary-cache-said-netrc-removed = O netrc do root para o cache se foi: nada guarda o seu token lá mais.
+binary-cache-said-netrc-footer = O netrc do root é pedido na barra do sudo, acima da modeline, se o sudo precisar de você.
+
+## ── anchor: L17 ──
+transfers-engine-stick = pendrive do instalador
+transfers-work-stick-fetch = baixar o instalador
+transfers-work-stick-write = gravar o instalador num pendrive
+group-stick = pendrive do instalador
+mode-stick = pendrive do instalador
+cmd-stick-open = O instalador num pendrive: a versão mais recente e os seus drives
+cmd-stick-window = O instalador num pendrive, numa janela
+cmd-stick-down = A próxima linha
+cmd-stick-up = A linha anterior
+cmd-stick-enter = Faz o que a linha diz: permitir, baixar, escolher o drive, responder
+cmd-stick-reread = Pergunta de novo ao GitHub a versão mais recente, e relê os drives quando o udisks não respondeu
+stick-down = baixo
+stick-up = cima
+stick-enter = escolher
+stick-reread = perguntar de novo
+sidebar-write-installer = gravar o instalador aqui
+sidebar-does-write-installer = abre o pendrive do instalador neste drive: o drive inteiro é gravado, depois de uma pergunta cuja primeira resposta é não
+stick-title = Pendrive do instalador
+stick-heading-release = O instalador
+stick-heading-drives = Drives
+stick-heading-write = A última gravação
+stick-consent-for = Saber a versão mais recente e baixar o instalador precisa do GitHub.
+stick-asking = Perguntando ao GitHub a versão mais recente…
+stick-retry = Perguntar de novo
+stick-version = Versão
+stick-published = Publicada
+stick-size = Tamanho
+stick-image = Imagem
+stick-image-cached = baixada e conferida, no cache
+stick-image-absent = ainda não baixada
+stick-fetch = Só baixar
+stick-fetch-value = a imagem, para o cache, sem gravar drive nenhum
+stick-drives-reading = Lendo os drives…
+stick-drives-down = O udisks não responde, então os drives não podem ser lidos.
+stick-drives-none = Nenhum pendrive nem cartão de memória está conectado.
+stick-drive-ready = { $size } · pode ser gravado
+stick-drive-small = { $size } · pequeno demais para esta versão
+stick-erases = Gravar apaga o drive inteiro. Primeiro vem uma pergunta, e depois a sua senha.
+stick-unfit-bus = { $size } · nem USB nem cartão de memória
+stick-unfit-system = { $size } · o sistema roda dele
+stick-unfit-mounted = { $size } · montado
+stick-unfit-open = { $size } · um volume cifrado está aberto
+stick-unfit-read-only = { $size } · só leitura
+stick-unfit-unnamed = { $size } · sem nome estável
+stick-why-bus = Só se grava pendrive ou cartão de memória: este drive está em outro barramento.
+stick-why-system = O sistema em execução usa um volume deste drive, então ele nunca é gravado.
+stick-why-mounted = Um volume deste drive está montado. Desmonte-o no gerenciador de arquivos e escolha o drive de novo.
+stick-why-open = Um volume cifrado deste drive está aberto. Tranque-o no gerenciador de arquivos e escolha o drive de novo.
+stick-why-read-only = O drive é só leitura: a trava do pendrive ou do cartão pode estar ligada.
+stick-why-unnamed = O drive não tem nome estável em /dev/disk/by-id, então a gravação não poderia ser presa a ele.
+stick-small-why = O instalador não cabe neste drive. Escolha um maior.
+stick-no-release-yet = A versão mais recente ainda não é conhecida, então não há o que gravar.
+stick-sure = Gravar o instalador { $version } em { $drive } ({ $size })?
+stick-sure-note = Tudo o que está no drive é apagado, e isso não se desfaz.
+stick-no = Não, deixar o drive como está
+stick-yes = Sim, apagar e gravar o instalador
+stick-state = Estado
+stick-phase-waiting = esperando o download terminar
+stick-phase-writing = gravando: { $percent }%
+stick-phase-verifying = relendo: { $percent }%
+stick-phase-done = gravado e relido: o pendrive está pronto
+stick-phase-failed = recusada
+stick-phase-given-up = desistida
+stick-refused-not-let = O GitHub não foi permitido, então nada foi perguntado.
+stick-refused-offline = O GitHub não respondeu. Você está conectado?
+stick-refused-download = O download não terminou, então nada foi gravado: o GitHub parou de responder, ou o cache ficou sem espaço. A linha da fila diz qual.
+stick-refused-no-release = A versão mais recente não tem um instalador que esta vista entenda.
+stick-refused-mismatch = O que foi baixado não confere com as checksums da versão, então nada foi gravado.
+stick-refused-not-writable = O drive não pôde ser gravado: estava montado, preso, é pequeno demais, ou não é um pendrive.
+stick-refused-changed = O drive mudou depois de ser escolhido, então nada foi gravado. Escolha-o de novo.
+stick-refused-read-back-differs = O pendrive não guarda o que foi gravado nele. Ele pode estar falhando, ou ser menor do que diz.
+stick-refused-failed = A gravação não aconteceu: a fila ou o gravador falhou. A linha da fila, ou o journal de ronoctua-stick-write.service, diz por quê.
+stick-about-allow = Permite os três hosts do GitHub, para perguntar e baixar a versão mais recente
+stick-about-retry = Pergunta de novo ao GitHub a versão mais recente
+stick-about-fetch = Baixa e confere a imagem agora, para uma gravação depois começar na hora
+stick-about-drive = Grava o instalador sobre este drive inteiro, depois de uma pergunta
+stick-about-unfit = Diz por que este drive não é gravado, e o que fazer
+stick-about-no = Fecha a pergunta e não grava nada
+stick-about-yes = Inicia o gravador com a sua senha, e então baixa, confere e grava
+stick-drive-left = O drive saiu, então a pergunta foi fechada.
+stick-queued-fetch = A imagem está baixando na fila.
+stick-queued-write = O gravador está esperando: a imagem baixa na fila, e então o drive é gravado e relido.
+stick-starting = Iniciando o gravador…
+stick-not-let-host = { $host } não está permitido: permita o GitHub nesta vista primeiro.
+stick-busy-writing = Um pendrive está sendo gravado agora. Espere ele terminar (a última gravação, abaixo) antes de gravar outro.
+stick-busy-waiting = Uma gravação já espera a imagem dela baixar. Desista dela na fila para escolher outro drive.
+stick-busy-stopped = Um gravador ainda esperava uma imagem que ninguém baixava; ele foi mandado parar. Escolha o drive de novo daqui a pouco.
+stick-no-writer = Esta máquina não tem o gravador de pendrive instalado.
+stick-no-cache = Não há pasta de cache para baixar a imagem.
+stick-sidebar-drive = { $name } — o drive inteiro: pressione para ver o que fazer com ele
+
+## ── anchor: L18 ──
+software-order-declare = declarado para você
+software-order-forget = removido de vez
+software-order-decline = mantido desinstalado
+software-order-undecline = trazido de volta
+software-order-reconcile = ajustado à sua declaração
+software-order-refresh-pins = downloads procurados de novo
+software-declared-refusal-nothing-to-pin = Veio de um arquivo sem endereço, então não há download pelo qual declará-lo. Instale-o pelo catálogo para tê-lo nos seus outros computadores.
+software-declared-refusal-declaration-refused = Este computador recusou a sua declaração, e nada dela mudou aqui. A linha da fila diz por quê.
+software-declared-refusal-declaration-unreadable = O arquivo da sua declaração não se lê aqui — um computador seu mais novo o escreveu, ou ele está quebrado —, então ficou como estava. Atualize este computador.
+software-declared-refusal-essential = A distro precisa dele, então ele não pode ficar desinstalado.
+software-declared-refusal-apply-failed = Este computador não pôde ser reconstruído com a mudança, e segue como estava. A linha da fila diz o que falhou.
+software-declared-refusal-machine-unnamed = O nome deste computador não pode ser escrito numa declaração: o hostname tem maiúsculas ou espaços.
+software-declared-phase-declaring = escrevendo a sua declaração
+software-declared-phase-applying = aplicando neste computador
+software-declared-phase-reconciling = ajustando este computador à sua declaração
+software-declared-phase-publishing = enviando ao seu repositório
+software-declared-origin-mine-declared = declarado por você
+software-declared-origin-distro = vem com a distro
+software-declared-origin-essential = vem com a distro, que precisa dele
+software-declared-standing-applied = neste computador
+software-declared-standing-waiting = chega com a próxima atualização
+software-declared-standing-elsewhere = só nos seus outros computadores
+software-declared-skipped-attr-missing = deixado de fora: os pacotes deste computador não têm mais esse nome
+software-declared-skipped-not-a-package = deixado de fora: esse nome não é um programa aqui
+software-declared-skipped-refused-by-meta = deixado de fora: recusado aqui — não livre e não permitido, quebrado ou inseguro
+software-declared-skipped-held = deixado de fora: a atualização o segurou
+software-declared-skipped-source-off = deixado de fora: este computador não tem suporte à origem dele
+software-declared-skipped-other-machine = declarado para os seus outros computadores
+software-declared-skipped-format-unknown = deixado de fora: uma distro mais nova que a deste computador o escreveu
+software-declared-held-eval-failed = não avaliou
+software-declared-held-fetch-failed = o download não pôde ser buscado
+software-declared-held-upstream-changed = o download mudou sob o mesmo endereço
+software-declared-held-build-failed = não construiu
+software-declared-decline-honoured = fora deste computador
+software-declared-decline-still-present = ainda aqui, por outro programa que o traz
+software-declared-decline-essential = mantido: a distro precisa dele
+software-declared-decline-unknown = esta distro não o conhece mais
+software-declared-decline-elsewhere = recusado em { $machines }
+software-declared-decline-waiting = sai com a próxima atualização
+software-declared-door = Declarados por você
+software-declared-door-declined = Recusados por você
+software-declared-count = { $count ->
+        [one] um programa
+       *[other] { $count } programas
+    }
+software-declared-count-out = { $count ->
+        [one] um deixado de fora aqui
+       *[other] { $count } deixados de fora aqui
+    }
+software-declared-declined-count = { $count ->
+        [one] um mantido desinstalado
+       *[other] { $count } mantidos desinstalados
+    }
+software-declared-none-yet = nada ainda
+software-declared-none-declined-yet = nada
+software-declared-note = O que você declara vai para todos os seus computadores: cada atualização o instala e o mantém, e ele viaja com os seus pertences.
+software-declared-not-reported = O sistema deste computador foi construído antes de conhecer as suas declarações: a próxima atualização as aplica.
+software-declared-none = Nada declarado ainda. Instalar só para você, na página de um programa, o declara.
+software-declared-android-pending = Alguns apps Android declarados esperam o Android iniciar, e entram então.
+software-declared-heading-pins = Downloads
+software-declared-refresh = Procurar downloads mais novos
+software-declared-refresh-value = a próxima atualização os constrói, depois de testar cada um
+software-declared-refresh-one = Procurar um download mais novo
+software-declared-refresh-one-value = a próxima atualização o constrói, depois de testá-lo
+software-declared-file-declared = seus programas declarados
+software-declared-file-declined = seus programas recusados
+software-declared-unreadable-newer = O arquivo de { $file } foi escrito por uma distro mais nova, e ficou como estava: atualize este computador para lê-lo.
+software-declared-unreadable-broken = O arquivo de { $file } não se lê, e ficou como estava: a próxima sincronização dos seus pertences pode consertá-lo.
+software-declared-gone = Ele não está mais na sua declaração.
+software-declared-row-here-now = Aqui
+software-declared-row-said = O que o sistema disse
+software-declared-row-why = Por quê
+software-declared-row-on = Vai para
+software-declared-all-computers = todos os seus computadores
+software-declared-everywhere = em todos os seus computadores
+software-declared-row-pin = Versão fixada
+software-declared-row-download = Download
+software-declared-row-edited = Última mudança
+software-declared-edited-on = { $when }, em { $machine }
+software-declared-heading-fixes = O que dá para fazer
+software-declared-row-program = O programa
+software-declared-program-value = abre a página dele
+software-declared-note-waiting = A próxima atualização o instala aqui: não há nada a fazer.
+software-declared-row-also-here = Também neste computador
+software-declared-note-source-off = Este computador não tem suporte à origem dele: um perfil reduzido não tem Android nem AppImages.
+software-declared-note-update-me = Atualize este computador: uma distro mais nova escreveu esta declaração.
+software-declared-row-replace = Procurar outro
+software-declared-replace-value = busca programas parecidos
+software-declared-row-forget = Remover de vez
+software-declared-forget-value = aqui, e da sua declaração
+software-declared-note-declined = Os programas da distro que você mantém desinstalados, aqui ou em todos os seus computadores: cada atualização os deixa de fora.
+software-declared-none-declined = Nada recusado: todo programa da distro está instalado.
+software-declared-heading-distro = Os programas da distro
+software-declared-distro-installed = instalado com o sistema
+software-declared-row-group = Grupo
+software-declared-not-on-this-machine = O perfil deste computador não o traz.
+software-declared-row-declined = Recusado
+software-declared-row-bring-back = Trazer de volta
+software-declared-bring-back-value = em todos os computadores, e aqui na hora
+software-declared-row-decline-here = Manter desinstalado aqui
+software-declared-row-decline-everywhere = Manter desinstalado em todos os seus computadores
+software-declared-row-for-me = Instalar só para você
+software-declared-row-here = Instalar só neste computador
+software-declared-here-value = não declarado: os seus outros computadores não o recebem
+software-declared-row-keep = Manter em todos os seus computadores
+software-declared-keep-value = declarado: cada computador seu o instala na atualização dele
+software-declared-row-declared = Declarado
+software-declared-sure-forget = Remover { $app } de vez?
+software-declared-forget-here = Ele sai deste computador e da sua declaração.
+software-declared-forget-elsewhere = Os seus outros computadores o removem na próxima atualização deles.
+software-declared-forget-data = O que ele guardou fica, a não ser que você escolha apagar.
+software-declared-yes-forget = Sim, remover de vez
+software-declared-sure-decline-here = Manter { $app } desinstalado neste computador?
+software-declared-sure-decline-everywhere = Manter { $app } desinstalado em todos os seus computadores?
+software-declared-decline-rebuild = Este computador é reconstruído agora, sem ele.
+software-declared-decline-others = Os seus outros computadores o deixam de fora na próxima atualização deles.
+software-declared-decline-back = Recusados por você o traz de volta.
+software-declared-yes-decline = Sim, manter desinstalado
+software-declared-refusal-leaves-at-next-apply = Sai na próxima atualização deste computador: a sua declaração não o tem mais, e o sistema daqui ainda tem.
+software-declared-returning = Não está mais recusado aqui: a próxima atualização deste computador o traz de volta.
+software-declared-web-edit = Ele é declarado: salvar muda a sua declaração, e os seus outros computadores recebem a mudança na próxima atualização deles.
+
+## ── anchor: L19 ──
+
+## ── anchor: L20 ──
+inst-belongings-access = Acesso ao repositório
+inst-belongings-access-help = Esta máquina chega ao repositório com uma chave própria, feita agora e guardada só na sua home. Ela é testada de novo até ler e escrever.
+inst-belongings-token-help = Digite um token que leia e escreva no repositório. Ele fica na sua home, legível só por você.
+inst-belongings-passphrase = Senha dos pertences
+inst-belongings-passphrase-help = A senha que abre os seus pertences. Ela é conferida no repositório antes de qualquer coisa ser tocada.
+inst-belongings-passphrase-new-help = O repositório está vazio: escolha a senha que vai selar os seus pertences, com pelo menos 12 caracteres. Ela é digitada duas vezes.
+inst-belongings-passphrase-again = Digite a senha de novo
+inst-belongings-passphrase-differs = As duas senhas são diferentes. Digite de novo desde o começo.
+inst-belongings-key-intro = Adicione esta chave ao repositório, com permissão de escrita:
+inst-belongings-key-where = Onde: { $address }
+inst-belongings-key-where-unknown = Onde: nas configurações do repositório, como chave de implantação que pode escrever.
+inst-belongings-token-where = O token se faz aqui: { $address }
+inst-access-waiting = O repositório ainda não responde a esta chave.
+inst-access-reads = A chave lê o repositório, mas ainda não escreve: dê a ela permissão de escrita.
+inst-access-ready = A chave lê e escreve no repositório.
+inst-checking = Conferindo…
+inst-network-help = A instalação precisa da rede. Ela fala com { $hosts } e com o repositório dos seus pertences; escolher uma rede, ou o cabo, é deixar.
+inst-network-help-unnamed = A instalação precisa da rede: ela fala com o release da distro, com o cache binário dela e com o repositório dos seus pertences.
+inst-gate-checking = Conectando e procurando uma saída…
+inst-gate-open = A rede tem saída.
+inst-gate-no-daemon = Nenhum serviço de rede responde neste instalador.
+inst-gate-off = A rede está desligada.
+inst-gate-no-link = Sem rede: ligue um cabo ou escolha uma rede Wi-Fi.
+inst-gate-unconnected = Essa rede não aceitou a conexão: confira a senha ou escolha outra.
+inst-gate-portal = Uma página de login fica entre esta rede e a internet: escolha outra rede.
+inst-release-looking = Perguntando ao release qual instalador usar…
+inst-release-newer = Há um instalador mais novo ({ $rev }). O Enter o inicia, com as respostas que você deu.
+inst-release-ahead = Este instalador é mais novo que o release: a máquina é instalada com a distro que ele traz e fica com ela.
+inst-release-unreachable = O release não respondeu: esta máquina é instalada com a distro deste instalador e fica com ela.
+inst-release-development = Este instalador é uma versão de desenvolvimento: a máquina é instalada com a distro que ele traz e fica com ela.
+inst-invalid-blank = Não pode ficar em branco.
+inst-invalid-hostname = Só letras minúsculas, números e hífen; sem começar nem terminar com hífen.
+inst-invalid-hostname-prefix = O nome da máquina começa com `{ $prefix }`.
+inst-invalid-passphrase-short = Pelo menos 12 caracteres.
+inst-invalid-disk = Esse caminho não é um disco.
+inst-invalid-language = Esse idioma não está disponível.
+inst-invalid-layout = Esse layout de teclado não existe.
+inst-invalid-profile = A instalação é `full` ou `minimal`.
+inst-invalid-access = Indique o arquivo que guarda a chave ou o token, pelo caminho completo.
+inst-step-template = Escrever o flake desta máquina a partir do template
+inst-step-aim = Apontar o flake para a distro deste instalador
+inst-step-lock = Fixar a versão da distro com que a máquina é construída
+inst-step-attribute = Perguntar ao flake qual sistema ele constrói
+inst-step-plain = Buscar as suas declarações no repositório
+inst-step-person = Aplicar as suas declarações a esta máquina
+inst-step-verify = Experimentar cada programa que você declarou
+inst-step-access = Dar à sua home o acesso ao repositório
+inst-step-consent = Permitir o servidor do repositório no seu consentimento
+inst-step-passphrase = Passar a senha à restauração
+inst-step-restore = Restaurar os seus pertences na sua home
+inst-step-init = Criar o repositório, guardando nele as configurações desta máquina
+inst-step-skipped = Nada a fazer aqui.
+
+## ── anchor: L21 ──
+# The one listing of what goes to the repository (`inventory`), its groups,
+# its rows and the states of a file.
+belongings-listing = O que vai para o seu repositório
+belongings-counting = Contando o que vai para o repositório…
+belongings-item = { $state } · { $size }
+belongings-state-synced = em dia
+belongings-state-changed = mudou
+belongings-state-new = novo
+belongings-state-conflict = em conflito
+belongings-state-unreadable = ilegível aqui
+belongings-state-repaired = consertado aqui
+belongings-state-deleted = apagado aqui: sai do repositório e das suas outras máquinas
+belongings-here-not-here = não nesta máquina
+belongings-here-nowhere = em nenhuma máquina
+belongings-never-because = nunca: { $reason }
+belongings-reason-too-large = grande demais para guardar em claro
+# A predefined target: where it is kept, and what may be done about it.
+belongings-target-everywhere = em todas as máquinas
+belongings-target-partly-here = em todas as máquinas, parte dele não nesta
+belongings-target-asked-nowhere = em nenhuma máquina, a partir da próxima sincronização
+belongings-target-asked-everywhere = em todas as máquinas de novo, a partir da próxima sincronização
+belongings-target-act-not-here = Não nesta máquina
+belongings-target-act-nowhere = Em nenhuma máquina
+belongings-target-act-here-again = Guardar de novo nesta máquina
+belongings-target-act-everywhere = Guardar de novo em todas as máquinas
+belongings-nowhere-question = Deixar de guardar { $target } em todas as máquinas? As cópias saem do repositório na próxima sincronização; cada outra máquina as esquece e fica com os próprios arquivos.
+about-belongings-not-here = Deixa de guardar isto nesta máquina: a cópia do repositório fica para as outras
+about-belongings-nowhere = Deixa de guardar isto em todas as máquinas — pergunta antes
+about-belongings-everywhere = Volta a guardar isto em todas as máquinas, a partir da próxima sincronização
+# A question on a page of its own, "no" first.
+belongings-answer-no = Não
+belongings-answer-yes = Sim
+about-belongings-answer-no = Deixa tudo como está
+about-belongings-answer-yes = Faz o que a pergunta diz
+# What the last sync offered to turn on.
+belongings-offers = Oferecido pela última sincronização
+belongings-offer-turning = Ligando…
+belongings-offer-taken = Ligado.
+belongings-offer-refused = Não foi ligado: { $why }
+about-belongings-offer-no = Deixa desligado: só volta a ser oferecido quando a chave mudar em outra máquina
+about-belongings-offer-yes = Liga isto, nesta máquina
+# The files a lenient read repaired.
+belongings-repairs = Consertado na leitura
+belongings-repairs-note = Esta máquina não conseguiu ler parte destes arquivos. O que ela não leu continua em cada arquivo como está escrito, e ela seguiu sem isso. Grave o conserto para pôr os valores desta máquina no lugar, ou deixe o arquivo como está.
+belongings-repairs-newest = Esta máquina roda o sistema mais novo das suas máquinas: a próxima sincronização grava estes consertos sozinha, e os envia.
+belongings-repairs-older = Outra das suas máquinas roda um sistema mais novo e pode conhecer estes valores: decida aqui.
+belongings-repair-count = { $n ->
+    [one] um valor
+   *[other] { $n } valores
+    }
+belongings-repair-line = { $pointer }: { $why }
+belongings-repair-whole-file = o arquivo inteiro
+belongings-repair-leave = Deixar
+belongings-repair-write = Gravar o conserto
+belongings-repair-written = O conserto de { $file } foi gravado.
+belongings-repair-stale = { $file } mudou desde que foi lido: o que falta consertar é perguntado de novo quando ele for lido.
+about-belongings-write-fix = Grava os valores desta máquina no lugar do que ela não leu
+about-belongings-leave-it = Deixa o arquivo como está, e para de perguntar até ele mudar
+# The history: its weight and its compaction.
+belongings-history = Histórico
+belongings-weighs = Pesa
+belongings-weighs-value = { $tree } de arquivos, { $history } com o histórico
+belongings-weight-heavy = O histórico pesa { $history }: acima de { $recommend }, compactá-lo é recomendado.
+belongings-weight-compact = Compactar o histórico é recomendado: ele pesa { $history }, muito mais do que o que guarda.
+belongings-compact = Compactar o histórico
+belongings-compact-keeps = guarda { $days ->
+    [one] o último dia
+   *[other] os últimos { $days } dias
+    }
+belongings-compact-note = Todo arquivo fica como está agora; as versões mais antigas saem do repositório, para todas as máquinas. O servidor pode guardar as cópias antigas até a limpeza dele.
+belongings-compact-question = As versões mais antigas saem do repositório de vez, para todas as máquinas; todo arquivo como está agora fica, e o servidor pode guardar as cópias antigas até a limpeza dele. Compactar o histórico para { $days ->
+    [one] o último dia?
+   *[other] os últimos { $days } dias?
+    }
+ask-belongings-compact = A senha, para compactar o histórico
+about-belongings-compact = Compacta o histórico — pergunta antes
+# Whether the session remembers the passphrase.
+belongings-unlock-on = sim
+belongings-unlock-off = não
+about-belongings-unlock = Se a sincronização pede a senha uma vez por sessão, ou toda vez
+# Every field of a JSON conflict, decided on its own.
+belongings-field-ours = O valor desta máquina
+belongings-field-theirs = O valor do repositório
+belongings-field-none = nenhum
+belongings-field-chosen = { $value } · escolhido
+belongings-field-before = antes: { $value }
+belongings-decided-fields = mesclado campo a campo
+belongings-fields-decided-of = { $n } de { $of } campos decididos
+belongings-field-only-two = Um campo fica com o valor desta máquina ou com o do repositório.
+about-belongings-field = Decide este campo sozinho: os dois valores dele são as linhas abaixo
+about-belongings-field-ours = Fica com o valor desta máquina neste campo
+about-belongings-field-theirs = Fica com o valor do repositório neste campo
+
+## ── anchor: L22 ──
+## A BARRA DO SUDO (2026-10-11): onde todo gesto de root de toda tela é
+## perguntado, acima da modeline — quem pede, para quê, e o que o sudo espera.
+sudo-bar-title = Administrador
+sudo-bar-asks = { $who } pede para { $deed }
+sudo-bar-who-security = A central de segurança
+sudo-bar-who-security-window = A janela da central de segurança
+sudo-bar-who-files = O gerenciador de arquivos
+sudo-bar-who-files-window = A janela do gerenciador de arquivos
+sudo-bar-who-stick = O pendrive do instalador
+sudo-bar-who-stick-window = A janela do pendrive do instalador
+sudo-bar-who-belongings = Os pertences
+sudo-bar-who-belongings-window = A janela dos pertences
+sudo-bar-who-update = A atualização
+sudo-bar-who-update-window = A janela da atualização
+sudo-bar-deed-relax-minutes = abrir a janela sem senha por { $minutes ->
+        [one] um minuto
+       *[other] { $minutes } minutos
+    }
+sudo-bar-deed-relax-hours = abrir a janela sem senha por { $hours ->
+        [one] uma hora
+       *[other] { $hours } horas
+    }
+sudo-bar-deed-relax-no-limit = abrir a janela sem senha até você encerrá-la
+sudo-bar-deed-relax-end = encerrar a janela sem senha
+sudo-bar-deed-firewall = mudar o firewall
+sudo-bar-deed-finger-enrol = cadastrar uma digital ({ $finger })
+sudo-bar-deed-finger-delete = remover uma digital ({ $finger })
+sudo-bar-deed-finger-delete-all = remover todas as digitais
+sudo-bar-deed-finger-sudo-on = deixar seus dedos responderem ao administrador
+sudo-bar-deed-finger-sudo-off = parar de deixar seus dedos responderem ao administrador
+sudo-bar-deed-files-root = mudar o que só o administrador pode mudar
+sudo-bar-deed-private = usar o cofre /private
+sudo-bar-deed-private-create = criar o cofre /private ({ $size })
+sudo-bar-deed-private-open = abrir o cofre /private
+sudo-bar-deed-private-lock = trancar o cofre /private
+sudo-bar-deed-private-enrol = deixar uma chave de segurança abrir o cofre /private
+sudo-bar-deed-private-forget = esquecer a chave que abre o cofre /private
+sudo-bar-deed-private-passphrase = trocar a senha do cofre /private
+sudo-bar-deed-private-grow = aumentar o cofre /private ({ $size })
+sudo-bar-deed-stick = gravar o instalador num pendrive
+sudo-bar-deed-approve = aprovar a parte root do seu módulo do brain { $id }
+sudo-bar-deed-keys = deixar { $count ->
+        [one] uma chave de segurança responder
+       *[other] { $count } chaves de segurança responderem
+    } ao administrador
+sudo-bar-deed-keys-off = parar de deixar suas chaves de segurança responderem ao administrador
+sudo-bar-deed-signer-pin = fixar a sua chave de assinatura nesta máquina
+sudo-bar-deed-cache-netrc = deixar esta máquina ler o seu cache binário privado { $name }
+sudo-bar-deed-cache-netrc-remove = tirar desta máquina o acesso ao seu cache binário privado
+sudo-bar-password = A sua senha
+sudo-bar-password-instead = A sua senha, no lugar
+sudo-bar-touch = Toque na sua chave de segurança, ou digite a sua senha
+sudo-bar-finger = Ponha o dedo no leitor, ou digite a sua senha
+sudo-bar-wrong = Essa não era a sua senha. { $asked }
+sudo-bar-checking = Conferindo…
+sudo-bar-cancelling = Cancelando…
+sudo-bar-answer = responder
+sudo-bar-use-password = usar a senha
+sudo-bar-cancel = cancelar
+about-sudo-bar-answer = Entrega ao sudo o que você digitou, só para este gesto
+about-sudo-bar-use-password = Para de esperar a chave ou o dedo, e pede a sua senha
+about-sudo-bar-cancel = Não faz nada, e a tela que pediu diz isso
+security-refusal-no-footer = O rodapé, onde o administrador é perguntado, não está rodando: nada foi feito.
+## AS CHAVES DA CENTRAL DE SEGURANÇA, e a contagem da janela sem senha.
+security-heading-keys = Chaves de segurança
+security-keys-sudo = Respondem ao administrador
+security-keys-on = sim, { $count ->
+        [one] uma chave
+       *[other] { $count } chaves
+    }
+security-keys-off = não
+security-keys-off-listed = não; a sua lista tem { $count ->
+        [one] uma chave
+       *[other] { $count } chaves
+    }
+security-keys-key = Chave { $n }
+security-keys-bring = Trazer as chaves das suas outras máquinas
+security-keys-away = { $count ->
+        [one] uma chave
+       *[other] { $count } chaves
+    }
+security-keys-register = Cadastrar uma chave
+security-keys-touch-now = Toque na chave que você está cadastrando.
+security-keys-stop = Parar o cadastro
+security-keys-full = No máximo { $count } chaves respondem ao administrador.
+security-keys-note = Uma chave responde ao administrador no lugar da sua senha — num terminal e na barra do sudo —, nunca no login; a sua senha sempre responde também. Desligar as tira desta máquina e as guarda na sua lista, que viaja com os pertences.
+security-keys-not-here = As chaves de segurança não respondem ao administrador nesta máquina (ronoctua.yubikey.enable está desligado).
+security-keys-ask-remove = Remover a chave { $key }?
+security-keys-remove-warning = Ela para de responder ao administrador aqui e sai da sua lista, então também não responde em nenhuma outra máquina.
+security-about-key = Remove esta chave, depois de perguntar
+security-about-key-register = Espera um toque da chave e a deixa responder ao administrador — aqui, e onde os pertences a levarem
+security-about-key-stop = Para de esperar o toque
+security-about-keys-switch = Suas chaves respondem ao administrador aqui, ou param — na hora, sem rebuild
+security-about-keys-bring = Deixa as chaves cadastradas nas suas outras máquinas responderem aqui também
+security-about-relax-again = Abre a janela de novo pelo mesmo tempo, a partir de agora
+security-sudo-left = Tempo restante
+security-sudo-again = Recomeçar a contagem
+echo-security-relax-again = A contagem recomeçou.
+echo-security-keys-registered = A chave foi cadastrada: ela responde ao administrador agora.
+echo-security-keys-removed = A chave foi removida.
+echo-security-keys-off = Suas chaves de segurança não respondem mais ao administrador aqui.
+echo-security-keys-on = Suas chaves de segurança voltaram a responder ao administrador aqui.
+echo-security-keys-brought = As chaves das suas outras máquinas respondem ao administrador aqui agora.
+transfers-engine-seal = criptografia
+transfers-work-seal = cifrar
+transfers-work-unseal = decifrar
+files-encrypt = cifrar…
+files-does-encrypt = cifra com o age ao lado do original — para você, com uma senha ou para a chave de alguém; uma pasta vira nome.tar.age
+files-decrypt = decifrar…
+files-does-decrypt = abre o .age ao lado dele, nunca por cima de nada — com a senha dele, ou com a chave dos seus pertences
+cmd-security-encrypt = Cifrar um arquivo ou uma pasta: para você, uma senha ou a chave de alguém
+cmd-security-quantum = A seção pós-quântica da central de segurança: o que cada canal faz contra um computador quântico
+seal-mode-myself = para você
+seal-mode-passphrase = com uma senha
+seal-mode-someone = para a chave de alguém (age1pq1…)
+seal-mine-ready = sua chave pós-quântica, dos pertences
+seal-mine-no-belongings = configure os pertences primeiro
+seal-mine-not-synced = os pertences ainda não sincronizaram nesta máquina
+seal-ask-mode = Cifrar { $what } — para quem?
+ask-seal-recipient = A chave pós-quântica da pessoa (age1pq1…)
+ask-seal-passphrase-new = Uma senha para cifrar
+ask-seal-passphrase-again = A mesma senha de novo
+ask-seal-passphrase = A senha que o abre
+ask-seal-passphrase-wrong = Não era essa — a senha que o abre
+ask-seal-key-passphrase = A senha dos seus pertences (ela abre a sua chave)
+ask-seal-key-passphrase-wrong = Não era essa — a senha dos seus pertences
+seal-refusal-no-belongings = Cifrar { $name } para você precisa dos seus pertences: configure-os primeiro.
+seal-refusal-not-synced = Seus pertences ainda não sincronizaram nesta máquina: sincronize-os uma vez e então cifre { $name } para você.
+seal-refusal-not-a-recipient = Isso não é uma chave pós-quântica (age1pq1…): veio cortada, com erro, ou é outro tipo de chave. Nada foi cifrado.
+seal-refusal-no-key = { $name } está cifrado para uma chave, e esta máquina não tem pertences para abri-lo.
+seal-refusal-mixed = { $name } mistura chaves pós-quânticas e clássicas, o que o age recusa.
+seal-refusal-classical = { $name } está cifrado para uma chave clássica, e a sua é pós-quântica: nada aqui o abre.
+seal-refusal-not-sealed = { $name } não é um arquivo do age.
+seal-refusal-unreadable = Não foi possível ler { $name }.
+seal-refusal-no-name = Não há um nome livre ao lado de { $name } para escrever.
+seal-refusal-differ = As duas senhas são diferentes: { $name } não foi cifrado.
+seal-refusal-offline = A fila de transferências não está rodando: { $name } não foi entregue a ela.
+seal-refusal-failed = Não foi possível entregar { $name } à fila.
+seal-refused-wrong-key = { $name } não está cifrado para esta chave.
+seal-refused-wrong-passphrase = Essa senha não abre { $name }.
+seal-refused-corrupt = { $name } está danificado, ou uma chave dada não é uma chave.
+seal-refused-mixed = { $name } misturaria chaves pós-quânticas e clássicas, o que o age recusa.
+seal-refused-failed = Não foi possível ler ou escrever { $name }; nada foi sobrescrito.
+seal-queued-seal = Cifrando { $name } em { $into }: está na fila de transferências.
+seal-queued-open = Decifrando { $name } em { $into }: está na fila de transferências.
+seal-queued-many = Cifrando { $n } itens: estão na fila de transferências.
+seal-filter-sealed = cifrados (.age)
+security-heading-encrypt = Cifrar
+security-encrypt-for-you = Para você
+security-encrypt-file = Cifrar arquivos…
+security-encrypt-folder = Cifrar uma pasta…
+security-encrypt-open = Decifrar um arquivo…
+security-encrypt-note = Cada um vai para a fila de transferências. Nada é sobrescrito e o original fica; uma pasta vira nome.tar.age. Para você e para a chave de alguém é ML-KEM-768 com X25519; com senha é scrypt.
+security-encrypt-pick-files = O que cifrar
+security-encrypt-pick-folder = A pasta a cifrar
+security-encrypt-pick-open = O .age a decifrar
+security-about-seal-folder = Escolha uma pasta no seletor de arquivos; ela é cifrada como um único .tar.age
+security-about-seal-open = Escolha um .age no seletor de arquivos; o cabeçalho dele diz o que o abre
+security-about-seal-mode = Cifra o que foi escolhido deste jeito, na fila de transferências
+security-heading-quantum = Pós-quântico
+security-quantum-note = Uma gravação feita hoje pode ser lida no dia em que um computador quântico quebrar a chave dela, e uma assinatura, então, pode ser forjada. Cada canal diz onde está.
+security-quantum-status-post-quantum = pós-quântico
+security-quantum-status-symmetric = simétrico
+security-quantum-status-classical = clássico
+security-quantum-status-unknown = não se sabe
+security-quantum-channel-belongings = Pertences
+security-quantum-channel-belongings-transport = Transporte dos pertences
+security-quantum-channel-seal-to-key = Cifrar para uma chave
+security-quantum-channel-seal-passphrase = Cifrar com senha
+security-quantum-channel-private = Cofre privado
+security-quantum-channel-root-disk = Disco do sistema
+security-quantum-channel-https = Nosso HTTPS
+security-quantum-channel-openssl = OpenSSL
+security-quantum-channel-ssh = SSH
+security-quantum-channel-chrome = Chrome
+security-quantum-channel-syncthing = Syncthing
+security-quantum-channel-tailscale = Tailscale
+security-quantum-channel-tor = Tor
+security-quantum-channel-clipcascade = ClipCascade
+security-quantum-channel-sops = Segredos da máquina
+security-quantum-channel-extension = Extensão do navegador
+security-quantum-channel-f-droid = F-Droid
+security-quantum-channel-nix-cache = Cache binário
+security-quantum-channel-secure-boot = Chaves do Secure Boot
+security-quantum-why-belongings-pq = Cifrados para a sua própria chave: ML-KEM-768 com X25519, e as duas precisam cair.
+security-quantum-why-belongings-unsynced = Ainda não sincronizados nesta máquina: o repositório é cifrado com ML-KEM-768 e X25519, e a primeira sincronização também.
+security-quantum-why-belongings-new = Nenhum configurado ainda; um repositório configurado agora é cifrado com ML-KEM-768 e X25519.
+security-quantum-why-belongings-transport = SSH e HTTPS só com troca de chaves pós-quântica: um servidor que não tem nenhuma é recusado.
+security-quantum-why-seal-to-key = O mlkem768x25519 do age: para você, ou para a chave age1pq1 de alguém.
+security-quantum-why-seal-passphrase = scrypt e ChaCha20-Poly1305: um computador quântico reduz pela metade a força de uma chave, e uma senha longa continua de pé.
+security-quantum-why-private = LUKS2 com AES-XTS e chave de 512 bits, a senha esticada pelo argon2id.
+security-quantum-why-root-disk = O mesmo para o disco do sistema: LUKS2, AES-XTS-512, argon2id.
+security-quantum-why-root-disk-unread = Não foi possível ler se o disco do sistema está cifrado.
+security-quantum-why-https-all = { $hosts ->
+        [one] O único host ouvido combinou X25519MLKEM768.
+       *[other] Todos os { $hosts } hosts ouvidos combinaram X25519MLKEM768.
+    }
+security-quantum-why-https-some = { $hosts ->
+        [one] O único host ouvido ainda combina uma chave clássica: { $names }.
+       *[other] { $classical ->
+            [one] Um dos { $hosts } hosts ouvidos ainda combina uma chave clássica: { $names }.
+           *[other] { $classical } dos { $hosts } hosts ouvidos ainda combinam uma chave clássica: { $names }.
+        }
+    }
+security-quantum-why-https-none-heard = Nenhum host ouvido ainda: o primeiro pedido de cada um diz o que ele combina.
+security-quantum-why-openssl = OpenSSL { $version } oferece X25519MLKEM768 primeiro: o git por HTTPS, o curl e o que mais o usa.
+security-quantum-why-openssl-old = OpenSSL { $version } não tem grupo pós-quântico por padrão.
+security-quantum-why-ssh = O OpenSSH { $version } oferece { $kex } primeiro, uma troca de chaves pós-quântica; um servidor sem nenhuma combina uma chave clássica.
+security-quantum-why-ssh-classical = O OpenSSH { $version }, como está configurado, não oferece troca de chaves pós-quântica (KexAlgorithms).
+security-quantum-why-ssh-not-first = O OpenSSH { $version }, como está configurado, oferece { $kex } primeiro e uma troca pós-quântica só depois dela: um servidor que conhece as duas combina a clássica (KexAlgorithms).
+security-quantum-why-ssh-unread = O ssh não disse o que oferece.
+security-quantum-why-chrome = Chrome { $version } combina X25519MLKEM768 por padrão.
+security-quantum-why-chrome-old = Chrome { $version } combina uma chave clássica por padrão.
+security-quantum-why-syncthing = Compilado com Go { $go }, que oferece X25519MLKEM768, e o Syncthing não o restringe; um aparelho com uma versão mais velha combina X25519.
+security-quantum-why-syncthing-pinned = Syncthing { $version } restringe a troca de chaves a curvas clássicas.
+security-quantum-why-syncthing-old-go = Syncthing { $version } é compilado com ou para um Go anterior ao 1.24: só X25519.
+security-quantum-why-tailscale = O WireGuard combina as chaves com X25519, e o Tailscale não tem modo pós-quântico.
+security-quantum-why-tor = Os circuitos do Tor são combinados com X25519; o Tor ainda não tem handshake pós-quântico.
+security-quantum-why-clipcascade = AES-256-GCM com uma chave da sua senha, levado pelo nosso TLS.
+security-quantum-why-sops = Os segredos da máquina são cifrados para uma chave X25519 feita da chave SSH do host.
+security-quantum-why-extension = A extensão do navegador é assinada com RSA-2048, e o formato dela não tem outra assinatura: uma falsificação precisa de um computador quântico no momento do ataque.
+security-quantum-why-f-droid = O F-Droid assina o índice com RSA: o que um computador quântico faria dele é uma falsificação, não uma leitura.
+security-quantum-why-nix-cache = As assinaturas do cache binário são ed25519: uma falsificação precisa de um computador quântico no momento do ataque.
+security-quantum-why-secure-boot = As chaves do Secure Boot são RSA-2048: o firmware não verifica outra coisa.
+security-quantum-why-not-built = Esta compilação não disse qual versão entrega.
+
+## ── anchor: L23 ──
+# O INCUS (LEADER s x) — `incus.rs`, as palavras dele (`incus_words.rs`), as
+# threads e a janela. Nome, alias, endereço, a descrição de uma imagem e o
+# nome de um snapshot são palavras do próprio daemon e são desenhados como
+# vieram; tecla nunca é texto aqui: uma sequência chega como `{ $keys }`.
+group-incus = Incus
+mode-incus = Incus
+incus-title = Incus
+cmd-incus-open = Incus: seus containers e máquinas virtuais
+cmd-incus-window = Incus, numa janela
+cmd-incus-new = Um novo container ou máquina virtual do Incus
+cmd-incus-images = As imagens do Incus, aqui e nos catálogos
+incus-down = descer
+incus-up = subir
+incus-enter = abrir
+incus-left = esquerda
+incus-right = direita
+incus-next-kind = próximo tipo
+incus-previous-kind = tipo anterior
+incus-next-tab = próxima aba
+incus-previous-tab = aba anterior
+incus-launch = nova
+incus-start-stop = ligar/desligar
+incus-restart = reiniciar
+incus-freeze = congelar/descongelar
+incus-delete = apagar
+incus-console = console
+incus-screen = tela
+incus-shell = shell
+incus-push = enviar
+incus-pull = trazer
+incus-export = exportar
+incus-import = importar
+incus-copy-image = guardar uma cópia
+cmd-incus-down = A próxima linha
+cmd-incus-up = A linha de cima
+cmd-incus-enter = Abre a linha; num fato, copia
+cmd-incus-left = A coluna da esquerda, ou volta do detalhe
+cmd-incus-right = A coluna da direita, ou o detalhe da linha
+cmd-incus-next-kind = O próximo tipo: instâncias, imagens, remotos, perfis, redes, armazenamento, projetos
+cmd-incus-previous-kind = O tipo anterior
+cmd-incus-next-tab = A próxima aba da instância
+cmd-incus-previous-tab = A aba anterior da instância
+cmd-incus-launch = Uma instância nova: tipo, nome, imagem e limites, depois lançada pela fila
+cmd-incus-start-stop = Liga, ou desliga
+cmd-incus-restart = Reinicia
+cmd-incus-freeze = Congela, ou descongela
+cmd-incus-delete = Apaga — uma instância, uma imagem ou um snapshot — depois de uma pergunta
+cmd-incus-console = O console de texto dela, no terminal
+cmd-incus-screen = A tela de uma máquina virtual, no remote-viewer
+cmd-incus-shell = Um shell dentro dela, no terminal
+cmd-incus-push = Envia um arquivo para dentro dela, pela fila
+ask-incus-push = Arquivo a enviar
+cmd-incus-push-to = Onde, lá dentro, fica o arquivo enviado
+ask-incus-push-to = Onde, lá dentro
+cmd-incus-pull = Traz um arquivo de dentro dela, pela fila
+ask-incus-pull = Caminho lá dentro a trazer
+cmd-incus-pull-to = Onde, aqui, fica o arquivo trazido, nunca por cima de outro
+ask-incus-pull-to = Gravar como
+cmd-incus-export = Exporta para um arquivo, pela fila
+ask-incus-export = Exportar para um arquivo que ainda não existe
+cmd-incus-import = Importa uma instância de um arquivo, pela fila
+ask-incus-import = Arquivo a importar
+cmd-incus-copy-image = Guarda aqui uma cópia da imagem do catálogo, pela fila
+cmd-incus-name = O nome da instância nova
+ask-incus-name = Nome da instância nova
+cmd-incus-image = A imagem da instância nova
+ask-incus-image = Imagem (remoto:alias, ou o alias de uma daqui)
+cmd-incus-cpu = Os processadores dela
+ask-incus-cpu = Processadores (nada digitado: sem limite)
+cmd-incus-memory = A memória dela
+ask-incus-memory = Memória, com a unidade (nada digitado: sem limite)
+cmd-incus-processes = Os processos dela
+ask-incus-processes = Processos (nada digitado: sem limite)
+cmd-incus-snapshot = Um snapshot dela, com um nome
+ask-incus-snapshot = Nome do snapshot
+cmd-incus-publish = Publica como uma imagem aqui, pela fila
+ask-incus-publish = Alias da imagem nova
+incus-kind-instances = Instâncias
+incus-kind-images = Imagens
+incus-kind-remotes = Remotos
+incus-kind-profiles = Perfis
+incus-kind-networks = Redes
+incus-kind-storage = Armazenamento
+incus-kind-projects = Projetos
+incus-empty-instances = Nenhuma instância ainda: uma nova nasce de uma imagem, daqui ou do catálogo de um remoto.
+incus-empty-images = Nenhuma imagem aqui. O catálogo de um remoto guarda a cópia de uma, e uma instância lançada guarda a que usou.
+incus-empty-remotes = Nenhum remoto: o cliente não conhece servidor de onde trazer imagens.
+incus-empty-profiles = Nenhum perfil.
+incus-empty-networks = Nenhuma rede.
+incus-empty-storage = Nenhum pool de armazenamento.
+incus-empty-projects = Nenhum projeto.
+incus-projects-note = Esta vista trabalha no projeto padrão; os outros, o comando incus alcança.
+incus-tab-overview = Visão geral
+incus-tab-snapshots = Snapshots
+incus-tab-limits = Limites
+incus-tab-actions = Ações
+incus-status-running = ligada
+incus-status-stopped = desligada
+incus-status-frozen = congelada
+incus-status-error = com erro
+incus-status-other = mudando
+incus-machine-container = container
+incus-machine-vm = máquina virtual
+incus-list-address = { $status } · { $address }
+incus-reading = Perguntando ao Incus…
+incus-events-lost = Os eventos do Incus pararam (o daemon reiniciou?), então uma mudança feita em outro lugar pode ainda não aparecer; eles são reabertos sozinhos.
+incus-working = { $what } { $name }: { $stage }
+incus-row-name = Nome
+incus-row-kind = Tipo
+incus-row-status = Estado
+incus-row-ipv4 = Endereço IPv4
+incus-row-ipv6 = Endereço IPv6
+incus-row-cpu = Tempo de processador
+incus-row-memory = Memória em uso
+incus-row-processes = Processos rodando
+incus-row-disk = Disco em uso
+incus-row-image = Feita de
+incus-row-profiles = Perfis
+incus-row-made = Criada
+incus-row-project = Projeto
+incus-row-description = Descrição
+incus-row-alias = Alias
+incus-row-size = Tamanho
+incus-row-fingerprint = Impressão digital
+incus-row-address = Endereço
+incus-row-protocol = Fala
+incus-row-type = Tipo de rede
+incus-row-managed = Gerida pelo Incus
+incus-row-driver = Driver
+incus-row-nth = { $label } { $n }
+incus-yes = sim
+incus-no = não
+incus-seconds = { $count ->
+        [one] 1 segundo
+       *[other] { $count } segundos
+    }
+incus-minutes = { $count ->
+        [one] 1 minuto
+       *[other] { $count } minutos
+    }
+incus-hours = { $hours } h { $minutes } min
+incus-snapshot-take = Tirar um snapshot
+incus-snapshot-take-value = com um nome
+incus-snapshots-none = Nenhum snapshot ainda.
+incus-limit-cpu = Processadores
+incus-limit-memory = Memória
+incus-limit-processes = Processos
+incus-limit-none = sem limite
+incus-limit-from-profile = { $value }, de um perfil
+incus-limit-cpus = { $count ->
+        [one] 1 processador
+       *[other] { $count } processadores
+    }
+incus-limit-count = { $count ->
+        [one] 1 processo
+       *[other] { $count } processos
+    }
+incus-limits-note = Um limite posto aqui é da própria instância e vale sobre o dos perfis; responder sem digitar nada tira o da própria instância. Um limite que vem de um perfil se muda no perfil.
+incus-limits-vm-processes = Uma máquina virtual não tem limite de processos: o próprio kernel dela os conta.
+incus-use-console = Console de texto
+incus-use-screen = Tela
+incus-use-shell = Shell
+incus-use-push = Enviar um arquivo
+incus-use-pull = Trazer um arquivo
+incus-use-export = Exportar para um arquivo
+incus-use-publish = Publicar como imagem
+incus-use-in-terminal = no terminal
+incus-use-in-viewer = no remote-viewer
+incus-use-on-queue = pela fila
+incus-use-not-running = só enquanto roda
+incus-image-launch = Lançar uma instância dela
+incus-image-launch-value = uma instância nova
+incus-heading-catalogue = As imagens dele
+incus-catalogue-reading = Perguntando a { $remote } pelas imagens…
+incus-catalogue-empty = Ele não oferece nada para esta máquina.
+incus-offered-value = { $kind } · { $size }
+incus-consent-catalogue = A lista de imagens do remoto vem de lá, e as imagens de onde uma instância nasce também.
+incus-consent-launch = A imagem de onde a instância nova nasce vem de lá.
+incus-protocol-simplestreams = simplestreams
+incus-protocol-oci = um registro OCI
+incus-heading-volumes = Os volumes dele
+incus-volumes-none = Nenhum volume.
+incus-new-title = Uma instância nova
+incus-field-machine = Tipo
+incus-field-name = Nome
+incus-field-image = Imagem
+incus-unchosen = ainda não escolhido
+incus-image-hint = A imagem é remoto:alias — os remotos daqui são { $remotes } — ou o alias de uma imagem daqui.
+incus-create = Lançar
+incus-create-value = criada e ligada pela fila
+incus-ask-delete = Apagar { $name }?
+incus-ask-delete-running = Ela está ligada: é desligada antes.
+incus-ask-delete-snapshots = Os snapshots dela vão junto.
+incus-ask-delete-image = Apagar a imagem { $name }?
+incus-ask-delete-snapshot = Apagar o snapshot { $snapshot } de { $name }?
+incus-ask-restore = Restaurar { $name } para { $snapshot }? O que mudou nela desde então se perde.
+incus-answer-no = Não
+incus-answer-yes = Sim
+incus-did-start = Ligando
+incus-did-stop = Desligando
+incus-did-restart = Reiniciando
+incus-did-freeze = Congelando
+incus-did-unfreeze = Descongelando
+incus-did-delete = Apagando
+incus-did-limits = Pondo os limites de
+incus-did-snapshot = Tirando o snapshot
+incus-did-restore = Restaurando
+incus-did-delete-snapshot = Apagando o snapshot
+incus-did-delete-image = Apagando a imagem
+incus-echo-asked = { $what } { $name }…
+incus-echo-done = { $what } { $name }: feito.
+incus-echo-refused = { $what } { $name }: { $why }
+incus-echo-queued = { $what } { $name } foi para a fila — { $keys } a mostra.
+incus-no-queue = A fila de transferências não está respondendo, então nada foi para ela.
+incus-refused-not-here = Isso não é algo que se faça com { $kind }.
+incus-refused-not-running = Ela não está ligada.
+incus-refused-not-vm = Só uma máquina virtual tem tela.
+incus-refused-unchosen = Escolha um nome e uma imagem antes.
+incus-refused-name = { $name } não é um nome que o Incus aceite: letras, dígitos e hífens, começando por uma letra.
+incus-refused-name-taken = Já existe uma instância chamada { $name }.
+incus-refused-no-image = Nenhuma imagem remota e nenhuma daqui se chama { $image }.
+incus-refused-number = { $said } não é um número inteiro maior que zero.
+incus-refused-size = { $said } não é um tamanho: diga a unidade, como em 512MiB ou 2GiB.
+incus-refused-snapshot-name = { $name } não é um nome de snapshot que o Incus aceite: sem espaços e sem barras.
+incus-refused-no-file = { $path } não é um arquivo daqui.
+incus-refused-inside = { $path } não é um caminho lá dentro: um começa por barra.
+incus-refused-exists = { $path } já existe; nada é gravado por cima.
+incus-refused-no-folder = A pasta de { $path } não existe.
+incus-refused-alias = { $alias } não é um alias que o Incus aceite: sem espaços.
+incus-refused-limit-profile = { $limit }: esse limite de { $name } vem de um perfil, e { $name } não tem um próprio para tirar.
+
+## ── anchor: L24 ──
+# THE LLM ACCOUNTS (`LEADER m a`, `crate::agents`): Claude Code's and Codex's
+# accounts, their limits, their tokens and their sessions.
+group-agents = contas de LLM
+# The modeline's name for its window (`br.ronoctua.agents`).
+mode-agents = contas de LLM
+agents-title = Contas de LLM
+cmd-agents-open = Suas contas de LLM: limites, tokens e sessões
+cmd-agents-window = Suas contas de LLM, numa janela
+cmd-agents-session = Uma sessão da conta sob o cursor — ou da padrão — no terminal
+cmd-agents-login = Entra na conta sob o cursor — ou na padrão —, no terminal
+cmd-agents-up = Linha anterior
+cmd-agents-down = Próxima linha
+cmd-agents-enter = O que a linha sob o cursor faz
+cmd-agents-rename = Dá outro nome à conta
+cmd-agents-default = Faz da conta a padrão do tipo dela: a que `claude` ou `codex` digitado num terminal abre
+cmd-agents-remove = Esquece a conta — depois de uma pergunta; a pasta, as sessões e o login ficam
+cmd-agents-refresh = Conta os tokens e pergunta de novo ao endpoint de uso, agora
+cmd-agents-add-claude = Acrescenta uma conta do Claude Code: o nome, uma pasta própria, a nossa statusline, o login
+cmd-agents-add-codex = Acrescenta uma conta do Codex: o nome, uma pasta própria, o login
+cmd-agents-status-line = Põe a nossa statusline na frente da da conta, ou devolve a dela
+cmd-agents-warn-at = Diz quanto uma janela tem de estar cheia para a barra e a marca avisarem
+cmd-agents-danger-at = Diz quanto uma janela tem de estar cheia para a barra e a marca virarem perigo
+agents-up = subir
+agents-down = descer
+agents-enter = fazer
+agents-session = sessão
+agents-login = entrar
+agents-rename = renomear
+agents-default = padrão
+agents-remove = remover
+agents-refresh = atualizar
+ask-agents-rename = O nome da conta
+ask-agents-add-claude = O nome da nova conta do Claude Code
+ask-agents-add-codex = O nome da nova conta do Codex
+ask-agents-warn-at = Aviso a partir de quantos por cento (1–100)
+ask-agents-danger-at = Perigo a partir de quantos por cento (1–100)
+about-agents-window = Quanto da janela foi usado, e quando ela recomeça; a cor é a da marca na modeline
+about-agents-fact = Copia o valor
+agents-heading = Contas
+agents-reading = Lendo as suas contas…
+agents-none = Nenhuma conta ainda: acrescente uma abaixo.
+agents-account = { $glyph } { $place } · { $name }
+agents-row-agent = Agente
+agents-kind-claude = Claude Code
+agents-kind-codex = Codex
+agents-row-folder = Pasta
+agents-row-plan = Plano
+agents-plan = { $plan } · { $tier }
+agents-plan-unsaid = As credenciais não dizem
+agents-not-logged-in = Ainda sem login — entre abaixo
+agents-row-five-hours = 5 horas
+agents-row-week = Semana
+agents-row-week-opus = Semana, Opus
+agents-row-week-sonnet = Semana, Sonnet
+agents-window = { $bar } { $percent } · recomeça { $when }
+agents-window-unknown = Ainda não se sabe
+agents-percent = { $percent }%
+agents-from-logs = Dos próprios logs de sessão do Codex.
+agents-from-endpoint = Da statusline do Claude Code e do endpoint de uso da Anthropic, perguntado { $when } — um endpoint que a Anthropic não documenta e que pode mudar.
+agents-endpoint-refused = O endpoint de uso não foi lido: { $why }
+agents-endpoint-not-let = Só da statusline do Claude Code: o endpoint de uso ainda não foi permitido (abaixo).
+agents-endpoint-not-asked = Da statusline do Claude Code; o endpoint de uso ainda não foi perguntado.
+agents-row-tokens = Tokens
+agents-tokens = { $bar } { $count }
+agents-tokens-none = Nenhum contado ainda
+agents-tokens-few = { $n }
+agents-tokens-thousands = { $value } mil
+agents-tokens-millions = { $value } mi
+agents-tokens-billions = { $value } bi
+agents-model-unnamed = (nenhum modelo dito)
+agents-row-status-line = Statusline
+agents-line-ours = A nossa, na frente da sua — os limites vêm dela; esta linha devolve a sua
+agents-line-replaced = Mudou depois que pusemos a nossa na frente — esta linha põe a nossa na frente de novo
+agents-line-not = Não é a nossa — esta linha põe a nossa na frente da sua; os limites vêm dela
+agents-row-session = Abrir uma sessão
+agents-row-login = Entrar
+agents-row-name = Nome
+agents-row-default = Padrão
+agents-default-yes = A padrão do tipo dela
+agents-default-no = Não — esta linha a faz padrão
+agents-row-remove = Remover…
+agents-heading-endpoint = Endpoint de uso da Anthropic
+agents-row-endpoint = Perguntado
+agents-endpoint-let = Permitido
+agents-consent-for = Para quanto de cada janela as suas contas do Claude Code usaram, de um endpoint que a Anthropic não documenta (não oficial): ele pode mudar ou parar de responder.
+agents-heading-add = Acrescentar uma conta
+agents-add-claude = Acrescentar uma conta do Claude Code…
+agents-add-codex = Acrescentar uma conta do Codex…
+agents-add-note = Cada conta tem uma pasta própria; o terminal que abre faz o login nela.
+agents-row-refresh = Contar e perguntar de novo agora
+agents-heading-lines = Quando uma barra e a marca dela mudam de cor
+agents-row-warn = Aviso a partir de
+agents-row-danger = Perigo a partir de
+agents-lines-note = As mesmas linhas pintam a marca da conta na modeline.
+agents-ask-remove = Esquecer a conta “{ $name }”? A pasta fica, com as sessões e o login.
+agents-ask-remove-claude = Esquecer a conta “{ $name }”? A pasta fica, com as sessões e o login; a statusline do próprio Claude Code é devolvida.
+agents-answer-no = Não, manter
+agents-answer-yes = Sim, esquecer
+agents-not-on-an-account = O cursor não está numa conta.
+agents-already-default = Ela já é a padrão do tipo dela.
+agents-not-a-percent = Isso não é um número inteiro de 1 a 100.
+agents-lines-cross = O aviso tem de vir antes do perigo.
+agents-lines-unkept = As linhas não puderam ser gravadas.
+agents-lines-unreadable = O arquivo das linhas não lê; nada foi gravado por cima dele.
+agents-added = “{ $name }” acrescentada; entre nela no terminal que abriu.
+agents-renamed = Agora se chama “{ $name }”.
+agents-removed = “{ $name }” esquecida; a pasta fica.
+agents-made-default = “{ $name }” agora é a padrão do tipo dela.
+agents-wrapped = A nossa statusline está na frente da de “{ $name }”.
+agents-unwrapped = “{ $name }” tem a própria statusline de volta.
+agents-refreshing = Contando os tokens e perguntando de novo…
+agents-refreshed = Contado e perguntado de novo.
+agents-refreshed-but = Contado, mas não tudo: { $id }: { $why }
+agents-refused-not-let = O endpoint de uso ainda não foi permitido; permita primeiro.
+agents-refused-expired = O login venceu: o Claude Code o renova na próxima vez que rodar, ou entre de novo.
+agents-refused-no-credentials = Nunca se entrou nessa conta.
+agents-refused-unreadable = Um arquivo das contas não lê; nada foi gravado por cima dele.
+agents-refused-offline = A rede não respondeu.
+agents-refused-unknown = Essa conta não existe mais.
+agents-refused-invalid = Isso não é um nome, uma pasta ou uma conta que dê para usar.
+agents-refused-not-installed = O agente não está instalado nesta máquina; ele vem com os agentes do perfil de desenvolvimento.
+agents-refused-failed = Não deu para fazer; o log do sistema diz por quê.

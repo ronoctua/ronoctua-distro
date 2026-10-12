@@ -45,6 +45,21 @@ pub enum Outcome {
         /// sync tries again.
         #[serde(default)]
         unwritten: Vec<String>,
+        /// What a restore offers to turn on, "no" first (the
+        /// belongings-targets-unlock package).
+        #[serde(default)]
+        offers: Vec<Offer>,
+        /// The person's files a lenient read repaired, by logical path (the
+        /// store-resilience package's ledger).
+        #[serde(default)]
+        repaired: Vec<String>,
+        /// What the repository weighs against its budget (the
+        /// belongings-sealed package); `None` before it is measured.
+        #[serde(default)]
+        budget: Option<Budget>,
+        // ── anchor: L07 ──
+        // ── anchor: L08 ──
+        // ── anchor: L10 ──
     },
     /// Prepared, and waiting for the person to decide these many conflicts.
     Waiting {
@@ -62,6 +77,59 @@ pub enum Outcome {
     Keyed,
     /// The passphrase was changed.
     Rekeyed,
+    /// The history was compacted (the belongings-sealed package).
+    Compacted {
+        /// What the clone weighed before.
+        before_bytes: u64,
+        /// And after.
+        after_bytes: u64,
+    },
+    /// The plain part alone was synced (the belongings-plain-merge package).
+    PlainSynced {
+        /// Plain files written here.
+        pulled: u32,
+        /// Plain files sent.
+        pushed: u32,
+    },
+    // ── anchor: L08 ──
+    /// A compaction found nothing to fold: every version is younger than
+    /// `keep_days` days and of this format, and no chunk is orphaned — the
+    /// history was left as it was (the belongings-sealed package).
+    NothingToCompact {
+        /// The days the compaction kept.
+        keep_days: u64,
+    },
+    // ── anchor: L09 ──
+    // ── anchor: L10 ──
+}
+
+/// Something a restore offers to turn on — "no" drawn first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "offer", rename_all = "kebab-case")]
+pub enum Offer {
+    /// Sign commits with this SSH key (`~/.gitconfig` through `ronoctua-git`).
+    SshSigning {
+        /// The public key's logical path.
+        key: String,
+    },
+    /// Let a security key answer for the password (`pam_u2f`, sufficient).
+    PamU2f,
+}
+
+/// What the repository weighs, against its budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Budget {
+    /// The tree, in bytes.
+    pub tree_bytes: u64,
+    /// The history (`git count-objects` size-pack after a fetch), in bytes.
+    pub history_bytes: u64,
+    /// What the table recommends, in bytes.
+    pub recommend_bytes: u64,
+    /// Whether a compaction of the table's `keepDays` would drop any commit
+    /// — what a recommendation to compact needs (`kept::weight`): a history
+    /// all younger than the cutoff weighs what it weighs.
+    #[serde(default)]
+    pub foldable: bool,
 }
 
 /// `status.json`.
@@ -136,6 +204,23 @@ pub struct Last {
     /// machine adds later, under a path this one took out, is not followed
     /// and so not taken out again.
     pub roots: std::collections::BTreeSet<String>,
+    // ── anchor: L09 ──
+    /// The plain part as the last run of it left it — a sync's, or a plain
+    /// run's alone (`sync-plain`, `plain pull`/`push`): the base of its next
+    /// merge, its conflicts and what it left out for its size. A plain run
+    /// writes only this, so the rest stays the last SEALED sync's.
+    pub plain: crate::plain::PlainBase,
+    // ── anchor: L10 ──
+    /// The predefined targets NO machine keeps any more, by id, as the
+    /// index said at that sync (`crate::merge::Index::dropped`) — what a
+    /// door reads to say "not on any machine" without the passphrase.
+    pub dropped: std::collections::BTreeSet<String>,
+    /// When each file of [`Last::entries`] and of the plain part last
+    /// changed here, in seconds since the epoch, as the run left it alike
+    /// with its base — what a door compares a file's `stat` with to say
+    /// "changed" without reading it (`crate::inventory::stamp_sealed`). A
+    /// path the run could not vouch for (changed while it ran) has none.
+    pub modified_s: BTreeMap<String, i64>,
 }
 
 impl Last {
@@ -182,6 +267,9 @@ mod tests {
                 large: vec![("home/videos".to_owned(), 200 << 20)],
                 unreadable: vec![],
                 unwritten: vec!["config/x.json".to_owned()],
+                offers: vec![Offer::PamU2f],
+                repaired: vec![],
+                budget: Some(Budget::default()),
             },
             Outcome::Waiting { conflicts: 4 },
             Outcome::Refused {
@@ -190,11 +278,33 @@ mod tests {
             Outcome::Abandoned,
             Outcome::Keyed,
             Outcome::Rekeyed,
+            Outcome::Compacted {
+                before_bytes: 9,
+                after_bytes: 4,
+            },
+            Outcome::PlainSynced {
+                pulled: 1,
+                pushed: 2,
+            },
+            Outcome::NothingToCompact { keep_days: 30 },
         ] {
             let s = Status { at_s: 5, outcome };
             let text = serde_json::to_string(&s).unwrap();
             assert_eq!(serde_json::from_str::<Status>(&text).unwrap(), s);
         }
+    }
+
+    /// FAILS IF: a `status.json` written before the 2026-10-05 wave (no
+    /// `offers`, `repaired`, `budget`) stops reading.
+    #[test]
+    fn an_older_status_still_reads() {
+        let old = r#"{"at_s":5,"outcome":{"outcome":"synced","pulled":1,"pushed":0,
+            "deleted_here":0,"deleted_there":0,"kept":3,"kept_bytes":10}}"#;
+        let s: Status = serde_json::from_str(old).unwrap();
+        assert!(matches!(
+            s.outcome,
+            Outcome::Synced { ref offers, budget: None, .. } if offers.is_empty()
+        ));
     }
 
     #[test]

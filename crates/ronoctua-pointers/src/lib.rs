@@ -52,6 +52,11 @@ pub struct Snapshot {
     /// Whether `pointers.json` could not be read — then nothing is written
     /// over it, and the screen says why its choices are missing.
     pub settings_failed: bool,
+    /// Whether PART of `pointers.json` did not read — a value repaired by
+    /// the store, the rest read. Orders still write (the store keeps the
+    /// file's value in that place), and the screen says that what it shows
+    /// there is not what the file says.
+    pub settings_repaired: bool,
     /// Whether there is a compositor to ask at all.
     pub connected: bool,
     /// Every keyboard's twin and its cursor — empty in Together mode.
@@ -363,12 +368,13 @@ impl Hands {
     }
 
     fn look(&mut self) -> Snapshot {
-        // `parsed` answers `None` only for a file that is there and will not
-        // parse — a missing one is the default, which is a fresh machine.
-        let (prefs, settings_failed) = match self.store.parsed() {
-            Some(p) => (p, false),
-            None => (Preferences::default(), true),
-        };
+        // NOTHING OF IT READ only for a file that is there and will not
+        // parse — a missing one is the default, which is a fresh machine. A
+        // file with a value repaired is the rest of it, and says so.
+        let reading = self.store.reading();
+        let settings_failed = reading.lost_everything();
+        let settings_repaired = reading.part_not_read();
+        let prefs = reading.value;
         let (devices, seats, connected) = match self.wm() {
             Some(wm) => (
                 wm.devices().unwrap_or_default(),
@@ -385,6 +391,7 @@ impl Hands {
             prefs,
             plan,
             settings_failed,
+            settings_repaired,
             connected,
             keyboards,
         }

@@ -1,0 +1,25 @@
+{
+  "why": "A person's brain-module id, as both sides read it: nix/brain-modules.nix (isPersonId) loads it, ronoctua-person (check::person_module) validates its approval. One table, proved by both: brain-person-module-ids-are-prefixed and a_person_module_id_is_the_loaders_grammar.",
+  "accepted": [
+    "my-sample",
+    "my-two-fa",
+    "my-a2",
+    "my-x",
+    "my-agents-quota",
+    "my-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "refused": [
+    "my-2fa",
+    "my-",
+    "my",
+    "my--x",
+    "my-x-",
+    "my-X",
+    "my-x_y",
+    "my-x.y",
+    "my-a-2b",
+    "made-up",
+    "mine",
+    "my-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}

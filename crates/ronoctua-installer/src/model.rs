@@ -31,12 +31,20 @@
 //! # The Wi-Fi password is a CONDITIONAL screen
 //!
 //! [`Question::WifiPassword`] only appears once a network has been chosen — see
-//! [`Question::skipped_one`]. Whoever goes by cable answers twelve screens;
-//! whoever chooses a network answers thirteen.
+//! [`Question::skipped_one`]. Whoever goes by cable answers fifteen screens;
+//! whoever chooses a network answers sixteen.
+//!
+//! # And the network is a GATE now
+//!
+//! The person's repository became mandatory (2026-10-05): the installation
+//! applies their declarations and restores their belongings, and asks the
+//! release which installer to use. So leaving the network question requires a
+//! way out (`crate::gate`), and the three questions about the repository come
+//! after it — each checked against the network before the next one appears.
 
 use ronoctua_i18n::key;
 
-/// The questions. **Fifteen, and the test counts them.**
+/// The questions. **Seventeen, and the test counts them.**
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Question {
     /// Which disk to install on. It erases everything.
@@ -90,13 +98,15 @@ pub enum Question {
     ///
     /// `full` brings everything and is the recommended one; `minimal` leaves out
     /// the applications — Android, the toolchains, the browser, the editor,
-    /// media and the extra font variants — and installs in minutes because the
-    /// ISO carries its closure already built.
+    /// media and the extra font variants — and installs in a fraction of the
+    /// time, because there is that much less to download (what no public
+    /// cache serves is either on the ISO or in the distro's binary cache).
     ///
     /// It is asked and not guessed because it is the one answer here that is
     /// nobody else's to infer: it says what the machine is FOR. And it is not
     /// final — the answer becomes a line in `host.nix`, and a group comes back
-    /// with a `nixos-rebuild`.
+    /// with that line changed and the machine applied again (the update, or
+    /// `ronoctua-machine apply`).
     Profile,
     /// The system's locale: date, number, paper and units.
     ///
@@ -111,20 +121,32 @@ pub enum Question {
     Wifi,
     /// Its password. It only appears when a network has been chosen.
     WifiPassword,
-    /// The private repository the person's belongings are kept in — optional.
+    /// The private repository the person's belongings are kept in.
     ///
-    /// # Why it is asked here
+    /// # Why it is asked here, and why it is not optional any more
     ///
     /// Because only the person knows it, and it is what turns a new machine
-    /// into THEIR machine: the first sync after the installation restores the
-    /// configuration another machine kept (`LEADER s v`). Empty is a choice —
-    /// no repository, or one set later from the view.
+    /// into THEIR machine: their declarations (`plain/person/`) are applied
+    /// to the machine's flake before it is built, and their belongings are
+    /// restored into the home before anybody logs in (`crate::access`).
     ///
     /// The address alone, never a credential (`user:pass@` is refused, and so
     /// are `http://` and a local path). It is written into the PERSON'S home
     /// (`~/.config/ronoctua/belongings.json`, owned by them), never into
     /// `host.nix`: it is theirs, and `host.nix` describes the machine.
-    Belongings,
+    BelongingsAddress,
+    /// How this machine reaches the repository.
+    ///
+    /// For an SSH address it is not typed: the installer makes a deploy key
+    /// in RAM, shows it (text, QR, the host's page) and probes the repository
+    /// until the key reads and writes. For an HTTPS address it is a token,
+    /// typed and probed the same way. The terminal-less mode names a FILE
+    /// holding the one or the other — never its content.
+    BelongingsAccess,
+    /// The passphrase that opens the belongings: proved by opening the
+    /// repository's `key.age`, or — the repository being empty — typed twice,
+    /// and the installation makes the repository with it.
+    BelongingsPassphrase,
 }
 
 impl Question {
@@ -147,7 +169,7 @@ impl Question {
     /// the passphrase is typed blind, is not echoed, and cannot be corrected
     /// later — typing it on the wrong layout is the one mistake here with no
     /// recovery.
-    pub const ALL_KEYS: [Self; 15] = [
+    pub const ALL_KEYS: [Self; 17] = [
         Self::Language,
         Self::Disk,
         // WHICH installation, right after WHERE it goes. It comes before the
@@ -163,13 +185,18 @@ impl Question {
         Self::Hostname,
         Self::Password,
         Self::Passphrase,
-        // THE NETWORK is the last thing the person types, and it comes after the
-        // language so the network list already appears in the chosen language.
+        // THE NETWORK comes after the language so the network list already
+        // appears in the chosen language — and it is a GATE: what follows is
+        // checked against the network.
         Self::Wifi,
         Self::WifiPassword,
-        // THE BELONGINGS LAST OF WHAT IS TYPED: optional, and the one answer
-        // about the person rather than the machine.
-        Self::Belongings,
+        // THE BELONGINGS LAST OF WHAT IS TYPED: the answers about the person
+        // rather than the machine, each proved before the next one — the
+        // address, the access that reads and writes it, the passphrase that
+        // opens it.
+        Self::BelongingsAddress,
+        Self::BelongingsAccess,
+        Self::BelongingsPassphrase,
         Self::ResumeOffset,
     ];
 
@@ -196,7 +223,12 @@ impl Question {
             Self::ResumeOffset => key::INST_RESUME_OFFSET,
             Self::Wifi => key::INST_WIFI,
             Self::WifiPassword => key::INST_WIFI_PASSWORD,
-            Self::Belongings => key::INST_BELONGINGS,
+            // `inst-belongings` and not `-address`: the label names the
+            // terminal-less mode's variable, and `RONOCTUA_INST_BELONGINGS`
+            // is what the tests and the VM already set.
+            Self::BelongingsAddress => key::INST_BELONGINGS,
+            Self::BelongingsAccess => key::INST_BELONGINGS_ACCESS,
+            Self::BelongingsPassphrase => key::INST_BELONGINGS_PASSPHRASE,
         }
     }
 
@@ -216,11 +248,15 @@ impl Question {
             Self::Timezone => key::INST_TIMEZONE_HELP,
             Self::Profile => key::INST_PROFILE_HELP,
             Self::ResumeOffset => key::INST_RESUME_OFFSET_HELP,
-            Self::Wifi => key::INST_WIFI_HELP,
-            // The network's help line also serves the password: what it
-            // says — that the password does not enter the repository — matters more here.
+            // THE NETWORK'S HELP NAMES THE HOSTS IT WILL REACH — answering
+            // the question is the consent to reach them (`$hosts`).
+            Self::Wifi => key::INST_NETWORK_HELP,
+            // The password's own line: that it does not enter the
+            // repository matters more here.
             Self::WifiPassword => key::INST_WIFI_HELP,
-            Self::Belongings => key::INST_BELONGINGS_HELP,
+            Self::BelongingsAddress => key::INST_BELONGINGS_HELP,
+            Self::BelongingsAccess => key::INST_BELONGINGS_ACCESS_HELP,
+            Self::BelongingsPassphrase => key::INST_BELONGINGS_PASSPHRASE_HELP,
         }
     }
 
@@ -237,7 +273,16 @@ impl Question {
     /// Whether the answer should be hidden on screen.
     #[must_use]
     pub const fn secret_one(self) -> bool {
-        matches!(self, Self::Password | Self::Passphrase | Self::WifiPassword)
+        // The ACCESS too: for an HTTPS address what is typed there is a
+        // token, which opens the repository as surely as a password.
+        matches!(
+            self,
+            Self::Password
+                | Self::Passphrase
+                | Self::WifiPassword
+                | Self::BelongingsAccess
+                | Self::BelongingsPassphrase
+        )
     }
 
     /// Whether the installer computes it instead of asking.
@@ -287,12 +332,9 @@ impl Question {
         // both variants it has put a dead accent on level 1 — and a keyboard whose
         // layout already carries the accents wants no Compose key stealing one.
         //
-        // The belongings too: no repository is an answer, and the view sets one
-        // later.
-        matches!(
-            self,
-            Self::Wifi | Self::KeyboardVariant | Self::ComposeKey | Self::Belongings
-        )
+        // The belongings are NOT here any more: the repository is mandatory
+        // (owner, 2026-10-05), and none of its three answers may be blank.
+        matches!(self, Self::Wifi | Self::KeyboardVariant | Self::ComposeKey)
     }
 
     /// Whether this screen should be SKIPPED, given the answers so far.
@@ -332,6 +374,57 @@ pub enum Invalid {
     UnknownProfile,
     /// A repository address the belongings may not use.
     Belongings(ronoctua_belongings::prefs::Invalid),
+    /// The access named is not a file's absolute path (the terminal-less
+    /// mode names the deploy key's or the token's file, never its content).
+    AccessNotAFile,
+}
+
+impl Invalid {
+    /// The sentence the TUI shows for it (invariant 8). The English of
+    /// [`Display`](std::fmt::Display) is the terminal-less mode's — a command
+    /// line's error, which invariant 18 keeps in English.
+    #[must_use]
+    pub const fn key(&self) -> &'static str {
+        match self {
+            Self::Blank => key::INST_INVALID_BLANK,
+            Self::HostnameMalformed => key::INST_INVALID_HOSTNAME,
+            Self::HostnameWithoutPrefix => key::INST_INVALID_HOSTNAME_PREFIX,
+            Self::PassphraseTooShort => key::INST_INVALID_PASSPHRASE_SHORT,
+            Self::InvalidDisk => key::INST_INVALID_DISK,
+            Self::UnknownLanguage => key::INST_INVALID_LANGUAGE,
+            Self::UnknownLayout => key::INST_INVALID_LAYOUT,
+            Self::WifiPasswordTooShort => key::INST_WIFI_PASSWORD_SHORT,
+            Self::UnknownProfile => key::INST_INVALID_PROFILE,
+            Self::Belongings(why) => crate::access::invalid_key(*why),
+            Self::AccessNotAFile => key::INST_INVALID_ACCESS,
+        }
+    }
+}
+
+impl Invalid {
+    /// The arguments its sentence takes: the hostname's prefix is the
+    /// code's ([`HOSTNAME_PREFIX`]), never spelled in a `.ftl`.
+    #[must_use]
+    pub fn args(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::HostnameWithoutPrefix => vec![("prefix", HOSTNAME_PREFIX.to_owned())],
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// The sentence of a text key the installer shows, with the arguments the
+/// key takes — the one place a refusal's arguments are given, for the TUI
+/// and the terminal-less mode alike.
+#[must_use]
+pub fn sentence(texts: &ronoctua_i18n::Texts, k: &str) -> String {
+    if k == key::INST_INVALID_HOSTNAME_PREFIX {
+        let args = Invalid::HostnameWithoutPrefix.args();
+        let args: Vec<(&str, &str)> = args.iter().map(|(n, v)| (*n, v.as_str())).collect();
+        texts.t_with(k, &args)
+    } else {
+        texts.t(k)
+    }
 }
 
 impl std::fmt::Display for Invalid {
@@ -341,7 +434,10 @@ impl std::fmt::Display for Invalid {
             Self::HostnameMalformed => {
                 "lowercase letters, digits and hyphens only; it may not start or end with a hyphen"
             }
-            Self::HostnameWithoutPrefix => "the machine's name starts with `noctua-`",
+            // THE PREFIX IS THE CODE'S, never spelled a second time.
+            Self::HostnameWithoutPrefix => {
+                return write!(f, "the machine's name starts with `{HOSTNAME_PREFIX}`");
+            }
             Self::PassphraseTooShort => "the disk's passphrase needs at least 12 characters",
             Self::InvalidDisk => "that path is not a disk",
             Self::UnknownProfile => "the installation is `full` or `minimal`",
@@ -360,8 +456,15 @@ impl std::fmt::Display for Invalid {
                         "an http:// address sends the access in the clear; use https:// or ssh"
                     }
                     Why::NotRemote => "a local path or file:// is not a remote repository",
+                    Why::UnnamedHost => {
+                        "the host must be a name or an IPv4 address: an IPv6 address or a name \
+                         with `_` cannot be allowed"
+                    }
                     Why::Unknown => "the address is git@host:path, ssh://… or https://…",
                 }
+            }
+            Self::AccessNotAFile => {
+                "name the file that holds the deploy key or the token, by its absolute path"
             }
         };
         f.write_str(s)
@@ -743,13 +846,26 @@ pub fn validate_it(
         }
         // THE ADDRESS ALONE: a credential in it would sit in a plain file and
         // in git's config; `http://` sends the access in the clear.
-        Question::Belongings => {
-            if !answer.is_empty() {
-                ronoctua_belongings::prefs::repository_is_plain(answer)
-                    .map_err(Invalid::Belongings)?;
+        Question::BelongingsAddress => {
+            ronoctua_belongings::prefs::repository_is_plain(answer).map_err(Invalid::Belongings)?;
+        }
+        // A FILE'S PATH, never the key or the token itself: the terminal-less
+        // mode reads it from the environment, and a secret there would be in
+        // every child's. Whether it reads and writes is the probe's question,
+        // asked before the first step.
+        Question::BelongingsAccess => {
+            if !answer.starts_with('/') {
+                return Err(Invalid::AccessNotAFile);
             }
         }
-        Question::Password | Question::ResumeOffset | Question::Wifi => {}
+        // Whatever the person chose: it opens the repository, or — an empty
+        // one — it is the one the repository will be made with, and THAT is
+        // where its length is asked (`MINIMUM_PASSPHRASE`, the TUI's second
+        // typing and the terminal-less mode's preflight).
+        Question::BelongingsPassphrase
+        | Question::Password
+        | Question::ResumeOffset
+        | Question::Wifi => {}
     }
     Ok(())
 }
@@ -785,12 +901,109 @@ pub struct Answers {
     pub wifi_ssid: String,
     /// Its password. It **never** enters the `host.nix` (section 9).
     pub wifi_password: String,
-    /// The belongings' repository. Empty = none. It never enters `host.nix`:
-    /// it is written into the person's home.
+    /// The belongings' repository. It never enters `host.nix`: it is written
+    /// into the person's home.
     pub belongings: String,
+    /// The file holding this machine's access to it: the deploy key the
+    /// installer made, or the token typed (or, terminal-less, the file
+    /// named).
+    pub belongings_access: String,
+    /// The belongings' passphrase. Never written anywhere but the `0600`
+    /// file a restore reads and deletes.
+    pub belongings_passphrase: String,
+    /// What the probe found: the repository has nothing yet, so the
+    /// installation MAKES it (`init`) instead of restoring from it.
+    /// Computed, like the offset.
+    pub belongings_empty: Option<bool>,
+    /// The swapfile, measured once the disk is known. Computed; `None`
+    /// leaves the hardware report's default.
+    pub swap: Option<crate::swap::Swap>,
+    /// Whether the machine is built from — and keeps — the installer's own
+    /// distro tree (`crate::plan::Origin::aimed`). Computed when the
+    /// installation runs; the dry run leaves it out, as it leaves the swap.
+    pub aimed: bool,
+}
+
+/// The variable of the answers' file that names where to resume — the label
+/// of the first question the release's installer asks.
+pub const RESUME: &str = "RONOCTUA_INST_RESUME";
+
+/// What every answer's variable starts with ([`Question::variable`],
+/// [`RESUME`]): the name a child must never inherit.
+pub const ANSWER_PREFIX: &str = "RONOCTUA_INST_";
+
+/// Every answer's variable by name: each question's, the resume's, and any
+/// other this process's environment holds under [`ANSWER_PREFIX`].
+#[must_use]
+pub fn answer_variables() -> Vec<String> {
+    let mut names: Vec<String> = Question::ALL_KEYS
+        .iter()
+        .map(|q| q.variable())
+        .chain(std::iter::once(RESUME.to_owned()))
+        .collect();
+    for (name, _) in std::env::vars_os() {
+        if let Some(name) = name.to_str()
+            && name.starts_with(ANSWER_PREFIX)
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 impl Answers {
+    /// The answers as the release's installer reads them back
+    /// (`--answers`): one `NAME=value` per answered question, named by
+    /// [`Question::variable`], and the question to resume at. It carries
+    /// SECRETS: whoever writes it writes it `0600`, and whoever reads it
+    /// deletes it.
+    #[must_use]
+    pub fn lines(&self, resume_at: Question) -> String {
+        let mut out = String::new();
+        for q in Question::ALL_KEYS {
+            let v = self.get(q);
+            if q.computed() || v.is_empty() || v.contains('\n') {
+                continue;
+            }
+            out.push_str(&q.variable());
+            out.push('=');
+            out.push_str(v);
+            out.push('\n');
+        }
+        out.push_str(RESUME);
+        out.push('=');
+        out.push_str(resume_at.label());
+        out.push('\n');
+        out
+    }
+
+    /// Reads [`Answers::lines`] back: the answers, and the question to
+    /// resume at. A line this installer does not know is skipped (a newer
+    /// one may have more), and a value is taken as it is — the questions
+    /// validate again when they are shown or run.
+    #[must_use]
+    pub fn from_lines(text: &str) -> (Self, Option<Question>) {
+        let mut r = Self::default();
+        let mut resume = None;
+        for line in text.lines() {
+            let Some((name, value)) = line.split_once('=') else {
+                continue;
+            };
+            if name == RESUME {
+                resume = Question::ALL_KEYS.into_iter().find(|q| q.label() == value);
+                continue;
+            }
+            if let Some(q) = Question::ALL_KEYS
+                .into_iter()
+                .find(|q| !q.computed() && q.variable() == name)
+            {
+                r.set(q, value.to_owned());
+            }
+        }
+        (r, resume)
+    }
+
     /// Reads one answer per question.
     #[must_use]
     pub fn get(&self, q: Question) -> &str {
@@ -808,7 +1021,9 @@ impl Answers {
             Question::Profile => &self.profile,
             Question::Wifi => &self.wifi_ssid,
             Question::WifiPassword => &self.wifi_password,
-            Question::Belongings => &self.belongings,
+            Question::BelongingsAddress => &self.belongings,
+            Question::BelongingsAccess => &self.belongings_access,
+            Question::BelongingsPassphrase => &self.belongings_passphrase,
             Question::ResumeOffset => "",
         }
     }
@@ -829,7 +1044,9 @@ impl Answers {
             Question::Profile => self.profile = v,
             Question::Wifi => self.wifi_ssid = v,
             Question::WifiPassword => self.wifi_password = v,
-            Question::Belongings => self.belongings = v,
+            Question::BelongingsAddress => self.belongings = v,
+            Question::BelongingsAccess => self.belongings_access = v,
+            Question::BelongingsPassphrase => self.belongings_passphrase = v,
             Question::ResumeOffset => {}
         }
     }
@@ -846,7 +1063,7 @@ mod tests {
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
 
     #[test]
-    fn there_are_exactly_fifteen_questions() {
+    fn there_are_exactly_seventeen_questions() {
         // Milestone 8's CRITERION still holds: one asks what ONLY THE PERSON
         // knows, and nothing beyond. One more question is a decision the project
         // handed back to the person after already making it (section 7.1).
@@ -867,14 +1084,148 @@ mod tests {
         // moment one finds out is while typing the disk's passphrase: not
         // echoed, and not correctable afterwards.
         //
-        // THE BELONGINGS' REPOSITORY is the fifteenth, optional: where the
-        // person keeps their configuration is theirs alone to know, and it is
-        // what makes the new machine theirs at its first sync.
-        assert_eq!(Question::ALL_KEYS.len(), 15);
+        // THE BELONGINGS' REPOSITORY is three, and mandatory (owner,
+        // 2026-10-05): where the person keeps their configuration, how this
+        // machine reaches it and what opens it are theirs alone to know, and
+        // they are what makes the new machine theirs before its first boot.
+        assert_eq!(Question::ALL_KEYS.len(), 17);
         let mut views: Vec<_> = Question::ALL_KEYS.to_vec();
         views.sort();
         views.dedup();
-        assert_eq!(views.len(), 15, "there is a repeated question in the list");
+        assert_eq!(views.len(), 17, "there is a repeated question in the list");
+    }
+
+    /// FAILS IF: the repository's questions come before the network they
+    /// are proved against, or out of their order — the access before the
+    /// address it is for, the passphrase before the access that reads the
+    /// repository.
+    #[test]
+    fn the_repository_is_asked_after_the_network_in_its_own_order() {
+        let at = |q: Question| Question::ALL_KEYS.iter().position(|x| *x == q).unwrap();
+        assert!(at(Question::WifiPassword) < at(Question::BelongingsAddress));
+        assert!(at(Question::BelongingsAddress) < at(Question::BelongingsAccess));
+        assert!(at(Question::BelongingsAccess) < at(Question::BelongingsPassphrase));
+        for q in [
+            Question::BelongingsAddress,
+            Question::BelongingsAccess,
+            Question::BelongingsPassphrase,
+        ] {
+            assert!(!q.optional(), "{q:?} became optional");
+            assert_eq!(
+                validate_it(q, "", LANGUAGES, LAYOUTS),
+                Err(Invalid::Blank),
+                "{q:?}"
+            );
+        }
+        assert!(Question::BelongingsPassphrase.secret_one());
+        assert!(Question::BelongingsAccess.secret_one());
+        assert_eq!(
+            validate_it(Question::BelongingsAccess, "deploy", LANGUAGES, LAYOUTS),
+            Err(Invalid::AccessNotAFile)
+        );
+        assert!(
+            validate_it(
+                Question::BelongingsAccess,
+                "/run/keys/deploy",
+                LANGUAGES,
+                LAYOUTS
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            Question::BelongingsAccess.variable(),
+            "RONOCTUA_INST_BELONGINGS_ACCESS"
+        );
+        assert_eq!(
+            Question::BelongingsPassphrase.variable(),
+            "RONOCTUA_INST_BELONGINGS_PASSPHRASE"
+        );
+    }
+
+    /// FAILS IF: the answers the release's installer reads back lose one,
+    /// gain a computed one, or resume anywhere but where they were left.
+    #[test]
+    fn the_answers_cross_to_the_release_installer_whole() {
+        let mut r = Answers::default();
+        r.set(Question::Language, "pt-BR".into());
+        r.set(Question::Disk, "/dev/nvme0n1".into());
+        r.set(Question::Password, "Zq7 with = and spaces".into());
+        r.set(Question::Wifi, "home-5g".into());
+        r.set(Question::WifiPassword, "Zq7-radio".into());
+        r.resume_offset = Some(1);
+        let text = r.lines(Question::BelongingsAddress);
+        assert!(
+            !text.contains("RESUME_OFFSET"),
+            "a computed answer travelled"
+        );
+        let (back, resume) = Answers::from_lines(&text);
+        assert_eq!(resume, Some(Question::BelongingsAddress));
+        for q in Question::ALL_KEYS {
+            assert_eq!(back.get(q), r.get(q), "{q:?}");
+        }
+        assert_eq!(back.resume_offset, None);
+        // A line from a newer installer, and nonsense, are skipped.
+        let (_, none) = Answers::from_lines("RONOCTUA_INST_FROM_THE_FUTURE=x\nnonsense\n");
+        assert_eq!(none, None);
+    }
+
+    /// FAILS IF: an answer the TUI refuses has no sentence of its own, or
+    /// two refusals say the same thing.
+    #[test]
+    fn every_refused_answer_has_its_own_sentence() {
+        use ronoctua_belongings::prefs::Invalid as Why;
+        let all = [
+            Invalid::Blank,
+            Invalid::HostnameMalformed,
+            Invalid::HostnameWithoutPrefix,
+            Invalid::PassphraseTooShort,
+            Invalid::InvalidDisk,
+            Invalid::UnknownLanguage,
+            Invalid::UnknownLayout,
+            Invalid::WifiPasswordTooShort,
+            Invalid::UnknownProfile,
+            Invalid::Belongings(Why::PlainHttp),
+            Invalid::AccessNotAFile,
+        ];
+        let mut keys: Vec<&str> = all.iter().map(Invalid::key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), all.len());
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = ronoctua_i18n::Texts::fresh(language).unwrap();
+            for i in &all {
+                let said = sentence(&t, i.key());
+                assert!(!said.starts_with('['), "{language}: {i:?}");
+                assert!(
+                    !said.contains('{'),
+                    "{language}: {i:?} lost an argument: {said}"
+                );
+            }
+            // THE PREFIX IS THE CODE'S: the sentence says the constant, and
+            // a `.ftl` that spelled it would not follow a rename.
+            assert!(
+                sentence(&t, Invalid::HostnameWithoutPrefix.key()).contains(HOSTNAME_PREFIX),
+                "{language}"
+            );
+        }
+        assert!(
+            Invalid::HostnameWithoutPrefix
+                .to_string()
+                .contains(HOSTNAME_PREFIX)
+        );
+    }
+
+    /// FAILS IF: an answer's variable does not start with the prefix a
+    /// child is cleaned of — it would reach every child the installer
+    /// starts.
+    #[test]
+    fn every_answer_is_named_under_the_prefix() {
+        let names = answer_variables();
+        for q in Question::ALL_KEYS {
+            assert!(q.variable().starts_with(ANSWER_PREFIX), "{q:?}");
+            assert!(names.contains(&q.variable()), "{q:?}");
+        }
+        assert!(RESUME.starts_with(ANSWER_PREFIX));
     }
 
     #[test]
@@ -945,7 +1296,9 @@ mod tests {
                     | Question::ResumeOffset
                     | Question::Wifi
                     | Question::KeyboardVariant
-                    | Question::Belongings
+                    | Question::BelongingsAddress
+                    | Question::BelongingsAccess
+                    | Question::BelongingsPassphrase
             );
             assert_eq!(
                 q.default_answer().is_some(),
@@ -1022,20 +1375,23 @@ mod tests {
     }
 
     /// FAILS IF: an address the belongings may use is refused, or one with a
-    /// credential, `http://` or a local path is taken — or empty is refused.
+    /// credential, `http://` or a local path is taken — or empty is taken.
     #[test]
     fn the_belongings_take_a_plain_remote_and_nothing_else() {
         use ronoctua_belongings::prefs::Invalid as Why;
-        assert!(Question::Belongings.optional());
-        assert!(!Question::Belongings.secret_one());
-        assert!(validate_it(Question::Belongings, "", LANGUAGES, LAYOUTS).is_ok());
+        assert!(!Question::BelongingsAddress.optional());
+        assert!(!Question::BelongingsAddress.secret_one());
+        assert_eq!(
+            validate_it(Question::BelongingsAddress, "", LANGUAGES, LAYOUTS),
+            Err(Invalid::Blank)
+        );
         for good in [
             "git@example.org:someone/belongings.git",
             "ssh://git@example.org/someone/belongings.git",
             "https://example.org/someone/belongings.git",
         ] {
             assert!(
-                validate_it(Question::Belongings, good, LANGUAGES, LAYOUTS).is_ok(),
+                validate_it(Question::BelongingsAddress, good, LANGUAGES, LAYOUTS).is_ok(),
                 "{good}"
             );
         }
@@ -1050,14 +1406,14 @@ mod tests {
             ("example.org", Why::Unknown),
         ] {
             assert_eq!(
-                validate_it(Question::Belongings, bad, LANGUAGES, LAYOUTS),
+                validate_it(Question::BelongingsAddress, bad, LANGUAGES, LAYOUTS),
                 Err(Invalid::Belongings(why)),
                 "{bad}"
             );
             assert!(!Invalid::Belongings(why).to_string().is_empty());
         }
         assert_eq!(
-            Question::Belongings.variable(),
+            Question::BelongingsAddress.variable(),
             "RONOCTUA_INST_BELONGINGS",
             "the terminal-less mode's variable is derived from the label"
         );

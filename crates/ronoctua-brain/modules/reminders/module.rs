@@ -191,10 +191,13 @@ impl Reminders {
     /// hands in), and what plays the chime.
     fn at(dir: Option<PathBuf>, zone: Arc<dyn Offset>, chime: Chime) -> Self {
         let store = ronoctua_store::Store::<Book>::at(dir, FILE);
-        // `parsed` AND NOT `read`: this module writes the whole file back,
+        // `whole` AND NOT `read`: this module writes the whole file back,
         // and a file read as empty because it did not parse would be
-        // written over with nothing (AGENTS.md, "Regras de código").
-        let (book, readable) = match store.parsed() {
+        // written over with nothing (AGENTS.md, "Regras de código"). Nor
+        // `parsed`: a reminder the store would repair away (a newer
+        // machine's repeat) is a reminder that does not ring — the file is
+        // "unreadable" until it reads whole, as it always was.
+        let (book, readable) = match store.whole() {
             Some(book) => (book, true),
             None => {
                 tracing::error!(
@@ -300,7 +303,7 @@ impl Reminders {
     /// The file changed on disk: taken when somebody else wrote it, let by
     /// when it is this module's own write.
     fn reread(&self, ctx: &Ctx) {
-        let read = self.store.parsed();
+        let read = self.store.whole();
         {
             let mut st = held(&self.state);
             match read {
@@ -1409,6 +1412,28 @@ mod tests {
         assert_eq!(
             ask(&m, "new", None, "tomorrow 9:00 anything", eight()),
             Acted::Done
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a file with a reminder this machine cannot read — which a
+    /// lenient read would drop, so it would never ring — is taken as the
+    /// rest of the reminders and written to, instead of being "unreadable"
+    /// as it always was.
+    #[test]
+    fn a_reminder_this_machine_cannot_read_keeps_the_file_unreadable() {
+        let dir = folder("repaired");
+        let text = br#"{"reminders":[7]}"#;
+        std::fs::write(dir.join(FILE), text).expect("plant");
+        let (m, _) = rooted(Some(dir.clone()));
+        assert_eq!(
+            ask(&m, "new", None, "tomorrow 9:00 anything", eight()),
+            Acted::Refused(super::super::why::UNREADABLE)
+        );
+        assert_eq!(
+            std::fs::read(dir.join(FILE)).expect("still there"),
+            text,
+            "a file with a reminder this machine cannot read was written to"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

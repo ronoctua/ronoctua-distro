@@ -8,6 +8,12 @@
 //! again; what it says — a refusal, a password that was wrong — it says on
 //! ITS line, because the door where the key was pressed is where it is read.
 //!
+//! Root is never asked here: every gesture that needs it goes down the
+//! footer's socket to the SUDO BAR (`crate::sudo_bar`, `Gate::window`), which
+//! asks the password, a key or a finger above the modeline, and the verdict
+//! comes back to be said on this window's line. The passwordless window's
+//! live count is a clock armed only while it is drawn.
+//!
 //! It is also photographed here (`ronoctua-shell photograph --door security`,
 //! [`photographed`]), over a scene handed in whole — never this machine's.
 
@@ -16,7 +22,7 @@ use crate::security::{Came, Errand, Job, Scene, Section, View};
 use anyhow::{Context as _, Result, bail, ensure};
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
-    reexports::calloop::channel,
+    reexports::calloop::{self, channel},
     seat::keyboard::{KeyEvent, Modifiers},
     seat::pointer::{PointerEvent, PointerEventKind},
 };
@@ -53,12 +59,17 @@ pub fn host_it(section: Option<Section>, check: Option<std::path::PathBuf>) -> R
         // AND THE WATCH'S PAGE: a connection refused, sudo used — the brain's
         // stream says when its page moved, and only then is it asked again.
         hear_the_watch(sender.clone());
+        // AND THE QUEUE: an open this page sent that the queue refused for
+        // its passphrase is asked again HERE, the door that asked first.
+        hear_the_queue(sender.clone());
         let mut me = SecurityWindow {
             view: View::at(section),
             scene: Scene::default(),
             send: Some(sender),
             zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
             _watches: watches,
+            handle: Some(w.handle.clone()),
+            count: None,
         };
         me.start(Job::Read);
         if let Some(path) = check {
@@ -87,6 +98,37 @@ fn hear_the_watch(send: channel::Sender<Came>) {
         });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "could not follow the brain for the security centre");
+    }
+}
+
+/// Follows the transfer queue on a thread of its own and hands the window
+/// every seal the queue refused — what ENDED, by the function the footer and
+/// the file manager's window use (`transfers::what_ended`); the view answers
+/// only the ones it sent. The queue pushes its list: no clock. The thread
+/// ends with the window (the channel closes).
+fn hear_the_queue(send: channel::Sender<Came>) {
+    if ronoctua_transfers::wire::socket_path().is_err() {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("security-queue".into())
+        .spawn(move || {
+            // NONE until the first list: that one is the whole history.
+            let mut before: Option<Vec<ronoctua_transfers::Job>> = None;
+            let _ = ronoctua_transfers::client::watch(|jobs| {
+                for report in crate::transfers::what_ended(before.as_deref(), &jobs) {
+                    if let crate::files::Report::Seal(r) = report
+                        && send.send(Came::Sealed(*r)).is_err()
+                    {
+                        return true;
+                    }
+                }
+                before = Some(jobs);
+                false
+            });
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "could not follow the queue for the security centre");
     }
 }
 
@@ -120,6 +162,10 @@ pub struct SecurityWindow {
     send: Option<channel::Sender<Came>>,
     zone: ronoctua_files::when::Zone,
     _watches: Vec<ronoctua_files::notice::Notice>,
+    /// The loop, for the count's clock — `None` in a photograph.
+    handle: Option<calloop::LoopHandle<'static, Door<SecurityWindow>>>,
+    /// The count's clock, while a window with an end is open.
+    count: Option<calloop::RegistrationToken>,
 }
 
 impl SecurityWindow {
@@ -133,6 +179,48 @@ impl SecurityWindow {
             send: None,
             zone: ronoctua_files::when::Zone::utc(),
             _watches: Vec::new(),
+            handle: None,
+            count: None,
+        }
+    }
+
+    /// The passwordless window's live count: a clock that beats once a
+    /// second while a window with an end is open — armed here, dropping
+    /// itself when none is — painting only while the administrator's rows
+    /// are on screen. The footer's twin (`Footer::security_keep_the_count`).
+    fn keep_the_count(&mut self) {
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
+        if !View::counts_down(&self.scene) {
+            if let Some(token) = self.count.take() {
+                handle.remove(token);
+            }
+            return;
+        }
+        if self.count.is_some() {
+            return;
+        }
+        let beat = std::time::Duration::from_secs(1);
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(beat),
+            move |_, (), door: &mut Door<Self>| {
+                if !View::counts_down(&door.content.scene) {
+                    door.content.count = None;
+                    door.ui.ask_paint();
+                    return calloop::timer::TimeoutAction::Drop;
+                }
+                let rows = door.content.view_rows(&door.ui);
+                let shown = door.ui.offset..door.ui.offset + door.ui.room_for_rows();
+                if View::count_on_screen(&rows, shown) {
+                    door.ui.ask_paint();
+                }
+                calloop::timer::TimeoutAction::ToDuration(beat)
+            },
+        );
+        match armed {
+            Ok(token) => self.count = Some(token),
+            Err(e) => tracing::warn!(error = %e, "the passwordless window's count will not move"),
         }
     }
 
@@ -166,6 +254,7 @@ impl SecurityWindow {
         }
         self.errand(ui, out.errand);
         self.settle(ui);
+        self.keep_the_count();
         ui.ask_paint();
     }
 
@@ -195,10 +284,15 @@ impl SecurityWindow {
                 secret,
                 initial,
             } => ui.ask(crate::line::Line::new(id, secret, initial.as_deref())),
-            Errand::Door(work, proof) => {
+            // ROOT, ASKED IN THE FOOTER'S SUDO BAR: this window's gesture goes
+            // down the footer's socket, the verdict comes back here.
+            Errand::Door(work) => {
                 self.view.sent(&work);
-                self.start(Job::Door(work, proof));
+                let gesture =
+                    crate::sudo_bar::Gate::window().gesture(crate::sudo_bar::Asker::Security);
+                self.start(Job::Door(work, gesture));
             }
+            Errand::Register => self.start(Job::Register),
             Errand::Shields => self.start(Job::Shields),
             Errand::Hash(path) => {
                 ui.say_for(
@@ -248,6 +342,12 @@ impl SecurityWindow {
                 }
             },
             Errand::Say(said) => ui.say_for(said, crate::echo::Echo::Long),
+            // A SEAL, to the queue on a thread — what it answered comes
+            // back (`Came::SealHanded`) and is said here.
+            Errand::Seal(doing) => self.start(Job::Seal(doing)),
+            Errand::Sniff(path) => self.start(Job::Sniff(path)),
+            // THE CLIPBOARD, off the loop, for the file picker over the page.
+            Errand::Paste => ui.paste(),
         }
     }
 
@@ -275,13 +375,22 @@ impl Content for SecurityWindow {
     }
 
     /// A key, read by its whole notation through the reader the footer calls
-    /// too (`security::press_of_key`).
+    /// too (`security::View::press_of`: the file picker's while it is up).
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         if let Some(press) =
-            crate::door::keys::key_of(event, mods).and_then(crate::security::press_of_key)
+            crate::door::keys::key_of(event, mods).and_then(|key| self.view.press_of(key))
         {
             self.pressed(ui, press);
         }
+    }
+
+    /// THE CLIPBOARD, for the file picker over the page — the footer's
+    /// `PasteFor::Picker`, on the same view.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        let errand = self.view.picker_pasted(text, &ui.texts);
+        self.errand(ui, errand);
+        self.settle(ui);
+        ui.ask_paint();
     }
 
     fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
@@ -296,7 +405,7 @@ impl Content for SecurityWindow {
     }
 
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
-        View::hint(&self.scene, &ui.texts)
+        self.view.hint_now(&self.scene, &ui.texts)
     }
 
     fn rows(&self, ui: &Ui) -> Vec<Vec<crate::files::Field>> {
@@ -325,8 +434,9 @@ usage: ronoctua-shell photograph --door security [options] [steps]
 
   --state <file.json>   the scene the page draws (`security::Scene`, JSON)
                                                        (default: an empty one)
-  --section <word>      now, firewall, admin, finger, device, privacy,
-                        online or suggest: the cursor starts there
+  --section <word>      now, firewall, admin, finger, keys, private,
+                        encrypt, device, quantum, privacy, online or
+                        suggest: the cursor starts there
   --out <file>          where to write                 (default: security.png)
   --columns <n>         the window's width, in cells   (default: 100)
   --lines <n>           the height, in lines           (default: 60)
@@ -346,7 +456,18 @@ Steps — walked in the order they appear:
                         XposedOrNot's answer about an address: the breaches,
                         comma-separated (none after `=` is a clean address)
   --pwned <count>       Pwned Passwords' answer: how often the password was
-                        seen in breaches";
+                        seen in breaches
+  --pick <what>         the file picker over the page: files, folder or open
+                        (it opens where it was left, else in $HOME)
+  --seal <path>         <path> chosen to encrypt: \"for whom\" over the page
+  --sniffed <path>=<kind>
+                        a .age's header read: pq, classical, passphrase, mixed
+                        or not-age — the question it asks, on the line
+  --registering         a security key's registration waiting for its touch
+  --refused <why>       the sudo work a `RET` sent ended refused, as the door's
+                        thread brings it back: a refusal's id (wrong-password,
+                        cancelled, no-key, no-footer…) — said on the window's
+                        line";
 
 /// What was asked for.
 #[derive(Debug)]
@@ -372,6 +493,11 @@ enum Step {
     NeverSeen(std::path::PathBuf),
     Breached(String, Vec<String>),
     Pwned(u64),
+    Pick(crate::seal::Pick),
+    Seal(std::path::PathBuf),
+    Sniffed(std::path::PathBuf, ronoctua_pq::Kind),
+    Registering,
+    Refused(ronoctua_security::Why),
 }
 
 fn number(flag: &str, raw: &str, most: u16) -> Result<u16> {
@@ -487,6 +613,37 @@ fn parse(words: &[String]) -> Result<Asked> {
                     .with_context(|| format!("`--pwned {raw}` is not a whole number"))?;
                 me.steps.push(Step::Pwned(count));
             }
+            "--pick" => {
+                let what = value()?;
+                me.steps.push(Step::Pick(match what.as_str() {
+                    "files" => crate::seal::Pick::Files,
+                    "folder" => crate::seal::Pick::Folder,
+                    "open" => crate::seal::Pick::Open,
+                    _ => bail!("`--pick {what}` is not files, folder or open"),
+                }));
+            }
+            "--seal" => me.steps.push(Step::Seal(value()?.into())),
+            "--sniffed" => {
+                let said = value()?;
+                let (path, kind) = said
+                    .rsplit_once('=')
+                    .with_context(|| format!("`--sniffed` wants `path=kind`, not `{said}`"))?;
+                let kind: ronoctua_pq::Kind = serde_json::from_str(&format!("\"{kind}\""))
+                    .with_context(|| {
+                        format!("`{kind}` is not pq, classical, passphrase, mixed or not-age")
+                    })?;
+                me.steps.push(Step::Sniffed(path.into(), kind));
+            }
+            "--registering" => me.steps.push(Step::Registering),
+            "--refused" => {
+                let id = value()?;
+                let why = ronoctua_security::Why::of_id(&id).with_context(|| {
+                    let ids: Vec<&str> =
+                        ronoctua_security::Why::ALL.iter().map(|w| w.id()).collect();
+                    format!("`--refused {id}` is not one of {}", ids.join(", "))
+                })?;
+                me.steps.push(Step::Refused(why));
+            }
             other => bail!("unknown option `{other}`.\n\n{USAGE}"),
         }
     }
@@ -586,6 +743,43 @@ fn shoot(asked: &Asked) -> Result<()> {
                 d.content.came(&mut d.ui, came);
             }
             Step::Pwned(count) => d.content.came(&mut d.ui, Came::Password(Ok(count))),
+            // AS THE PAGE DOES AFTER A KEY: the cursor settled on a row that
+            // acts, and the place asked for brought into view.
+            Step::Pick(pick) => {
+                d.content.view.pick(pick);
+                d.content.settle(&mut d.ui);
+            }
+            Step::Seal(ref path) => {
+                d.content.view.seal_these(vec![path.clone()]);
+                d.content.settle(&mut d.ui);
+            }
+            Step::Sniffed(ref path, kind) => {
+                let came = Came::Sniffed {
+                    path: path.clone(),
+                    kind: Some(kind),
+                };
+                d.content.came(&mut d.ui, came);
+            }
+            Step::Registering => {
+                d.content.view.registering_shown();
+                d.content.settle(&mut d.ui);
+            }
+            // THE DOOR'S THREAD'S ANSWER, as it comes back: refused.
+            Step::Refused(why) => {
+                let work = d.content.view.in_flight().with_context(|| {
+                    format!(
+                        "`--refused {}` answers a sudo work, and no `RET` before it sent one",
+                        why.id()
+                    )
+                })?;
+                d.content.came(
+                    &mut d.ui,
+                    Came::Door {
+                        work,
+                        result: Err(why),
+                    },
+                );
+            }
             Step::Key(key) => d.press(key),
             Step::Hover(c, l) | Step::Click(c, l) => {
                 let event = |kind| {
@@ -716,6 +910,12 @@ mod tests {
             )
         );
         assert_eq!(asked.steps[3], Step::Pwned(3));
+        let refused = parse(&["--refused".into(), "no-footer".into()]).expect("a refusal");
+        assert_eq!(
+            refused.steps,
+            [Step::Refused(ronoctua_security::Why::NoFooter)]
+        );
+        assert!(parse(&["--refused".into(), "nope".into()]).is_err());
         assert!(parse(&["--door".into(), "files".into()]).is_err());
         assert!(parse(&["--section".into(), "nowhere".into()]).is_err());
     }
@@ -780,10 +980,11 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the window stops asking its questions on its own line, or a
-    /// refusal of the door stops being said here.
+    /// FAILS IF: the window asks the password itself again — a work refused
+    /// for want of one is a sentence on ITS line, never a question there —
+    /// or a refusal of the door stops being said here.
     #[test]
-    fn the_window_asks_and_says_in_its_own_door() {
+    fn the_window_never_asks_root_and_says_in_its_own_door() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
         let mut ui = Ui::for_tests(texts);
         let mut w = SecurityWindow::over(
@@ -793,27 +994,26 @@ mod tests {
             },
             None,
         );
-        w.came(
-            &mut ui,
-            Came::Door {
-                work: crate::security::Work::RelaxEnd,
-                result: Err(ronoctua_security::Why::NeedsPassword),
-            },
-        );
-        assert!(ui.message.is_none(), "{:?}", ui.message);
-        w.came(
-            &mut ui,
-            Came::Door {
-                work: crate::security::Work::RelaxEnd,
-                result: Err(ronoctua_security::Why::WrongPassword),
-            },
-        );
-        assert_eq!(
-            ui.message,
-            Some(
-                ui.texts
-                    .t(ronoctua_i18n::key::SECURITY_REFUSAL_WRONG_PASSWORD)
-            )
-        );
+        for why in [
+            ronoctua_security::Why::NeedsPassword,
+            ronoctua_security::Why::WrongPassword,
+            ronoctua_security::Why::NoFooter,
+        ] {
+            w.came(
+                &mut ui,
+                Came::Door {
+                    work: crate::security::Work::RelaxEnd,
+                    result: Err(why),
+                },
+            );
+            assert!(
+                ui.asking.is_none(),
+                "{why:?}: a question on the window's line"
+            );
+            assert_eq!(
+                ui.message,
+                Some(ui.texts.t(crate::security_words::refusal(why)))
+            );
+        }
     }
 }

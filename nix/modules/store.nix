@@ -18,7 +18,8 @@
 #    or anything a root reaches.
 # 2. **The system's generations, by count.** `ronoctua-system-generations`
 #    keeps the newest N, the profile's current one, the running system, the
-#    booted system, the one the last switch went away from, and every one the
+#    booted system, the one the last switch went away from, the boot trial's
+#    last good system and the one on trial, and every one the
 #    boot menu lists — each of them also when it is a SPECIALISATION of a
 #    generation that was booted or switched to. It deletes the other generation
 #    LINKS of the system profile and of no other profile. The garbage
@@ -187,6 +188,10 @@ let
   #   previous-system`, written by the activation below). A person who rolled
   #   back to generation 3 because 4 to 8 are broken, and whose weekly update
   #   then built 9, would otherwise lose 3 in the very switch that left it;
+  # - the LAST GOOD system and the one ON TRIAL (`--machine-state`, the
+  #   record `ronoctua-machine` keeps): the boot trial's default entry is the
+  #   last good one, and the way back must still be there when the trial
+  #   does not boot — however many generations the applies made since;
   # - every generation the BOOT MENU lists (`--menu`, each boot mount): by
   #   the generation number in an entry's file name (`nixos-generation-7.conf`,
   #   a lanzaboote `nixos-generation-7-….efi`) or by its toplevel's store path
@@ -204,11 +209,12 @@ let
       pkgs.coreutils
       pkgs.findutils
       pkgs.gnugrep
+      pkgs.jq
     ];
     text = ''
       profile=${systemProfile} running=/run/current-system booted=/run/booted-system
       previous=${previousSystem}
-      keep="" execute=0 menus=()
+      keep="" execute=0 menus=() machine_state=""
       while [ $# -gt 0 ]; do
         case "$1" in
           --profile) profile=$2; shift 2 ;;
@@ -217,6 +223,7 @@ let
           --booted) booted=$2; shift 2 ;;
           --previous) previous=$2; shift 2 ;;
           --menu) menus+=("$2"); shift 2 ;;
+          --machine-state) machine_state=$2; shift 2 ;;
           --execute) execute=1; shift ;;
           *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
         esac
@@ -251,6 +258,14 @@ let
       previous_to=""
       if [ -L "$previous" ]; then
         previous_to=$(readlink -f -- "$previous" || true)
+      fi
+
+      # THE BOOT TRIAL'S TWO SYSTEMS, from the machine's record. A record
+      # that is not there or does not read names nothing: the rest holds.
+      last_good_to="" trial_to=""
+      if [ -n "$machine_state" ] && [ -r "$machine_state" ]; then
+        last_good_to=$(jq -r '."last-good".toplevel // empty' "$machine_state" 2> /dev/null || true)
+        trial_to=$(jq -r '.trial.toplevel // empty' "$machine_state" 2> /dev/null || true)
       fi
 
       shopt -s nullglob
@@ -343,6 +358,10 @@ let
           why="the booted system"
         elif among "$previous_to" "''${tops[@]}"; then
           why="the system the last switch went away from"
+        elif among "$last_good_to" "''${tops[@]}"; then
+          why="the last good system, the boot trial's way back"
+        elif among "$trial_to" "''${tops[@]}"; then
+          why="the system on boot trial"
         elif listed "$n" "''${tops[@]}"; then
           why="the boot menu lists it"
         fi
@@ -446,7 +465,13 @@ let
     "--profile ${systemProfile}"
     "--keep ${toString cfg.systemGenerations}"
   ]
+  # The machine's record, where the machine's life is (`nix/modules/machine.nix`).
+  ++ lib.optional (
+    machineState != null
+  ) "--machine-state ${lib.escapeShellArg "${machineState}/state.json"}"
   ++ map (m: "--menu ${lib.escapeShellArg m}") menus;
+
+  machineState = config.ronoctua.machine.stateDir or null;
   trimCommand = lib.concatStringsSep " " (trimArguments ++ [ "--execute" ]);
   trimRehearsal = lib.concatStringsSep " " trimArguments;
 

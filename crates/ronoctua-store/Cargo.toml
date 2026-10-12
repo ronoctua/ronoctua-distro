@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-store"
-description = "One store: a file under a root, written whole and atomically, read back or degraded to its default with a reason — and the second root, which is the repository."
+description = "One store: a file under a root, written whole and atomically, read back field by field — what will not read is repaired, said in a ledger, and never written over unasked — and the second root, which is the repository."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,14 @@ publish.workspace = true
 ronoctua-xdg = { path = "../ronoctua-xdg" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# WHERE a value failed to read, as a path into the file — what lets a broken
+# field cost that field instead of the whole file (`lenient`).
+serde_path_to_error = { workspace = true }
+# WHICH keys the type passed over — a newer machine's fields, kept through an
+# older machine's write (`lenient`).
+serde_ignored = { workspace = true }
+# The fingerprint a repair ledger names its file by (`repair`).
+sha2 = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

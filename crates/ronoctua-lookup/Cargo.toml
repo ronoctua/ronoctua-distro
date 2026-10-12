@@ -49,9 +49,9 @@ ronoctua-zip = { path = "../ronoctua-zip" }
 # writing those fields. Schema only.
 ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
 # THE SECURITY CENTRE'S CHECKS: SHA-256 of a file and SHA-1 of a password,
-# computed here (the TLS stack already brings `ring`); the digest's hex zeroed
+# computed here (the TLS stack already brings `aws-lc-rs`); the digest's hex zeroed
 # once split; `scans.json` kept like every file of the person's, by `Store`.
-ring.workspace = true
+aws-lc-rs.workspace = true
 zeroize.workspace = true
 ronoctua-store = { path = "../ronoctua-store" }
 

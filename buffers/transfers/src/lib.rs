@@ -115,6 +115,9 @@ mod key {
     pub const ENGINE_SCAN: &str = "transfers-engine-scan";
     pub const ENGINE_CONTAINER: &str = "transfers-engine-container";
     pub const ENGINE_BELONGINGS: &str = "transfers-engine-belongings";
+    pub const ENGINE_SEAL: &str = "transfers-engine-seal";
+    pub const ENGINE_INCUS: &str = "transfers-engine-incus";
+    pub const ENGINE_STICK: &str = "transfers-engine-stick";
 
     pub const STAGE_WEIGHING: &str = "transfers-stage-weighing";
     pub const STAGE_RUNNING: &str = "transfers-stage-running";
@@ -141,6 +144,10 @@ mod key {
     pub const WORK_ARCHIVE_REMOVE: &str = "transfers-work-archive-remove";
     pub const WORK_ARCHIVE_TEST: &str = "transfers-work-archive-test";
     pub const WORK_ARCHIVE_CONVERT: &str = "transfers-work-archive-convert";
+    pub const WORK_SEAL: &str = "transfers-work-seal";
+    pub const WORK_UNSEAL: &str = "transfers-work-unseal";
+    pub const WORK_INCUS: &str = "transfers-work-incus";
+    pub const WORK_STICK_WRITE: &str = "transfers-work-stick-write";
 }
 
 /// The keys this window answers to — the queue's ONE table, the footer
@@ -289,6 +296,9 @@ const fn engine_key(e: Engine) -> &'static str {
         Engine::Scan => key::ENGINE_SCAN,
         Engine::Container => key::ENGINE_CONTAINER,
         Engine::Belongings => key::ENGINE_BELONGINGS,
+        Engine::Seal => key::ENGINE_SEAL,
+        Engine::Incus => key::ENGINE_INCUS,
+        Engine::Stick => key::ENGINE_STICK,
     }
 }
 
@@ -323,6 +333,10 @@ const fn errand_key(e: Errand) -> &'static str {
         Errand::ArchiveRemove => key::WORK_ARCHIVE_REMOVE,
         Errand::ArchiveTest => key::WORK_ARCHIVE_TEST,
         Errand::ArchiveConvert => key::WORK_ARCHIVE_CONVERT,
+        Errand::Seal => key::WORK_SEAL,
+        Errand::Unseal => key::WORK_UNSEAL,
+        Errand::Incus => key::WORK_INCUS,
+        Errand::StickWrite => key::WORK_STICK_WRITE,
     }
 }
 
@@ -394,6 +408,9 @@ const fn engine_icon(e: Engine) -> Icon {
         Engine::Scan => Icon::EngineScan,
         Engine::Container => Icon::EngineContainer,
         Engine::Belongings => Icon::EngineBelongings,
+        Engine::Seal => Icon::EngineSeal,
+        Engine::Incus => Icon::EngineIncus,
+        Engine::Stick => Icon::EngineStick,
     }
 }
 
@@ -540,7 +557,7 @@ mod width {
     /// `Icon`.
     pub const BAR: u16 = 12;
 
-    /// The errand: which of eighteen operations this row is.
+    /// The errand: which of twenty-two operations this row is.
     ///
     /// Eleven cells, which is what it has always had. The longest errand runs
     /// to twenty-three (`put back from the trash`) and the HOST elides it — a
@@ -1595,6 +1612,10 @@ mod tests {
             (Errand::ArchiveRemove, key::WORK_ARCHIVE_REMOVE),
             (Errand::ArchiveTest, key::WORK_ARCHIVE_TEST),
             (Errand::ArchiveConvert, key::WORK_ARCHIVE_CONVERT),
+            (Errand::Seal, key::WORK_SEAL),
+            (Errand::Unseal, key::WORK_UNSEAL),
+            (Errand::Incus, key::WORK_INCUS),
+            (Errand::StickWrite, key::WORK_STICK_WRITE),
         ];
         for (errand, word) in cases {
             assert_eq!(errand_key(errand), word);
@@ -1661,6 +1682,9 @@ mod tests {
             Engine::Scan,
             Engine::Container,
             Engine::Belongings,
+            Engine::Seal,
+            Engine::Incus,
+            Engine::Stick,
         ];
         let mut words: Vec<&str> = all.iter().map(|e| engine_key(*e)).collect();
         words.sort_unstable();

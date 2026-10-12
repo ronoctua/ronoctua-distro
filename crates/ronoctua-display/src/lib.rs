@@ -234,6 +234,15 @@ pub struct Snapshot {
     /// is followed by a fresh reading, and a setting that did not take shows
     /// as a setting that did not take.
     pub settings_failed: bool,
+    /// Whether PART of `display.json` did not read — a value a newer
+    /// machine wrote, a typo — and the store read the rest with that value
+    /// repaired (`ronoctua_store::Reading::part_not_read`).
+    ///
+    /// The list then shows the repair in that place — a screen's default
+    /// transform — while the file keeps what it says, and an order still
+    /// writes: the store puts the value back. Shown without a word, the
+    /// screen would look as if the file said what it does not.
+    pub settings_repaired: bool,
 }
 
 impl Snapshot {
@@ -660,6 +669,8 @@ struct Eyes {
     previewed: BTreeSet<String>,
     /// Whether the last read of `display.json` fell back to the default.
     settings_failed: bool,
+    /// Whether the last read of `display.json` repaired a value of it.
+    settings_repaired: bool,
     /// Whether the size of the text in `self.prefs` is one an order of ours
     /// just set, rather than one read from the file.
     ///
@@ -813,6 +824,7 @@ impl Eyes {
             monitors: BTreeMap::new(),
             previewed: BTreeSet::new(),
             settings_failed: false,
+            settings_repaired: false,
             wrote_the_text: false,
             wrote_the_screens: BTreeMap::new(),
         }
@@ -836,9 +848,14 @@ impl Eyes {
         // "no file yet" and for "a file I could not parse". The first is every
         // machine's first morning and the second is somebody's settings
         // apparently gone, and the list has to be able to tell them apart.
-        let understood = prefs::store().parsed();
-        self.settings_failed = understood.is_none();
-        self.prefs = understood.unwrap_or_default();
+        //
+        // AND A THIRD: the file read with a value of it REPAIRED (the store
+        // is lenient). The rest is shown, and the list owes the person a
+        // word about the one place that is not what the file says.
+        let reading = prefs::store().reading();
+        self.settings_failed = reading.lost_everything();
+        self.settings_repaired = reading.part_not_read();
+        self.prefs = reading.value;
         let wiring = connector::read(&self.places);
 
         let (outputs, focused, compositor) = match open_the_compositor() {
@@ -895,6 +912,7 @@ impl Eyes {
             focused,
             compositor,
             settings_failed: self.settings_failed,
+            settings_repaired: self.settings_repaired,
         }
     }
 
@@ -1351,6 +1369,7 @@ mod tests {
             focused: None,
             compositor: true,
             settings_failed: false,
+            settings_repaired: false,
         };
         assert_eq!(one.focused_screen().map(|s| s.at.as_str()), Some("eDP-1"));
         // With two, guessing would dim the wrong one.

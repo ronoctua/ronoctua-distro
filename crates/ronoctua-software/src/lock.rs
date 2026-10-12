@@ -36,12 +36,31 @@ pub fn directory(roots: &crate::Roots) -> PathBuf {
 ///
 /// When the lock file cannot be created or locked.
 pub fn take(dir: &Path, source: Source, waiting: impl FnOnce()) -> std::io::Result<Lane> {
+    take_file(dir, source.word(), waiting)
+}
+
+/// The lane of the person's DECLARATION: whoever reads, changes and stages
+/// `declared.json` and `declined.json` holds it, so two orders never write
+/// one over the other — a declaration of a Flatpak and one of an AppImage run
+/// in two source lanes at once, and both rewrite the same file.
+///
+/// # Errors
+///
+/// As [`take`].
+pub fn take_declaration(dir: &Path, waiting: impl FnOnce()) -> std::io::Result<Lane> {
+    take_file(dir, DECLARATION, waiting)
+}
+
+/// The declaration's lock file's stem; no source has this word.
+pub const DECLARATION: &str = "declaration";
+
+fn take_file(dir: &Path, stem: &str, waiting: impl FnOnce()) -> std::io::Result<Lane> {
     std::fs::create_dir_all(dir)?;
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(dir.join(format!("{}.lock", source.word())))?;
+        .open(dir.join(format!("{stem}.lock")))?;
     if flock(&file, FlockOperation::NonBlockingLockExclusive).is_err() {
         waiting();
         flock(&file, FlockOperation::LockExclusive)?;
@@ -79,6 +98,21 @@ mod tests {
             ok
         });
         assert!(released, "released");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_declarations_lane_is_no_sources() {
+        assert!(Source::ALL.iter().all(|s| s.word() != DECLARATION));
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-software-declaration-lane-{}",
+            std::process::id()
+        ));
+        let held = take_declaration(&dir, || panic!("free")).unwrap();
+        // A SOURCE'S LANE is another file: holding the declaration's never
+        // makes an install wait.
+        let other = take(&dir, Source::Nix, || panic!("the nix lane was free")).unwrap();
+        drop((held, other));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

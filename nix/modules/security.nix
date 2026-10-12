@@ -4,22 +4,26 @@
 # WHAT IS THE PERSON'S AND WHAT IS THE DISTRO'S
 # ---------------------------------------------
 # Invariant 6 has an approved exception here, in the mould of "the person's
-# programs" (owner, 2026-09-30): the firewall RULES the person makes live in
-# `/var/lib/ronoctua-security/firewall.json` and are applied by a declared unit
-# into a table of our own (`inet ronoctua`); the passwordless-sudo window is
-# one line in `/run/ronoctua-sudo` that expires by itself. Everything that
-# makes those two possible — the include, the units, the marks the declared
-# firewall obeys, the one polkit rule — is declared below. Nothing the person
-# does reaches `/etc`.
+# programs" (owner, 2026-09-30, amended 2026-10-11): the firewall RULES the
+# person makes live in `/var/lib/ronoctua-security/firewall.json` and are
+# applied by a declared unit into a table of our own (`inet ronoctua`); the
+# passwordless-sudo window is one line in root's persisted
+# `/var/lib/ronoctua-sudo`, which survives a reboot and ends at its end or
+# when the person ends it. Everything that makes those two possible — the
+# include, the units, the marks the declared firewall obeys, the one polkit
+# rule — is declared below. Nothing the person does reaches `/etc`.
 #
 # THE SUDO DOOR
 # -------------
-# There is no polkit agent in the session. A gesture that needs root types the
-# password into our own secret question and `ronoctua_security::authority`
-# pipes it to `sudo -S -k -p "" -- <helper> <verb>` (after `sudo -n`). The
-# helper is `ronoctua-security-root`, extracted from the workspace so the
-# units below that run it as root do not carry the desktop; the session learns
-# its path from `RONOCTUA_SECURITY_ROOT`.
+# There is no polkit agent in the session. A gesture that needs root goes
+# through `ronoctua_security::authority`: `sudo -n` first, then either the
+# typed password piped to `sudo -S -k -p "" -- <helper> <verb>`, or a
+# conversation with sudo on a terminal the door owns, where a security key
+# (`nix/modules/yubikey.nix`) or a finger (below) may answer before the
+# password — the door hears only its own sentinels there. The helper is
+# `ronoctua-security-root`, extracted from the workspace so the units below
+# that run it as root do not carry the desktop; the session learns its path
+# from `RONOCTUA_SECURITY_ROOT`.
 {
   config,
   lib,
@@ -246,28 +250,60 @@ in
     # `NOPASSWD` wins while it lasts. sudo skips a name with a dot in it,
     # which is what makes the helper's `.relax` draft invisible until `visudo`
     # has passed it. `sudoers-includes-one-dir` holds this line.
+    #
+    # `!pam_silent` FIRST: since 1.9.16 sudo hands PAM `PAM_SILENT` by
+    # default, and `pam_echo` then says nothing — the line that tells the
+    # sudo door (and a person in a terminal) that a finger is about to be
+    # asked would never be said. It brings back sudo's behaviour of before:
+    # a module's messages reach whoever is authenticating.
+    # `sudo-door-reads-its-own-sentinels` holds it.
     security.sudo.extraConfig = ''
-      @includedir /run/ronoctua-sudo
+      Defaults !pam_silent
+      @includedir /var/lib/ronoctua-sudo
     '';
 
-    # The FOURTH lock: autologin and no screen lock mean a machine that
-    # sleeps with the window open wakes with it open. Before sleep, it closes.
-    systemd.services.ronoctua-sudo-close = {
-      description = "Closes the passwordless sudo window before the machine sleeps";
-      wantedBy = [ "sleep.target" ];
-      before = [ "sleep.target" ];
+    # THE WINDOW SURVIVES A REBOOT, and ends only at its end or by the
+    # person's gesture (owner, 2026-10-11) — so nothing closes it before the
+    # machine sleeps any more. What a reboot does lose is the transient timer
+    # that takes the line away at the end: at every boot this looks again
+    # (`relax::boot`) — an expired or orphaned line goes (sudo's own
+    # `NOTAFTER` refused it already), a live timed one gets its timer back,
+    # one with no limit stays. `RemainAfterExit`, so a switch does not run it
+    # again; `-`, so a failure here never fails a switch (the `NOTAFTER`
+    # still holds). `sudo-window-survives-a-reboot` holds all of it.
+    systemd.services.ronoctua-sudo-window = {
+      description = "Ends an expired passwordless sudo window, and arms the end of a live one";
+      wantedBy = [ "multi-user.target" ];
+      unitConfig.RequiresMountsFor = [
+        "/var/lib/ronoctua-sudo"
+        "/var/lib/ronoctua-security"
+      ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${helper} relax-end";
+        RemainAfterExit = true;
+        ExecStart = "-${helper} relax-boot";
+        ProtectSystem = "strict";
+        ReadWritePaths = [
+          "-/var/lib/ronoctua-sudo"
+          "-/var/lib/ronoctua-security"
+        ];
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = true;
+        # The manager's socket alone: `systemctl` and `systemd-run` for the
+        # timer.
+        RestrictAddressFamilies = [ "AF_UNIX" ];
       };
     };
 
-    # WHERE THINGS LIVE. `/run` is tmpfs: the window and the status are gone
-    # with a reboot (the THIRD lock). The staging folder is the person's and
-    # private — the files-root pattern: nobody else may leave a wish for a
-    # program that runs as root.
+    # WHERE THINGS LIVE. The window's folder is root's and persisted
+    # (`nix/modules/persist.nix`), so it outlives a reboot; nobody else may
+    # write in it — sudo reads it as sudoers. `/run` keeps the firewall's
+    # status. The staging folder is the person's and private — the
+    # files-root pattern: nobody else may leave a wish for a program that
+    # runs as root.
     systemd.tmpfiles.rules = [
-      "d /run/ronoctua-sudo 0755 root root -"
+      "d /var/lib/ronoctua-sudo 0755 root root -"
       "d /run/ronoctua-security 0755 root root -"
       "d /run/ronoctua-security/staged 0700 ${user} ${group} -"
       "d /var/lib/ronoctua-security 0755 root root -"
@@ -292,17 +328,22 @@ in
     #
     # The first gate is the list `FingerSudo` writes (on and off without a
     # rebuild); a missing file is an error, and `onerr=fail` makes an error a
-    # "no". The second keeps fingers to terminals: the door's `sudo -S` has no
-    # tty, so fprintd never makes it wait. Each gate jumps over whatever is
-    # between it and `pam_fprintd` — so they sit DIRECTLY before it, one and
-    # two below its order (rules are a hundred apart).
+    # "no". The second keeps fingers to terminals: the door's password-only
+    # `sudo -S` has no tty, so fprintd never makes it wait there; its
+    # conversation gives sudo a terminal of its own, where a finger answers.
+    # Then the CUE: one `pam_echo` line saying, in the words the door listens
+    # for (`ronoctua_security::authority::FINGER_CUE`), that a finger is
+    # about to be asked — fprintd's own words are translated and never read.
+    # Each gate jumps over whatever is between it and `pam_fprintd`, cue
+    # included — so the three sit DIRECTLY before it, one, two and three
+    # below its order (rules are a hundred apart).
     # `pam-fingerprint-is-gated` reads every PAM service to hold all of it.
     security.pam.services.sudo = {
       fprintAuth = true;
       rules.auth = {
         ronoctua-finger-listed = {
-          order = config.security.pam.services.sudo.rules.auth.fprintd.order - 2;
-          control = "[success=ignore default=2]";
+          order = config.security.pam.services.sudo.rules.auth.fprintd.order - 3;
+          control = "[success=ignore default=3]";
           modulePath = "${config.security.pam.package}/lib/security/pam_listfile.so";
           args = [
             "item=user"
@@ -312,8 +353,8 @@ in
           ];
         };
         ronoctua-finger-tty = {
-          order = config.security.pam.services.sudo.rules.auth.fprintd.order - 1;
-          control = "[success=ignore default=1]";
+          order = config.security.pam.services.sudo.rules.auth.fprintd.order - 2;
+          control = "[success=ignore default=2]";
           modulePath = "${config.security.pam.package}/lib/security/pam_succeed_if.so";
           args = [
             "quiet"
@@ -321,6 +362,12 @@ in
             "=~"
             "/dev/*"
           ];
+        };
+        ronoctua-finger-cue = {
+          order = config.security.pam.services.sudo.rules.auth.fprintd.order - 1;
+          control = "optional";
+          modulePath = "${config.security.pam.package}/lib/security/pam_echo.so";
+          args = [ "A fingerprint may answer for the password (ronoctua-sudo:finger)" ];
         };
       };
     };
@@ -337,5 +384,31 @@ in
     # remotes), signed in `polkit-rules-are-the-ones-we-know` as upstream.
     services.fwupd.enable = true;
     systemd.timers.fwupd-refresh.wantedBy = lib.mkForce [ ];
+
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L06 ──
+    # ── anchor: L12 ──
+    # ── anchor: L17 ──
+    # ── anchor: L22 ──
+    # WHAT THIS GENERATION SHIPS, for the post-quantum section (`LEADER s e
+    # q`): the versions the workspace's copy carries too, AND which optional
+    # channels this configuration turned on — which the workspace, one build
+    # every configuration shares, cannot know (`nix/pq-facts.nix`). Asked of
+    # the option that turns each one on — nixpkgs' own where there is one (a
+    # host that enables Tor by hand has Tor), ours for Chrome, which nixpkgs
+    # only packages (`nix/modules/software.nix` asks the same). The footer
+    # reads the file this names before its own baked copy
+    # (`ronoctua_security::quantum::built`), and the windows it opens inherit
+    # it.
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_PQ_FACTS = "${import ../pq-facts.nix {
+      inherit pkgs;
+      ships = {
+        chrome = config.ronoctua.browser.enable or false;
+        syncthing = config.services.syncthing.enable;
+        tailscale = config.services.tailscale.enable;
+        tor = config.services.tor.enable;
+        android = config.virtualisation.waydroid.enable;
+      };
+    }}";
   };
 }

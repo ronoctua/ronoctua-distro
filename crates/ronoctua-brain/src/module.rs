@@ -259,6 +259,61 @@ impl Manifest {
     pub fn why_key(&self, word: &str) -> Option<&'static str> {
         self.whys.iter().find(|w| w.word == word).map(|w| w.key)
     }
+
+    /// One mark's declaration, by its name.
+    #[must_use]
+    pub fn mark(&self, name: &str) -> Option<&'static MarkId> {
+        self.marks.iter().find(|m| m.name == name)
+    }
+
+    /// Why a mark this module published may NOT be shown, or `None` when its
+    /// manifest lets it: what the core asks of every mark before the mind
+    /// carries it (`crate::hub`). `earlier` is what this module already had
+    /// shown in the same face.
+    ///
+    /// Read against the DECLARATION (by name), never against the bounds the
+    /// published id carries: a module that built its own `MarkId` cannot give
+    /// itself a tenth instance, or a rest the owner did not approve.
+    #[must_use]
+    pub fn refusal_of(&self, mark: &Mark, earlier: &[&Mark]) -> Option<&'static str> {
+        let id = &mark.id;
+        let Some(declared) = self.mark(&id.name) else {
+            return Some("a mark its manifest does not declare");
+        };
+        if declared.instances == 0 && id.instance != 0 {
+            return Some("an instance of a mark that is one");
+        }
+        if declared.instances != 0 && !(1..=declared.instances).contains(&id.instance) {
+            return Some("an instance its manifest does not declare");
+        }
+        if id.label.is_some() && id.instance == 0 {
+            return Some("a label on a mark that is one");
+        }
+        // AN INSTANCE IS OPENED, NEVER ACTED ON: `brain-act` names a module
+        // and an action, and the instance clicked would not reach it — the
+        // action would act on whichever one the module guessed.
+        if id.instance != 0 && mark.act.is_some() {
+            return Some("an action on one instance (an instance opens through `MarkId::opening`)");
+        }
+        // AN INSTANCE COUNTS NOTHING: its digit is drawn where a count would
+        // be, a space after the glyph, and two numbers there would read as
+        // one.
+        if id.instance != 0 && mark.count != 0 {
+            return Some("a count on one instance (its digit stands where a count would)");
+        }
+        // THE MODELINE AT REST IS SILENT: a quiet mark says only that all is
+        // well, and only a mark declared `resting` may say that.
+        if mark.tone == Tone::Quiet && !declared.resting {
+            return Some("a mark at rest its manifest does not declare `resting`");
+        }
+        if earlier
+            .iter()
+            .any(|e| e.id.name == id.name && e.id.instance == id.instance)
+        {
+            return Some("the same mark twice");
+        }
+        None
+    }
 }
 
 /// What a module needs from the machine.
@@ -314,15 +369,27 @@ pub struct Why {
     pub key: &'static str,
 }
 
-/// Which mark, as the generator declared it: its name, its glyph and its hint.
+/// Which mark, as the generator declared it: its name, its glyph and its hint
+/// — and, once published, which of its instances it is.
 ///
 /// It crosses the socket inside a [`Mark`], which is why it holds [`Word`]s:
 /// declared `&'static` (`MarkId::of`), read back owned.
+///
+/// # Why the instance is here and not on [`Mark`]
+///
+/// Because everything the footer makes a mark's SEGMENT out of is here: its
+/// id (`brain:<module>/<name>.<n>`), its glyph and digit, the hint and what a
+/// click runs. The instance is part of WHICH mark it is — the third account's
+/// and the first account's are two segments — exactly as [`MarkId::opens`]
+/// is part of where it leads, and both are set the same way, on the declared
+/// constant ([`MarkId::numbered`], [`MarkId::opening`]). [`Mark`] keeps what a
+/// publication says ABOUT the mark: its tone, its count and its action.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct MarkId {
     /// The mark's name inside its module: `full`. The modeline segment is
-    /// `brain:<module>/<name>`.
+    /// `brain:<module>/<name>`, and `brain:<module>/<name>.<n>` for one of
+    /// its instances ([`MarkId::local`]).
     pub name: Word,
     /// The glyph's TOKEN name, merged into the measured icon table:
     /// `<module>-<glyph>`. Never a codepoint (invariant 10).
@@ -334,20 +401,74 @@ pub struct MarkId {
     /// running containers open the containers' view). `None`: the click is
     /// the mark's action, or the module's page. The shell runs it by name,
     /// so it reaches nothing the keyboard does not (`LEADER :`), and names
-    /// no module to do so.
+    /// no module to do so. For one of a mark's instances the click hands the
+    /// command the instance's number as its argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opens: Option<Word>,
+    /// DECLARED: how many of it a module may show at once (`instances = N`
+    /// in the manifest, from 1 to 9 — `nix/brain-modules.nix` refuses any
+    /// other); `0` is a mark that is one. The core reads it from the
+    /// MANIFEST, never from what a module published (`crate::hub`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub instances: u8,
+    /// DECLARED: whether it may be drawn AT REST — published in
+    /// [`Tone::Quiet`], saying only that all is well. The modeline at rest is
+    /// silent (`AGENTS.md`), so the core drops a quiet mark that does not
+    /// declare this, and the loader lets only the marks the owner approved
+    /// declare it (`resting-marks-are-the-approved-ones`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub resting: bool,
+    /// Which of its instances this is, from 1; `0` for a mark that is one.
+    /// Drawn as the digit after the glyph, where a count would be — so an
+    /// instance counts nothing (`Manifest::refusal_of`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub instance: u8,
+    /// The instance's name as the PERSON gave it ("work", an account's
+    /// name) — data, like what a person typed in a reminder, so it is drawn
+    /// as it is: the hint's `$label` (the instance's number when there is
+    /// none). Only an instance has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<Word>,
+}
+
+/// `skip_serializing_if` for the counts a mark leaves at zero: a mind written
+/// before they existed reads the same, and one that has none says nothing.
+const fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// The same, for the flag a mark leaves off.
+const fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl MarkId {
     /// A declaration — what the generated `mark::*` constants are.
     #[must_use]
     pub const fn of(name: &'static str, glyph: &'static str, hint: &'static str) -> Self {
+        Self::declared(name, glyph, hint, 0, false)
+    }
+
+    /// A declaration with its instances and whether it may rest — what the
+    /// generator writes for a mark whose manifest says `instances` or
+    /// `resting` ([`MarkId::of`] for every other).
+    #[must_use]
+    pub const fn declared(
+        name: &'static str,
+        glyph: &'static str,
+        hint: &'static str,
+        instances: u8,
+        resting: bool,
+    ) -> Self {
         Self {
             name: Cow::Borrowed(name),
             glyph: Cow::Borrowed(glyph),
             hint: Cow::Borrowed(hint),
             opens: None,
+            instances,
+            resting,
+            instance: 0,
+            label: None,
         }
     }
 
@@ -358,6 +479,33 @@ impl MarkId {
         Self {
             opens: Some(Cow::Borrowed(command)),
             ..self.clone()
+        }
+    }
+
+    /// The same mark as its instance `n` (from 1), named `label` by the
+    /// person — the third account of nine, say. The core refuses an `n` its
+    /// manifest does not declare (`crate::hub`), so a module cannot draw a
+    /// tenth.
+    ///
+    /// A BLANK LABEL IS NO LABEL: an account the person left unnamed is
+    /// named by its number in the hint, never by a hole in the sentence.
+    #[must_use]
+    pub fn numbered(&self, n: u8, label: Option<String>) -> Self {
+        Self {
+            instance: n,
+            label: label.filter(|l| !l.trim().is_empty()).map(Cow::Owned),
+            ..self.clone()
+        }
+    }
+
+    /// Its name inside its module, as the segment carries it: `full`, or
+    /// `claude.3` for an instance — the part after `brain:<module>/`.
+    #[must_use]
+    pub fn local(&self) -> Cow<'_, str> {
+        if self.instance == 0 {
+            Cow::Borrowed(self.name.as_ref())
+        } else {
+            Cow::Owned(format!("{}.{}", self.name, self.instance))
         }
     }
 }
@@ -452,6 +600,12 @@ pub struct Mark {
     /// its id instead ([`MarkId::opens`]): ONE way for a mark to open a
     /// command, and it is typed, not a prefix on a string.
     pub act: Option<Word>,
+    // THE 2026-10-05 WAVE: a mark's instance and its label, after its anchor.
+    // ── anchor: L11 ──
+    // (They live on the id — `MarkId::instance` and `MarkId::label`, set with
+    // `MarkId::numbered` — beside everything else the segment is made of; see
+    // `MarkId`. A mark with an instance names no `act`: the core refuses it,
+    // since a module action would not know which instance was clicked.)
 }
 
 /// The colour a mark or a row is drawn in — a MEANING, one token each in the
@@ -983,6 +1137,14 @@ pub enum Source {
     Journal(Match),
     /// A path: something changed at it, or under it (inotify, never a poll).
     Path(PathBuf),
+    /// A directory and everything under it, however deep: something changed
+    /// at it or anywhere below — the folders made below it after the start
+    /// included, each watched from the moment its birth is heard (inotify is
+    /// not recursive, and a list of the folders there at the start is deaf
+    /// to every one made later). Heard as [`Heard::Path`] with the source's
+    /// path. For a small tree: each folder is a watch out of the user's
+    /// `max_user_watches` (`ronoctua_files::notice::TREE_MOST` at most).
+    Tree(PathBuf),
     /// The lines of a long-lived child, restarted with a backoff when it dies.
     /// `argv[0]` is a STORE PATH, never a name.
     Lines {
@@ -1351,6 +1513,122 @@ mod tests {
         let old = serde_json::to_string(&plain).unwrap();
         assert!(!old.contains("opens"), "{old}");
         assert_eq!(serde_json::from_str::<MarkId>(&old).unwrap().opens, None);
+    }
+
+    /// FAILS IF: an instance or its label is lost on the socket, a mark that
+    /// is one starts saying `instance`, or a mind written before the fields
+    /// existed stops reading.
+    #[test]
+    fn an_instance_crosses_with_its_label_and_a_plain_mark_says_nothing_of_it() {
+        let declared = MarkId::declared("seat", "fixture-seat", "fixture-mark-seat", 9, true);
+        let third = declared
+            .opening("fixture-open")
+            .numbered(3, Some("work".to_owned()));
+        assert_eq!((third.instance, third.label.as_deref()), (3, Some("work")));
+        assert_eq!((third.instances, third.resting), (9, true));
+        assert_eq!(third.local(), "seat.3");
+        // A BLANK NAME IS NONE: the hint then names the instance by its
+        // number, never `Seat  is taken`.
+        for blank in ["", "   ", "\t"] {
+            assert_eq!(declared.numbered(2, Some(blank.to_owned())).label, None);
+        }
+        let wire = serde_json::to_string(&third).unwrap();
+        assert_eq!(serde_json::from_str::<MarkId>(&wire).unwrap(), third);
+
+        let plain = FIXTURE.marks[0].clone();
+        assert_eq!(plain.local(), "full");
+        let old = serde_json::to_string(&plain).unwrap();
+        for absent in ["instance", "label", "resting"] {
+            assert!(!old.contains(absent), "{absent} in {old}");
+        }
+        // AN OLD LINE, with none of the four: the mark that is one.
+        let back: MarkId =
+            serde_json::from_str(r#"{"name":"full","glyph":"g","hint":"h"}"#).unwrap();
+        assert_eq!((back.instances, back.resting, back.instance), (0, false, 0));
+        assert_eq!(back.label, None);
+    }
+
+    /// FAILS IF: the core would show a mark its manifest does not let it —
+    /// an undeclared name, an instance past the declared number or on a mark
+    /// that is one, a label with no instance, an action or a count on one
+    /// instance, a quiet mark that was not declared to rest, or one mark
+    /// twice — or if it refuses one the manifest does let it show.
+    #[test]
+    fn a_mark_is_shown_only_as_its_manifest_declares_it() {
+        static MARKS: [MarkId; 2] = [
+            MarkId::of("full", "fixture-full", "fixture-mark-full"),
+            MarkId::declared("seat", "fixture-seat", "fixture-mark-seat", 9, true),
+        ];
+        let manifest = Manifest {
+            marks: &MARKS,
+            ..FIXTURE
+        };
+        let mark = |id: MarkId, tone: Tone| Mark {
+            id,
+            tone,
+            count: 0,
+            act: None,
+        };
+        let full = MARKS[0].clone();
+        let seat = MARKS[1].clone();
+        // SHOWN: a warning on the mark that is one, and each instance from
+        // the first to the ninth — quiet ones included, since `seat` rests.
+        assert_eq!(
+            manifest.refusal_of(&mark(full.clone(), Tone::Warning), &[]),
+            None
+        );
+        for n in 1..=9 {
+            let one = mark(seat.numbered(n, Some(format!("n{n}"))), Tone::Quiet);
+            assert_eq!(manifest.refusal_of(&one, &[]), None, "instance {n}");
+        }
+        // REFUSED, each for its own reason.
+        let undeclared = mark(MarkId::of("gone", "fixture-gone", "h"), Tone::Danger);
+        let tenth = mark(seat.numbered(10, None), Tone::Warning);
+        let zeroth = mark(seat.clone(), Tone::Warning);
+        let numbered_one = mark(full.numbered(1, None), Tone::Warning);
+        let labelled_one = Mark {
+            id: MarkId {
+                label: Some("x".into()),
+                ..full.clone()
+            },
+            ..mark(full.clone(), Tone::Warning)
+        };
+        let acted = Mark {
+            act: Some("forget".into()),
+            ..mark(seat.numbered(2, None), Tone::Warning)
+        };
+        let counted = Mark {
+            count: 4,
+            ..mark(seat.numbered(2, None), Tone::Warning)
+        };
+        let resting = mark(full, Tone::Quiet);
+        // A MODULE THAT DECLARED ITS OWN BOUNDS on the id it published is
+        // read against its manifest all the same.
+        let forged = mark(
+            MarkId::declared("full", "fixture-full", "fixture-mark-full", 0, true),
+            Tone::Quiet,
+        );
+        for (what, refused) in [
+            ("an undeclared mark", undeclared),
+            ("a tenth instance", tenth),
+            ("instance zero of a mark with instances", zeroth),
+            ("an instance of a mark that is one", numbered_one),
+            ("a label with no instance", labelled_one),
+            ("an action on one instance", acted),
+            ("a count on one instance", counted),
+            ("a quiet mark that does not rest", resting),
+            ("a rest the id gave itself", forged),
+        ] {
+            assert!(
+                manifest.refusal_of(&refused, &[]).is_some(),
+                "{what} was shown"
+            );
+        }
+        let first = mark(seat.numbered(1, None), Tone::Warning);
+        let again = mark(seat.numbered(1, Some("other".to_owned())), Tone::Danger);
+        let second = mark(seat.numbered(2, None), Tone::Warning);
+        assert!(manifest.refusal_of(&again, &[&first]).is_some(), "twice");
+        assert_eq!(manifest.refusal_of(&second, &[&first]), None);
     }
 
     #[test]

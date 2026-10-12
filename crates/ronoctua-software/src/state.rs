@@ -52,14 +52,42 @@ pub struct Installed {
 
 /// Who put a program there.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", rename_all_fields = "kebab-case")]
 pub enum Origin {
-    /// The person, through this crate or by hand.
+    /// The person, through this crate or by hand, on this machine only: no
+    /// declaration names it, and the update neither keeps nor brings it.
     #[default]
     Mine,
-    /// The flake, through nix-flatpak's user installation: removing it here
-    /// would be undone at the next rebuild, so it is refused with a sentence.
+    /// The person's declaration names it (`declared.json`): it follows them
+    /// to every machine the entry names, and removing it here alone would be
+    /// undone — it is removed FOR GOOD, from the declaration
+    /// ([`crate::Order::Forget`]). Also what the declaration named until the
+    /// system this machine runs was built, and leaves at its next apply: its
+    /// trouble is [`Refusal::LeavesAtNextApply`], and removing it for good
+    /// asks again for the rebuild that takes it.
+    MineDeclared,
+    /// One of the distro's programs (`ronoctua.apps`, `distro-apps.json`). A
+    /// declinable one can be kept uninstalled, here or on every machine of
+    /// the person ([`crate::Order::Decline`]); an essential one says why not.
+    Distro {
+        /// Whether it may be declined.
+        declinable: bool,
+    },
+    /// The flake installed it for this machine otherwise (a `host.nix` line,
+    /// through nix-flatpak's user installation): removing it here would be
+    /// undone at the next rebuild, so it is refused with a sentence.
     Declared,
+}
+
+impl Origin {
+    /// Every kind, a distro program once of each, for the words' census.
+    pub const ALL: [Self; 5] = [
+        Self::Mine,
+        Self::MineDeclared,
+        Self::Distro { declinable: true },
+        Self::Distro { declinable: false },
+        Self::Declared,
+    ];
 }
 
 /// A trial: a Nix package running without being installed.
@@ -184,11 +212,22 @@ pub struct Snapshot {
     /// The nixpkgs revision the search index comes from.
     #[serde(default)]
     pub nix_index_rev: Option<String>,
+    /// The person's declaration and how this machine stands to it: what is
+    /// declared and declined, what was applied, skipped or waits, and the
+    /// distro's programs ([`crate::declaration`]).
+    #[serde(default)]
+    pub declarations: crate::declaration::Declarations,
 }
 
 /// Read everything. Runs programs: call it on a thread.
 #[must_use]
 pub fn read(ctx: &Context) -> Snapshot {
+    read_with(ctx, &crate::declaration::this_host())
+}
+
+/// [`read`], on a machine called `host` — a test's, or a photograph's.
+#[must_use]
+pub fn read_with(ctx: &Context, host: &str) -> Snapshot {
     let supports = Supports::of(&ctx.tools);
     let android = if supports.android {
         crate::android::status(ctx)
@@ -209,6 +248,12 @@ pub fn read(ctx: &Context) -> Snapshot {
         installed.extend(crate::android::installed(ctx, &android));
     }
     installed.extend(crate::web::installed(&ctx.roots));
+    // WHO PUT EACH THERE, and the declared copies the lists above cannot
+    // see: a declared Nix package is in the person's `home.packages`, not in
+    // their profile; a declared AppImage or web app is the system's entry,
+    // not a file of `~/Applications` or `~/.local/share/applications`.
+    let declarations = crate::declaration::read(&ctx.roots, host);
+    crate::declaration::shape(&mut installed, &declarations, &ctx.roots);
     installed.sort_by(|a, b| {
         (a.key.source(), ronoctua_apps::fold::fold(&a.name))
             .cmp(&(b.key.source(), ronoctua_apps::fold::fold(&b.name)))
@@ -231,5 +276,6 @@ pub fn read(ctx: &Context) -> Snapshot {
         },
         supports,
         nix_index_rev: ctx.tools.nixpkgs_rev.clone(),
+        declarations,
     }
 }

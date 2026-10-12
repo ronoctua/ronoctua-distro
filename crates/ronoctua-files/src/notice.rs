@@ -212,6 +212,36 @@ impl Notice {
         )
     }
 
+    /// [`Notice::watching`], for a door that LISTS a folder: the `/private`
+    /// vault's status folder is heard too, when this machine has one. What a
+    /// listing may read inside the vault is what that status says, so a
+    /// vault opened, locked or suspended at sleep is a stir like a file
+    /// landing — the door reads again and draws the vault's row anew.
+    ///
+    /// # Errors
+    ///
+    /// As [`Notice::watching`].
+    pub fn for_listing<F>(sidebar: Option<&Path>, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        let vault = Path::new(ronoctua_private::STATUS_FILE)
+            .parent()
+            .filter(|d| d.is_dir())
+            .map(Path::to_path_buf);
+        Self::raise(
+            sidebar
+                .map(Path::to_path_buf)
+                .into_iter()
+                .chain(vault)
+                .collect(),
+            Vec::new(),
+            None,
+            Pace::Coalesced,
+            on_stir,
+        )
+    }
+
     /// Watches SEVERAL FIXED DIRECTORIES, whole — a repository's git
     /// directory, today — and SEVERAL TREES: a directory and every directory
     /// under it, the ones made later included (a repository's `refs`, where
@@ -280,6 +310,7 @@ impl Notice {
                     only,
                     pace,
                     held: Vec::new(),
+                    listing_wd: None,
                 }
                 .run(&on_stir);
             })
@@ -419,6 +450,11 @@ struct Watcher {
     /// to. Dropping them all and asking again — see [`Watcher::rearm`] — is what
     /// makes that case need no special sentence.
     held: Vec<i32>,
+    /// The listing's own watch, while it is held. `None` beside a listing is
+    /// one that could not be held — a folder of the `/private` vault while
+    /// it is shut, or one not there yet — and it is asked for again at the
+    /// next stir ([`Watcher::run`]).
+    listing_wd: Option<i32>,
 }
 
 impl Watcher {
@@ -443,6 +479,15 @@ impl Watcher {
             }
             if !stirred || !self.drain(&mut buffer) {
                 continue;
+            }
+            // A LISTING NOT HELD is asked for again, before the door reads:
+            // a folder of the `/private` vault refused while it was shut is
+            // held once its status (a fixed watch of `Notice::for_listing`)
+            // says it opened — `Notice::look_at` swallows the same path, so
+            // the door cannot ask for it again — and the reading the door does
+            // next finds the watch already in place.
+            if self.listing.is_some() && self.listing_wd.is_none() {
+                self.rearm();
             }
             // THE LEADING EDGE. One file appearing is reported at once: holding
             // it for the quiet time would make a manager that is merely
@@ -582,9 +627,12 @@ impl Watcher {
             let _ = inotify::remove_watch(&self.fd, wd);
         }
         self.grown.clear();
-        let dirs: Vec<PathBuf> = self.listing.iter().chain(&self.fixed).cloned().collect();
-        for dir in &dirs {
-            let _ = self.hold(dir);
+        self.listing_wd = match self.listing.clone() {
+            Some(dir) => self.hold(&dir),
+            None => None,
+        };
+        for dir in self.fixed.clone() {
+            let _ = self.hold(&dir);
         }
         for root in self.trees.clone() {
             self.grow(&root);
@@ -593,6 +641,14 @@ impl Watcher {
 
     /// Asks for one directory, and gives back its watch.
     fn hold(&mut self, dir: &Path) -> Option<i32> {
+        // NOT IN THE /private VAULT unless it is open (`ronoctua_private`):
+        // the path walked to its watch would freeze this thread in a
+        // suspended one. A vault that opens later moves its status file,
+        // which a listing's watch hears ([`Notice::for_listing`]), and this
+        // thread asks for the listing again at that stir ([`Watcher::run`]).
+        if !ronoctua_private::may_touch(dir) {
+            return None;
+        }
         match inotify::add_watch(&self.fd, dir, WANTED) {
             Ok(wd) => {
                 if !self.held.contains(&wd) {
@@ -702,6 +758,11 @@ impl Watcher {
         }
         self.held.retain(|wd| !gone.contains(wd));
         self.grown.retain(|(wd, _)| !gone.contains(wd));
+        // THE LISTING'S WATCH OVER — its folder deleted, or the vault it is
+        // in locked and unmounted: asked for again at the next stir.
+        if self.listing_wd.is_some_and(|wd| gone.contains(&wd)) {
+            self.listing_wd = None;
+        }
         for dir in born {
             self.grow(&dir);
         }
@@ -821,6 +882,53 @@ mod tests {
                 since = Instant::now();
             }
         }
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a listing that could not be held when the door
+    // pointed at it — a folder of the /private vault while it was shut — is
+    // never held after, because `look_at` swallows the same path: the vault
+    // opened, and files landing in it were never heard. A stir of a fixed
+    // watch (the vault's status, here the sidebar's folder) asks for it again.
+    fn a_listing_not_held_is_held_at_the_next_stir() {
+        let root = scratch("held-later");
+        let side = root.join("side");
+        std::fs::create_dir_all(&side).unwrap();
+        let later = root.join("later");
+        let (mut notice, seen) = counted(Some(&side));
+        notice.look_at(&later);
+        assert!(armed(&seen, &side), "the fixed watch never came alive");
+        settled(&seen);
+        std::fs::create_dir_all(&later).unwrap();
+        // NOT HEARD YET: nothing holds it.
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(later.join("early"), b"x").unwrap();
+        assert_eq!(
+            past(&seen, was, Duration::from_millis(300)),
+            was,
+            "a folder nobody held was heard"
+        );
+        // THE FIXED WATCH STIRS (the vault's status moving): the listing is
+        // held from here on.
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(side.join("status"), b"open").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "the fixed watch went deaf"
+        );
+        assert!(
+            armed(&seen, &later),
+            "the listing was never held after the stir"
+        );
+        settled(&seen);
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(later.join("landed"), b"x").unwrap();
+        assert!(
+            past(&seen, was, PATIENCE) > was,
+            "a file landing in the listing went unheard"
+        );
+        drop(notice);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

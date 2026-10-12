@@ -48,6 +48,11 @@ pub struct Belongings {
     pub extra: Vec<String>,
     /// Logical paths the person took out of what is kept.
     pub excluded: Vec<String>,
+    /// Whether the identity a typed passphrase opened is KEPT for the
+    /// session — in the kernel's keyring, never on disk, until the session
+    /// ends, the machine sleeps or `unlockHours` pass (`crate::unlock`) — so
+    /// the next sync asks nothing. On by default (the owner's choice).
+    pub keep_unlocked: bool,
 }
 
 impl Belongings {
@@ -134,6 +139,7 @@ impl Default for Belongings {
             period_days: Some(7),
             extra: Vec::new(),
             excluded: Vec::new(),
+            keep_unlocked: true,
         }
     }
 }
@@ -153,17 +159,34 @@ pub enum Invalid {
     PlainHttp,
     /// `file://` or a bare path: not a remote.
     NotRemote,
+    /// The host is not a name `consent.json` can hold — an IPv6 address in
+    /// brackets, a name with `_` — so the person could never let it, and no
+    /// sync could ever ask it ([`host_of`]).
+    UnnamedHost,
     /// Some other shape.
     Unknown,
 }
 
 /// Whether `address` is a repository the belongings may use: `git@host:path`,
-/// `ssh://…` or `https://…`, with no credentials in it. Pure.
+/// `ssh://…` or `https://…`, with no credentials in it, and a host
+/// [`host_of`] names — what the person lets in `consent.json`, and every
+/// fetch and push asks a pass for. Pure.
 ///
 /// # Errors
 ///
 /// An [`Invalid`].
 pub fn repository_is_plain(address: &str) -> Result<(), Invalid> {
+    shape_is_plain(address)?;
+    // AN ADDRESS NO CONSENT CAN NAME is refused when it is typed, never
+    // kept to be refused by every sync after it.
+    if host_of(address).is_none() {
+        return Err(Invalid::UnnamedHost);
+    }
+    Ok(())
+}
+
+/// The shape of [`repository_is_plain`]: the scheme, the user, the path.
+fn shape_is_plain(address: &str) -> Result<(), Invalid> {
     let address = address.trim();
     if address.is_empty() {
         return Err(Invalid::Empty);
@@ -204,6 +227,44 @@ pub fn repository_is_plain(address: &str) -> Result<(), Invalid> {
         return Err(Invalid::Unknown);
     }
     Ok(())
+}
+
+/// The host a repository address reaches — what the person lets in
+/// `consent.json` when they set the address, and what every fetch and push
+/// asks a `Pass` for: `example.org` of `git@example.org:a/b.git`,
+/// `ssh://git@example.org:2222/a/b.git` and `https://example.org/a/b.git`.
+/// `None` for an address that names no host (a folder, `file://`), which a
+/// sync refuses anyway ([`repository_is_plain`]). Pure.
+#[must_use]
+pub fn host_of(address: &str) -> Option<String> {
+    let address = address.trim();
+    let authority = if let Some(rest) = address
+        .strip_prefix("https://")
+        .or_else(|| address.strip_prefix("ssh://"))
+        .or_else(|| address.strip_prefix("http://"))
+    {
+        let authority = rest.split('/').next().unwrap_or_default();
+        let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+        // `[::1]:22` keeps its brackets' inside; `host:22` loses the port.
+        if let Some(inner) = host_port.strip_prefix('[') {
+            inner.split_once(']').map(|(h, _)| h)?
+        } else {
+            host_port.split(':').next().unwrap_or_default()
+        }
+    } else if address.starts_with("file://") || address.starts_with('/') || address.starts_with('.')
+    {
+        return None;
+    } else {
+        // `git@host:path`, scp-like.
+        let (_, rest) = address.split_once('@')?;
+        rest.split_once(':')?.0
+    };
+    let host = authority.trim_end_matches('.').to_ascii_lowercase();
+    let fits = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    fits.then_some(host)
 }
 
 #[cfg(test)]
@@ -266,6 +327,57 @@ mod tests {
         assert!(partial.has_repository());
     }
 
+    /// FAILS IF: a repository's host is read wrongly — the consent would be
+    /// asked for (or given to) another host than the one git reaches.
+    #[test]
+    fn the_host_is_the_one_git_reaches() {
+        for (address, host) in [
+            ("git@github.com:someone/belongings.git", "github.com"),
+            ("ssh://git@Example.org:2222/someone/b.git", "example.org"),
+            ("ssh://example.org/b.git", "example.org"),
+            ("https://git.example.org/someone/b.git", "git.example.org"),
+            ("https://example.org:8443/b.git", "example.org"),
+        ] {
+            assert_eq!(host_of(address).as_deref(), Some(host), "{address}");
+        }
+        for none in ["file:///srv/b.git", "/srv/b.git", "./b.git", "", "nonsense"] {
+            assert_eq!(host_of(none), None, "{none}");
+        }
+    }
+
+    /// FAILS IF: an address is kept whose host no consent can name — every
+    /// sync would be refused for good, and typing it again could never help
+    /// — or one that names its host is refused for it.
+    #[test]
+    fn an_address_is_kept_only_with_a_host_consent_can_name() {
+        for unnamed in [
+            "ssh://git@[2001:db8::1]/belongings.git",
+            "https://[::1]/b.git",
+            "git@[::1]:b.git",
+            "git@my_host:b.git",
+            "ssh://git@my_host.example/b.git",
+        ] {
+            assert_eq!(
+                repository_is_plain(unnamed),
+                Err(Invalid::UnnamedHost),
+                "{unnamed}"
+            );
+        }
+        for named in [
+            "git@github.com:someone/belongings.git",
+            "ssh://git@192.0.2.10:2222/b.git",
+            "https://git.example.org/someone/b.git",
+        ] {
+            assert_eq!(repository_is_plain(named), Ok(()), "{named}");
+            let host = host_of(named).unwrap();
+            assert_eq!(
+                ronoctua_consent::normal(&host).as_deref(),
+                Some(host.as_str()),
+                "{named}: consent.json would keep another name"
+            );
+        }
+    }
+
     #[test]
     fn the_period_walks_round_and_keeping_is_undone_by_its_opposite() {
         let mut seen = vec![Some(7)];
@@ -314,5 +426,19 @@ mod tests {
             &b,
             false
         ));
+    }
+
+    /// FAILS IF: a file written before the session unlock (no
+    /// `keep_unlocked`) stops keeping the identity — the owner's default is
+    /// on — or a person's "off" is read as on.
+    #[test]
+    fn the_session_keeps_the_identity_unless_the_person_says_no() {
+        let before: Belongings =
+            serde_json::from_str(r#"{"repository":"git@example.org:a/b.git"}"#).unwrap();
+        assert!(before.keep_unlocked);
+        assert!(Belongings::default().keep_unlocked);
+        let off: Belongings = serde_json::from_str(r#"{"keep_unlocked":false}"#).unwrap();
+        assert!(!off.keep_unlocked);
+        assert_eq!(Belongings::from_file(&off.to_file()), Some(off));
     }
 }

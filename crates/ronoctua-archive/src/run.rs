@@ -250,6 +250,50 @@ pub(crate) fn run(
     })
 }
 
+/// Starts `program` for `call` with its archive on standard output, which
+/// the caller reads (`child.stdout`) and waits on — what
+/// [`crate::Tools::tar_stream`] hands encrypt-anything. The same clock and
+/// locale as [`run`]; `call.listing` is written to stdin whole, and stdin
+/// closed, before this returns — a few bytes the pipe holds, so this cannot
+/// wait on output nobody reads yet. Its complaints go to this process's
+/// standard error; a member it could not read makes it exit with a failure
+/// at the end, which the caller's `wait` sees. No `setsid` and no password:
+/// the child is in the caller's group, so whatever stops the caller's group
+/// stops it too.
+///
+/// # Errors
+///
+/// [`Why::Unstartable`] when it does not start, [`Why::Failed`] when its
+/// list of names could not be written (the child is gone by then).
+pub(crate) fn stream(program: &Path, call: &Call<'_>) -> Result<std::process::Child, Refusal> {
+    let refused = |why| Refusal {
+        why,
+        tool: Some(call.tool),
+    };
+    let mut command = Command::new(program);
+    command
+        .args(&call.args)
+        .env("TZ", "UTC0")
+        .env("LC_ALL", "C.UTF-8")
+        .env_remove("LANGUAGE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    if let Some(cwd) = call.cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command.spawn().map_err(|_| refused(Why::Unstartable))?;
+    let written = child.stdin.take().map_or(Ok(()), |mut stdin| {
+        stdin.write_all(call.listing.unwrap_or_default())
+    });
+    if written.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(refused(Why::Failed));
+    }
+    Ok(child)
+}
+
 /// Asks `switch` every [`POLL`] until `over`, and signals the program `pid`:
 /// its whole process group when it leads one (`grouped`, under `setsid`),
 /// itself otherwise. A hold is sent once and undone once; a stop is `SIGKILL`,

@@ -24,14 +24,17 @@
 //! door goes through one field ([`Reach`]), and a photograph's writes down
 //! what would have been sent instead (`crate::belongings_photograph`).
 
+use std::sync::Arc;
+
 use ronoctua_belongings::order::Op;
 use ronoctua_belongings::places::Places;
+use ronoctua_belongings::status::Offer;
 
-use crate::belongings::{Errand, Press, Readings, View};
+use crate::belongings::{Counted, Counting, Ears, Errand, Press, Readings, View};
 use crate::door::{Content, Door, Ui};
 use anyhow::Result;
 use smithay_client_toolkit::{
-    reexports::calloop::channel,
+    reexports::calloop::{self, channel},
     seat::keyboard::{KeyEvent, Modifiers},
 };
 
@@ -41,7 +44,7 @@ pub const APP_ID: &str = "br.ronoctua.belongings";
 /// Where the orders of this window go.
 #[derive(Debug)]
 pub enum Reach {
-    /// The transfer queue.
+    /// The transfer queue — and a "yes" to an offer, turned on here.
     Queue,
     /// Nowhere: what would have been sent is written down — a photograph's.
     Nowhere(Vec<Op>),
@@ -60,24 +63,41 @@ pub fn host_it() -> Result<()> {
         // made, a setting another door changed — each moves this window
         // without it being reopened.
         let (sender, changed) = channel::channel::<()>();
+        // THE SAME CHANNEL hears the listing's folders, raised after each
+        // count (`belongings::Ears`).
+        let ring = sender.clone();
         let watches = places.as_ref().map_or_else(Vec::new, |p| {
             crate::belongings::watch(p, move || sender.send(()).is_ok())
         });
         w.handle
             .insert_source(changed, |event, (), door: &mut Door<BelongingsWindow>| {
                 if let channel::Event::Msg(()) = event {
-                    door.content.reread(&mut door.ui);
+                    door.content.heard(&mut door.ui);
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the belongings' watch: {e}"))?;
+        // THE LISTING, counted in a thread of its own and handed back here.
+        let (counted, count) = channel::channel::<Arc<Counted>>();
+        w.handle
+            .insert_source(count, |event, (), door: &mut Door<BelongingsWindow>| {
+                if let channel::Event::Msg(counted) = event {
+                    door.content.counted(&mut door.ui, counted);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the belongings' count: {e}"))?;
         let zone = ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
-        Ok(BelongingsWindow::over(
+        let mut window = BelongingsWindow::counting(
             places,
             crate::belongings::now_s,
             zone,
             Reach::Queue,
             watches,
-        ))
+            Counting::through(counted),
+        );
+        window.ring = Some(ring);
+        window.loop_handle = Some(w.handle.clone());
+        window.arm_the_clock();
+        Ok(window)
     })
 }
 
@@ -94,11 +114,29 @@ pub struct BelongingsWindow {
     zone: ronoctua_files::when::Zone,
     /// Where the orders go.
     pub reach: Reach,
+    /// The count of what goes to the repository.
+    counting: Counting,
+    /// The offers a photograph said yes to, instead of turning them on.
+    accepted: Vec<Offer>,
+    /// The keys a photograph asked to pin (their fingerprints), instead of
+    /// asking the sudo door.
+    pinned: Vec<String>,
     _watches: Vec<ronoctua_files::notice::Notice>,
+    /// What the listing's files are heard by.
+    ears: Ears,
+    /// The watches' channel, for the ears raised after a count; `None`: a
+    /// photograph's, which hears nothing.
+    ring: Option<channel::Sender<()>>,
+    /// The window's loop, for its clock; `None`: a photograph's.
+    loop_handle: Option<calloop::LoopHandle<'static, Door<Self>>>,
+    /// The timer at the moment the session forgets the passphrase, and that
+    /// moment.
+    clock: Option<(i64, calloop::RegistrationToken)>,
 }
 
 impl BelongingsWindow {
-    /// The window over the files under `places`.
+    /// The window over the files under `places`, its listing counted in
+    /// place (a photograph's, a test's).
     #[must_use]
     pub fn over(
         places: Option<Places>,
@@ -107,7 +145,22 @@ impl BelongingsWindow {
         reach: Reach,
         watches: Vec<ronoctua_files::notice::Notice>,
     ) -> Self {
-        let readings = Readings::read(places.clone(), now());
+        Self::counting(places, now, zone, reach, watches, Counting::in_place())
+    }
+
+    /// The window over the files under `places`, its listing counted as
+    /// `counting` says.
+    #[must_use]
+    pub fn counting(
+        places: Option<Places>,
+        now: fn() -> i64,
+        zone: ronoctua_files::when::Zone,
+        reach: Reach,
+        watches: Vec<ronoctua_files::notice::Notice>,
+        mut counting: Counting,
+    ) -> Self {
+        let mut readings = Readings::read(places.clone(), now());
+        counting.ask(&mut readings);
         let texts = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT);
         let view = texts.as_ref().map_or_else(View::default, |t| {
             View::fresh(&readings, &zone, OPENING_COLUMNS, t)
@@ -119,13 +172,83 @@ impl BelongingsWindow {
             now,
             zone,
             reach,
+            counting,
+            accepted: Vec::new(),
+            pinned: Vec::new(),
             _watches: watches,
+            ears: Ears::default(),
+            ring: None,
+            loop_handle: None,
+            clock: None,
         }
     }
 
-    /// A file changed: read again, and put the cursor back on its row.
+    /// Hears the folders of the count that is in.
+    fn listen(&mut self) {
+        if let Some(ring) = self.ring.clone() {
+            self.ears
+                .follow(&self.readings, move || ring.send(()).is_ok());
+        }
+    }
+
+    /// Arms the window's one clock at the moment the session forgets the
+    /// passphrase it remembers — moved when that moment moves, taken down
+    /// when nothing is remembered; when it rings the window reads again. The
+    /// footer's twin (`Footer::belongings_arm_the_clock`).
+    fn arm_the_clock(&mut self) {
+        let Some(handle) = self.loop_handle.clone() else {
+            return;
+        };
+        let wanted = self.readings.kept_until;
+        if self.clock.as_ref().map(|(at, _)| *at) == wanted {
+            return;
+        }
+        if let Some((_, token)) = self.clock.take() {
+            handle.remove(token);
+        }
+        let Some(at) = wanted else {
+            return;
+        };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(crate::belongings::until(at)),
+            |_, (), door: &mut Door<Self>| {
+                door.content.clock = None;
+                door.content.heard(&mut door.ui);
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        match armed {
+            Ok(token) => self.clock = Some((at, token)),
+            Err(e) => tracing::warn!(error = %e, "the belongings' unlock clock could not be hung"),
+        }
+    }
+
+    /// What this window wrote: read again, and put the cursor back on its
+    /// row — the listing kept until a watch rings for a count.
     fn reread(&mut self, ui: &mut Ui) {
-        self.readings = Readings::read(self.places.clone(), (self.now)());
+        self.readings = Readings::read(self.places.clone(), (self.now)()).keeping(&self.readings);
+        self.counting.reread(&mut self.readings);
+        self.view
+            .settle_in(&self.readings, &self.zone, ui.columns, &ui.texts);
+        self.arm_the_clock();
+        ui.ask_paint();
+    }
+
+    /// A watch rang (or the clock): read again, and count again.
+    fn heard(&mut self, ui: &mut Ui) {
+        self.readings = Readings::read(self.places.clone(), (self.now)()).keeping(&self.readings);
+        self.counting.ask(&mut self.readings);
+        self.listen();
+        self.view
+            .settle_in(&self.readings, &self.zone, ui.columns, &ui.texts);
+        self.arm_the_clock();
+        ui.ask_paint();
+    }
+
+    /// A count came back from its thread.
+    fn counted(&mut self, ui: &mut Ui, counted: Arc<Counted>) {
+        self.counting.came(&mut self.readings, counted);
+        self.listen();
         self.view
             .settle_in(&self.readings, &self.zone, ui.columns, &ui.texts);
         ui.ask_paint();
@@ -147,6 +270,33 @@ impl BelongingsWindow {
                     crate::echo::Echo::Brief,
                 );
             }
+            Errand::Accept(at_s, offer) => match (&self.reach, self.places.clone()) {
+                // THE KEYS' YES is a root gesture: asked in the footer's sudo
+                // bar, as this window's.
+                (Reach::Queue, Some(places)) => {
+                    crate::belongings::accept_in_background(
+                        places,
+                        at_s,
+                        offer,
+                        crate::sudo_bar::Gate::window(),
+                    );
+                }
+                _ => self.accepted.push(offer),
+            },
+            // THE PIN is a root gesture: asked in the footer's sudo bar, as
+            // this window's.
+            Errand::Pin { key, fingerprint } => match (&self.reach, self.places.clone()) {
+                (Reach::Queue, Some(places)) => {
+                    crate::belongings::pin_in_background(
+                        places,
+                        key,
+                        fingerprint,
+                        crate::sudo_bar::Gate::window(),
+                    );
+                }
+                // A PHOTOGRAPH asks no door: it writes the pin down.
+                _ => self.pinned.push(fingerprint),
+            },
             Errand::Queue(op) => {
                 let sent = match &mut self.reach {
                     Reach::Queue => crate::belongings::queue(op, self.places.as_ref()),
@@ -178,7 +328,7 @@ impl BelongingsWindow {
         ui.message = None;
         // THE FILES AS THEY ARE NOW: a decision the other door made a moment
         // ago is the one a key here lays its own over.
-        self.readings = Readings::read(self.places.clone(), (self.now)());
+        self.readings = Readings::read(self.places.clone(), (self.now)()).keeping(&self.readings);
         let errand = self
             .view
             .press(press, &self.readings, &self.zone, ui.columns, &ui.texts);
@@ -197,6 +347,18 @@ impl BelongingsWindow {
             Reach::Queue => &[],
             Reach::Nowhere(sent) => sent,
         }
+    }
+
+    /// The offers a photograph said yes to.
+    #[must_use]
+    pub fn accepted(&self) -> &[Offer] {
+        &self.accepted
+    }
+
+    /// The keys a photograph asked to pin.
+    #[must_use]
+    pub fn pinned(&self) -> &[String] {
+        &self.pinned
     }
 }
 
@@ -225,7 +387,7 @@ impl Content for BelongingsWindow {
     /// footer's minibuffer reaches.
     fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
         ui.message = None;
-        self.readings = Readings::read(self.places.clone(), (self.now)());
+        self.readings = Readings::read(self.places.clone(), (self.now)()).keeping(&self.readings);
         let errand = self.view.answered(id, text, &self.readings, &ui.texts);
         self.apply(ui, errand);
     }
@@ -298,6 +460,8 @@ mod tests {
                 "git@example.org:someone/b.git",
             ))
             .expect("prefs");
+        // THE HOST LET, as typing the address does.
+        ronoctua_consent::let_hosts_under(&places.config, &["example.org"], true).expect("consent");
         std::fs::create_dir_all(places.keys()).expect("keys");
         std::fs::write(places.deploy_key(), "k").expect("key");
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
@@ -344,6 +508,31 @@ mod tests {
         assert_eq!(w.sent(), [Op::Prepare]);
         assert!(places.passphrase().is_file());
         assert!(ui.orders().is_empty(), "the order went to the footer");
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the window draws no row asking a host nobody let, or a
+    /// click on it does not let the host here — the two doors do the same.
+    #[test]
+    fn the_window_asks_a_host_nobody_let_on_its_row() {
+        let (mut w, mut ui, places) = a_window("consent");
+        std::fs::remove_file(places.config.join(ronoctua_consent::FILE)).expect("consent");
+        w.reread(&mut ui);
+        let row = Target::Let("example.org".to_owned());
+        stand_on(&mut w, &mut ui, &row);
+        w.clicked(&mut ui, w.view.cursor());
+        assert!(ronoctua_consent::allows_under(
+            &places.config,
+            "example.org"
+        ));
+        w.reread(&mut ui);
+        assert!(
+            !w.view_rows(&ui)
+                .iter()
+                .any(|r| r.target.as_ref() == Some(&row)),
+            "the row stays once the host is let"
+        );
+        assert!(w.sent().is_empty(), "letting a host sent an order");
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 

@@ -37,8 +37,12 @@ pub const KEY_PREFIX_OF: &str = "sidebar-";
 /// and it is repeated here because it is the whole reason this enum exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Applies {
-    /// Always.
-    Always,
+    /// Every row that is a place, a device or the trash — never a drive's
+    /// HEADING ([`Target::Drive`]). The heading is the whole drive: there is
+    /// nowhere to walk into, so `open` would do nothing; and its id is the
+    /// node (`drive:/dev/sdb`) the next stick takes, so hiding it would hide
+    /// THAT stick's heading too — a blank one would vanish again.
+    Listed,
     /// A folder, a file or an application — anything that is not a device.
     Place,
     /// Any device, mounted or not.
@@ -69,6 +73,10 @@ pub enum Applies {
     /// An encrypted device that is open, and that the running system does
     /// not need: what locking it again is offered on.
     Unlocked,
+    /// A removable drive's HEADING ([`Target::Drive`]) that the running
+    /// system does not need: what the installer is written to — the whole
+    /// drive, so never a volume's row, and a blank stick's heading included.
+    Drive,
 }
 
 /// One row of the sidebar's menu.
@@ -111,7 +119,7 @@ pub fn all_of() -> &'static [Action] {
             label: key::SIDEBAR_OPEN,
             does: key::SIDEBAR_DOES_OPEN,
             key: "RET",
-            applies: Applies::Always,
+            applies: Applies::Listed,
         },
         Action {
             id: "mount",
@@ -163,7 +171,17 @@ pub fn all_of() -> &'static [Action] {
             label: key::SIDEBAR_UNPIN,
             does: key::SIDEBAR_DOES_UNPIN,
             key: "d",
-            applies: Applies::Always,
+            applies: Applies::Listed,
+        },
+        // THE INSTALLER, WRITTEN TO A STICK: the whole drive, after a question
+        // whose first answer is "no" — the stick view's.
+        // ── anchor: L17 ──
+        Action {
+            id: "write-installer",
+            label: key::SIDEBAR_WRITE_INSTALLER,
+            does: key::SIDEBAR_DOES_WRITE_INSTALLER,
+            key: "W",
+            applies: Applies::Drive,
         },
         // LAST, AND ON PURPOSE. It is the one row here that cannot be undone,
         // and the listing's menu puts `delete` late for the same reason: a
@@ -192,21 +210,28 @@ pub fn for_row(row: &Row) -> Vec<&'static Action> {
 #[must_use]
 pub fn offered(applies: Applies, row: &Row) -> bool {
     let device = matches!(row.target, Target::Device(_));
+    // THE /private VAULT reuses two of a disk's keys and nothing else: `m`
+    // opens it while it is locked, `l` locks it while it is open. It is never
+    // unmounted, ejected or formatted from here.
+    let vault = matches!(row.target, Target::Private);
     // WHAT THE SYSTEM NEEDS IS NOT SPARE, and that is one test standing between
     // a menu row and somebody formatting the disk they booted from.
     let spare = device && row.needed.is_none();
     match applies {
-        Applies::Always => true,
-        Applies::Place => !device,
+        Applies::Listed => !matches!(row.target, Target::Drive(_)),
+        Applies::Place => !device && !vault,
         Applies::Device => device,
         Applies::Mounted => device && row.mounted == Some(true),
         Applies::MountedSpare => spare && row.mounted == Some(true),
-        Applies::Unmounted => device && row.mounted == Some(false),
+        Applies::Unmounted => (device || vault) && row.mounted == Some(false),
         Applies::Removable => {
             spare && row.removable && (row.mounted == Some(true) || row.seal.is_some())
         }
         Applies::Spare => spare,
-        Applies::Unlocked => spare && row.seal == Some(crate::sidebar::Seal::Unlocked),
+        Applies::Unlocked => (spare || vault) && row.seal == Some(crate::sidebar::Seal::Unlocked),
+        Applies::Drive => {
+            matches!(row.target, Target::Drive(_)) && row.needed.is_none() && row.removable
+        }
     }
 }
 
@@ -231,8 +256,9 @@ pub mod key {
     pub use ronoctua_i18n::key::{
         SIDEBAR_DOES_EJECT, SIDEBAR_DOES_FORMAT, SIDEBAR_DOES_INFORMATION, SIDEBAR_DOES_LOCK,
         SIDEBAR_DOES_MOUNT, SIDEBAR_DOES_OPEN, SIDEBAR_DOES_UNMOUNT, SIDEBAR_DOES_UNPIN,
-        SIDEBAR_EJECT, SIDEBAR_FORMAT, SIDEBAR_INFORMATION, SIDEBAR_LOCK, SIDEBAR_MOUNT,
-        SIDEBAR_OPEN, SIDEBAR_UNMOUNT, SIDEBAR_UNPIN,
+        SIDEBAR_DOES_WRITE_INSTALLER, SIDEBAR_EJECT, SIDEBAR_FORMAT, SIDEBAR_INFORMATION,
+        SIDEBAR_LOCK, SIDEBAR_MOUNT, SIDEBAR_OPEN, SIDEBAR_UNMOUNT, SIDEBAR_UNPIN,
+        SIDEBAR_WRITE_INSTALLER,
     };
 }
 
@@ -358,6 +384,77 @@ mod tests {
         let mut root = a_device(true, false, Some("/"));
         root.seal = Some(crate::sidebar::Seal::Unlocked);
         assert!(!ids(&root).contains(&"lock"));
+    }
+
+    /// FAILS IF: the /private vault's row offers anything of a disk's but
+    /// opening while it is locked and locking while it is open.
+    #[test]
+    fn the_vault_opens_and_locks_and_nothing_more() {
+        let vault = |open: bool| Row {
+            id: "private".to_owned(),
+            target: Target::Private,
+            label: Some("private".to_owned()),
+            section: Section::Devices,
+            mounted: Some(open),
+            at: open.then(|| PathBuf::from("/private")),
+            quiet: false,
+            system: false,
+            needed: None,
+            removable: false,
+            built_in: true,
+            seal: Some(if open {
+                crate::sidebar::Seal::Unlocked
+            } else {
+                crate::sidebar::Seal::Locked
+            }),
+        };
+        assert_eq!(ids(&vault(false)), ["open", "mount", "unpin"]);
+        assert_eq!(ids(&vault(true)), ["open", "lock", "unpin"]);
+    }
+
+    /// THE INSTALLER IS WRITTEN TO A WHOLE DRIVE: offered on a removable
+    /// drive's heading the system does not need — a blank stick's included —
+    /// and never on a volume's row, a soldered drive or the system's own.
+    #[test]
+    fn the_installer_is_offered_on_a_sticks_heading_only() {
+        let heading = |removable: bool, needed: Option<&str>| Row {
+            id: "drive:x".to_owned(),
+            target: Target::Drive("/drive/x".to_owned()),
+            label: Some("Vendor Model".to_owned()),
+            section: Section::Devices,
+            mounted: None,
+            at: None,
+            quiet: false,
+            system: false,
+            needed: needed.map(ToOwned::to_owned),
+            removable,
+            built_in: true,
+            seal: None,
+        };
+        assert!(ids(&heading(true, None)).contains(&"write-installer"));
+        assert!(!ids(&heading(false, None)).contains(&"write-installer"));
+        assert!(!ids(&heading(true, Some("/"))).contains(&"write-installer"));
+        assert!(!ids(&a_device(false, true, None)).contains(&"write-installer"));
+        // A HEADING IS NOT A VOLUME: nothing to mount, format or eject on it
+        // — nor to OPEN (nowhere to walk into) or hide (its id is the node
+        // the next stick takes). The installer is all it offers.
+        let offered = ids(&heading(true, None));
+        for absent in ["open", "unpin", "mount", "unmount", "format", "information"] {
+            assert!(!offered.contains(&absent), "{absent}: {offered:?}");
+        }
+        assert_eq!(offered, ["write-installer"]);
+        assert!(
+            ids(&heading(true, Some("/"))).is_empty(),
+            "the system's stick: nothing, and the menu's fact says why"
+        );
+        // EVERY OTHER ROW still opens and unpins.
+        for row in [a_place(), a_device(false, true, None)] {
+            let offered = ids(&row);
+            assert!(
+                offered.contains(&"open") && offered.contains(&"unpin"),
+                "{offered:?}"
+            );
+        }
     }
 
     #[test]

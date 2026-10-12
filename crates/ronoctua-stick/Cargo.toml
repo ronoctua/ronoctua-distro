@@ -1,0 +1,48 @@
+[package]
+name = "ronoctua-stick"
+description = "The installer on a USB stick: the distro's GitHub releases, their checksums, which drives may be written, and the raw write — the one crate that writes a stick whole."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE ROOT WRITER, as its own binary — extracted by `nix/rust.nix`
+# (`rust.stickWrite`) so the unit that runs it as root carries this crate and
+# nothing of the desktop. It needs no feature: the release's address (TLS) is
+# the shell's, never root's.
+[[bin]]
+name = "ronoctua-stick-write"
+path = "src/bin/write.rs"
+
+[features]
+default = [ ]
+# ASKING GITHUB — `latest` and `sums`, over `ronoctua-http`'s TLS with the
+# person's `Pass`. The SHELL turns it on; the queue's daemon and the root
+# writer do not, so neither carries a TLS stack for a question they never ask
+# (the queue downloads through aria2, the writer reads a file).
+net = [ "dep:ronoctua-http" ]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The release's address is asked with a consent `Pass`.
+ronoctua-consent = { path = "../ronoctua-consent" }
+# Which drives may be written: removable, whole, unmounted, big enough — on
+# the disk border's own rack, never on a second reading of udisks.
+ronoctua-disks = { path = "../ronoctua-disks" }
+ronoctua-http = { path = "../ronoctua-http", features = [ "tls" ], optional = true }
+# SHA-256 of a part, of the whole image and of what the stick reads back: the
+# tree's one implementation of the digest, `aws-lc-rs` (see the root
+# `Cargo.toml`; `one-crypto-implementation` refuses `ring`).
+aws-lc-rs.workspace = true
+# The root writer's syscalls: `O_DIRECT` and `O_EXCL` on the block device,
+# `O_NOFOLLOW` on what the person staged, `fstat` to pin what was opened, and
+# inotify to wait for `ready` without a clock.
+rustix = { workspace = true, features = [ "fs", "event", "process" ] }
+
+[dev-dependencies]
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+
+[lints]
+workspace = true

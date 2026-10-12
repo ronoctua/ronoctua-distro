@@ -58,6 +58,9 @@ usage: ronoctua-shell photograph --door belongings --places <folder> [options] [
   --busy                a run of the belongings holds the lock while the
                         picture is taken (`running::hold` on the copy), so
                         the page draws a sync going on and a key refuses
+  --machine <folder>    the machine directory whose `local/signer.json`
+                        (the key root pinned) the page reads — never this
+                        machine's (default: none pinned)
   --list                prints the frame instead of drawing it
 
 Steps — walked in the order they appear:
@@ -96,6 +99,7 @@ struct Asked {
     scale: u16,
     list: bool,
     busy: bool,
+    machine: Option<std::path::PathBuf>,
     steps: Vec<Step>,
 }
 
@@ -159,6 +163,7 @@ fn parse(words: &[String]) -> Result<Asked> {
         scale: 1,
         list: false,
         busy: false,
+        machine: None,
         steps: Vec::new(),
     };
     let mut words = words.iter();
@@ -238,6 +243,11 @@ fn parse(words: &[String]) -> Result<Asked> {
             }
             "--list" => me.list = true,
             "--busy" => me.busy = true,
+            "--machine" => {
+                let d = std::path::PathBuf::from(value()?);
+                ensure!(d.is_dir(), "`--machine {}` is not a folder", d.display());
+                me.machine = Some(d);
+            }
             "--key" => {
                 let notation = value()?;
                 let key = ronoctua_keymap::Key::parse(&notation)
@@ -305,6 +315,15 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
         } else {
             std::fs::copy(entry.path(), &there)
                 .with_context(|| format!("could not copy {}", entry.path().display()))?;
+            // THE TIME IT LAST CHANGED goes with it: the listing compares it
+            // with what the last sync recorded, and a copy made now would
+            // read as changed. A file the camera may not open for writing
+            // keeps the copy's time.
+            if let Ok(when) = entry.metadata().and_then(|m| m.modified())
+                && let Ok(file) = std::fs::OpenOptions::new().write(true).open(&there)
+            {
+                let _ = file.set_modified(when);
+            }
         }
     }
     Ok(())
@@ -345,6 +364,14 @@ pub fn run(words: &[String]) -> Result<()> {
         .transpose()
         .context("could not hold the belongings' lock on the copy")?;
     NOW.store(asked.now, std::sync::atomic::Ordering::Relaxed);
+    // THE PIN the page reads: the folder named, or one with none — never
+    // this machine's own.
+    crate::belongings::photograph_machine(
+        asked
+            .machine
+            .clone()
+            .unwrap_or_else(|| copy.join("no-machine")),
+    );
     let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
     let window = BelongingsWindow::over(
         Some(Places::under(&copy)),
@@ -479,6 +506,12 @@ fn shoot(d: &mut Detached<BelongingsWindow>, asked: &Asked) -> Result<()> {
 
     for op in d.content.sent() {
         println!("would have sent: {}", op.word());
+    }
+    for offer in d.content.accepted() {
+        println!("would have turned on: {offer:?}");
+    }
+    for fingerprint in d.content.pinned() {
+        println!("would have pinned: {fingerprint}");
     }
     if let Some(m) = d.ui.message.as_ref() {
         println!("the message line says: {m}");

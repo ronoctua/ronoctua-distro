@@ -52,6 +52,27 @@
 # from there, rather than being trusted to the driver's own capture. Each
 # iteration of this test costs about a quarter of an hour; the cheapest thing to
 # do with that is make sure a failure arrives with its output attached.
+#
+# # THE PERSON'S REPOSITORY, over SSH (2026-10-05)
+#
+# The repository became mandatory, and the installer now applies the person's
+# declarations to the machine's flake BEFORE the disk is touched and restores
+# their belongings into the new home after `nixos-install`. So this test has
+# a third node, `server`: an SSH git server holding a belongings repository
+# that a seeder made on the installer node with the same deploy key —
+# `ronoctua-belongings init` from a home whose plain part declares ONE
+# program (`nix:hello`). The installer then runs in its terminal-less mode
+# with that address, the deploy key's FILE and the passphrase, and what is
+# asserted is the person's half: the declaration in the machine's `person/`,
+# `person-applied.json` naming it, the machine's `flake.nix` and `flake.lock`
+# agreeing (this node is a development build: it installs its own tree,
+# aimed, and the machine KEEPS that pair — `nix flake metadata
+# --no-update-lock-file` must take it as it is), the access and the consent
+# in the home, theirs, and the restore's base.
+#
+# The network gate needs NetworkManager and a way out: the installer node
+# runs NM over its test link, with the server as its gateway. WRITTEN, NOT
+# RUN in the wave that wrote it (2026-10-05): see docs/PENDING.md.
 {
   pkgs,
   lib,
@@ -87,11 +108,46 @@ let
     # THE FIFTEENTH ANSWER, which lands in the person's home and never in
     # `host.nix`: an address alone, as the question accepts it.
     RONOCTUA_INST_BELONGINGS = belongings;
+    RONOCTUA_INST_BELONGINGS_ACCESS = "/root/keys/deploy";
+    RONOCTUA_INST_BELONGINGS_PASSPHRASE = belongingsPassphrase;
+    # WHERE THE DISTRO'S TREE IS, as the ISO says it (`nix/installer/iso.nix`).
+    # No revision: this node is a development build, and installs its own.
+    RONOCTUA_FLAKE_DIR = "/etc/ronoctua/distro";
   };
-  belongings = "git@example.org:someone/belongings.git";
+  # THE REPOSITORY, on the `server` node, reached by its node name — a host
+  # `consent.json` can hold.
+  belongings = "git@server:/srv/belongings.git";
   exports = lib.concatStringsSep " " (
     lib.mapAttrsToList (name: value: "${name}=${lib.escapeShellArg value}") answers
   );
+
+  # A DEPLOY KEY, made once at build time: the test's, nobody's. The server
+  # authorises its public half; the installer is handed its private half as
+  # a FILE (`RONOCTUA_INST_BELONGINGS_ACCESS`).
+  deployKey = pkgs.runCommand "installer-vm-deploy-key" { nativeBuildInputs = [ pkgs.openssh ]; } ''
+    mkdir -p $out
+    ssh-keygen -q -t ed25519 -N "" -C installer-vm -f $out/deploy
+  '';
+
+  # THE PERSON'S DECLARATION the repository carries in its plain part: one
+  # program, from nixpkgs.
+  declared = pkgs.writeText "declared.json" (
+    builtins.toJSON {
+      format = 1;
+      apps = [
+        {
+          source = "nix";
+          id = "nix:hello";
+          machines = null;
+          edited-at = "2026-10-05T12:00:00Z";
+          edited-on = "noctua-seeder";
+          attr = "hello";
+          unfree = false;
+        }
+      ];
+    }
+  );
+  belongingsPassphrase = "test-belongings-passphrase";
 
   common = {
     virtualisation.cores = 4;
@@ -111,10 +167,31 @@ pkgs.testers.runNixOSTest {
   globalTimeout = 2 * 3600;
 
   nodes = {
-    installer =
+    # THE PERSON'S REPOSITORY: an SSH git server with one bare repository,
+    # which the deploy key may read and write.
+    server =
       { ... }:
       {
+        services.openssh.enable = true;
+        users.users.git = {
+          isNormalUser = true;
+          home = "/srv/git";
+          openssh.authorizedKeys.keyFiles = [ "${deployKey}/deploy.pub" ];
+        };
+        environment.systemPackages = [ pkgs.git ];
+        networking.firewall.allowedTCPPorts = [ 22 ];
+      };
+
+    installer =
+      { nodes, ... }:
+      {
         imports = [ common ];
+
+        # THE NETWORK GATE: NetworkManager over the test's link, with the
+        # server as the way out — the installer refuses to start without one
+        # (`installer-requires-network`).
+        networking.networkmanager.enable = true;
+        networking.defaultGateway = nodes.server.networking.primaryIPAddress;
 
         # THE INSTALLER RUNS WITH NO ROOT DISK AT ALL.
         #
@@ -166,15 +243,21 @@ pkgs.testers.runNixOSTest {
 
         # WHAT THE ISO GIVES THE INSTALLER, repeated here because an ISO module
         # cannot be a VM node: it brings `installation-cd-minimal` with it.
-        environment.etc."nixos".source = self;
+        # The distro's tree where the ISO keeps it, and the person's two
+        # programs on the PATH.
+        environment.etc."ronoctua/distro".source = self;
         environment.systemPackages = [
           rust.installer
+          rust.belongings
+          rust.person
           self.inputs.disko.packages.${system}.disko
           pkgs.nixos-facter
           pkgs.btrfs-progs
           pkgs.cryptsetup
           pkgs.mkpasswd
           pkgs.util-linux
+          pkgs.git
+          pkgs.openssh
         ];
       };
 
@@ -197,8 +280,39 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    server.start()
+    server.wait_for_unit("sshd.service")
+    server.succeed("install -d -o git -g users -m 0755 /srv")
+    server.succeed("sudo -u git git init -q --bare -b main /srv/belongings.git")
+
     installer.start()
     installer.wait_for_unit("multi-user.target")
+    installer.wait_for_unit("NetworkManager.service")
+
+    with subtest("a seeder fills the repository: one declared program, sealed belongings"):
+        # THE SAME DEPLOY KEY the installer is handed, as the file it names.
+        installer.succeed(
+            "install -d -m 0700 /root/keys /root/seed/.config/ronoctua/belongings-keys"
+            " /root/seed/.local/state/ronoctua/person/software /root/seed-run"
+            " && install -m 0600 ${deployKey}/deploy /root/keys/deploy"
+            " && install -m 0600 ${deployKey}/deploy /root/seed/.config/ronoctua/belongings-keys/deploy"
+            " && install -m 0644 ${declared} /root/seed/.local/state/ronoctua/person/software/declared.json"
+        )
+        installer.succeed(
+            "printf '{\"repository\": \"${belongings}\", \"auth\": \"ssh\"}\\n'"
+            " > /root/seed/.config/ronoctua/belongings.json"
+            " && printf '{\"hosts\": {\"server\": true}}\\n' > /root/seed/.config/ronoctua/consent.json"
+            " && install -d -m 0700 /root/seed-run/ronoctua-belongings"
+            " && printf %s ${lib.escapeShellArg belongingsPassphrase} > /root/seed-run/ronoctua-belongings/passphrase"
+            " && chmod 0600 /root/seed-run/ronoctua-belongings/passphrase"
+        )
+        seeded = installer.execute(
+            "HOME=/root/seed XDG_CONFIG_HOME=/root/seed/.config XDG_STATE_HOME=/root/seed/.local/state"
+            " XDG_RUNTIME_DIR=/root/seed-run ronoctua-belongings init --progress 2>&1"
+        )
+        print(seeded[1])
+        assert seeded[0] == 0, seeded[1]
+        server.succeed("sudo -u git git -C /srv/belongings.git cat-file -e main:plain/person/software/declared.json")
 
     with subtest("the installer runs to the end, and the output comes along if it does not"):
         # `< /dev/null` is not tidiness: with a terminal on stdin the binary
@@ -263,6 +377,42 @@ pkgs.testers.runNixOSTest {
         mode = installer.succeed("stat -c %a /mnt/home/noctua/.config/ronoctua/belongings.json").strip()
         assert mode == "644", f"belongings.json is {mode}"
 
+    with subtest("the person's declarations are the machine's, and its flake agrees with its lock"):
+        installer.succeed("grep -q 'nix:hello' /mnt/etc/nixos/person/software/declared.json")
+        applied = installer.succeed("cat /mnt/etc/ronoctua/person-applied.json")
+        print(applied)
+        assert "nix:hello" in applied, applied
+        # THE AIMED PAIR, KEPT: this node is a development build, so the
+        # machine's flake names this node's tree — and its lock was made for
+        # that flake, which every `--no-update-lock-file` evaluation needs.
+        installer.fail("cmp ${self}/templates/machine/flake.nix /mnt/etc/nixos/flake.nix")
+        installer.succeed("grep -q 'path:/nix/store/' /mnt/etc/nixos/flake.nix")
+        installer.succeed("test -s /mnt/etc/nixos/flake.lock")
+        installer.succeed(
+            "nix --extra-experimental-features 'nix-command flakes' flake metadata"
+            " --no-update-lock-file --offline path:/mnt/etc/nixos"
+        )
+        # AND THE TREE IT NAMES IS KEPT by the system built from it.
+        installer.succeed("grep -q 'inputs.self.outPath' /mnt/etc/nixos/host.nix")
+        installer.succeed("test -s /mnt/etc/nixos/facter.json")
+
+    with subtest("the home has its access, its consent and its belongings, all the person's"):
+        uid = installer.succeed("grep '^noctua:' /mnt/etc/passwd | cut -d: -f3").strip()
+        home = "/mnt/home/noctua"
+        for made, mode in (
+            (".config/ronoctua/belongings-keys", "700"),
+            (".config/ronoctua/belongings-keys/deploy", "600"),
+            (".config/ronoctua/consent.json", None),
+            (".local/state/ronoctua/person/software/declared.json", None),
+            (".local/state/ronoctua/belongings/last.json", None),
+        ):
+            owner, got = installer.succeed(f"stat -c '%u %a' {home}/{made}").split()
+            assert owner == uid, f"{made} is owned by {owner}, not the user ({uid})"
+            assert mode is None or got == mode, f"{made} is {got}, not {mode}"
+        installer.succeed(f"grep -q server {home}/.config/ronoctua/consent.json")
+        # THE PASSPHRASE AND THE SCRATCH ARE GONE, the key in RAM with them.
+        installer.fail("test -e /run/ronoctua-install")
+
     with subtest("the resume_offset came out of the swapfile, and not out of a guess"):
         # Computed AFTER the swap file exists, and the one answer the installer
         # produces instead of asking. Zero would be accepted by the kernel and
@@ -290,6 +440,13 @@ pkgs.testers.runNixOSTest {
         assert machine.succeed(
             "stat -c %U /home/noctua/.config/ronoctua/belongings.json"
         ).strip() == "noctua"
+        # The machine's flake and lock still agree on the running system:
+        # an evaluation that may not move the lock takes them as they are.
+        machine.succeed("grep -q 'inputs.ronoctua.url' /etc/nixos/flake.nix")
+        machine.succeed(
+            "nix --extra-experimental-features 'nix-command flakes' flake metadata"
+            " --no-update-lock-file --offline path:/etc/nixos"
+        )
 
     machine.shutdown()
   '';

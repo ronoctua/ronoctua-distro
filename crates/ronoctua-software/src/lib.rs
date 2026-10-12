@@ -32,6 +32,17 @@
 //! queue (`ronoctua-transfers`), which runs this crate's CLI as a child and reads
 //! the progress lines it prints ([`progress`]). The screen links the library
 //! for what is quick and read-only — the installed list, the search, a preview.
+//!
+//! # The person's declaration
+//!
+//! A program the person keeps is DECLARED: an entry of their
+//! `declared.json`, which travels with their belongings to every machine of
+//! theirs and which the update builds into each ([`declaration`]). Declaring
+//! installs it here at once by the source's own path and pins its download;
+//! the mirror is then staged for root's applier ([`stage`]) and pushed. The
+//! distro's own programs can be declined, here or everywhere, the same way.
+//! What Nix cannot do — Android's apps, and the copies by hand a declared one
+//! replaces — the reconciler does, within its ledger ([`reconcile`]).
 
 #![forbid(unsafe_code)]
 
@@ -39,14 +50,18 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod declaration;
 pub mod found;
 pub mod journal;
 pub mod lock;
 pub mod order;
+pub mod pins;
 pub mod prefs;
 pub mod progress;
+pub mod reconcile;
 pub mod refusal;
 pub mod run;
+pub mod stage;
 pub mod state;
 
 pub mod android;
@@ -68,6 +83,8 @@ pub mod web;
 pub mod appimagehub;
 #[cfg(all(feature = "net", feature = "draw"))]
 pub mod cli;
+#[cfg(all(feature = "net", feature = "draw"))]
+pub mod declare;
 #[cfg(feature = "net")]
 pub mod flathub;
 #[cfg(feature = "net")]
@@ -79,6 +96,9 @@ pub mod net;
 
 pub use order::Order;
 pub use refusal::Refusal;
+/// The person's declared data, as its one schema says it — re-exported, so
+/// the screen reads a declaration in the types this crate writes it in.
+pub use ronoctua_person as person;
 
 /// Where a program comes from.
 ///
@@ -248,6 +268,11 @@ pub struct Tools {
     pub icon_names: Option<PathBuf>,
     /// `RONOCTUA_SOFTWARE` — this crate's own CLI, which the queue runs.
     pub software: Option<PathBuf>,
+    /// `RONOCTUA_BELONGINGS` — the belongings' CLI, which carries a
+    /// declaration to the person's repository (`plain push`). The queue's
+    /// unit has it (`nix/modules/belongings.nix`), and the order the queue
+    /// runs inherits it; without it a declaration travels at the next sync.
+    pub belongings: Option<PathBuf>,
 }
 
 impl Tools {
@@ -277,9 +302,70 @@ impl Tools {
             icons: path("RONOCTUA_ICONS"),
             icon_names: path("RONOCTUA_ICON_NAMES"),
             software: path("RONOCTUA_SOFTWARE"),
+            belongings: path("RONOCTUA_BELONGINGS"),
         }
     }
 }
+
+/// The machine's side of the person's declaration: where root's applier
+/// reads the staging and says what it did, what Nix wrote back about the
+/// system, and the machine's own record. Constants on a machine; a folder of
+/// the test's (or a photograph's room) everywhere else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct System {
+    /// `/run/ronoctua-person` — root's folder of the person's staging
+    /// (`staged/`, `verdict.json`; `ronoctua_person::root`).
+    pub person_run: PathBuf,
+    /// `/etc/ronoctua` — `person-applied.json`, `distro-apps.json` and
+    /// `declared-android.json`, written by Nix (`ronoctua_person::reports`).
+    pub reports: PathBuf,
+    /// `/var/lib/ronoctua-machine` — the machine's record (`state.json`).
+    pub machine: PathBuf,
+    /// `/run/current-system` — the system the machine runs. A switch
+    /// replaces this link, and that is how a watcher learns the reports
+    /// changed: their own links under `/etc` never move (`/etc/static`
+    /// does).
+    pub current: PathBuf,
+}
+
+impl System {
+    /// The machine's: the three folders where the system puts them — or, when
+    /// `RONOCTUA_SOFTWARE_SYSROOT` names a folder, the same three under it
+    /// (the photograph's room, a test). Read once, by the session's roots.
+    #[must_use]
+    pub fn of_machine(sysroot: Option<&Path>) -> Self {
+        let at = |path: &str| {
+            sysroot.map_or_else(
+                || PathBuf::from(path),
+                |root| root.join(path.trim_start_matches('/')),
+            )
+        };
+        Self {
+            person_run: at(ronoctua_person::root::RUN),
+            reports: at(REPORTS),
+            machine: at(ronoctua_machine::STATE_DIR),
+            current: at(CURRENT_SYSTEM),
+        }
+    }
+
+    /// `staged/`, where the person's tree is laid for the applier.
+    #[must_use]
+    pub fn staged(&self) -> PathBuf {
+        self.person_run.join("staged")
+    }
+
+    /// `verdict.json`, what the applier last did.
+    #[must_use]
+    pub fn verdict(&self) -> PathBuf {
+        self.person_run.join("verdict.json")
+    }
+}
+
+/// Where Nix writes its reports about the person's declaration.
+pub const REPORTS: &str = "/etc/ronoctua";
+
+/// The link to the system the machine runs.
+pub const CURRENT_SYSTEM: &str = "/run/current-system";
 
 /// Where the person's things are. Every function that reads or writes takes
 /// one of these as a PARAMETER (`persistence-takes-its-root-as-a-parameter`),
@@ -298,6 +384,12 @@ pub struct Roots {
     pub cache: PathBuf,
     /// `$XDG_RUNTIME_DIR`, when there is one.
     pub runtime: Option<PathBuf>,
+    /// `$XDG_DATA_DIRS`, in its order: where a launcher entry the system or
+    /// the person's profile installed lives (a declared web app's, a
+    /// declared AppImage's, the distro's programs').
+    pub data_dirs: Vec<PathBuf>,
+    /// The machine's side of the declaration.
+    pub system: System,
 }
 
 impl Roots {
@@ -323,11 +415,21 @@ impl Roots {
             runtime: std::env::var_os("XDG_RUNTIME_DIR")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
+            data_dirs: data_dirs_of(std::env::var("XDG_DATA_DIRS").ok().as_deref()),
+            system: System::of_machine(
+                std::env::var_os("RONOCTUA_SOFTWARE_SYSROOT")
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+                    .as_deref(),
+            ),
             home,
         })
     }
 
-    /// A tree under one directory, for tests.
+    /// A tree under one directory, for tests and for a photograph's room:
+    /// the person's under `home/`, the machine's under `sys/` (as
+    /// [`System::of_machine`] lays it) and the system's launcher entries
+    /// under `share/`.
     #[must_use]
     pub fn under(root: &Path) -> Self {
         Self {
@@ -337,6 +439,8 @@ impl Roots {
             state: root.join("home/.local/state"),
             cache: root.join("home/.cache"),
             runtime: Some(root.join("run")),
+            data_dirs: vec![root.join("share")],
+            system: System::of_machine(Some(&root.join("sys"))),
         }
     }
 
@@ -373,6 +477,23 @@ impl Roots {
     pub fn ours_cache(&self) -> PathBuf {
         self.cache.join(ronoctua_xdg::name()).join("software")
     }
+}
+
+/// `$XDG_DATA_DIRS` as a list: absolute folders only, in order, and the
+/// specification's default (`/usr/local/share:/usr/share`) when it is unset
+/// or empty.
+#[must_use]
+pub fn data_dirs_of(value: Option<&str>) -> Vec<PathBuf> {
+    let value = value
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or("/usr/local/share:/usr/share");
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in value.split(':').map(PathBuf::from) {
+        if dir.is_absolute() && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
 }
 
 /// What a finished order leaves behind, for the notification and the screen.
@@ -537,6 +658,48 @@ mod tests {
         assert_eq!(slug_of("../../etc"), "etc");
         assert_eq!(slug_of("日本"), "");
         assert!(slug_of(&"a".repeat(90)).len() <= 40);
+    }
+
+    #[test]
+    fn the_data_dirs_are_absolute_ordered_and_have_a_default() {
+        assert_eq!(
+            data_dirs_of(Some(
+                "/etc/profiles/per-user/a/share:relative:/run/current-system/sw/share:/etc/profiles/per-user/a/share"
+            )),
+            [
+                PathBuf::from("/etc/profiles/per-user/a/share"),
+                PathBuf::from("/run/current-system/sw/share"),
+            ]
+        );
+        assert_eq!(
+            data_dirs_of(None),
+            [
+                PathBuf::from("/usr/local/share"),
+                PathBuf::from("/usr/share")
+            ]
+        );
+        assert_eq!(data_dirs_of(Some("")), data_dirs_of(None));
+    }
+
+    #[test]
+    fn the_machines_side_moves_whole_under_a_room() {
+        let here = System::of_machine(None);
+        assert_eq!(here.person_run, PathBuf::from(ronoctua_person::root::RUN));
+        assert_eq!(here.staged(), PathBuf::from(ronoctua_person::root::STAGED));
+        assert_eq!(
+            here.verdict(),
+            PathBuf::from(ronoctua_person::root::VERDICT)
+        );
+        assert_eq!(here.reports, PathBuf::from(REPORTS));
+        assert_eq!(here.machine, PathBuf::from(ronoctua_machine::STATE_DIR));
+        assert_eq!(here.current, PathBuf::from(CURRENT_SYSTEM));
+        let room = System::of_machine(Some(Path::new("/room/sys")));
+        assert_eq!(room.reports, PathBuf::from("/room/sys/etc/ronoctua"));
+        assert_eq!(room.current, PathBuf::from("/room/sys/run/current-system"));
+        assert_eq!(
+            room.staged(),
+            PathBuf::from("/room/sys/run/ronoctua-person/staged")
+        );
     }
 
     #[test]

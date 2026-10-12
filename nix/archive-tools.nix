@@ -1,8 +1,10 @@
 # WHAT `ronoctua-archive` RUNS, by store path — the three programs a person's
-# archive goes through (`crates/ronoctua-archive`). `nix/rust.nix` bakes them
-# into the workspace (`generated`, read with `option_env!`) and hands them to
-# the tests at run time; `bsdtar` is `RONOCTUA_BSDTAR`, already there for the
-# file manager.
+# archive goes through (`crates/ronoctua-archive`). `nix/rust.nix` bakes 7zz
+# and bsdtar into the workspace (`generated`, read with `option_env!`) and
+# hands all three to the tests at run time; `bsdtar` is `RONOCTUA_BSDTAR`,
+# already there for the file manager. unrar is set at run time only
+# (`atRunTime`): unfree, a baked path would keep the workspace out of the
+# public binary cache.
 #
 # `7zz` and not `p7zip`: `p7zip` is a fork frozen at 16.02; `7zz` is Igor
 # Pavlov's own, current, with AES-256 zip, hidden names in 7z and split

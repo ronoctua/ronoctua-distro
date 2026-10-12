@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "ssh-signing": {
+    "key": ".ssh/id_ed25519.pub"
+  },
+  "binary-cache": {
+    "name": "someone",
+    "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=",
+    "visibility": "private"
+  }
+}

@@ -68,23 +68,55 @@ fn home() -> Option<PathBuf> {
     ronoctua_store::config_dir()
 }
 
+/// `language.json` as it is written: `{ "language": "pt-BR" }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Written {
+    /// The language's tag; absent is "nobody chose".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+}
+
+/// The file as a [`ronoctua_store::Store`] in `dir`, judged by [`refused`]
+/// on every read and write.
+fn store_at(dir: &Path) -> ronoctua_store::Store<Written> {
+    ronoctua_store::Store::at(Some(dir.to_path_buf()), FILE).checked(refused)
+}
+
+/// A language this build does not declare is REPAIRED — out of the value read,
+/// into the ledger the belongings' page shows — and the file keeps it: a
+/// newer machine's third language is not erased by this one.
+fn refused(w: &Written) -> Vec<ronoctua_store::Refused> {
+    match &w.language {
+        Some(id) if !exists(id) => vec![ronoctua_store::Refused {
+            pointer: "/language".to_owned(),
+            why: ronoctua_store::repair::Why::UnknownVariant,
+            kept: None,
+        }],
+        _ => Vec::new(),
+    }
+}
+
 /// The language named by a file, if it names one that exists.
 ///
 /// # Errors
 ///
-/// The file is there and does not parse. A file that is ABSENT is not an
+/// The file is there and does not parse, or names a language that is not
+/// declared (said with what it named). A file that is ABSENT is not an
 /// error: it is every machine on its first morning.
-fn read_choice(path: &Path) -> Result<Option<String>, String> {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.to_string()),
-    };
-    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    Ok(parsed
-        .get("language")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned))
+fn read_choice(dir: &Path) -> Result<Option<String>, String> {
+    let reading = store_at(dir).reading();
+    if let Some(trouble) = reading.trouble {
+        return Err(format!("{FILE}: {trouble}"));
+    }
+    if let Some(repair) = reading.repairs.iter().find(|r| r.pointer == "/language") {
+        let said = match &repair.found {
+            ronoctua_store::Node::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        return Err(format!("{FILE} names an unknown language `{said}`"));
+    }
+    Ok(reading.value.language)
 }
 
 /// `pt_BR.UTF-8` -> `pt-BR`, the way `ronoctua_i18n::Texts::from_env` does it.
@@ -105,15 +137,10 @@ fn tag_of(value: &str) -> String {
 pub fn resolve_in(dir: Option<&Path>, env: &[Option<&str>]) -> (String, Source, Vec<String>) {
     let mut complaints = Vec::new();
     if let Some(dir) = dir {
-        match read_choice(&dir.join(FILE)) {
+        match read_choice(dir) {
             Ok(None) => {}
-            Ok(Some(id)) => {
-                if exists(&id) {
-                    return (id, Source::File, complaints);
-                }
-                complaints.push(format!("{FILE} names an unknown language `{id}`"));
-            }
-            Err(e) => complaints.push(format!("{FILE}: {e}")),
+            Ok(Some(id)) => return (id, Source::File, complaints),
+            Err(e) => complaints.push(e),
         }
     }
     for value in env.iter().flatten() {
@@ -169,7 +196,8 @@ pub fn texts() -> ronoctua_i18n::Texts {
     })
 }
 
-/// Writes the choice, atomically.
+/// Writes the choice, atomically — keeping what the file holds that this
+/// machine does not know.
 ///
 /// # Errors
 ///
@@ -187,8 +215,9 @@ pub fn persist(id: &str) -> std::io::Result<()> {
 ///
 /// The directory cannot be written.
 pub fn persist_in(dir: &Path, id: &str) -> std::io::Result<()> {
-    let text = serde_json::json!({ "language": id }).to_string();
-    ronoctua_xdg::write_atomically(dir, FILE, text.as_bytes())
+    store_at(dir).write(&Written {
+        language: Some(id.to_owned()),
+    })
 }
 
 /// A watch on the file, ringing `on_stir` from the watcher's thread.

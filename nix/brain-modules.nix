@@ -28,6 +28,26 @@
 # `.ftl`, a manifest that is a function, a field it does not know, a field with
 # the wrong shape, a mark whose glyph is not declared, and two modules whose
 # generated names (glyph tokens, event tags, commands) come out the same.
+#
+# THE PERSON'S MODULES (`personModulesDir`, the 2026-10-05 wave). A machine
+# may compile the person's own modules beside the distro's: folders the person
+# wrote (`$XDG_CONFIG_HOME/ronoctua/brain-modules/<id>/`, carried by the
+# belongings' plain part), which the machine's flake hands in as a store copy.
+# Each module says whose it is (`origin`, `distro` or `person`); a person's id
+# begins with `my-` and a distro's never does, so the two can never name one
+# module. A person's folder needs only `manifest.nix`, `module.rs` and its
+# texts — its `module.nix` reaches root, so the machine imports it only once
+# approved through the sudo door (`personNixosModules`, by id), and its
+# `checks.nix` is not the distro's to run. It may not draw at rest. And a
+# person's folder this refuses is LEFT OUT and said (`personRefused`), never
+# a `throw`: it travels to every machine of theirs, and one bad folder must
+# not stop them all.
+#
+# MARKS WITH INSTANCES, AND MARKS AT REST. A mark may declare `instances = N`
+# (from 1 to 9: the footer draws ONE digit beside the glyph) and
+# `resting = true` — drawn while all is well, which the modeline at rest
+# otherwise never is. Only the marks the owner approved may rest
+# (`assets/brain-resting-marks.nix`, and AGENTS.md beside the rule).
 {
   lib,
   # The folder every module lives in. A test passes the fixture's instead.
@@ -35,6 +55,20 @@
   # The languages, from the one list — every module owes each a `.ftl`.
   # Passed in, never defaulted: whoever imports this says which list.
   languages,
+  # THE 2026-10-05 WAVE: the person's modules (`my-…`), after its anchor.
+  # ── anchor: L11 ──
+  # The folder of the PERSON's modules, or `null` for none — the distro's own
+  # builds, the checks. The machine's flake hands in a store copy.
+  personModulesDir ? null,
+  # The person's folders to READ, by id, or `null` for every one. The machine
+  # leaves out a folder it does not include (one whose NixOS half waits for
+  # an approval), and the update's isolated verification one whose manifest
+  # does not even evaluate: an error Nix cannot catch, read here, would stop
+  # the whole machine's evaluation.
+  personModulesOnly ? null,
+  # The marks the owner approved to be drawn at rest, `<module>/<mark>`. A
+  # test passes its own list.
+  restingApproved ? import ../assets/brain-resting-marks.nix,
 }:
 
 let
@@ -150,6 +184,49 @@ let
     "checks.nix"
     "why.md"
   ];
+  # AND A PERSON'S: what the brain compiles. Its NixOS half, its checks and
+  # its paragraph are the person's business, so each may be there or not.
+  personRequiredFiles = [
+    "manifest.nix"
+    "module.rs"
+  ];
+
+  # WHOSE A MODULE IS, by the first word of its id — the one rule that keeps a
+  # person's module from ever being mistaken for (or shadowing) the distro's.
+  #
+  # ONE GRAMMAR, here and in `ronoctua-person` (`check::person_module`, which
+  # validates the approvals): `my-` and an English kebab word, at most 64
+  # characters. A word and not a slug because the id becomes a Rust module, a
+  # WIT case (a glyph token) and a text-key prefix, and a segment that begins
+  # with a digit is refused by the WIT; both sides are proved on one table,
+  # `crates/ronoctua-person/fixtures/module-ids.json`.
+  personPrefix = "my-";
+  personIdMost = 64;
+  isPersonId = id: isWord id && lib.hasPrefix personPrefix id && lib.stringLength id <= personIdMost;
+  # THE PERSON'S NAMESPACE, `my` and everything after `my-`: nothing of the
+  # distro's — an id, a key prefix — is named in it, so every name a
+  # person's module generates (`my-…`) is apart from every name the distro's
+  # do. `my` alone counts: `my` with a glyph `x-seat` would be `my-x-seat`.
+  inPersonNamespace =
+    s: isString s && (s == lib.removeSuffix "-" personPrefix || lib.hasPrefix personPrefix s);
+
+  # PLAIN DATA: what a person's manifest must be, all the way down. A function
+  # or a path inside it is an error the evaluation cannot catch the moment
+  # something turns it into JSON (`forGenerator`), so it is refused before.
+  isData =
+    v:
+    if isFunction v || builtins.isPath v then
+      false
+    else if isAttrs v then
+      lib.all isData (builtins.attrValues v)
+    else if isList v then
+      lib.all isData v
+    else
+      true;
+
+  # THE MOST INSTANCES A MARK MAY DECLARE: the footer draws the instance as
+  # ONE digit beside the glyph, so a tenth would be a mark drawn as two.
+  mostInstances = 9;
 
   # What a module's `checks.nix` may ask for, by name — `tests/checks.nix`
   # passes exactly these, plus `module` (this file's view of it) and `dir`
@@ -185,10 +262,12 @@ let
       files,
       i18nFiles,
       manifest,
+      origin ? "distro",
     }:
     let
       m = manifest;
-      missingFiles = filter (f: !(elem f files)) requiredFiles;
+      person = origin == "person";
+      missingFiles = filter (f: !(elem f files)) (if person then personRequiredFiles else requiredFiles);
       missingTexts = filter (l: !(elem "${l}.ftl" i18nFiles)) languages;
       strayTexts = filter (f: !(elem (lib.removeSuffix ".ftl" f) languages)) i18nFiles;
 
@@ -296,9 +375,19 @@ let
           ) (attrNames units);
 
       keys = m.keys or [ id ];
-      keyProblems = lib.optional (
-        !(isList keys && keys != [ ] && lib.all isWord keys)
-      ) "keys is a non-empty list of English kebab prefixes";
+      keyProblems =
+        lib.optional (
+          !(isList keys && keys != [ ] && lib.all isWord keys)
+        ) "keys is a non-empty list of English kebab prefixes"
+        # A PERSON'S TEXTS STAY IN THE PERSON'S NAMESPACE: a prefix like
+        # `agents` builds today and stops the day the distro adds a key or a
+        # module under it — on every machine of that person, at the update.
+        ++ lib.optional (
+          person && isList keys && !(lib.all (k: isString k && lib.hasPrefix personPrefix k) keys)
+        ) "keys: a person's module's prefixes begin with `${personPrefix}`"
+        ++ lib.optional (
+          !person && isList keys && lib.any inPersonNamespace keys
+        ) "keys: `my` and `${personPrefix}…` are the person's prefixes, never the distro's";
 
       whys = m.whys or [ ];
       whyProblems =
@@ -327,22 +416,42 @@ let
             k:
             let
               mk = marks.${k};
+              instances = mk.instances or null;
+              resting = mk.resting or false;
             in
             lib.optional (!(isWord k)) "marks.${k}: the name is an English kebab word"
             ++ (
               if !(isAttrs mk) then
                 [ "marks.${k} is { glyph; hint; }" ]
               else
+                # A STRING FIRST: `hasAttr` handed anything else stops the
+                # evaluation with an error nothing catches.
                 lib.optional (
-                  !(isAttrs glyphs && hasAttr (mk.glyph or "") glyphs)
+                  !(isAttrs glyphs && isString (mk.glyph or null) && hasAttr mk.glyph glyphs)
                 ) "marks.${k}.glyph names a glyph `glyphs` does not declare"
                 ++ lib.optional (!(isKey (mk.hint or null))) "marks.${k}.hint is a text key"
-                ++ map (f: "marks.${k}.${f} is not a field (glyph, hint)") (
+                # ONE DIGIT beside the glyph, so from 1 to 9; a mark that is
+                # one says nothing.
+                ++ lib.optional (
+                  instances != null && !(isInt instances && instances >= 1 && instances <= mostInstances)
+                ) "marks.${k}.instances is a whole number from 1 to ${toString mostInstances}"
+                ++ lib.optional (!(isBool resting)) "marks.${k}.resting is a boolean"
+                # THE MODELINE AT REST IS SILENT, but for the marks the owner
+                # approved one by one — and never a person's.
+                ++ lib.optional (
+                  resting == true && person
+                ) "marks.${k}.resting: a person's module draws nothing at rest"
+                ++
+                  lib.optional (resting == true && !person && !(elem "${id}/${k}" restingApproved))
+                    "marks.${k}.resting: `${id}/${k}` is not a mark the owner approved to be drawn at rest (assets/brain-resting-marks.nix, AGENTS.md)"
+                ++ map (f: "marks.${k}.${f} is not a field (glyph, hint, instances, resting)") (
                   filter (
                     f:
                     !(elem f [
                       "glyph"
                       "hint"
+                      "instances"
+                      "resting"
                     ])
                   ) (attrNames mk)
                 )
@@ -443,6 +552,12 @@ let
                     map (
                       f: "events.${k}.notification.${f} is not a field (${lib.concatStringsSep ", " notificationFields})"
                     ) (filter (f: !(elem f notificationFields)) (attrNames n))
+                    # A LIST, since the catalogue's tags are joined to it
+                    # (`notifications`) — and `++` on anything else stops the
+                    # evaluation with an error nothing catches.
+                    ++ lib.optional (
+                      !(isList (n.tags or [ ]) && lib.all isString (n.tags or [ ]))
+                    ) "events.${k}.notification.tags is a list of tags"
                 )
             )
           ) (attrNames events);
@@ -478,6 +593,19 @@ let
       ) "what is one English line";
     in
     lib.optional (!(isWord id)) "the folder's name is the id, and `${id}` is not an English kebab word"
+    # WHOSE IT IS, by its first word: `my-` is the person's, and only theirs.
+    ++
+      lib.optional (person && !(isPersonId id))
+        "a person's module's id is `${personPrefix}` and an English kebab word, at most ${toString personIdMost} characters, and `${id}` is not"
+    ++ lib.optional (
+      !person && inPersonNamespace id
+    ) "`my` and `${personPrefix}…` are the person's names, and `${id}` is the distro's"
+    ++ lib.optional (
+      !(elem origin [
+        "distro"
+        "person"
+      ])
+    ) "the origin is `distro` or `person`, not `${origin}`"
     ++ map (f: "${f} is missing") missingFiles
     ++ map (l: "i18n/${l}.ftl is missing") missingTexts
     ++ map (f: "i18n/${f} is not a declared language") strayTexts
@@ -488,6 +616,8 @@ let
         [ "manifest.nix is a plain attrset, not a function" ]
       else if !(isAttrs m) then
         [ "manifest.nix is an attrset" ]
+      else if person && !(isData m) then
+        [ "manifest.nix is plain data: a person's manifest holds no function and no path" ]
       else
         map (
           f: "manifest.nix: `${f}` is not a field (${lib.concatStringsSep ", " (required ++ optional)})"
@@ -516,7 +646,7 @@ let
   # downstream asks `or` again.
   # ---------------------------------------------------------------------
   normalise =
-    id: m:
+    origin: id: m:
     let
       unitOf =
         u:
@@ -529,7 +659,7 @@ let
           { sessionPath = false; } // u;
     in
     {
-      inherit id;
+      inherit id origin;
       snake = snakeOf id;
       inherit (m) what uses namedBy;
       needs = {
@@ -550,7 +680,16 @@ let
       prefixes = lib.unique ([ id ] ++ (m.keys or [ ]));
       whys = m.whys or [ ];
       glyphs = m.glyphs or { };
-      marks = m.marks or { };
+      # EVERY MARK SAYS how many it is and whether it rests: `0` and `false`
+      # for a mark that is one and says nothing at rest.
+      marks = lib.mapAttrs (
+        _: mk:
+        {
+          instances = 0;
+          resting = false;
+        }
+        // mk
+      ) (m.marks or { });
       notices = lib.mapAttrs (_: n: { snooze = [ ]; } // n) (m.notices or { });
       actions = lib.mapAttrs (
         _: a:
@@ -564,13 +703,20 @@ let
       polkit = m.polkit or [ ];
     };
 
-  load =
-    id:
+  # ONE FOLDER, READ: what is wrong with it, and the module it is when nothing
+  # is. Never a `throw` — who reads it decides (`load` for the distro's,
+  # `personSettled` for the person's).
+  read =
+    origin: root: id:
     let
-      dir = modulesDir + "/${id}";
-      files = attrNames (readDir dir);
+      dir = root + "/${id}";
+      entries = readDir dir;
+      # A FILE IS NOT A DIRECTORY: a folder named `manifest.nix` would be
+      # imported as one, and `i18n` as a file read as a folder — two errors
+      # nothing catches.
+      files = attrNames (lib.filterAttrs (_: t: t != "directory") entries);
       i18nFiles =
-        if pathExists (dir + "/i18n") then
+        if (entries.i18n or null) == "directory" then
           attrNames (lib.filterAttrs (_: t: t == "regular") (readDir (dir + "/i18n")))
         else
           [ ];
@@ -581,31 +727,162 @@ let
           files
           i18nFiles
           manifest
+          origin
           ;
       };
     in
-    if problems != [ ] then
-      throw ''
-        the brain module `${id}` (${toString dir}) is refused:
-          ${lib.concatStringsSep "\n  " problems}''
-    else
-      normalise id manifest
-      // {
+    {
+      inherit id dir problems;
+      module = normalise origin id manifest // {
         inherit dir;
         hasTables = elem "tables.nix" files;
+        hasNixos = elem "module.nix" files;
+      };
+    };
+
+  # THE DISTRO'S FOLDER IS REFUSED WHOLE: its modules are the distro's own,
+  # and a broken one is the developer's to fix before anything builds.
+  load =
+    origin: root: id:
+    let
+      r = read origin root id;
+    in
+    if r.problems != [ ] then
+      throw ''
+        the brain module `${id}` (${toString r.dir}) is refused:
+          ${lib.concatStringsSep "\n  " r.problems}''
+    else
+      r.module;
+
+  foldersOf =
+    root:
+    if root != null && pathExists root then
+      lib.sort lib.lessThan (attrNames (lib.filterAttrs (_: t: t == "directory") (readDir root)))
+    else
+      [ ];
+  distroIds = foldersOf modulesDir;
+  distroEvery = map (load "distro" modulesDir) distroIds;
+
+  # ---------------------------------------------------------------------
+  # THE PERSON'S FOLDERS ARE REFUSED ONE BY ONE. They arrive from the
+  # person's home through the belongings, onto every machine of theirs: a
+  # `throw` for one of them would be every rebuild of every machine stopped
+  # until they fix it. So a folder that is not a module — a stray directory,
+  # an id outside the grammar, a field misspelt, a text missing, a name
+  # another module generates — is LEFT OUT and said (`personRefused`, by id,
+  # in sentences), and the rest load. What the evaluation cannot catch at all
+  # (a manifest that does not parse) is left out before it is read: the
+  # update's isolated verification reads each folder alone
+  # (`personProblemsOf.<id>`) and the machine hands the ones that answered
+  # as `personModulesOnly`.
+  # ---------------------------------------------------------------------
+  personFolders = foldersOf personModulesDir;
+  personAsked =
+    if personModulesOnly == null then
+      personFolders
+    else
+      filter (id: elem id personModulesOnly) personFolders;
+
+  # EACH FOLDER'S OWN PROBLEMS, one attribute per folder and lazy: asking for
+  # one reads that folder alone, never its neighbours.
+  personProblemsOf = lib.genAttrs personFolders (id: (read "person" personModulesDir id).problems);
+
+  # THE NAMES A MODULE GENERATES, by kind — the ones `refuseTwice` below
+  # refuses twice, and its text prefixes, which `gen-i18n.py` refuses when
+  # they overlap (`made` and `made-up`).
+  namesOf = m: {
+    "glyph token" = map (g: "${m.id}-${g}") (attrNames m.glyphs);
+    "event tag" = map (e: "${m.id}-${e}") (attrNames m.events);
+    command = map (a: "${m.id}-${a}") (attrNames m.actions);
+  };
+  overlap = p: q: p == q || lib.hasPrefix "${p}-" q || lib.hasPrefix "${q}-" p;
+  # What a person's module would generate that a module already taken does,
+  # in sentences — empty when nothing.
+  clashesWith =
+    taken: m:
+    concatMap (
+      t:
+      let
+        mine = namesOf m;
+        theirs = namesOf t;
+      in
+      concatMap (
+        kind:
+        map (n: "its ${kind} `${n}` is also generated by `${t.id}`") (
+          filter (n: elem n theirs.${kind}) mine.${kind}
+        )
+      ) (attrNames mine)
+      ++ concatMap (
+        p:
+        map (q: "its text prefix `${p}` overlaps `${q}`, which is `${t.id}`'s") (
+          filter (overlap p) t.prefixes
+        )
+      ) m.prefixes
+    ) taken;
+
+  # IN ORDER, each against the distro's and the person's already taken: of two
+  # folders that clash, the first by name loads and the second is said — the
+  # same answer on every machine.
+  personSettled =
+    lib.foldl'
+      (
+        acc: id:
+        let
+          r = read "person" personModulesDir id;
+          why = if r.problems != [ ] then r.problems else clashesWith (distroEvery ++ acc.accepted) r.module;
+        in
+        if why == [ ] then
+          acc // { accepted = acc.accepted ++ [ r.module ]; }
+        else
+          acc
+          // {
+            refused = acc.refused // {
+              ${id} = why;
+            };
+          }
+      )
+      {
+        accepted = [ ];
+        refused = lib.genAttrs (filter (id: !(elem id personAsked)) personFolders) (_: [
+          "left out unread: the machine did not ask for it (`personModulesOnly`)"
+        ]);
+      }
+      personAsked;
+  personEvery = personSettled.accepted;
+  personIds = map (m: m.id) personEvery;
+  personRefused = personSettled.refused;
+
+  # THE COPY THE BUILD READS: the person's folder with only the modules that
+  # load. `build.rs` compares that folder with the table's `person` lines, so
+  # a refused folder left in it would stop the build the refusal kept going.
+  # `null` when none loads — a build with no person's module, the distro's.
+  personCopy =
+    if personIds == [ ] then
+      null
+    else
+      builtins.path {
+        path = personModulesDir;
+        name = "ronoctua-person-brain-modules";
+        filter =
+          path: _:
+          elem (lib.head (lib.splitString "/" (lib.removePrefix "${toString personModulesDir}/" (toString path)))) personIds;
       };
 
-  folders =
-    if pathExists modulesDir then
-      lib.filterAttrs (_: t: t == "directory") (readDir modulesDir)
+  # ONE NAME, ONE MODULE: the prefix rule already keeps the two lists apart,
+  # and this says so by name should it ever not.
+  ids =
+    let
+      twice = filter (id: elem id personIds) distroIds;
+    in
+    if twice != [ ] then
+      throw "the person's brain modules and the distro's are both called: ${lib.concatStringsSep ", " twice}"
     else
-      { };
-  ids = lib.sort lib.lessThan (attrNames folders);
+      distroIds ++ personIds;
   modules = listToAttrs (
-    map (id: {
-      name = id;
-      value = load id;
-    }) ids
+    map (m: {
+      name = m.id;
+      value = m;
+    }) (distroEvery ++ personEvery)
   );
   every = map (id: modules.${id}) ids;
 
@@ -710,8 +987,11 @@ let
   # every option it has). `disabledModules` is refused too: what it takes
   # away is resolved before any `config`, so no gate can put it back.
   # ---------------------------------------------------------------------
-  gate =
-    id: dir: m:
+  # A PERSON'S HALF has no switch of its own (`nix/modules/brain.nix` makes
+  # one per DISTRO module): it is on with the brain, and only once the
+  # machine imported it — approved.
+  gateAs =
+    origin: id: dir: m:
     let
       isFile = builtins.isPath m || isString m;
       mine = lib.hasPrefix "${toString dir}/" (toString m);
@@ -721,7 +1001,9 @@ let
         let
           r = if isFunction raw then raw args else raw;
           full = r ? config || r ? options;
-          on = args.config.ronoctua.brain.enable && args.config.ronoctua.brain.modules.${id}.enable;
+          on =
+            args.config.ronoctua.brain.enable
+            && (origin == "person" || args.config.ronoctua.brain.modules.${id}.enable);
         in
         if (r.disabledModules or [ ]) != [ ] then
           throw "the brain module `${id}`: its NixOS half declares `disabledModules`, which no gate can turn back on; put that in `nix/modules/`"
@@ -730,7 +1012,7 @@ let
           # form `config` and a top-level `meta` are the configuration; in the
           # short form everything but the module system's own keys is.
           {
-            imports = map (gate id dir) ((r.imports or [ ]) ++ (r.require or [ ]));
+            imports = map (gateAs origin id dir) ((r.imports or [ ]) ++ (r.require or [ ]));
             options = r.options or { };
             config = lib.mkIf on (
               if full then
@@ -765,7 +1047,18 @@ let
         key = "ronoctua-brain-module:${id}:${toString m}";
       };
 
-  nixosModules = map (m: gate m.id m.dir (m.dir + "/module.nix")) every;
+  gate = gateAs "distro";
+
+  # THE DISTRO'S HALVES, which `nix/modules/brain.nix` imports.
+  nixosModules = map (m: gate m.id m.dir (m.dir + "/module.nix")) distroEvery;
+  # AND THE PERSON'S, by id: a person's `module.nix` reaches root, so the
+  # machine imports one only once it is approved through the sudo door.
+  personNixosModules = listToAttrs (
+    map (m: {
+      name = m.id;
+      value = gateAs "person" m.id m.dir (m.dir + "/module.nix");
+    }) (filter (m: m.hasNixos) personEvery)
+  );
 
   # ---------------------------------------------------------------------
   # THE CHECKS. Every module's own, merged, and a name two of them give — or
@@ -822,7 +1115,8 @@ let
         slow = concatMap (a: a.slow) answers;
       };
 
-  checksWith = arguments: mergeChecks (map (m: checksOf m arguments) every);
+  # THE DISTRO'S CHECKS: a person's module is not the distro's to test.
+  checksWith = arguments: mergeChecks (map (m: checksOf m arguments) distroEvery);
 
   # THE SLOW NAMES, read without the arguments: the flake needs them to split
   # the batteries, and the batteries are built long before any check is. A
@@ -848,6 +1142,7 @@ let
       removeAttrs m [
         "dir"
         "hasTables"
+        "hasNixos"
         "uses"
         "namedBy"
       ]
@@ -879,7 +1174,25 @@ builtins.deepSeq (attrNames glyphs ++ attrNames eventTags ++ attrNames commands)
     problemsOf
     mergeChecks
     gate
+    # THE PERSON'S MODULES: whose each id is, the folders left out and why
+    # (all of them, and one by one for the isolated verification), their
+    # NixOS halves by id (for the machine to import the approved ones), and
+    # the rules a check proves.
+    distroIds
+    personIds
+    personRefused
+    personProblemsOf
+    personNixosModules
+    personPrefix
+    personIdMost
+    mostInstances
+    restingApproved
     ;
+  # THE COPY THE BUILD READS — only the folders that load — or `null`.
+  # `nix/brain-modules-rs.nix` carries it beside the table it generates.
+  personModulesDir = personCopy;
+  # AND THE FOLDER IT WAS MADE FROM, as handed in.
+  personModulesSource = personModulesDir;
 
   # WHAT `nix/i18n.nix` HANDS `gen-i18n.py`: each module's text folder, alone
   # in the store, and the prefixes its keys may begin with.
@@ -898,6 +1211,7 @@ builtins.deepSeq (attrNames glyphs ++ attrNames eventTags ++ attrNames commands)
       removeAttrs m [
         "dir"
         "hasTables"
+        "hasNixos"
       ]
     ) every
   );

@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "machine": "noctua",
+  "distro-rev": "613862c0ffee",
+  "applied": [
+    "nix:ripgrep",
+    "flatpak:org.gnome.Calculator"
+  ],
+  "skipped": [
+    {
+      "id": "nix:lighttable",
+      "reason": "attr-missing",
+      "detail": "nixpkgs has no attribute lighttable"
+    },
+    {
+      "id": "appimage:obsidian",
+      "reason": "held",
+      "detail": "upstream-changed"
+    },
+    {
+      "id": "nix:krita",
+      "reason": "other-machine",
+      "detail": ""
+    },
+    {
+      "id": "android:org.fdroid.fdroid",
+      "reason": "source-off",
+      "detail": "this machine has no Android"
+    }
+  ],
+  "declined": {
+    "honoured": [
+      "blender",
+      "vlc"
+    ],
+    "refused": [
+      {
+        "id": "zsh",
+        "reason": "the-login-shell"
+      }
+    ],
+    "unknown": [
+      "gimp"
+    ],
+    "still-present": [
+      "vlc"
+    ]
+  },
+  "brain": {
+    "included": [],
+    "awaiting-approval": []
+  }
+}

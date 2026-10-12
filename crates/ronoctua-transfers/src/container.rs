@@ -323,7 +323,6 @@ fn group_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
     use crate::job::{Engine, Job};
-    use std::os::unix::fs::PermissionsExt as _;
     use std::path::PathBuf;
 
     #[test]
@@ -378,8 +377,7 @@ mod tests {
     /// A stand-in podman: a script, run as podman would be.
     fn stand_in(dir: &std::path::Path, body: &str) -> Podman {
         let program = dir.join("podman");
-        std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::write_executable(&program, &format!("#!/bin/sh\n{body}\n"));
         Podman { program }
     }
 

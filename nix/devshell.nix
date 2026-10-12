@@ -15,80 +15,38 @@
 }:
 
 let
-  rust = pkgs.rust-bin.stable.latest.default.override {
-    extensions = [
-      "rust-src"
-      "rust-analyzer"
-      "clippy"
-      "rustfmt"
-    ];
-    # Section 7.6: native buffers and the design system compile to wasip2.
-    targets = [
-      "wasm32-wasip2"
-      "wasm32-unknown-unknown"
-    ];
-  };
+  # THE TOOLCHAIN IS A FILE OF ITS OWN (`nix/toolchain.nix`): every installed
+  # system keeps the same list in its store, so `nix develop` on the distro
+  # downloads no toolchain (`devshell-is-in-the-store`). What the checkout
+  # generates (hooks, WIT, buffers, the `-rs` tables) follows the commit and
+  # is built the first time.
+  toolchain = import ./toolchain.nix { inherit pkgs; };
 
-  py = pkgs.python3.withPackages (ps: [
-    ps.fonttools
-    ps.brotli
-    ps.zopfli
-    ps.freetype-py
-  ]);
+  # THE ICON SUPERPACK BY ITS PATH, AND NOT AS AN INPUT — here, in the
+  # devshell, and only here. As an input, entering the devshell built or
+  # downloaded its 0,61 GiB on every machine — the reduced profile included,
+  # which leaves it out on purpose. Without the string's context the path is
+  # only a name: the full profile's store has it (the system installs the same
+  # derivation, `nix/modules/icons.nix`), and the hook below exports it only
+  # when it is there. The `.#dev` loop, which is where the icons are SEEN,
+  # keeps it as a real input (`nix/dev.nix`): running the loop brings it, on
+  # any host, so no collection of garbage makes the launcher lose its
+  # pixmaps without a word.
+  icons = builtins.unsafeDiscardStringContext "${iconSuperpack}/share/icons/noctua";
 in
 pkgs.mkShell {
   name = "ronoctua-distro";
 
-  packages = [
-    rust
-    py
-
-    # --- Nix ---------------------------------------------------------
-    pkgs.nixfmt
-    pkgs.nix-tree
-    pkgs.nvd
-
-    # --- Wayland / graphics ------------------------------------------
-    # Needed for the nested loop (section 7.12, speed 1).
-    pkgs.wayland
-    pkgs.wayland-protocols
-    pkgs.libxkbcommon
-    pkgs.vulkan-loader
-    pkgs.vulkan-tools
-    # Software Vulkan rasteriser. Section 9.3 of the plan: it is what runs
-    # in the correctness tests. Performance is NEVER measured under it.
-    pkgs.mesa
-
-    # --- VM and images -----------------------------------------------
-    pkgs.qemu
-    pkgs.OVMF
-    pkgs.swtpm # emulated TPM2, for the PCR 15 test (milestone 8)
-
-    # --- tools -------------------------------------------------------
-    # No `git-lfs` here: it was for the fonts, and they never enter git at all
-    # now — they are Release assets. Nothing in this tree is an LFS object.
-    pkgs.git
-    pkgs.jq
-    pkgs.ripgrep
-    pkgs.fd
-    pkgs.pkg-config
-  ];
+  packages = toolchain.tools;
 
   # What the workspace LINKS, as in `nix/rust.nix`'s `buildInputs`: SQLite for
   # the catalogues and libpam for `ronoctua-pam`. As build inputs, so pkg-config
   # finds their `.pc` files the way crane's build does.
-  buildInputs = [
-    pkgs.sqlite
-    pkgs.linux-pam
-  ];
+  buildInputs = toolchain.links;
 
   # The renderer links wgpu; the loader has to find the libs at run
   # time inside the devshell.
-  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
-    pkgs.wayland
-    pkgs.libxkbcommon
-    pkgs.vulkan-loader
-  ];
+  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath toolchain.runtimeLibraries;
 
   # Section 7.6: pin wasmtime and wit-bindgen to the same WIT version. The
   # mismatch shows up as a confusing type error at instantiation, which is
@@ -109,16 +67,25 @@ pkgs.mkShell {
   # table for the same reason, and `dev-exports-what-the-build-bakes` is the
   # guard on that side.
   env = generated // atRunTime;
-  # The icon superpackage, for the PIXMAP step of the app
-  # launcher. Without it `nix run .#dev` would show only the glyphs, and half
-  # of the path that depends most on the screen would never be seen here.
-  RONOCTUA_ICONS = "${iconSuperpack}/share/icons/noctua";
   # The WIT directory already merged with the generated `tokens.wit`.
   RONOCTUA_WIT_DIR = "${wit}";
 
   shellHook = ''
     echo "ronoctua-distro — devshell"
     echo
+
+    # The icon superpackage, for the PIXMAP step of the app launcher. Without
+    # it `nix run .#dev` would show only the glyphs, and half of the path that
+    # depends most on the screen would never be seen here. Only when the store
+    # has it (see `icons` above); otherwise the line says how to bring it.
+    if [ -d "${icons}" ]; then
+      export RONOCTUA_ICONS="${icons}"
+    else
+      unset RONOCTUA_ICONS
+      echo "  no icon superpack in the store: apps show their category glyph."
+      echo "  nix build .#noctua-icon-theme --out-link ~/.cache/ronoctua-distro/icons  brings it (0.61 GiB)"
+      echo
+    fi
 
     # `target/` must NOT live inside the tree.
     #

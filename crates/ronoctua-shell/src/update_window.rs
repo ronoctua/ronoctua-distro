@@ -60,6 +60,10 @@ use std::path::PathBuf;
 use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
 use anyhow::Result;
 use ronoctua_brain::compiled::system_update as module;
+/// The battery as the update weighs it — the footer asks it before `LEADER
+/// s u n` starts anything, through this file, which is the one outside the
+/// module that names it.
+pub use ronoctua_brain::compiled::system_update::Charge;
 use ronoctua_brain::compiled::system_update::unit;
 use ronoctua_i18n::key;
 use ronoctua_render::layout;
@@ -197,6 +201,13 @@ pub fn begin() -> Started {
         }
         Err(e) => tracing::debug!(error = %e, "no brain; asking systemd directly"),
     }
+    begin_directly()
+}
+
+/// Starts the whole sequence straight through systemd — [`begin`]'s second
+/// door, and the one a "yes" to the network goes through: the brain would
+/// hold it.
+fn begin_directly() -> Started {
     // THE BUILD'S OWN ANSWER, before anything is spawned. `reachable` is a
     // `const fn` over an `option_env!`: outside Nix nothing baked the path, and
     // saying so is better than a key that fails silently every time.
@@ -224,6 +235,184 @@ pub fn begin() -> Started {
         }
     }
 }
+
+/// Starts the whole sequence ON BATTERY, after the person said yes.
+///
+/// # Why straight to systemd, and why a file
+///
+/// The brain WAITS on a battery below the floor — that is what a scheduled
+/// run must do, and it asks nobody — so a yes given here would sit in its
+/// queue until the charger came. The person answered now; the run starts
+/// now, the way it starts with no brain at all ([`begin`]'s second door).
+///
+/// The yes itself is a file in the person's runtime directory
+/// ([`ON_BATTERY`]): the sequence's person half reads it when it starts —
+/// and tells its root half, which tests it — and takes it away however the
+/// run ends. It is for this run only; nothing else writes it, and a
+/// scheduled run never finds one.
+pub fn begin_on_battery() -> Started {
+    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
+        tracing::warn!("no runtime directory: the yes to a run on battery has nowhere to go");
+        return Started::Nowhere;
+    };
+    let yes = PathBuf::from(runtime).join(ON_BATTERY);
+    let written = yes
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&yes, b""));
+    if let Err(e) = written {
+        tracing::warn!(file = %yes.display(), error = %e, "the yes to a run on battery was not written");
+        return Started::Nowhere;
+    }
+    if !ronoctua_brain::systemd::reachable() {
+        let _ = std::fs::remove_file(&yes);
+        tracing::warn!("this build does not know where systemctl is");
+        return Started::Nowhere;
+    }
+    // A YES NO RUN TOOK IS TAKEN BACK: a start systemd refused leaves no run
+    // to remove it, and the next run — a scheduled one, which must never
+    // find one — would honour it.
+    let given = yes.clone();
+    let born = std::thread::Builder::new()
+        .name("update-on-battery".to_owned())
+        .spawn(move || {
+            if let Err(e) = ronoctua_brain::systemd::start(unit::RUN) {
+                let _ = std::fs::remove_file(&given);
+                tracing::error!(unit = unit::RUN, error = %e, "systemd refused");
+            }
+        });
+    match born {
+        Ok(_) => Started::Systemd,
+        Err(e) => {
+            let _ = std::fs::remove_file(&yes);
+            tracing::error!(error = %e, "could not start the update thread");
+            Started::Nowhere
+        }
+    }
+}
+
+/// Starts the run the person said yes to, here and now: straight through
+/// systemd — with the yes to a run on battery when it is that one
+/// ([`begin_on_battery`]) — after taking the update out of the brain's
+/// queue, where it would otherwise run AGAIN once what held it is gone.
+pub fn begin_anyway(mind: Option<&ronoctua_brain::Mind>, on_battery: bool) -> Started {
+    withdraw(mind);
+    if on_battery {
+        begin_on_battery()
+    } else {
+        begin_directly()
+    }
+}
+
+/// Takes the update out of the brain's queue when it is waiting there — and
+/// never when it is running: the brain's `abort` would stop it.
+fn withdraw(mind: Option<&ronoctua_brain::Mind>) {
+    let Some(m) = mind else {
+        return;
+    };
+    if m.running == module::ID || !m.queue.iter().any(|q| q == module::ID) {
+        return;
+    }
+    let ask = ronoctua_brain::Ask::Abort {
+        task: module::ID.to_owned(),
+    };
+    if let Err(e) = ronoctua_brain::client::tell(&ask) {
+        tracing::warn!(error = %e, "the update could not be taken out of the brain's queue");
+    }
+}
+
+/// What the minibuffer says when the person answered no to a run on battery
+/// — in both doors, from here: the footer names none of the module's words.
+pub const NOT_STARTED: &str = key::ECHO_SYSTEM_UPDATE_NOT_STARTED;
+
+/// What it says when the person answered no to a run the brain holds: it
+/// stays in the queue, and goes by itself when nothing holds it.
+pub const KEPT_WAITING: &str = key::ECHO_SYSTEM_UPDATE_KEPT_WAITING;
+
+/// How long, in seconds, a run asked of the brain is followed before it was
+/// even seen in the queue: the brain queues it before it answers, so a mind
+/// that still does not show it this long after says nothing of it.
+const FOLLOWED_FOR_S: i64 = 60;
+
+/// A run asked for BY HAND through the brain, followed until the brain says
+/// what became of it — so a hold for a metered way out
+/// ([`module::HOLD_METERED`]), which is how the brain waits on a SCHEDULED
+/// run, becomes a question in the door that asked: the person asked for
+/// this one now.
+///
+/// It is the brain's own decision that is followed, from the mind both
+/// doors already receive, and not a second reading of the network: the door
+/// asks exactly when the brain holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Followed {
+    /// When it was asked for, in Unix seconds — the clock the brain's `now`
+    /// is on.
+    since_s: i64,
+    /// Whether a mind has shown it queued: before that, a mind that does
+    /// not is one published before the ask.
+    seen: bool,
+}
+
+/// What a mind says of a [`Followed`] run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heard {
+    /// Still to say: not seen yet, or queued and held by something else.
+    Waiting,
+    /// Queued, and held for a metered way out: ask.
+    Metered,
+    /// Running, or out of the queue: nothing more to follow.
+    Over,
+}
+
+impl Followed {
+    /// Asked for at `since_s`.
+    #[must_use]
+    pub const fn since(since_s: i64) -> Self {
+        Self {
+            since_s,
+            seen: false,
+        }
+    }
+
+    /// Asked for now.
+    #[must_use]
+    pub fn now() -> Self {
+        Self::since(now_s())
+    }
+
+    /// What `mind` says of it.
+    pub fn heard(&mut self, mind: &ronoctua_brain::Mind) -> Heard {
+        if mind.running == module::ID {
+            return Heard::Over;
+        }
+        if mind.queue.iter().any(|q| q == module::ID) {
+            self.seen = true;
+            let held = mind.task(module::ID).and_then(|t| t.hold);
+            return if held == Some(module::HOLD_METERED) {
+                Heard::Metered
+            } else {
+                Heard::Waiting
+            };
+        }
+        if self.seen || mind.now > self.since_s.saturating_add(FOLLOWED_FOR_S) {
+            Heard::Over
+        } else {
+            Heard::Waiting
+        }
+    }
+}
+
+/// Now, in Unix seconds.
+fn now_s() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// Where the person's yes to a run on battery is, under their runtime
+/// directory — the leaf the sequence's runner reads (`gen-updates.py`,
+/// `ON_BATTERY`), which the module's `…-names-agree` check holds to this.
+const ON_BATTERY: &str = "ronoctua-update/on-battery";
 
 // ---------------------------------------------------------------------------
 // WHAT THE UNITS REPORTED
@@ -262,7 +451,8 @@ const JOURNALCTL: &str = match option_env!("RONOCTUA_JOURNALCTL") {
 /// # A closed vocabulary, and it is not ours
 ///
 /// the update's `gen-updates.py` emits exactly these words — `off`,
-/// `skipped-<kind>`, `rehearsed`, `ran`, `failed`, `stopped` — and its own
+/// `skipped-<kind>`, `rehearsed`, `ran`, `failed`, `failed-<word>`,
+/// `declined-<word>`, `stopped` — and its own
 /// comment says so: *"Ids and verdicts are English and closed; the sentence on
 /// screen comes from a text key, never from here."* [`Verdict::Pending`] is the
 /// only one this side adds, and it is the absence of a line rather than a word
@@ -273,6 +463,10 @@ pub enum Verdict {
     Ran,
     /// It ran, and it did not.
     Failed,
+    /// It ran, and its program REFUSED with this word (`failed-<word>`): a
+    /// failure, with the reason the program gave — the machine's sentence
+    /// for it, when the word is the machine's ([`refusal_key`]).
+    Refused(String),
     /// This machine has it switched off, in `/etc/ronoctua/updates.conf`.
     Off,
     /// A precondition did not hold. The word is the KIND — `binary`,
@@ -281,6 +475,10 @@ pub enum Verdict {
     Skipped(String),
     /// A rehearsal printed it and ran nothing.
     Rehearsed,
+    /// The program looked and had nothing new to do — a refusal the step
+    /// declares as news (`declined-<word>`), and the module says which key
+    /// explains it ([`module::declined_key`]).
+    Declined(String),
     /// The sequence stopped at this point.
     Stopped,
     /// The report has not reached it. Not a word in the file: the absence of
@@ -294,7 +492,7 @@ impl Verdict {
     pub const fn key(&self) -> &'static str {
         match self {
             Self::Ran => key::SYSTEM_UPDATE_VERDICT_RAN,
-            Self::Failed => key::SYSTEM_UPDATE_VERDICT_FAILED,
+            Self::Failed | Self::Refused(_) => key::SYSTEM_UPDATE_VERDICT_FAILED,
             Self::Off => key::SYSTEM_UPDATE_VERDICT_OFF,
             // THE ROW SAYS *SKIPPED* AND THE CURSOR SAYS WHY. The kind's own
             // sentence is a whole line long (*"this program is not on your
@@ -302,6 +500,7 @@ impl Verdict {
             // for a column.
             Self::Skipped(_) => key::SYSTEM_UPDATE_VERDICT_SKIPPED,
             Self::Rehearsed => key::SYSTEM_UPDATE_VERDICT_REHEARSED,
+            Self::Declined(_) => key::SYSTEM_UPDATE_VERDICT_DECLINED,
             Self::Stopped => key::SYSTEM_UPDATE_VERDICT_STOPPED,
             Self::Pending => key::SYSTEM_UPDATE_VERDICT_PENDING,
         }
@@ -319,8 +518,14 @@ impl Verdict {
     pub const fn mark(&self) -> (char, tokens::Color) {
         match self {
             Self::Ran => (tokens::icon::SUCCESS, tokens::color::STATE_SUCCESS),
-            Self::Failed | Self::Stopped => (tokens::icon::ERROR, tokens::color::STATE_ERROR),
-            Self::Rehearsed => (tokens::icon::INFO, tokens::color::TEXT_SECONDARY),
+            Self::Failed | Self::Refused(_) | Self::Stopped => {
+                (tokens::icon::ERROR, tokens::color::STATE_ERROR)
+            }
+            // NOTHING NEW is a fact about the machine, not a failure: the
+            // mark a rehearsal has, quiet.
+            Self::Rehearsed | Self::Declined(_) => {
+                (tokens::icon::INFO, tokens::color::TEXT_SECONDARY)
+            }
             Self::Off | Self::Skipped(_) => (tokens::icon::REMOVE, tokens::color::TEXT_DIM),
             // An empty box: the step exists and has not been reached.
             Self::Pending => (tokens::icon::PROGRESS_LEFT, tokens::color::TEXT_DIM),
@@ -341,10 +546,18 @@ pub fn verdict_of(word: &str) -> Option<Verdict> {
         "off" => Some(Verdict::Off),
         "rehearsed" => Some(Verdict::Rehearsed),
         "stopped" => Some(Verdict::Stopped),
-        other => other
-            .strip_prefix("skipped-")
-            .filter(|kind| !kind.is_empty())
-            .map(|kind| Verdict::Skipped(kind.to_owned())),
+        other => {
+            if let Some(kind) = other.strip_prefix("skipped-") {
+                return (!kind.is_empty()).then(|| Verdict::Skipped(kind.to_owned()));
+            }
+            if let Some(word) = other.strip_prefix("failed-") {
+                return (!word.is_empty()).then(|| Verdict::Refused(word.to_owned()));
+            }
+            other
+                .strip_prefix("declined-")
+                .filter(|word| !word.is_empty())
+                .map(|word| Verdict::Declined(word.to_owned()))
+        }
     }
 }
 
@@ -374,8 +587,16 @@ pub fn read_report(text: &str) -> Vec<(String, Verdict, u32)> {
 }
 
 /// The two report files, in the order the sequence writes them.
+///
+/// The root half's under the footer camera's room while it photographs
+/// ([`crate::footer_photograph::room`], its `run/`), so a photograph of the
+/// footer draws the reports it was given and never this machine's.
 fn report_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from(SYSTEM_REPORT)];
+    let system = match crate::footer_photograph::room() {
+        Some(room) => room.join(SYSTEM_REPORT.trim_start_matches('/')),
+        None => PathBuf::from(SYSTEM_REPORT),
+    };
+    let mut paths = vec![system];
     if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
         paths.push(PathBuf::from(runtime).join(PERSON_REPORT));
     }
@@ -432,16 +653,33 @@ impl Verdicts {
     }
 }
 
-/// When the reports last changed, so a beat can decide whether to re-read.
+/// When the reports — and the machine's records the view draws above the
+/// steps — last changed, so a beat can decide whether to re-read.
 ///
 /// One `stat` per file per second — the device the file manager already uses to
 /// notice a directory moved. Re-reading unconditionally would parse both files
 /// once a second for a machine that updates once a week.
 fn report_stamp() -> Vec<Option<std::time::SystemTime>> {
     report_paths()
-        .iter()
+        .into_iter()
+        .chain(record_places().files())
         .map(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()))
         .collect()
+}
+
+/// Where the machine's records are: this machine's — or, while the footer's
+/// camera photographs, its room's (`machine/` for the machine directory,
+/// `machine-state/` for the record's folder; the belongings already follow
+/// the room's XDG directories). Absolute places of the machine are what a
+/// room of XDG directories alone could not plant, and the footer's door of
+/// this view drew only the conflicts in a photograph.
+fn record_places() -> module::RecordPlaces {
+    let mut at = module::RecordPlaces::here();
+    if let Some(room) = crate::footer_photograph::room() {
+        at.machine_dir = room.join(crate::footer_photograph::MACHINE_DIR);
+        at.machine_state = room.join(crate::footer_photograph::MACHINE_STATE);
+    }
+    at
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +975,10 @@ pub fn step_row(
     });
     // AND HOW LONG IT TOOK, only where that is a fact. Zero seconds against a
     // step that never ran is not "it was instantaneous".
-    if matches!(verdict, Verdict::Ran | Verdict::Failed) {
+    if matches!(
+        verdict,
+        Verdict::Ran | Verdict::Failed | Verdict::Refused(_)
+    ) {
         let elapsed = clock_of(seconds);
         right = right.saturating_sub(COLUMN_GAP + layout::width(&elapsed));
         out.push(Piece {
@@ -787,6 +1028,21 @@ pub fn cursor_explains(
         said.push(' ');
         said.push_str(&texts.t(why));
     }
+    // AND NOTHING NEW SAYS WHY THERE WAS NOTHING, in the module's words.
+    if let Verdict::Declined(word) = verdict
+        && let Some(why) = module::declined_key(word)
+    {
+        said.push(' ');
+        said.push_str(&texts.t(why));
+    }
+    // A REFUSAL SAYS WHY, in the machine's own words — and a word that is
+    // not the machine's says nothing more than the row's *failed*.
+    if let Verdict::Refused(word) = verdict
+        && let Some(why) = refusal_key(word)
+    {
+        said.push(' ');
+        said.push_str(&texts.t(why));
+    }
     if step.needs_root {
         said.push(' ');
         said.push_str(&texts.t(ronoctua_i18n::key::BRAIN_NEEDS_ROOT));
@@ -814,6 +1070,19 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("u", START),
     ("a", ABORT),
     ("p", PROCEED),
+    // THE PERSON'S BINARY CACHE, a page of this view (`crate::binary_cache`):
+    // `c` turns the view to it and back.
+    ("c", crate::binary_cache::OPEN),
+];
+
+/// The keys the binary cache's page teaches, in both doors — every one a
+/// click, pressed by its notation through [`press_of_key`]: the rows, the
+/// change, and `c` back to the steps (the way back, `Esc`, too).
+pub const OF_THE_PAGE: &[(&str, &str)] = &[
+    ("<down>", "binary-cache-down"),
+    ("<up>", "binary-cache-up"),
+    ("RET", "binary-cache-enter"),
+    ("c", "binary-cache-steps"),
 ];
 
 /// The command that starts the whole sequence now — the module's own id, and
@@ -859,6 +1128,30 @@ pub const COMMANDS: &[ronoctua_cmd::Command] = &[
         id: WATCH,
         label: key::CMD_SYSTEM_UPDATE_WATCH,
     },
+    // THE PERSON'S BINARY CACHE, the view's page (`crate::binary_cache`): its
+    // door (`LEADER s u c`), the three questions it asks — commands, so the
+    // minibuffer's answer comes back by name, and `LEADER :` asks them — and
+    // root's netrc, a root gesture asked in the sudo bar.
+    ronoctua_cmd::Command {
+        id: crate::binary_cache::OPEN,
+        label: key::CMD_BINARY_CACHE_OPEN,
+    },
+    ronoctua_cmd::Command {
+        id: crate::binary_cache::NAME,
+        label: key::CMD_BINARY_CACHE_NAME,
+    },
+    ronoctua_cmd::Command {
+        id: crate::binary_cache::KEY,
+        label: key::CMD_BINARY_CACHE_KEY,
+    },
+    ronoctua_cmd::Command {
+        id: crate::binary_cache::TOKEN,
+        label: key::CMD_BINARY_CACHE_TOKEN,
+    },
+    ronoctua_cmd::Command {
+        id: crate::binary_cache::NETRC,
+        label: key::CMD_BINARY_CACHE_NETRC,
+    },
 ];
 
 /// `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory panel
@@ -870,6 +1163,8 @@ pub const BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("s u u", OPEN, None),
     ("s u w", WATCH, None),
     ("s u n", START, None),
+    // THE PERSON'S BINARY CACHE, straight to the view's page.
+    ("s u c", crate::binary_cache::OPEN, None),
 ];
 
 /// What one of the update's commands asks of the footer.
@@ -881,6 +1176,8 @@ pub enum Order {
     Open,
     /// The view, in a window ([`WATCH`]).
     Watch,
+    /// One of the binary cache's commands (`crate::binary_cache`), by its id.
+    Cache(&'static str),
 }
 
 /// Which of the update's commands an id is — the one question the footer asks
@@ -891,6 +1188,11 @@ pub fn order_of(id: &str) -> Option<Order> {
         START => Some(Order::Start),
         OPEN => Some(Order::Open),
         WATCH => Some(Order::Watch),
+        crate::binary_cache::OPEN => Some(Order::Cache(crate::binary_cache::OPEN)),
+        crate::binary_cache::NAME => Some(Order::Cache(crate::binary_cache::NAME)),
+        crate::binary_cache::KEY => Some(Order::Cache(crate::binary_cache::KEY)),
+        crate::binary_cache::TOKEN => Some(Order::Cache(crate::binary_cache::TOKEN)),
+        crate::binary_cache::NETRC => Some(Order::Cache(crate::binary_cache::NETRC)),
         _ => None,
     }
 }
@@ -914,8 +1216,13 @@ pub enum Press {
     Abort,
     /// Start now what is counting down.
     Proceed,
-    /// Out.
+    /// `RET`: answers the question on battery with the answer under the
+    /// cursor. On a step there is nothing more to do than the cursor did.
+    Enter,
+    /// Out — and, with the question open, its "no".
     Escape,
+    /// The person's binary cache: the page, or back to the steps.
+    Cache,
 }
 
 /// A key, as the view's press — the one reader both doors call.
@@ -931,6 +1238,7 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
     let plain = !key.mods.ctrl && !key.mods.alt && !key.mods.logo;
     match key.sym {
         Sym::Esc => return Some(Press::Escape),
+        Sym::Enter if plain => return Some(Press::Enter),
         Sym::Char('q') if plain => return Some(Press::Escape),
         Sym::Char('j') if plain => return Some(Press::Down),
         Sym::Char('k') if plain => return Some(Press::Up),
@@ -952,6 +1260,7 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         START => Press::Start,
         ABORT => Press::Abort,
         PROCEED => Press::Proceed,
+        crate::binary_cache::OPEN => Press::Cache,
         _ => return None,
     })
 }
@@ -969,7 +1278,7 @@ pub enum Output {
 }
 
 /// What the door has to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Errand {
     /// Nothing changed.
     Nothing,
@@ -980,10 +1289,83 @@ pub enum Errand {
     Output(Output),
     /// Start the update ([`begin`]), and say which door it went through.
     Start,
+    /// Start it here and now, the person having said yes to what it spends
+    /// ([`begin_anyway`]): on battery below the floor, or on the metered
+    /// way out the brain held it for.
+    StartHere {
+        /// The yes is to a run on battery ([`begin_on_battery`]).
+        on_battery: bool,
+    },
+    /// The person said no to a run on battery: say it did not start.
+    NotStarted,
+    /// The person said no to a run the brain holds: say it stays queued.
+    KeptWaiting,
+    /// Open the belongings, whose conflicts a row counts — the footer's
+    /// region, or the belongings' window from the window.
+    OpenBelongings,
     /// Answer the countdown — `true` to start now, `false` for "not now".
     Answer(bool),
+    /// What the binary cache's page asks of the door: a question on its
+    /// line, a sentence, a change (`crate::binary_cache::apply`).
+    Cache(crate::binary_cache::Errand),
     /// The view closes.
     Close,
+}
+
+/// What a line of the view takes when it is clicked — the one answer the
+/// painting, the pointer and the footer's click read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// A step: the cursor goes there.
+    Step(usize),
+    /// An answer to the question — `true` is yes. The first click puts the
+    /// cursor on it, the second answers (invariant 19).
+    Answer(bool),
+    /// The belongings, whose conflicts a line counts: one click opens them,
+    /// as a key the line teaches does.
+    Belongings,
+    /// A row of the binary cache's page, by its index: the first click puts
+    /// the cursor there, the second does what `RET` does.
+    Cache(usize),
+    /// An answer of the page's grave question — `true` is yes.
+    CacheAnswer(bool),
+}
+
+/// What a question of the view is about: what a run asked for BY HAND would
+/// spend that a scheduled one waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cost {
+    /// A battery below the floor — its charge, in per cent, when it says it.
+    Battery(Option<u8>),
+    /// A metered way out, on which the brain holds the run asked for.
+    Metered,
+}
+
+/// The question a run by hand asks before it spends what a scheduled one
+/// waits for — "no" first, and the cursor born on it: it is a question that
+/// appears on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Question {
+    /// What it would spend.
+    pub cost: Cost,
+    /// Whether the brain holds this run in its queue: a "no" then leaves it
+    /// there, waiting, and a "yes" takes it out before starting it here.
+    pub queued: bool,
+    /// Which answer the cursor is on.
+    pub yes: bool,
+}
+
+/// One line at the top of the view — the question or the second register,
+/// then what the machine's records say — placed and coloured, with what a
+/// click on it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopLine {
+    /// What it says, already wrapped to the width.
+    pub text: String,
+    /// Its colour: the cursor's on an answer, danger's on what costs.
+    pub color: tokens::Color,
+    /// What a click on it takes, when anything.
+    pub target: Option<Target>,
 }
 
 /// The update, as both doors show it: the declared steps, what the two
@@ -1001,17 +1383,53 @@ pub struct View {
     scrollback: Scrollback,
     /// Which step the second register is explaining.
     cursor: usize,
+    /// What the machine's records say beside the run.
+    records: module::Records,
+    /// The keys that open the belongings, as this leader teaches them — for
+    /// the line that counts their conflicts.
+    belongings_keys: String,
+    /// The question, while it is asked.
+    asking: Option<Question>,
+    /// The battery as given — a test's, a photograph's — or `None` to read
+    /// the machine's when a run is asked for.
+    charge: Option<module::Charge>,
+    /// The person's binary cache's page, while the view is turned to it.
+    cache: Option<CachePage>,
+}
+
+/// The binary cache's page as the view holds it: the page, what it read,
+/// and where it reads again (none for a test's or a photograph's page, which
+/// reads nothing of the machine).
+#[derive(Debug, Clone)]
+pub struct CachePage {
+    /// The page's cursor and questions.
+    pub page: crate::binary_cache::Page,
+    /// What it draws.
+    pub readings: crate::binary_cache::Readings,
+    /// Where it reads, and when each file last moved.
+    places: Option<(
+        crate::binary_cache::Places,
+        Vec<Option<std::time::SystemTime>>,
+    )>,
+    /// The zone its dates are drawn in.
+    zone: ronoctua_files::when::Zone,
 }
 
 impl View {
-    /// The declared steps, and what the reports on this machine say.
+    /// The declared steps, and what the reports and the records on this
+    /// machine say; its battery is read when a run is asked for.
     #[must_use]
     pub fn read() -> Self {
-        Self::of(module::steps(), Verdicts::read(), report_stamp())
+        let mut v = Self::of(module::steps(), Verdicts::read(), report_stamp()).with_records(
+            module::Records::read_at(&record_places()),
+            belongings_keys(),
+        );
+        v.charge = None;
+        v
     }
 
     /// A view of `steps` with `verdicts` — what a test builds, and nothing of
-    /// the machine is read.
+    /// the machine is read: no records, and a machine on mains.
     #[must_use]
     pub fn of(
         steps: &'static [ronoctua_brain::Step],
@@ -1024,6 +1442,236 @@ impl View {
             stamp,
             scrollback: Scrollback::default(),
             cursor: 0,
+            records: module::Records::default(),
+            belongings_keys: String::new(),
+            asking: None,
+            charge: Some(module::Charge {
+                discharging: false,
+                percent: None,
+            }),
+            cache: None,
+        }
+    }
+
+    /// The same view over these records, the belongings taught by `keys`.
+    #[must_use]
+    pub fn with_records(mut self, records: module::Records, keys: String) -> Self {
+        self.records = records;
+        self.belongings_keys = keys;
+        self
+    }
+
+    /// The same view on this battery — a test's, a photograph's.
+    #[must_use]
+    pub const fn on_charge(mut self, charge: module::Charge) -> Self {
+        self.charge = Some(charge);
+        self
+    }
+
+    /// What the machine's records say — what a test reads back.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn records(&self) -> &module::Records {
+        &self.records
+    }
+
+    // -----------------------------------------------------------------------
+    // THE BINARY CACHE'S PAGE (`crate::binary_cache`)
+    // -----------------------------------------------------------------------
+
+    /// Turns the view to the binary cache's page, reading what this person
+    /// and this machine say — or, when it is open, back to the steps.
+    pub fn toggle_cache(&mut self) -> Errand {
+        if self.cache.take().is_none() {
+            self.open_cache();
+        }
+        Errand::Moved
+    }
+
+    /// Opens the page over what this person and this machine say (kept open
+    /// when it is).
+    pub fn open_cache(&mut self) {
+        if self.cache.is_some() {
+            return;
+        }
+        let places = crate::binary_cache::Places::here();
+        let readings = crate::binary_cache::Readings::read(&places);
+        let stamp = places.stamp();
+        self.cache = Some(CachePage {
+            page: crate::binary_cache::Page::default(),
+            readings,
+            places: Some((places, stamp)),
+            zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
+        });
+    }
+
+    /// The same view on the page, over these readings — a test's, a
+    /// photograph's: nothing of the machine is read, and its dates are UTC.
+    #[must_use]
+    pub fn with_cache(mut self, readings: crate::binary_cache::Readings) -> Self {
+        self.cache = Some(CachePage {
+            page: crate::binary_cache::Page::default(),
+            readings,
+            places: None,
+            zone: ronoctua_files::when::Zone::utc(),
+        });
+        self
+    }
+
+    /// The page, while the view is turned to it.
+    #[must_use]
+    pub const fn cache_page(&self) -> Option<&CachePage> {
+        self.cache.as_ref()
+    }
+
+    /// The keys this view teaches now: the steps', or the binary cache's
+    /// page's — what both doors' hints draw.
+    #[must_use]
+    pub const fn taught(&self) -> &'static [(&'static str, &'static str)] {
+        if self.cache.is_some() {
+            OF_THE_PAGE
+        } else {
+            OF_THE_VIEW
+        }
+    }
+
+    /// Where the page reads — `None` for a test's or a photograph's.
+    #[must_use]
+    pub fn cache_places(&self) -> Option<&crate::binary_cache::Places> {
+        self.cache
+            .as_ref()
+            .and_then(|c| c.places.as_ref())
+            .map(|(p, _)| p)
+    }
+
+    /// Reads the page again, now — after a change this door made.
+    pub fn cache_reread(&mut self) {
+        if let Some(c) = self.cache.as_mut()
+            && let Some((places, stamp)) = c.places.as_mut()
+        {
+            c.readings = crate::binary_cache::Readings::read(places);
+            *stamp = places.stamp();
+            c.page.settle(&c.readings);
+        }
+    }
+
+    /// What the page asks of the door, as the view's errand.
+    fn page_errand(&mut self, e: crate::binary_cache::Errand) -> Errand {
+        use crate::binary_cache::Errand as Page;
+        match e {
+            Page::Nothing => Errand::Nothing,
+            Page::Moved => Errand::Moved,
+            Page::Close => {
+                self.cache = None;
+                Errand::Moved
+            }
+            other => Errand::Cache(other),
+        }
+    }
+
+    /// What was typed on a line, answering the page's question `id`.
+    pub fn cache_answered(&mut self, id: &str, text: &str) -> Errand {
+        let Some(c) = self.cache.as_mut() else {
+            return Errand::Nothing;
+        };
+        let e = c.page.answered(id, text, &c.readings);
+        self.page_errand(e)
+    }
+
+    /// The question `id`, asked as `RET` on its row would — a command run by
+    /// its name with nothing typed.
+    pub fn cache_ask_for(&mut self, id: &str) -> Errand {
+        self.open_cache();
+        let Some(c) = self.cache.as_mut() else {
+            return Errand::Nothing;
+        };
+        let e = c.page.ask_for(id, &c.readings);
+        self.page_errand(e)
+    }
+
+    /// The line was let go.
+    pub fn cache_unanswered(&mut self) {
+        if let Some(c) = self.cache.as_mut() {
+            c.page.unanswered();
+        }
+    }
+
+    /// The page's lines under the head, placed from `left` in `room`.
+    #[must_use]
+    pub fn cache_lines(
+        &self,
+        left: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<crate::binary_cache::PageLine> {
+        self.cache.as_ref().map_or_else(Vec::new, |c| {
+            c.page.lines(&c.readings, left, room, &c.zone, texts)
+        })
+    }
+
+    /// The question, while it is asked.
+    #[must_use]
+    pub const fn asking(&self) -> Option<Question> {
+        self.asking
+    }
+
+    /// The battery, as given or as the machine has it now.
+    fn charge(&self) -> module::Charge {
+        self.charge.unwrap_or_else(module::Charge::read)
+    }
+
+    /// Asks the question on battery — what `LEADER s u n` does in the
+    /// footer below the floor, before anything starts — when the battery is
+    /// below the floor; `false` when it is not and nothing was asked.
+    pub fn ask_on_battery(&mut self) -> bool {
+        let charge = self.charge();
+        if !charge.below_the_floor() {
+            return false;
+        }
+        self.asking = Some(Question {
+            cost: Cost::Battery(charge.percent),
+            queued: false,
+            yes: false,
+        });
+        true
+    }
+
+    /// Asks whether to spend a metered way out on the run the brain holds
+    /// for it — what a door does when a run it asked for by hand is held
+    /// that way ([`Followed`]).
+    pub const fn ask_metered(&mut self) {
+        self.asking = Some(Question {
+            cost: Cost::Metered,
+            queued: true,
+            yes: false,
+        });
+    }
+
+    /// The question answered: it closes, and the door starts the run here,
+    /// or says it did not start — or that it stays queued, when the brain
+    /// holds it. A yes to the network on a battery below the floor asks
+    /// about the battery next: one yes is not the other.
+    fn answer(&mut self, yes: bool) -> Errand {
+        let Some(q) = self.asking.take() else {
+            return Errand::Nothing;
+        };
+        match (q.cost, yes) {
+            (Cost::Metered, true) => {
+                let charge = self.charge();
+                if charge.below_the_floor() {
+                    self.asking = Some(Question {
+                        cost: Cost::Battery(charge.percent),
+                        queued: true,
+                        yes: false,
+                    });
+                    Errand::Moved
+                } else {
+                    Errand::StartHere { on_battery: false }
+                }
+            }
+            (Cost::Battery(_), true) => Errand::StartHere { on_battery: true },
+            (_, false) if q.queued => Errand::KeptWaiting,
+            (_, false) => Errand::NotStarted,
         }
     }
 
@@ -1061,15 +1709,30 @@ impl View {
         self.scrollback.owes_a_frame()
     }
 
-    /// Re-reads the reports when a file moved, and only then; `true` when
-    /// something did.
+    /// Re-reads the reports and the records when a file moved, and only
+    /// then; `true` when something did.
     pub fn reread_if_moved(&mut self) -> bool {
+        // THE BINARY CACHE'S PAGE reads its own files, the same way: only
+        // when one moved.
+        let mut moved = false;
+        if let Some(c) = self.cache.as_mut()
+            && let Some((places, stamp)) = c.places.as_mut()
+        {
+            let now = places.stamp();
+            if now != *stamp {
+                *stamp = now;
+                c.readings = crate::binary_cache::Readings::read(places);
+                c.page.settle(&c.readings);
+                moved = true;
+            }
+        }
         let now = report_stamp();
         if now == self.stamp {
-            return false;
+            return moved;
         }
         self.stamp = now;
         self.verdicts = Verdicts::read();
+        self.records = module::Records::read_at(&record_places());
         true
     }
 
@@ -1084,6 +1747,42 @@ impl View {
 
     /// One key — the same in both doors.
     pub fn key(&mut self, press: Press) -> Errand {
+        // THE BINARY CACHE'S PAGE takes the arrows, `RET` and `Esc` while the
+        // view is turned to it, and `c` turns it back; the other keys stay
+        // the update's.
+        if press == Press::Cache {
+            return self.toggle_cache();
+        }
+        if let Some(c) = self.cache.as_mut() {
+            use crate::binary_cache::Press as Page;
+            let page = match press {
+                Press::Up => Some(Page::Up),
+                Press::Down => Some(Page::Down),
+                Press::Enter => Some(Page::Enter),
+                Press::Escape => Some(Page::Escape),
+                _ => None,
+            };
+            if let Some(p) = page {
+                let e = c.page.press(p, &c.readings);
+                return self.page_errand(e);
+            }
+        }
+        // THE QUESTION TAKES THE ARROWS, `RET` AND `Esc` while it is asked:
+        // two answers, "no" above and "yes" below, and `Esc` is the "no".
+        if let Some(q) = self.asking.as_mut() {
+            match press {
+                Press::Up | Press::Down => {
+                    q.yes = press == Press::Down;
+                    return Errand::Moved;
+                }
+                Press::Enter => {
+                    let yes = q.yes;
+                    return self.answer(yes);
+                }
+                Press::Escape => return self.answer(false),
+                _ => {}
+            }
+        }
         match press {
             Press::Down => {
                 self.cursor = (self.cursor + 1).min(self.steps.len().saturating_sub(1));
@@ -1096,11 +1795,107 @@ impl View {
             Press::OutputUp => Errand::Output(Output::Up),
             Press::OutputDown => Errand::Output(Output::Down),
             Press::OutputEnd => Errand::Output(Output::End),
-            Press::Start => Errand::Start,
+            // BELOW THE BATTERY FLOOR, A RUN BY HAND ASKS FIRST — the no
+            // first — where a scheduled one would wait for the charger.
+            Press::Start => {
+                if self.ask_on_battery() {
+                    Errand::Moved
+                } else {
+                    Errand::Start
+                }
+            }
             Press::Abort => Errand::Answer(false),
             Press::Proceed => Errand::Answer(true),
+            Press::Enter => Errand::Nothing,
             Press::Escape => Errand::Close,
+            Press::Cache => self.toggle_cache(),
         }
+    }
+
+    /// The head of the view, wrapped to `room`: the question while it is
+    /// asked — its sentence, "no", "yes" — or else the second register; then
+    /// what the machine's records say, each line only when it says
+    /// something. Notes are WRAPPED, never cut.
+    #[must_use]
+    pub fn top_lines(&self, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<TopLine> {
+        let line = |text: String, color, target| TopLine {
+            text,
+            color,
+            target,
+        };
+        // THE BINARY CACHE'S PAGE: its grave question, or what the row under
+        // its cursor is.
+        if let Some(c) = &self.cache {
+            return c
+                .page
+                .top_lines(&c.readings, room, texts)
+                .into_iter()
+                .map(|h| line(h.text, h.color, h.answer.map(Target::CacheAnswer)))
+                .collect();
+        }
+        let mut out = Vec::new();
+        if let Some(q) = self.asking {
+            let asked = match q.cost {
+                Cost::Battery(Some(percent)) => texts.t_args(
+                    key::SYSTEM_UPDATE_ASK_ON_BATTERY,
+                    &[
+                        ("percent", ronoctua_i18n::Arg::Number(i64::from(percent))),
+                        (
+                            "floor",
+                            ronoctua_i18n::Arg::Number(i64::from(
+                                module::battery_floor().unwrap_or_default(),
+                            )),
+                        ),
+                    ],
+                ),
+                Cost::Battery(None) => texts.t(key::SYSTEM_UPDATE_ASK_ON_BATTERY_UNKNOWN),
+                Cost::Metered => texts.t(key::SYSTEM_UPDATE_ASK_METERED),
+            };
+            for said in crate::chrome::note_lines(&asked, room) {
+                out.push(line(said, tokens::color::TEXT_PRIMARY, None));
+            }
+            // "NO" FIRST, and the cursor is born on it. "Yes" is in the
+            // colour of what it costs: a battery spent on a build, a
+            // connection paid by the byte.
+            let (no, yes_key) = match q.cost {
+                Cost::Battery(_) => (key::SYSTEM_UPDATE_ANSWER_NO, key::SYSTEM_UPDATE_ANSWER_YES),
+                Cost::Metered => (
+                    key::SYSTEM_UPDATE_ANSWER_NO_METERED,
+                    key::SYSTEM_UPDATE_ANSWER_YES_METERED,
+                ),
+            };
+            for (yes, answer) in [(false, no), (true, yes_key)] {
+                let color = if q.yes == yes {
+                    tokens::color::TEXT_HERE_ACTS
+                } else if yes {
+                    tokens::color::STATE_WARNING
+                } else {
+                    crate::chrome::Kind::Setting.tones(false).0
+                };
+                out.push(line(
+                    layout::elide_end(&texts.t(answer), room),
+                    color,
+                    Some(Target::Answer(yes)),
+                ));
+            }
+        } else {
+            for said in self.register_lines(room, texts) {
+                out.push(line(said, tokens::color::TEXT_SECONDARY, None));
+            }
+        }
+        // A LINE OF AIR between what the cursor's step is and what the
+        // machine's records say: two subjects, and hierarchy is colour and
+        // air, never size. Only when there is a record to say.
+        let records = record_sentences(&self.records, &self.belongings_keys, texts);
+        if !records.is_empty() && !out.is_empty() {
+            out.push(line(String::new(), tokens::color::TEXT_SECONDARY, None));
+        }
+        for (said, color, target) in records {
+            for wrapped in crate::chrome::note_lines(&said, room) {
+                out.push(line(wrapped, color, target));
+            }
+        }
+        out
     }
 
     /// The second register's lines in the footer's region: WRAPPED, never
@@ -1109,32 +1904,61 @@ impl View {
         crate::chrome::note_lines(&self.explains(texts).unwrap_or_default(), room)
     }
 
-    /// How many rows the footer's region is: the second register, the steps,
-    /// a line of air and the output — counted without building any, for the
-    /// footer asks this on every pointer motion.
+    /// How many rows the footer's region is: the head (the question or the
+    /// second register, and the records), the steps, a line of air and the
+    /// output — counted without building the output, for the footer asks
+    /// this on every pointer motion.
     #[must_use]
     pub fn region_len(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
-        let (_, room) = crate::power::extent(columns);
-        self.register_lines(room, texts).len()
-            + self.steps.len()
-            + 1
-            + self.scrollback.amount().max(1)
+        let (left, room) = crate::power::extent(columns);
+        if self.cache.is_some() {
+            return self.top_lines(room, texts).len() + self.cache_lines(left, room, texts).len();
+        }
+        self.top_lines(room, texts).len() + self.steps.len() + 1 + self.scrollback.amount().max(1)
     }
 
-    /// The row of the region the cursor's step is on — what the footer's
-    /// page follows after a key.
+    /// The row of the region the cursor is on — the answer under it while
+    /// the question is asked, else the cursor's step: what the footer's page
+    /// follows after a key.
     #[must_use]
     pub fn region_cursor(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
         let (_, room) = crate::power::extent(columns);
-        self.register_lines(room, texts).len() + self.cursor
+        let head = self.top_lines(room, texts);
+        if let Some(c) = &self.cache {
+            // THE PAGE'S CURSOR, under its heading — or the answer of its
+            // grave question the cursor is on.
+            if let Some(q) = c.page.confirm()
+                && let Some(n) = head
+                    .iter()
+                    .position(|l| l.target == Some(Target::CacheAnswer(q.yes)))
+            {
+                return n;
+            }
+            let (left, room) = crate::power::extent(columns);
+            let below = self
+                .cache_lines(left, room, texts)
+                .iter()
+                .position(|l| l.row == Some(c.page.cursor()))
+                .unwrap_or(0);
+            return head.len() + below;
+        }
+        if let Some(q) = self.asking
+            && let Some(n) = head
+                .iter()
+                .position(|l| l.target == Some(Target::Answer(q.yes)))
+        {
+            return n;
+        }
+        head.len() + self.cursor
     }
 
     /// The footer's region, rows `skip..skip + take` of it: ONE list — the
-    /// second register on top, the steps with their verdicts under it (the
-    /// cursor's name in the accent: the cursor is a colour), a line of air,
-    /// and the output of both journals — which the region's own scroll, bar
-    /// and wheel read, as they read every list of the footer. Only the rows
-    /// asked for are built: the output keeps up to [`KEPT`] lines.
+    /// head on top (the question or the second register, then the records),
+    /// the steps with their verdicts under it (the cursor's name in the
+    /// accent: the cursor is a colour), a line of air, and the output of both
+    /// journals — which the region's own scroll, bar and wheel read, as they
+    /// read every list of the footer. Only the rows asked for are built: the
+    /// output keeps up to [`KEPT`] lines.
     #[must_use]
     pub fn region_rows(
         &self,
@@ -1144,11 +1968,33 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<RegionRow> {
         let (left, room) = crate::power::extent(columns);
-        let register = self.register_lines(room, texts);
-        let steps_at = register.len();
+        let head = self.top_lines(room, texts);
+        // THE BINARY CACHE'S PAGE: its head, then its heading and its rows.
+        if self.cache.is_some() {
+            let page = self.cache_lines(left, room, texts);
+            let rows = head
+                .iter()
+                .map(|said| RegionRow {
+                    fields: vec![crate::files::Field {
+                        at: left,
+                        text: said.text.clone(),
+                        color: said.color,
+                        hit: crate::files::Hit::Nothing,
+                        explain: None,
+                        ink: crate::files::Ink::Grid,
+                    }],
+                    target: said.target,
+                })
+                .chain(page.into_iter().map(|l| RegionRow {
+                    fields: l.fields,
+                    target: l.row.map(Target::Cache),
+                }));
+            return rows.skip(skip).take(take).collect();
+        }
+        let steps_at = head.len();
         let air_at = steps_at + self.steps.len();
         let output_at = air_at + 1;
-        let total = self.region_len(columns, texts);
+        let total = air_at + 1 + self.scrollback.amount().max(1);
         let field = |at: u16, text: String, color: tokens::Color| crate::files::Field {
             at: left + at,
             text,
@@ -1159,18 +2005,20 @@ impl View {
         };
         let mut out = Vec::with_capacity(take.min(total));
         for n in skip..total.min(skip.saturating_add(take)) {
-            let row = if let Some(said) = register.get(n) {
+            let row = if let Some(said) = head.get(n) {
                 RegionRow {
-                    fields: vec![field(0, said.clone(), tokens::color::TEXT_SECONDARY)],
-                    step: None,
+                    fields: vec![field(0, said.text.clone(), said.color)],
+                    target: said.target,
                 }
             } else if n < air_at {
                 let at = n - steps_at;
                 let step = &self.steps[at];
                 let (verdict, seconds) = self.verdicts.of_step(step.id);
                 let mut pieces = step_row(step, &verdict, seconds, room, texts);
-                // THE NAME IS THE LAST PIECE, and the cursor is its colour.
+                // THE NAME IS THE LAST PIECE, and the cursor is its colour —
+                // while no question holds the cursor.
                 if at == self.cursor
+                    && self.asking.is_none()
                     && let Some(name) = pieces.last_mut()
                 {
                     name.color = crate::chrome::Kind::ListedFact.tones(true).0;
@@ -1180,12 +2028,12 @@ impl View {
                         .into_iter()
                         .map(|p| field(p.at, p.text, p.color))
                         .collect(),
-                    step: Some(at),
+                    target: Some(Target::Step(at)),
                 }
             } else if n < output_at {
                 RegionRow {
                     fields: crate::chrome::AIR,
-                    step: None,
+                    target: None,
                 }
             } else if self.scrollback.is_empty() {
                 RegionRow {
@@ -1194,7 +2042,7 @@ impl View {
                         layout::elide_end(&texts.t(key::SYSTEM_UPDATE_NO_OUTPUT), room),
                         tokens::color::TEXT_DIM,
                     )],
-                    step: None,
+                    target: None,
                 }
             } else {
                 // MACHINE TEXT, drawn as it came — sanitised for the grid and
@@ -1205,7 +2053,7 @@ impl View {
                     .map_or_else(String::new, |l| layout::elide_end(l, room));
                 RegionRow {
                     fields: vec![field(0, line, tokens::color::TEXT_SECONDARY)],
-                    step: None,
+                    target: None,
                 }
             };
             out.push(row);
@@ -1213,17 +2061,181 @@ impl View {
         out
     }
 
-    /// A click on step `n`: the cursor goes there, and what the step is is
-    /// said. There is nothing else to do to a step here — switching one on or
-    /// off belongs to the brain's screen, where the choice is written down —
-    /// so a second click, like `RET`, does nothing more (invariant 19).
-    pub fn clicked(&mut self, n: usize) -> Errand {
-        if n >= self.steps.len() || n == self.cursor {
-            return Errand::Nothing;
+    /// A click on what a line takes, in either door.
+    ///
+    /// A STEP: the cursor goes there, and what the step is is said. There is
+    /// nothing else to do to a step here — switching one on or off belongs
+    /// to the brain's screen, where the choice is written down — so a second
+    /// click, like `RET`, does nothing more (invariant 19).
+    ///
+    /// AN ANSWER: the first click puts the cursor on it, the second answers,
+    /// as `RET` does. THE BELONGINGS' LINE: one click opens them — it is the
+    /// key the line teaches.
+    pub fn clicked(&mut self, target: Target) -> Errand {
+        match target {
+            Target::Step(n) => {
+                if n >= self.steps.len() || n == self.cursor {
+                    return Errand::Nothing;
+                }
+                self.cursor = n;
+                Errand::Moved
+            }
+            Target::Answer(yes) => match self.asking.as_mut() {
+                Some(q) if q.yes == yes => self.answer(yes),
+                Some(q) => {
+                    q.yes = yes;
+                    Errand::Moved
+                }
+                None => Errand::Nothing,
+            },
+            Target::Belongings => Errand::OpenBelongings,
+            Target::Cache(n) => match self.cache.as_mut() {
+                Some(c) => {
+                    let e = c.page.clicked(n, &c.readings);
+                    self.page_errand(e)
+                }
+                None => Errand::Nothing,
+            },
+            Target::CacheAnswer(yes) => match self.cache.as_mut() {
+                Some(c) => {
+                    let e = c.page.answer_clicked(yes);
+                    self.page_errand(e)
+                }
+                None => Errand::Nothing,
+            },
         }
-        self.cursor = n;
-        Errand::Moved
     }
+}
+
+/// What the machine's records say, as sentences: the belongings' conflicts
+/// (a click opens them), each declared program the verification held back,
+/// the boot trial or why there is none, and a hold — each only when it is
+/// there, in the colour of what it costs.
+fn record_sentences(
+    r: &module::Records,
+    belongings_keys: &str,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<(String, tokens::Color, Option<Target>)> {
+    let mut out = Vec::new();
+    if r.conflicts > 0 {
+        out.push((
+            texts.t_args(
+                key::SYSTEM_UPDATE_RECORDS_CONFLICTS,
+                &[
+                    (
+                        "count",
+                        ronoctua_i18n::Arg::Number(i64::try_from(r.conflicts).unwrap_or(i64::MAX)),
+                    ),
+                    ("keys", ronoctua_i18n::Arg::Text(belongings_keys)),
+                ],
+            ),
+            tokens::color::STATE_WARNING,
+            Some(Target::Belongings),
+        ));
+    }
+    for held in &r.held {
+        out.push((
+            texts.t_with(
+                key::SYSTEM_UPDATE_RECORDS_HELD,
+                &[("id", &held.id), ("why", &texts.t(held_key(held.why)))],
+            ),
+            tokens::color::STATE_WARNING,
+            None,
+        ));
+    }
+    if let Some(outcome) = r.trial {
+        let color = match outcome {
+            module::TrialOutcome::Failed => tokens::color::STATE_ERROR,
+            _ => tokens::color::TEXT_SECONDARY,
+        };
+        out.push((texts.t(trial_key(outcome)), color, None));
+    }
+    if let Some(why) = r.no_trial {
+        out.push((
+            texts.t(no_trial_key(why)),
+            tokens::color::TEXT_SECONDARY,
+            None,
+        ));
+    }
+    if let Some(hold) = &r.hold {
+        // THE REVISION AS GIT ABBREVIATES IT, and the day it was held: the
+        // record's whole stamp is a machine's way of writing a date.
+        let rev: String = hold.rev.chars().take(REV_SHOWN).collect();
+        let since = hold.since.split('T').next().unwrap_or_default();
+        out.push((
+            texts.t_with(
+                key::SYSTEM_UPDATE_RECORDS_HOLD,
+                &[("rev", &rev), ("since", since)],
+            ),
+            tokens::color::TEXT_SECONDARY,
+            None,
+        ));
+    }
+    out
+}
+
+/// How many hex digits of a held revision are drawn — git's own short form.
+const REV_SHOWN: usize = 7;
+
+/// The machine's own sentence for a refusal of its program
+/// (`ronoctua-machine`'s `refused <word>`), or `None` for a word that is not
+/// one of the machine's: a silent fallback would say a reason the program
+/// never gave.
+#[must_use]
+pub fn refusal_key(word: &str) -> Option<&'static str> {
+    use module::MachineRefusal as Why;
+    Some(match Why::of_id(word)? {
+        Why::NotRoot => key::MACHINE_REFUSED_NOT_ROOT,
+        Why::Busy => key::MACHINE_REFUSED_BUSY,
+        Why::NothingToMigrate => key::MACHINE_REFUSED_NOTHING_TO_MIGRATE,
+        Why::BuildFailed => key::MACHINE_REFUSED_BUILD_FAILED,
+        Why::SwitchFailed => key::MACHINE_REFUSED_SWITCH_FAILED,
+        Why::DidNotBoot => key::MACHINE_REFUSED_DID_NOT_BOOT,
+        Why::LastGoodWouldFallOut => key::MACHINE_REFUSED_LAST_GOOD_WOULD_FALL_OUT,
+        Why::Held => key::MACHINE_REFUSED_HELD,
+        Why::Unreadable => key::MACHINE_REFUSED_UNREADABLE,
+        Why::Failed => key::MACHINE_REFUSED_FAILED,
+    })
+}
+
+/// The sentence of a reason the verification held a program back.
+const fn held_key(why: module::HeldWhy) -> &'static str {
+    match why {
+        module::HeldWhy::EvalFailed => key::SYSTEM_UPDATE_HELD_EVAL_FAILED,
+        module::HeldWhy::FetchFailed => key::SYSTEM_UPDATE_HELD_FETCH_FAILED,
+        module::HeldWhy::UpstreamChanged => key::SYSTEM_UPDATE_HELD_UPSTREAM_CHANGED,
+        module::HeldWhy::BuildFailed => key::SYSTEM_UPDATE_HELD_BUILD_FAILED,
+    }
+}
+
+/// The machine's own sentence of a boot trial's outcome.
+const fn trial_key(outcome: module::TrialOutcome) -> &'static str {
+    match outcome {
+        module::TrialOutcome::Pending => key::MACHINE_TRIAL_PENDING,
+        module::TrialOutcome::Good => key::MACHINE_TRIAL_GOOD,
+        module::TrialOutcome::Failed => key::MACHINE_TRIAL_FAILED,
+        module::TrialOutcome::BootIdentical => key::MACHINE_TRIAL_BOOT_IDENTICAL,
+    }
+}
+
+/// The machine's own sentence of why an apply armed no trial.
+const fn no_trial_key(why: module::NoTrial) -> &'static str {
+    match why {
+        module::NoTrial::NoEfiVariables => key::MACHINE_NO_TRIAL_NO_EFI_VARIABLES,
+        module::NoTrial::NotInMenu => key::MACHINE_NO_TRIAL_NOT_IN_MENU,
+        module::NoTrial::NoLastGood => key::MACHINE_NO_TRIAL_NO_LAST_GOOD,
+    }
+}
+
+/// The keys that open the belongings, as this leader's trees teach them —
+/// taught by the line that counts their conflicts, never written in a text.
+fn belongings_keys() -> String {
+    crate::leader::default_of()
+        .ok()
+        .and_then(|(trees, _)| {
+            crate::leader::taught_keys(&trees, crate::belongings::OPEN_COMMAND, None)
+        })
+        .map_or_else(String::new, |k| format!("{} {k}", crate::leader()))
 }
 
 /// One row of the footer's region.
@@ -1231,8 +2243,9 @@ impl View {
 pub struct RegionRow {
     /// Placed and cut.
     pub fields: Vec<crate::files::Field>,
-    /// The step it is, when it is one — what a click on it selects.
-    pub step: Option<usize>,
+    /// What a click on it takes, when anything — the window's click reads
+    /// the same answer ([`View::clicked`]).
+    pub target: Option<Target>,
 }
 
 /// What starting said, in the person's words: through the brain it is
@@ -1246,6 +2259,36 @@ pub const fn said_of(started: Started) -> &'static str {
         Started::Systemd => key::ECHO_SYSTEM_UPDATE_STARTED,
         Started::Nowhere => key::ECHO_SYSTEM_UPDATE_NOWHERE,
     }
+}
+
+/// What starting it here said ([`begin_anyway`]): it went straight to
+/// systemd, as the person's yes asked — on battery, or on this connection —
+/// and both doors say the same.
+#[must_use]
+pub const fn said_anyway(started: Started, on_battery: bool) -> &'static str {
+    match (started, on_battery) {
+        (Started::Nowhere, _) => key::ECHO_SYSTEM_UPDATE_NOWHERE,
+        (_, true) => key::ECHO_SYSTEM_UPDATE_ON_BATTERY,
+        (_, false) => key::ECHO_SYSTEM_UPDATE_ON_METERED,
+    }
+}
+
+/// The other rows of the one control the row `at` belongs to: every row a
+/// sentence wrapped over takes the same click, so the pointer on any of
+/// them lights them all — what the window does with its head lines, asked
+/// here by the footer, whose region lights by rows (`targets` is what each
+/// row's click takes).
+#[must_use]
+pub fn one_control(targets: &[Option<Target>], at: usize) -> Vec<usize> {
+    let Some(Some(target)) = targets.get(at) else {
+        return Vec::new();
+    };
+    targets
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| *i != at && t.as_ref() == Some(target))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Follows both journals — the root half's and the person's — each on a
@@ -1346,7 +2389,7 @@ pub fn host_it() -> Result<()> {
         w.handle
             .insert_source(mind, |event, (), door: &mut Door<UpdateWindow>| {
                 if let channel::Event::Msg(m) = event {
-                    door.content.mind = Some(m);
+                    door.content.mind_arrived(&mut door.ui, m);
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the brain: {e}"))?;
@@ -1357,6 +2400,7 @@ pub fn host_it() -> Result<()> {
                 timer::Timer::from_duration(BEAT),
                 |_, (), door: &mut Door<UpdateWindow>| {
                     if door.content.view.reread_if_moved() {
+                        door.content.netrc_came(&mut door.ui);
                         door.ui.ask_paint();
                     }
                     timer::TimeoutAction::ToDuration(BEAT)
@@ -1390,7 +2434,26 @@ pub struct UpdateWindow {
     /// Where a key that starts or answers something goes: the machine, or
     /// nowhere — a photograph's.
     reach: Reach,
+    /// A run this window asked of the brain, followed until the brain says
+    /// what became of it ([`Followed`]).
+    followed: Option<Followed>,
+    /// A photograph's brain holds the run a `u` asks for, for a metered way
+    /// out — the scene's (`"metered": true`); nothing on a screen.
+    held_metered: bool,
+    /// When this window asked for root's netrc to agree, in milliseconds —
+    /// what came of it is said here once its gesture leaves the verdict
+    /// (`binary_cache::Verdict`).
+    netrc_asked: Option<u64>,
+    /// The first line of the binary cache's page drawn, when it does not
+    /// all fit: the page follows its cursor. One number, which the painting
+    /// sets and the pointer reads.
+    page_offset: usize,
 }
+
+/// Where the binary cache page's rows are counted from among the rows the
+/// seats light: far past any step and any head line, so a row of the page
+/// and a step are never the same number.
+const CACHE_ROWS: usize = 1 << 20;
 
 /// Where a key or a click of this window reaches past the door.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1424,6 +2487,461 @@ pub fn photographed(halves: &[String], said: &str) -> UpdateWindow {
     window
 }
 
+/// `ronoctua-shell photograph --door update-scene …`: the update's window
+/// over a scene handed in whole — the reports, what the journals said, the
+/// machine's records and its battery — walked by keys and the pointer, and
+/// developed by the scenes' camera. Nothing of this machine is read, and a
+/// key that would start or open something is kept and printed, never done.
+pub fn photographed_scene(rest: &[String]) -> ! {
+    let line: Vec<String> = std::env::args().skip(2).collect();
+    let words = if line.ends_with(rest) {
+        line
+    } else {
+        rest.to_vec()
+    };
+    match camera::parse(&words).and_then(|asked| camera::shoot(&asked)) {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The window's scene camera.
+mod camera {
+    use anyhow::{Context as _, Result, bail, ensure};
+    use ronoctua_tokens as tokens;
+    use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
+
+    use super::{UpdateWindow, View, module};
+    use crate::door::{Content as _, Detached, Ui};
+
+    const USAGE: &str = "\
+usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [steps]
+
+  the update's window over a scene given whole (JSON): the two halves'
+  reports, what the journals said, the machine's records and its battery
+
+  --scene <file>        the scene:
+                          {\"reports\": [\"<id>\\t<verdict>\\t<s>\\n…\"],
+                           \"said\": \"<a line>\\n…\",
+                           \"records\": {\"conflicts\": 2,
+                             \"held\": [{\"id\": \"nix:hello\", \"why\": \"build-failed\"}],
+                             \"trial\": \"failed\", \"no-trial\": \"not-in-menu\",
+                             \"hold\": {\"rev\": \"<hex>\", \"since\": \"<stamp>\"}},
+                           \"battery\": {\"discharging\": true, \"percent\": 20},
+                           \"metered\": true,
+                           \"keys\": \"SUPER s v\",
+                           \"cache\": {\"named\": {\"name\": \"someone\",
+                               \"public-key\": \"someone.cachix.org-1:…=\",
+                               \"visibility\": \"private\"},
+                             \"copy\": \"unreadable\" | \"newer\",
+                             \"applied\": {…the same shape…},
+                             \"token\": \"kept\" | \"token-open\" | …,
+                             \"netrc\": true,
+                             \"last\": {\"at\": \"<stamp>\", \"cache\": \"someone\",
+                               \"visibility\": \"private\", \"applied-at\": null,
+                               \"outcome\": \"pushed\", \"paths\": 3, \"bytes\": 9}}}
+                        `metered`: the brain holds the run a `u` asks for,
+                        for a metered way out; `cache`: the view opens on the
+                        binary cache's page, over these readings
+  --out <file>          where to write                 (default: update.png)
+  --columns <n>         the window's width, in cells   (default: 90)
+  --lines <n>           the height, in lines           (default: 30)
+  --language <id>       pt-BR or en-GB                 (default: pt-BR)
+  --theme <id>          a theme of assets/themes       (default: the default)
+  --scale <n>           physical px per logical        (default: 1)
+  --list                prints the frame instead of drawing it
+
+Steps — walked in the order they appear:
+
+  --key <notation>      a key, as the keymap writes it: u, <down>, RET
+  --hover <col,line>    rests the pointer on a cell of the surface
+  --click <col,line>    a press and a release there";
+
+    /// The scene: what the window would have read.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct Scene {
+        reports: Vec<String>,
+        said: String,
+        records: Records,
+        battery: Option<Battery>,
+        metered: bool,
+        keys: String,
+        cache: Option<CacheScene>,
+    }
+
+    /// The binary cache's page, as the scene says it.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct CacheScene {
+        named: Option<ronoctua_person::options::BinaryCache>,
+        copy: Option<String>,
+        applied: Option<ronoctua_person::options::BinaryCache>,
+        token: Option<String>,
+        netrc: bool,
+        last: Option<ronoctua_cachix::record::Record>,
+    }
+
+    impl CacheScene {
+        fn readings(self) -> Result<crate::binary_cache::Readings> {
+            use crate::binary_cache::TokenState;
+            use ronoctua_cachix::settings::Named;
+            let named = match (self.copy.as_deref(), self.named) {
+                (Some("unreadable"), _) => Named::Unreadable,
+                (Some("newer"), _) => Named::Newer,
+                (Some(other), _) => bail!("`copy` is unreadable or newer, not `{other}`"),
+                (None, Some(c)) => Named::Cache(c),
+                (None, None) => Named::None,
+            };
+            let token = match self.token.as_deref() {
+                None => TokenState::None,
+                Some("kept") => TokenState::Kept,
+                Some(word) => TokenState::Refused(
+                    ronoctua_cachix::Why::of_id(word)
+                        .with_context(|| format!("`token` is kept or a refusal, not `{word}`"))?,
+                ),
+            };
+            Ok(crate::binary_cache::Readings {
+                named,
+                applied: self.applied,
+                token,
+                netrc: self.netrc,
+                last: self.last,
+                verdict: None,
+            })
+        }
+    }
+
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+    struct Records {
+        conflicts: usize,
+        held: Vec<Held>,
+        trial: Option<module::TrialOutcome>,
+        no_trial: Option<module::NoTrial>,
+        hold: Option<Hold>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Held {
+        id: String,
+        why: module::HeldWhy,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Hold {
+        rev: String,
+        since: String,
+    }
+
+    #[derive(Debug, Clone, Copy, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Battery {
+        discharging: bool,
+        percent: Option<u8>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Step {
+        Key(ronoctua_keymap::Key),
+        Hover(u16, u16),
+        Click(u16, u16),
+    }
+
+    #[derive(Debug)]
+    pub(super) struct Asked {
+        scene: Option<std::path::PathBuf>,
+        out: std::path::PathBuf,
+        columns: u16,
+        lines: u16,
+        language: String,
+        theme: tokens::theme::Theme,
+        scale: u16,
+        list: bool,
+        steps: Vec<Step>,
+    }
+
+    fn number(flag: &str, raw: &str, range: std::ops::RangeInclusive<u16>) -> Result<u16> {
+        let n: u16 = raw
+            .trim()
+            .parse()
+            .ok()
+            .with_context(|| format!("`{flag} {raw}` is not a whole number"))?;
+        ensure!(
+            range.contains(&n),
+            "`{flag} {n}` is out of range {}..={}",
+            range.start(),
+            range.end()
+        );
+        Ok(n)
+    }
+
+    fn cell_of(flag: &str, raw: &str) -> Result<(u16, u16)> {
+        let (c, l) = raw
+            .split_once(',')
+            .with_context(|| format!("`{flag}` wants `column,line`, not `{raw}`"))?;
+        Ok((number(flag, c, 0..=999)?, number(flag, l, 0..=999)?))
+    }
+
+    pub(super) fn parse(words: &[String]) -> Result<Asked> {
+        let mut me = Asked {
+            scene: None,
+            out: std::path::PathBuf::from("update.png"),
+            columns: 90,
+            lines: 30,
+            language: "pt-BR".to_owned(),
+            theme: tokens::theme::default_one(),
+            scale: 1,
+            list: false,
+            steps: Vec::new(),
+        };
+        let mut words = words.iter();
+        while let Some(flag) = words.next() {
+            let mut value = || {
+                words
+                    .next()
+                    .cloned()
+                    .with_context(|| format!("`{flag}` with no value"))
+            };
+            match flag.as_str() {
+                "--help" | "-h" => {
+                    println!("{USAGE}");
+                    std::process::exit(0);
+                }
+                "--door" => {
+                    let said = value()?;
+                    ensure!(
+                        said == "update-scene",
+                        "`--door {said}` is not this camera's door"
+                    );
+                }
+                "--scene" => me.scene = Some(value()?.into()),
+                "--out" | "-o" => me.out = value()?.into(),
+                "--columns" => me.columns = number("--columns", &value()?, 1..=1000)?,
+                "--lines" => me.lines = number("--lines", &value()?, 1..=1000)?,
+                "--language" => me.language = value()?,
+                "--theme" => {
+                    let id = value()?;
+                    me.theme = tokens::theme::by_id(&id)
+                        .with_context(|| format!("unknown theme `{id}`"))?;
+                }
+                "--scale" => {
+                    let most = u16::try_from(ronoctua_render::MOST_SCALE).unwrap_or(1);
+                    me.scale = number("--scale", &value()?, 1..=most)?;
+                }
+                "--list" => me.list = true,
+                "--key" => {
+                    let notation = value()?;
+                    let key = ronoctua_keymap::Key::parse(&notation)
+                        .map_err(|e| anyhow::anyhow!("`--key {notation}` is not a key: {e}"))?;
+                    me.steps.push(Step::Key(key));
+                }
+                "--hover" => {
+                    let (c, l) = cell_of("--hover", &value()?)?;
+                    me.steps.push(Step::Hover(c, l));
+                }
+                "--click" => {
+                    let (c, l) = cell_of("--click", &value()?)?;
+                    me.steps.push(Step::Click(c, l));
+                }
+                other => bail!("unknown option `{other}`.\n\n{USAGE}"),
+            }
+        }
+        Ok(me)
+    }
+
+    fn middle_of(column: u16, line: u16) -> (f64, f64) {
+        let px = tokens::text::size();
+        (
+            (f64::from(column) + 0.5) * f64::from(tokens::metrics::cell_width(px)),
+            (f64::from(line) + 0.5) * f64::from(tokens::metrics::line_height(px)),
+        )
+    }
+
+    /// The window the scene describes.
+    fn window_of(mut scene: Scene) -> Result<UpdateWindow> {
+        let cache = scene.cache.take().map(CacheScene::readings).transpose()?;
+        let mut w = window_of_records(scene);
+        if let Some(readings) = cache {
+            w.view = w.view.clone().with_cache(readings);
+        }
+        Ok(w)
+    }
+
+    /// The window of the scene's reports, records and battery.
+    fn window_of_records(scene: Scene) -> UpdateWindow {
+        let mut w = super::photographed(&scene.reports, &scene.said);
+        let records = module::Records {
+            conflicts: scene.records.conflicts,
+            held: scene
+                .records
+                .held
+                .into_iter()
+                .map(|h| module::Held {
+                    id: h.id,
+                    why: h.why,
+                })
+                .collect(),
+            trial: scene.records.trial,
+            no_trial: scene.records.no_trial,
+            hold: scene.records.hold.map(|h| module::HeldAt {
+                rev: h.rev,
+                since: h.since,
+            }),
+        };
+        let charge = scene.battery.map_or(
+            module::Charge {
+                discharging: false,
+                percent: None,
+            },
+            |b| module::Charge {
+                discharging: b.discharging,
+                percent: b.percent,
+            },
+        );
+        let view: View = w
+            .view
+            .clone()
+            .with_records(records, scene.keys)
+            .on_charge(charge);
+        w.view = view;
+        w.held_metered = scene.metered;
+        w
+    }
+
+    pub(super) fn shoot(asked: &Asked) -> Result<()> {
+        tokens::theme::set(asked.theme);
+        tokens::theme::set_ground(tokens::theme::Ground::Chrome);
+        tokens::text::set(tokens::text::NORMAL);
+        crate::locale::prefs::set(crate::locale::Choice::default());
+        let texts = ronoctua_i18n::Texts::fresh(&asked.language)
+            .with_context(|| format!("the language `{}` does not exist", asked.language))?;
+        let scene: Scene = match &asked.scene {
+            Some(file) => {
+                let raw = std::fs::read_to_string(file)
+                    .with_context(|| format!("could not read `{}`", file.display()))?;
+                serde_json::from_str(&raw)
+                    .with_context(|| format!("`{}` is not an update scene", file.display()))?
+            }
+            None => Scene::default(),
+        };
+        let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
+        let mut d = Detached::new(ui, window_of(scene)?);
+        let px = tokens::text::size();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let size = (
+            (f32::from(asked.columns + 2 * d.content.margin()) * tokens::metrics::cell_width(px))
+                .ceil() as u32,
+            (f32::from(asked.lines) * tokens::metrics::line_height(px)).ceil() as u32,
+        );
+        d.lay_out_at(size);
+        d.turn();
+        let mut gpu = ronoctua_render::offscreen::Offscreen::new(1, 1)?;
+        let format = ronoctua_render::offscreen::FORMAT;
+        let mut images = ronoctua_render::image::Images::new(&gpu.device, format)?;
+        // A FRAME BEFORE EVERY STEP: a key of the header is grabbed where the
+        // last paint drew it, so a pointer that moves before anything was
+        // composed finds no key under it.
+        let mut composed = d.compose(&gpu.device, &gpu.queue, &mut images);
+        let mut entered = false;
+        for step in &asked.steps {
+            match *step {
+                Step::Key(key) => d.press(key),
+                Step::Hover(c, l) | Step::Click(c, l) => {
+                    let event = |kind| {
+                        vec![PointerEvent {
+                            surface: d.ui.surface.clone(),
+                            position: middle_of(c, l),
+                            kind,
+                        }]
+                    };
+                    let first = if std::mem::replace(&mut entered, true) {
+                        PointerEventKind::Motion { time: 0 }
+                    } else {
+                        PointerEventKind::Enter { serial: 0 }
+                    };
+                    let mut frames = vec![event(first)];
+                    if matches!(step, Step::Click(..)) {
+                        for kind in [
+                            PointerEventKind::Press {
+                                time: 0,
+                                button: crate::door::LEFT_BUTTON,
+                                serial: 0,
+                            },
+                            PointerEventKind::Release {
+                                time: 0,
+                                button: crate::door::LEFT_BUTTON,
+                                serial: 0,
+                            },
+                        ] {
+                            frames.push(event(kind));
+                        }
+                    }
+                    for events in frames {
+                        d.pointer(&events);
+                    }
+                }
+            }
+            d.turn();
+            if d.ui.quit {
+                break;
+            }
+            composed = d.compose(&gpu.device, &gpu.queue, &mut images);
+        }
+        let film = crate::scene_photograph::Film {
+            list: asked.list,
+            by: asked.scale,
+            language: &asked.language,
+            out: asked.out.clone(),
+        };
+        crate::scene_photograph::draw(
+            &mut gpu,
+            &mut images,
+            &composed,
+            (d.ui.width, d.ui.height),
+            &film,
+            i32::from(asked.scale),
+        )?;
+        if let Some(m) = d.ui.message.as_ref() {
+            println!("the message line says: {m}");
+        }
+        for asked in d.content.would_have() {
+            println!("{asked}");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A SCENE IS READ WHOLE, and a field it does not have is refused
+        /// rather than drawn as if the record said nothing.
+        #[test]
+        fn a_scene_is_its_records_and_nothing_else() {
+            let scene: Scene = serde_json::from_str(
+                r#"{"records": {"conflicts": 2, "held": [{"id": "nix:hello", "why": "build-failed"}],
+                    "trial": "failed", "no-trial": "not-in-menu",
+                    "hold": {"rev": "613862c", "since": "2026-10-05T12:00:00Z"}},
+                    "battery": {"discharging": true, "percent": 20}, "keys": "SUPER s v"}"#,
+            )
+            .expect("a scene");
+            let w = window_of(scene).expect("a window");
+            let r = w.view.records();
+            assert_eq!(r.conflicts, 2);
+            assert_eq!(r.trial, Some(module::TrialOutcome::Failed));
+            assert_eq!(r.held.len(), 1);
+            assert!(serde_json::from_str::<Scene>(r#"{"recrods": {}}"#).is_err());
+            assert!(parse(&["--door".to_owned(), "update".to_owned()]).is_err());
+        }
+    }
+}
+
 impl Drop for UpdateWindow {
     /// WHAT I STARTED, I STOP. `journalctl -f` never ends on its own, and a
     /// door that leaves two of them behind every time it is closed is a door
@@ -1445,6 +2963,35 @@ impl UpdateWindow {
             register: 1,
             children,
             reach: Reach::Machine,
+            followed: None,
+            held_metered: false,
+            netrc_asked: None,
+            page_offset: 0,
+        }
+    }
+
+    /// The brain spoke: its mind is kept — the countdown's answers read it —
+    /// and a run this window asked for is followed in it.
+    fn mind_arrived(&mut self, ui: &mut Ui, mind: ronoctua_brain::Mind) {
+        self.mind = Some(mind);
+        self.heard_the_brain(ui);
+    }
+
+    /// What the brain's mind says of the run this window asked for: held
+    /// for a metered way out, the question — the no first.
+    fn heard_the_brain(&mut self, ui: &mut Ui) {
+        let (Some(followed), Some(mind)) = (self.followed.as_mut(), self.mind.as_ref()) else {
+            return;
+        };
+        match followed.heard(mind) {
+            Heard::Waiting => {}
+            Heard::Over => self.followed = None,
+            Heard::Metered => {
+                self.followed = None;
+                self.view.ask_metered();
+                self.measure(ui);
+                ui.ask_paint();
+            }
         }
     }
 
@@ -1496,7 +3043,7 @@ impl UpdateWindow {
     /// and never an ellipsis.
     fn measure(&mut self, ui: &Ui) {
         self.lines = ui.lines.saturating_sub(ui.first_of_list());
-        let wrapped = self.view.register_lines(ui.columns, &ui.texts).len();
+        let wrapped = self.view.top_lines(ui.columns, &ui.texts).len();
         self.register = u16::try_from(wrapped)
             .unwrap_or(u16::MAX)
             .clamp(1, self.lines.saturating_sub(2).max(1));
@@ -1548,7 +3095,7 @@ impl UpdateWindow {
     /// Which step row a pointer position lands on, if any.
     fn at(&self, ui: &Ui, x: f64, y: f64) -> Option<usize> {
         let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
-        if line_px <= 0.0 || x < 0.0 || y < 0.0 {
+        if line_px <= 0.0 || x < 0.0 || y < 0.0 || self.view.cache_page().is_some() {
             return None;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1559,6 +3106,153 @@ impl UpdateWindow {
         }
         let row = self.step_offset + usize::from(line - first_step);
         (row < self.view.steps().len()).then_some(row)
+    }
+
+    /// Which line of the head a pointer position lands on — the question,
+    /// the register, the records — if any. The painting draws the same
+    /// lines in the same rows (`top_lines`, `measure`).
+    fn head_at(&self, ui: &Ui, y: f64) -> Option<usize> {
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        if line_px <= 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let line = (y / line_px) as u16;
+        let first = ui.first_of_list();
+        (line >= first && line < first + self.register).then(|| usize::from(line - first))
+    }
+
+    /// What a pointer position takes: a step, or a head line that takes
+    /// something — the one answer the painting's band and the click read.
+    fn target_at(&self, ui: &Ui, x: f64, y: f64) -> Option<Target> {
+        if let Some(row) = self.at(ui, x, y) {
+            return Some(Target::Step(row));
+        }
+        if let Some(row) = self.cache_row_at(ui, x, y) {
+            return Some(Target::Cache(row));
+        }
+        let n = self.head_at(ui, y)?;
+        self.view
+            .top_lines(ui.columns, &ui.texts)
+            .get(n)
+            .and_then(|l| l.target)
+    }
+
+    /// The row a target is lit as under the pointer: a step by its index, a
+    /// head line past the last step — one number, which the seats' `lit`
+    /// carries.
+    fn lit_row_of(&self, ui: &Ui, target: Target) -> Option<usize> {
+        match target {
+            Target::Step(n) => Some(n),
+            Target::Cache(n) => Some(CACHE_ROWS + n),
+            other => self
+                .view
+                .top_lines(ui.columns, &ui.texts)
+                .iter()
+                .position(|l| l.target == Some(other))
+                .map(|n| self.view.steps().len() + n),
+        }
+    }
+
+    /// Which row of the binary cache's page a pointer position lands on —
+    /// the lines the painting draws under the head, from the same function.
+    fn cache_row_at(&self, ui: &Ui, x: f64, y: f64) -> Option<usize> {
+        self.view.cache_page()?;
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        if line_px <= 0.0 || x < 0.0 || y < 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let line = (y / line_px) as u16;
+        let first = ui.first_of_list() + self.register;
+        let n = usize::from(line.checked_sub(first)?) + self.page_offset;
+        self.view
+            .cache_lines(0, ui.columns, &ui.texts)
+            .get(n)
+            .and_then(|l| l.row)
+    }
+
+    /// The first line of the page that keeps its cursor in `room` lines.
+    fn page_offset_for(
+        lines: &[crate::binary_cache::PageLine],
+        cursor: usize,
+        room: usize,
+    ) -> usize {
+        if lines.len() <= room || room == 0 {
+            return 0;
+        }
+        let at = lines
+            .iter()
+            .position(|l| l.row == Some(cursor))
+            .unwrap_or(0);
+        at.saturating_sub(room - 1).min(lines.len() - room)
+    }
+
+    /// What the binary cache's page asked of this door: the question on this
+    /// window's line, a sentence, a change — and root's netrc, a root gesture
+    /// of this window's asked in the footer's sudo bar (the deed goes down
+    /// the footer's socket, off this loop), whose verdict this window says
+    /// when it comes ([`UpdateWindow::netrc_came`]) — a footer that is not
+    /// there included (`Why::NoFooter`).
+    fn cache_errand(&mut self, ui: &mut Ui, e: crate::binary_cache::Errand) {
+        use crate::binary_cache::Errand as Page;
+        match e {
+            Page::Ask(line) => ui.ask(line),
+            Page::Say(k) => ui.say(ui.texts.t(k)),
+            Page::Edit(edit) => match &mut self.reach {
+                Reach::Machine => {
+                    let (Some(places), Some(page)) =
+                        (self.view.cache_places().cloned(), self.view.cache_page())
+                    else {
+                        return;
+                    };
+                    let readings = page.readings.clone();
+                    let applied = crate::binary_cache::apply(&edit, &places, &readings, &ui.texts);
+                    self.view.cache_reread();
+                    let mut said = applied.said;
+                    if applied.netrc {
+                        self.netrc_asked = Some(crate::binary_cache::now_ms());
+                        crate::binary_cache::door(
+                            places,
+                            crate::sudo_bar::Gate::window().gesture(crate::sudo_bar::Asker::Update),
+                            |_| {},
+                        );
+                        let footer = ui.texts.t(key::BINARY_CACHE_SAID_NETRC_FOOTER);
+                        said = if said.is_empty() {
+                            footer
+                        } else {
+                            format!("{said} {footer}")
+                        };
+                    }
+                    if !said.is_empty() {
+                        ui.say(said);
+                    }
+                }
+                Reach::Kept(asked) => {
+                    asked.push(format!(
+                        "would have changed the binary cache: {}",
+                        edit.word()
+                    ));
+                }
+            },
+            Page::Nothing | Page::Moved | Page::Close => {}
+        }
+        self.measure(ui);
+    }
+
+    /// What came of root's netrc this window asked for, said here once its
+    /// gesture left the verdict — a verdict older than the asking is another
+    /// gesture's.
+    fn netrc_came(&mut self, ui: &mut Ui) {
+        let (Some(asked), Some(page)) = (self.netrc_asked, self.view.cache_page()) else {
+            return;
+        };
+        if let Some(v) = page.readings.verdict
+            && v.at_ms >= asked
+        {
+            self.netrc_asked = None;
+            ui.say(crate::binary_cache::came_said(v.came, &ui.texts));
+        }
     }
 
     /// Carries out what the view asked for — the footer's `update_errand`, on
@@ -1578,11 +3272,54 @@ impl UpdateWindow {
             }
             // STARTED FROM HERE, through the door the footer's `LEADER s u n`
             // goes through, and said here in its words.
+            // AND FOLLOWED, when the brain took it: held for a metered way
+            // out, the question comes (`heard_the_brain`) — now, when the
+            // brain already holds a scheduled run that way.
             Errand::Start => match &mut self.reach {
-                Reach::Machine => ui.say(ui.texts.t(said_of(begin()))),
-                Reach::Kept(asked) => {
-                    asked.push(format!("would have asked for a run of {}", module::ID))
+                Reach::Machine => {
+                    let started = begin();
+                    ui.say(ui.texts.t(said_of(started)));
+                    if started == Started::Brain {
+                        self.followed = Some(Followed::now());
+                        self.heard_the_brain(ui);
+                    }
                 }
+                Reach::Kept(asked) => {
+                    asked.push(format!("would have asked for a run of {}", module::ID));
+                    // THE SCENE'S BRAIN HOLDS IT for a metered way out.
+                    if self.held_metered {
+                        self.view.ask_metered();
+                        self.measure(ui);
+                    }
+                }
+            },
+            // THE PERSON SAID YES TO WHAT IT SPENDS: started here, the
+            // brain's queued run taken out first.
+            Errand::StartHere { on_battery } => match &mut self.reach {
+                Reach::Machine => {
+                    let started = begin_anyway(self.mind.as_ref(), on_battery);
+                    ui.say(ui.texts.t(said_anyway(started, on_battery)));
+                }
+                Reach::Kept(asked) => asked.push(format!(
+                    "would have started a run of {} here, {}",
+                    module::ID,
+                    if on_battery {
+                        "on battery"
+                    } else {
+                        "on this connection"
+                    }
+                )),
+            },
+            Errand::NotStarted => ui.say(ui.texts.t(NOT_STARTED)),
+            Errand::KeptWaiting => ui.say(ui.texts.t(KEPT_WAITING)),
+            // THE BELONGINGS' WINDOW, this door's twin of the footer's
+            // `LEADER s v`: the footer opens it, and this window stays.
+            Errand::OpenBelongings => match &mut self.reach {
+                Reach::Machine => ui.tell_the_footer(crate::belongings::WINDOW_COMMAND, None),
+                Reach::Kept(asked) => asked.push(format!(
+                    "would have asked the footer for {}",
+                    crate::belongings::WINDOW_COMMAND
+                )),
             },
             Errand::Answer(proceeding) => match &mut self.reach {
                 Reach::Machine => {
@@ -1594,6 +3331,7 @@ impl UpdateWindow {
                     if proceeding { "proceed" } else { "abort" }
                 )),
             },
+            Errand::Cache(e) => self.cache_errand(ui, e),
             Errand::Close => ui.quit = true,
         }
         ui.ask_paint();
@@ -1637,10 +3375,24 @@ impl Content for UpdateWindow {
         CONTENT_MARGIN
     }
 
+    /// THE BINARY CACHE'S QUESTIONS, typed on this window's line — the
+    /// footer's minibuffer answers into the same `View::cache_answered`.
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        let errand = self.view.cache_answered(id, text);
+        self.measure(ui);
+        self.apply(ui, errand);
+    }
+
+    /// The line was let go: the page's question goes with it.
+    fn unanswered(&mut self, ui: &mut Ui, _: &'static str) {
+        self.view.cache_unanswered();
+        ui.ask_paint();
+    }
+
     /// THE KEYS THE FOOTER TEACHES, on this window's header — every one a
     /// click, `u`, `a` and `p` included.
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
-        crate::chrome::hint_of(OF_THE_VIEW, &ui.texts)
+        crate::chrome::hint_of(self.view.taught(), &ui.texts)
     }
 
     fn resized(&mut self, ui: &mut Ui) {
@@ -1697,21 +3449,82 @@ impl Content for UpdateWindow {
                 foot: false,
             };
 
-        // THE SECOND REGISTER — what the step under the cursor really is —
-        // WRAPPED WHOLE, on the lines `measure` counted for it.
-        for (n, said) in self
-            .view
-            .register_lines(columns, &texts)
-            .into_iter()
-            .take(usize::from(self.register))
-            .enumerate()
-        {
-            canvas.spans.push(span(
-                said,
-                margin,
-                first + u16::try_from(n).unwrap_or(0),
-                tokens::color::TEXT_SECONDARY,
-            ));
+        // THE HEAD — the question on battery, or the second register (what
+        // the step under the cursor really is) — and what the machine's
+        // records say, WRAPPED WHOLE, on the lines `measure` counted for it.
+        // A line that takes something lights under the pointer, as a step
+        // does: the pointer lights what the click takes.
+        // A SENTENCE WRAPPED OVER TWO LINES IS ONE CONTROL: the pointer on
+        // either lights both — what a click takes is the sentence, and the
+        // seat carries the line it rests on.
+        let steps_len = self.view.steps().len();
+        let heads = self.view.top_lines(columns, &texts);
+        let target_of_row = |row: Option<usize>| {
+            row.and_then(|r| r.checked_sub(steps_len))
+                .and_then(|h| heads.get(h))
+                .and_then(|l| l.target)
+        };
+        for (n, head) in heads.iter().take(usize::from(self.register)).enumerate() {
+            let y = first + u16::try_from(n).unwrap_or(0);
+            if head.target.is_some()
+                && let Some((color, _)) = canvas
+                    .lit
+                    .iter()
+                    .find(|(_, under)| target_of_row(*under) == head.target)
+            {
+                canvas.under.push(ronoctua_render::quad::Quad {
+                    x: 0.0,
+                    y: f32::from(y) * line_px,
+                    width,
+                    height: line_px,
+                    color: *color,
+                });
+            }
+            canvas
+                .spans
+                .push(span(head.text.clone(), margin, y, head.color));
+        }
+
+        // THE BINARY CACHE'S PAGE, in place of the steps and the output: its
+        // heading and its rows under the head, the cursor a colour and the
+        // row under the pointer lit — from the lines the pointer reads too
+        // (`cache_row_at`).
+        if let Some(page) = self.view.cache_page() {
+            let below = first + self.register;
+            let lines = self.view.cache_lines(0, columns, &texts);
+            // A WINDOW TOO SHORT FOR THE PAGE keeps its cursor in sight: the
+            // page follows the cursor, which the arrows and the wheel walk.
+            let room = usize::from(ui.lines.saturating_sub(below));
+            self.page_offset = Self::page_offset_for(&lines, page.page.cursor(), room);
+            for (n, l) in lines.into_iter().skip(self.page_offset).enumerate() {
+                let y = below + u16::try_from(n).unwrap_or(u16::MAX);
+                if y >= ui.lines {
+                    break;
+                }
+                if let Some(row) = l.row
+                    && let Some((color, _)) = canvas
+                        .lit
+                        .iter()
+                        .find(|(_, under)| *under == Some(CACHE_ROWS + row))
+                {
+                    canvas.under.push(ronoctua_render::quad::Quad {
+                        x: 0.0,
+                        y: f32::from(y) * line_px,
+                        width,
+                        height: line_px,
+                        color: *color,
+                    });
+                }
+                for f in l.fields {
+                    canvas.spans.push(span(f.text, margin + f.at, y, f.color));
+                }
+            }
+            // NO BAR: the page fits, so no column of it is a bar's.
+            ui.room = crate::chrome::Room {
+                width,
+                bar_from: None,
+            };
+            return;
         }
 
         // THE STEPS, only the ones that fit.
@@ -1739,7 +3552,9 @@ impl Content for UpdateWindow {
             // AND THE BAND IS THE WHOLE WIDTH: the only bar this window draws
             // is the output's, below the table, so no column of these rows is
             // a bar's.
-            let band = if row == self.view.cursor() {
+            // WHILE THE QUESTION ON BATTERY IS ASKED the cursor is on its
+            // answers, and no step wears the cursor's band.
+            let band = if row == self.view.cursor() && self.view.asking().is_none() {
                 Some(tokens::color::SURFACE_SELECTION)
             } else {
                 canvas
@@ -1862,7 +3677,9 @@ impl UpdateWindow {
                         dragged =
                             Some(crate::chrome::list_offset_at(scroll, top, bar_w, bar_h, py));
                     } else {
-                        hand.row_under_pointer = self.at(ui, e.position.0, e.position.1);
+                        hand.row_under_pointer = self
+                            .target_at(ui, e.position.0, e.position.1)
+                            .and_then(|t| self.lit_row_of(ui, t));
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -1888,8 +3705,8 @@ impl UpdateWindow {
                         hand.dragging = true;
                         dragged =
                             Some(crate::chrome::list_offset_at(scroll, top, bar_w, bar_h, py));
-                    } else if let Some(row) = self.at(ui, e.position.0, e.position.1) {
-                        let errand = self.view.clicked(row);
+                    } else if let Some(target) = self.target_at(ui, e.position.0, e.position.1) {
+                        let errand = self.view.clicked(target);
                         self.apply(ui, errand);
                     }
                 }
@@ -1934,7 +3751,13 @@ impl UpdateWindow {
             return;
         }
         if by != 0 {
-            if over_the_steps {
+            // ON THE BINARY CACHE'S PAGE the wheel walks its rows, once a
+            // notch, as the arrows do — and the page follows its cursor.
+            if self.view.cache_page().is_some() {
+                let press = if by > 0 { Press::Down } else { Press::Up };
+                let errand = self.view.key(press);
+                self.apply(ui, errand);
+            } else if over_the_steps {
                 // THE WHEEL DOES WHAT THE ARROW DOES, on whichever half it is
                 // resting over — the rule this project applies to every
                 // pointer: a second meaning would be a door only the mouse
@@ -2090,7 +3913,27 @@ mod tests {
         for word in ["off", "rehearsed", "ran", "failed", "stopped"] {
             assert!(verdict_of(word).is_some(), "`{word}` was not understood");
         }
-        for kind in ["always", "binary", "directory", "writable-file", "network"] {
+        assert_eq!(
+            verdict_of("declined-did-not-boot"),
+            Some(Verdict::Declined("did-not-boot".to_owned()))
+        );
+        assert_eq!(verdict_of("declined-"), None);
+        assert_eq!(
+            verdict_of("failed-build-failed"),
+            Some(Verdict::Refused("build-failed".to_owned()))
+        );
+        assert_eq!(verdict_of("failed-"), None);
+        for kind in [
+            "always",
+            "binary",
+            "directory",
+            "writable-file",
+            "network",
+            "file",
+            "power",
+            "free-space",
+            "not-held",
+        ] {
             assert_eq!(
                 verdict_of(&format!("skipped-{kind}")),
                 Some(Verdict::Skipped(kind.to_owned())),
@@ -2215,6 +4058,8 @@ mod tests {
             Verdict::Off,
             Verdict::Skipped("writable-file".to_owned()),
             Verdict::Rehearsed,
+            Verdict::Declined("did-not-boot".to_owned()),
+            Verdict::Refused("build-failed".to_owned()),
             Verdict::Stopped,
             Verdict::Pending,
         ];
@@ -2287,6 +4132,31 @@ mod tests {
         }
     }
 
+    /// FAILS IF: the binary cache's page, in a window too short for it,
+    /// leaves its cursor's row out of sight — or scrolls a page that fits.
+    #[test]
+    fn the_cache_page_follows_its_cursor_in_a_short_window() {
+        let line = |row| crate::binary_cache::PageLine {
+            fields: Vec::new(),
+            row,
+        };
+        let lines: Vec<_> = [None, None]
+            .into_iter()
+            .chain((0..9).map(Some))
+            .map(line)
+            .collect();
+        assert_eq!(UpdateWindow::page_offset_for(&lines, 8, 20), 0, "it fits");
+        for (cursor, room) in [(0, 4), (5, 4), (8, 4), (8, 1), (3, 6)] {
+            let offset = UpdateWindow::page_offset_for(&lines, cursor, room);
+            let at = lines.iter().position(|l| l.row == Some(cursor)).unwrap();
+            assert!(
+                (offset..offset + room).contains(&at),
+                "cursor {cursor} in {room} lines from {offset}"
+            );
+            assert!(offset + room <= lines.len());
+        }
+    }
+
     /// THE THREE COMMANDS ARE THIS FILE'S, and the footer finds each by the
     /// one question it asks — so neither it nor the leader spells an id.
     #[test]
@@ -2297,7 +4167,9 @@ mod tests {
                 .register(*c)
                 .expect("a command the registry refuses");
         }
-        assert_eq!(COMMANDS.len(), 3);
+        // THE UPDATE'S THREE, and the binary cache's five (its page's door,
+        // its questions and root's netrc — whose password the sudo bar asks).
+        assert_eq!(COMMANDS.len(), 8);
         for c in COMMANDS {
             assert!(order_of(c.id).is_some(), "`{}` is not dispatched", c.id);
         }
@@ -2310,9 +4182,12 @@ mod tests {
             assert!(order_of(id).is_some(), "`{id}` is bound and not ours");
             assert!(argument.is_none());
         }
+        // EVERY ONE HAS A KEY, but the binary cache's questions, which its
+        // page's rows ask (`leader::BY_NAME_ONLY`).
         for c in COMMANDS {
             assert!(
-                BINDINGS.iter().any(|(_, id, _)| *id == c.id),
+                BINDINGS.iter().any(|(_, id, _)| *id == c.id)
+                    || crate::leader::BY_NAME_ONLY.contains(&c.id),
                 "`{}` has no key",
                 c.id
             );
@@ -2341,6 +4216,8 @@ mod tests {
             Verdict::Off,
             Verdict::Skipped("binary".to_owned()),
             Verdict::Rehearsed,
+            Verdict::Declined("did-not-boot".to_owned()),
+            Verdict::Refused("build-failed".to_owned()),
             Verdict::Stopped,
             Verdict::Pending,
         ] {
@@ -2418,12 +4295,22 @@ mod tests {
         assert_eq!(v.key(Press::Abort), Errand::Answer(false));
         assert_eq!(v.key(Press::Proceed), Errand::Answer(true));
         assert_eq!(v.key(Press::Escape), Errand::Close);
+        assert_eq!(
+            v.key(Press::Enter),
+            Errand::Nothing,
+            "`RET` on a step does nothing more"
+        );
         // A CLICK PUTS THE CURSOR ON THE STEP; on the step it is on, like
         // `RET`, it does nothing more.
-        assert_eq!(v.clicked(1), Errand::Moved);
+        assert_eq!(v.clicked(Target::Step(1)), Errand::Moved);
         assert_eq!(v.cursor(), 1);
-        assert_eq!(v.clicked(1), Errand::Nothing);
-        assert_eq!(v.clicked(999), Errand::Nothing);
+        assert_eq!(v.clicked(Target::Step(1)), Errand::Nothing);
+        assert_eq!(v.clicked(Target::Step(999)), Errand::Nothing);
+        assert_eq!(
+            v.clicked(Target::Answer(true)),
+            Errand::Nothing,
+            "no question, no answer"
+        );
     }
 
     /// THE FOOTER'S REGION IS ONE LIST — the register, the steps, air and the
@@ -2440,7 +4327,11 @@ mod tests {
         let register = v.region_cursor(80, &t);
         assert!(register >= 1, "the second register has no line");
         for (i, row) in whole.iter().enumerate().skip(register).take(steps) {
-            assert_eq!(row.step, Some(i - register), "row {i} is not its step");
+            assert_eq!(
+                row.target,
+                Some(Target::Step(i - register)),
+                "row {i} is not its step"
+            );
         }
         // NOTHING SAID YET is said, once, under a line of air.
         assert_eq!(whole.len(), register + steps + 2);
@@ -2485,17 +4376,24 @@ mod tests {
         let lit = |v: &View| -> Vec<usize> {
             v.region_rows(0, usize::MAX, 80, &t)
                 .iter()
-                .filter(|r| r.step.is_some() && r.fields.iter().any(|f| f.color == accent))
-                .filter_map(|r| r.step)
+                .filter(|r| r.fields.iter().any(|f| f.color == accent))
+                .filter_map(|r| match r.target {
+                    Some(Target::Step(n)) => Some(n),
+                    _ => None,
+                })
                 .collect()
         };
         assert_eq!(lit(&v), vec![0]);
-        let before = v.region_cursor(80, &t);
+        // THE STEP'S PLACE AMONG THE STEPS moves by one; the head above them
+        // is the new step's sentence, which wraps to its own length.
+        let (_, room) = crate::power::extent(80);
+        let below_the_head = |v: &View| v.region_cursor(80, &t) - v.top_lines(room, &t).len();
+        let before = below_the_head(&v);
         v.key(Press::Down);
         assert_eq!(lit(&v), vec![1]);
         let rows = v.region_rows(0, usize::MAX, 80, &t);
-        assert_eq!(rows[v.region_cursor(80, &t)].step, Some(1));
-        assert!(v.region_cursor(80, &t) >= before);
+        assert_eq!(rows[v.region_cursor(80, &t)].target, Some(Target::Step(1)));
+        assert_eq!(below_the_head(&v), before + 1);
     }
 
     /// STARTING SAYS WHICH DOOR IT WENT THROUGH, in both doors' words.
@@ -2680,5 +4578,473 @@ mod tests {
         typed(&mut w, &mut ui, "<down>");
         assert_eq!(w.view.cursor(), 2);
         assert!(ui.message.is_none());
+    }
+
+    /// A machine running off a battery below the sequence's floor.
+    fn flat() -> module::Charge {
+        module::Charge {
+            discharging: true,
+            percent: Some(module::battery_floor().expect("a floor") - 1),
+        }
+    }
+
+    /// A RUN BY HAND BELOW THE FLOOR ASKS FIRST, the no first and the
+    /// cursor born on it: `u` opens the question and starts nothing; the
+    /// arrows move between the two answers, `RET` answers the one under the
+    /// cursor, `Esc` is the no. On mains — or above the floor — `u` starts.
+    #[test]
+    fn a_run_by_hand_below_the_floor_asks_with_the_no_first() {
+        let t = texts();
+        let mut v = a_view().on_charge(flat());
+        assert_eq!(
+            v.key(Press::Start),
+            Errand::Moved,
+            "it started without asking"
+        );
+        let q = v.asking().expect("a question");
+        assert!(!q.yes, "the cursor was not born on the no");
+        let head = v.top_lines(80, &t);
+        let answers: Vec<&TopLine> = head.iter().filter(|l| l.target.is_some()).collect();
+        assert_eq!(answers.len(), 2);
+        assert_eq!(
+            answers[0].target,
+            Some(Target::Answer(false)),
+            "the no is not first"
+        );
+        assert_eq!(answers[1].target, Some(Target::Answer(true)));
+        assert_eq!(
+            answers[0].color,
+            tokens::color::TEXT_HERE_ACTS,
+            "the cursor is a colour"
+        );
+        let said: String = head
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let Cost::Battery(Some(charge)) = q.cost else {
+            panic!("not the battery's question: {q:?}");
+        };
+        let percent = charge.to_string();
+        assert!(said.contains(&percent), "the charge is not said: {said}");
+        assert!(!said.contains('['), "a key with no text: {said}");
+
+        assert_eq!(v.key(Press::Down), Errand::Moved);
+        assert!(v.asking().expect("asked").yes);
+        assert_eq!(v.key(Press::Up), Errand::Moved);
+        assert_eq!(
+            v.key(Press::Enter),
+            Errand::NotStarted,
+            "the no started something"
+        );
+        assert!(v.asking().is_none());
+
+        v.key(Press::Start);
+        assert_eq!(v.key(Press::Escape), Errand::NotStarted, "`Esc` is the no");
+        v.key(Press::Start);
+        v.key(Press::Down);
+        assert_eq!(v.key(Press::Enter), Errand::StartHere { on_battery: true });
+
+        // THE POINTER: the first click on an answer puts the cursor there,
+        // the second answers — invariant 19.
+        v.key(Press::Start);
+        assert_eq!(v.clicked(Target::Answer(true)), Errand::Moved);
+        assert_eq!(
+            v.clicked(Target::Answer(true)),
+            Errand::StartHere { on_battery: true }
+        );
+
+        let mut plugged = a_view();
+        assert_eq!(
+            plugged.key(Press::Start),
+            Errand::Start,
+            "on mains it asked"
+        );
+        let mut above = a_view().on_charge(module::Charge {
+            discharging: true,
+            percent: module::battery_floor(),
+        });
+        assert_eq!(
+            above.key(Press::Start),
+            Errand::Start,
+            "at the floor it asked"
+        );
+    }
+
+    /// THE QUESTION IS ONE LIST IN THE FOOTER TOO: its answers are rows a
+    /// click takes, and the page follows the answer under the cursor.
+    #[test]
+    fn the_footers_region_asks_the_same_question() {
+        let t = texts();
+        let mut v = a_view().on_charge(flat());
+        v.key(Press::Start);
+        let rows = v.region_rows(0, usize::MAX, 80, &t);
+        let at = v.region_cursor(80, &t);
+        assert_eq!(rows[at].target, Some(Target::Answer(false)));
+        v.key(Press::Down);
+        let at = v.region_cursor(80, &t);
+        assert_eq!(rows[at].target, Some(Target::Answer(true)));
+        assert_eq!(rows.len(), v.region_len(80, &t));
+    }
+
+    /// Records that say everything a row can say.
+    fn every_record() -> module::Records {
+        module::Records {
+            conflicts: 2,
+            held: vec![module::Held {
+                id: "nix:hello".to_owned(),
+                why: module::HeldWhy::BuildFailed,
+            }],
+            trial: Some(module::TrialOutcome::Failed),
+            no_trial: Some(module::NoTrial::NotInMenu),
+            hold: Some(module::HeldAt {
+                rev: "613862c5a0ff".to_owned(),
+                since: "2026-10-05T12:00:00Z".to_owned(),
+            }),
+        }
+    }
+
+    /// WHAT THE MACHINE'S RECORDS SAY is on top of both doors, each only
+    /// when it is there: the conflicts with the keys that open them (and a
+    /// click that does), what the verification held and why, the boot
+    /// trial in the machine's words, why there is none, and a hold with its
+    /// short revision and its day.
+    #[test]
+    fn the_records_are_said_above_the_steps_in_both_doors() {
+        let t = texts();
+        let v = a_view().with_records(every_record(), "SUPER s v".to_owned());
+        let head = v.top_lines(200, &t);
+        let said: String = head
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for needle in [
+            "SUPER s v",
+            "nix:hello",
+            &t.t(key::SYSTEM_UPDATE_HELD_BUILD_FAILED),
+            &t.t(key::MACHINE_TRIAL_FAILED),
+            &t.t(key::MACHINE_NO_TRIAL_NOT_IN_MENU),
+            "613862c ",
+            "2026-10-05",
+        ] {
+            assert!(said.contains(needle), "`{needle}` is not said: {said}");
+        }
+        assert!(!said.contains("613862c5"), "the revision was not shortened");
+        assert!(!said.contains("T12:00"), "the stamp was not made a day");
+        assert!(!said.contains('['), "a key with no text: {said}");
+        assert!(
+            head.iter().any(|l| l.target == Some(Target::Belongings)),
+            "the conflicts' line takes nothing"
+        );
+        // THE SAME LINES, IN THE FOOTER'S REGION, above its steps.
+        let rows = v.region_rows(0, usize::MAX, 200, &t);
+        let first_step = rows
+            .iter()
+            .position(|r| matches!(r.target, Some(Target::Step(_))))
+            .expect("steps");
+        let region: String = rows[..first_step]
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            region.contains("nix:hello") && region.contains("SUPER s v"),
+            "{region}"
+        );
+        let mut v = v;
+        assert_eq!(v.clicked(Target::Belongings), Errand::OpenBelongings);
+        // AND NOTHING THERE IS NOTHING SAID.
+        let quiet = a_view();
+        assert_eq!(quiet.top_lines(200, &t), {
+            let mut only_register = Vec::new();
+            for said in quiet.register_lines(200, &t) {
+                only_register.push(TopLine {
+                    text: said,
+                    color: tokens::color::TEXT_SECONDARY,
+                    target: None,
+                });
+            }
+            only_register
+        });
+    }
+
+    /// A PHOTOGRAPH'S WINDOW STARTS NOTHING ON BATTERY EITHER, and opens no
+    /// belongings: both are kept, and said nowhere as if they had gone out.
+    #[test]
+    fn a_photographs_yes_and_its_belongings_reach_nothing() {
+        let mut w = photographed(&[], "");
+        w.view = w
+            .view
+            .clone()
+            .on_charge(flat())
+            .with_records(every_record(), String::new());
+        let mut ui = Ui::for_tests(texts());
+        typed(&mut w, &mut ui, "u");
+        typed(&mut w, &mut ui, "<down>");
+        typed(&mut w, &mut ui, "RET");
+        let errand = w.view.clicked(Target::Belongings);
+        w.apply(&mut ui, errand);
+        let kept = w.would_have();
+        assert_eq!(kept.len(), 2, "{kept:?}");
+        assert!(kept[0].contains("on battery"), "{kept:?}");
+        assert!(
+            kept[1].contains(crate::belongings::WINDOW_COMMAND),
+            "{kept:?}"
+        );
+        assert!(ui.orders().is_empty(), "the footer was told");
+    }
+
+    /// A REFUSAL OF THE MACHINE'S PROGRAM SAYS WHY, in the machine's words:
+    /// every reason it can give has its sentence, the cursor's register
+    /// carries it, and a word that is not the machine's says nothing more.
+    #[test]
+    fn a_refusal_says_the_machines_reason() {
+        let t = texts();
+        for why in module::MachineRefusal::ALL {
+            let k = refusal_key(why.id()).expect("every reason of the machine has a sentence");
+            assert!(!t.t(k).starts_with('['), "{k}");
+        }
+        assert_eq!(refusal_key("a-word-the-machine-never-says"), None);
+        let step = &module::steps()[0];
+        let said = cursor_explains(step, &Verdict::Refused("build-failed".to_owned()), &t);
+        assert!(
+            said.contains(&t.t(key::MACHINE_REFUSED_BUILD_FAILED)),
+            "{said}"
+        );
+        let plain = cursor_explains(step, &Verdict::Refused("nonsense".to_owned()), &t);
+        assert_eq!(plain, cursor_explains(step, &Verdict::Failed, &t));
+    }
+
+    /// WHAT STARTING IT HERE SAID is its own sentence — on battery, on this
+    /// connection — in both doors, and so are the two noes.
+    #[test]
+    fn starting_it_here_says_so() {
+        let t = texts();
+        for on_battery in [true, false] {
+            assert_ne!(
+                t.t(said_anyway(Started::Systemd, on_battery)),
+                t.t(said_of(Started::Systemd))
+            );
+            assert_eq!(
+                said_anyway(Started::Nowhere, on_battery),
+                said_of(Started::Nowhere)
+            );
+        }
+        assert_ne!(
+            said_anyway(Started::Systemd, true),
+            said_anyway(Started::Systemd, false)
+        );
+        for k in [
+            said_anyway(Started::Systemd, true),
+            said_anyway(Started::Systemd, false),
+            NOT_STARTED,
+            KEPT_WAITING,
+        ] {
+            assert!(!t.t(k).starts_with('['), "{k}");
+        }
+    }
+
+    /// The update's row in a mind: queued, held as given, or running.
+    fn a_mind_with(
+        running: bool,
+        queued: bool,
+        hold: Option<ronoctua_brain::Hold>,
+        now: i64,
+    ) -> ronoctua_brain::Mind {
+        let mut mind = a_mind(
+            if running { module::ID } else { "" },
+            if queued { &[module::ID] } else { &[] },
+        );
+        mind.now = now;
+        mind.tasks.push(ronoctua_brain::TaskState {
+            id: module::ID.to_owned(),
+            kind: ronoctua_brain::task::Kind::Routine,
+            standing: ronoctua_brain::Standing::Queued,
+            enabled: true,
+            interval_days: 7,
+            part_of_day: ronoctua_brain::PartOfDay::Afternoon,
+            next: 0,
+            hold,
+            why_not: String::new(),
+            last: None,
+            history: Vec::new(),
+            steps: Vec::new(),
+            calendar: true,
+            name_key: String::new(),
+            does_key: String::new(),
+            why_key: String::new(),
+            screen_generation: 0,
+            actions: Vec::new(),
+        });
+        mind
+    }
+
+    /// A RUN ASKED FOR BY HAND IS FOLLOWED IN THE BRAIN'S MIND, and the
+    /// brain's hold for a metered way out — how it waits on a scheduled run
+    /// — is what turns it into the question. A mind from before the ask
+    /// says nothing; a run held by something else waits; running, or gone
+    /// from the queue once seen, is over; and one never seen is let go.
+    ///
+    /// THE DEFECT THIS CATCHES: `u` on a phone's hotspot said "queued — it
+    /// starts when the machine is free" and the brain held it for as long as
+    /// the hotspot lasted, the person never asked.
+    #[test]
+    fn a_run_asked_by_hand_and_held_for_the_network_becomes_the_question() {
+        use ronoctua_brain::Hold;
+        let mut f = Followed::since(1000);
+        assert_eq!(
+            f.heard(&a_mind_with(false, false, None, 1000)),
+            Heard::Waiting,
+            "a mind from before the ask"
+        );
+        assert_eq!(
+            f.heard(&a_mind_with(false, true, Some(Hold::Ram), 1001)),
+            Heard::Waiting,
+            "held by the gate"
+        );
+        assert_eq!(
+            f.heard(&a_mind_with(false, true, Some(module::HOLD_METERED), 1002)),
+            Heard::Metered
+        );
+        assert_eq!(
+            f.heard(&a_mind_with(false, false, None, 1003)),
+            Heard::Over,
+            "gone from the queue once seen"
+        );
+        let mut f = Followed::since(1000);
+        assert_eq!(
+            f.heard(&a_mind_with(true, false, None, 1001)),
+            Heard::Over,
+            "running"
+        );
+        let mut f = Followed::since(1000);
+        assert_eq!(
+            f.heard(&a_mind_with(false, false, None, 1000 + FOLLOWED_FOR_S + 1)),
+            Heard::Over,
+            "a run never seen is followed for ever"
+        );
+        // A SCHEDULED RUN ALREADY HELD that way, when `u` is pressed: asked
+        // at once, from the mind the door already has.
+        let mut f = Followed::since(1000);
+        assert_eq!(
+            f.heard(&a_mind_with(false, true, Some(module::HOLD_METERED), 900)),
+            Heard::Metered
+        );
+    }
+
+    /// THE METERED QUESTION, the no first: the no leaves the run in the
+    /// queue, the yes starts it here on mains — and on a battery below the
+    /// floor asks about the battery next, whose no also leaves it queued.
+    #[test]
+    fn the_metered_question_starts_it_here_or_leaves_it_queued() {
+        let t = texts();
+        let mut v = a_view();
+        v.ask_metered();
+        let q = v.asking().expect("a question");
+        assert_eq!((q.cost, q.queued, q.yes), (Cost::Metered, true, false));
+        let head = v.top_lines(80, &t);
+        let answers: Vec<&TopLine> = head.iter().filter(|l| l.target.is_some()).collect();
+        assert_eq!(answers.len(), 2);
+        assert_eq!(
+            answers[0].target,
+            Some(Target::Answer(false)),
+            "the no is not first"
+        );
+        assert_eq!(answers[0].text, t.t(key::SYSTEM_UPDATE_ANSWER_NO_METERED));
+        let said: String = head
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let expected: Vec<String> = [
+            t.t(key::SYSTEM_UPDATE_ASK_METERED),
+            t.t(key::SYSTEM_UPDATE_ANSWER_NO_METERED),
+            t.t(key::SYSTEM_UPDATE_ANSWER_YES_METERED),
+        ]
+        .join(" ")
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+        let got: Vec<String> = said.split_whitespace().map(str::to_owned).collect();
+        assert_eq!(got, expected, "the question is not the metered one, whole");
+        assert_eq!(
+            v.key(Press::Escape),
+            Errand::KeptWaiting,
+            "the no stays in the queue"
+        );
+        v.ask_metered();
+        assert_eq!(v.clicked(Target::Answer(true)), Errand::Moved);
+        assert_eq!(
+            v.clicked(Target::Answer(true)),
+            Errand::StartHere { on_battery: false }
+        );
+
+        let mut flat_one = a_view().on_charge(flat());
+        flat_one.ask_metered();
+        flat_one.key(Press::Down);
+        assert_eq!(
+            flat_one.key(Press::Enter),
+            Errand::Moved,
+            "the battery was not asked next"
+        );
+        let q = flat_one.asking().expect("the battery's question");
+        assert!(
+            matches!(q.cost, Cost::Battery(Some(_))) && q.queued && !q.yes,
+            "{q:?}"
+        );
+        assert_eq!(
+            flat_one.key(Press::Enter),
+            Errand::KeptWaiting,
+            "its no left the queue"
+        );
+        flat_one.ask_metered();
+        flat_one.key(Press::Down);
+        flat_one.key(Press::Enter);
+        flat_one.key(Press::Down);
+        assert_eq!(
+            flat_one.key(Press::Enter),
+            Errand::StartHere { on_battery: true }
+        );
+    }
+
+    /// A SENTENCE WRAPPED OVER ROWS IS ONE CONTROL: the other rows that take
+    /// the same click — and only those.
+    #[test]
+    fn a_wrapped_sentence_is_one_control() {
+        let rows = [
+            None,
+            Some(Target::Belongings),
+            Some(Target::Belongings),
+            Some(Target::Step(0)),
+            Some(Target::Step(1)),
+        ];
+        assert_eq!(one_control(&rows, 1), vec![2]);
+        assert_eq!(one_control(&rows, 2), vec![1]);
+        assert!(one_control(&rows, 3).is_empty(), "a step lit another");
+        assert!(one_control(&rows, 0).is_empty());
+        assert!(one_control(&rows, 99).is_empty());
+    }
+
+    /// A PHOTOGRAPH'S WINDOW WHOSE BRAIN HOLDS THE RUN FOR THE NETWORK asks,
+    /// and what the answers would have done is kept, never done.
+    #[test]
+    fn a_photographs_metered_question_reaches_nothing() {
+        let mut w = photographed(&[], "");
+        w.held_metered = true;
+        let mut ui = Ui::for_tests(texts());
+        typed(&mut w, &mut ui, "u");
+        assert_eq!(w.view.asking().map(|q| q.cost), Some(Cost::Metered));
+        typed(&mut w, &mut ui, "RET");
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(ui.texts.t(KEPT_WAITING).as_str())
+        );
+        typed(&mut w, &mut ui, "u");
+        typed(&mut w, &mut ui, "<down>");
+        typed(&mut w, &mut ui, "RET");
+        let kept = w.would_have();
+        assert_eq!(kept.len(), 3, "{kept:?}");
+        assert!(kept[2].contains("on this connection"), "{kept:?}");
     }
 }

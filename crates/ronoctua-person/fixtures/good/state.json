@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "last-good": {
+    "toplevel": "/nix/store/abcdefghijklmnopqrstuvwxyz012345-nixos-system-noctua-26.05",
+    "entry": "nixos-generation-41.conf",
+    "distro-rev": "613862c0ffee",
+    "blessed-at": "2026-10-05T12:00:00Z"
+  },
+  "trial": {
+    "toplevel": "/nix/store/bcdefghijklmnopqrstuvwxyz0123456-nixos-system-noctua-26.05",
+    "outcome": "pending"
+  },
+  "hold": null,
+  "last-apply": {
+    "at": "2026-10-05T12:05:00Z",
+    "result": "switched"
+  }
+}

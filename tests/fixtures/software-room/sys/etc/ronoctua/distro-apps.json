@@ -1,0 +1,102 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "id": "chrome",
+      "source": "nix",
+      "desktop-ids": [
+        "google-chrome.desktop"
+      ],
+      "essential": null,
+      "group": "browser",
+      "on-this-machine": true,
+      "declined-here": false
+    },
+    {
+      "id": "emacs",
+      "source": "nix",
+      "desktop-ids": [
+        "emacs.desktop"
+      ],
+      "essential": null,
+      "group": "editor",
+      "on-this-machine": true,
+      "declined-here": false
+    },
+    {
+      "id": "blender",
+      "source": "nix",
+      "desktop-ids": [
+        "blender.desktop"
+      ],
+      "essential": null,
+      "group": "workshop",
+      "on-this-machine": false,
+      "declined-here": true
+    },
+    {
+      "id": "vlc",
+      "source": "nix",
+      "desktop-ids": [
+        "vlc.desktop"
+      ],
+      "essential": null,
+      "group": "media",
+      "on-this-machine": true,
+      "declined-here": true
+    },
+    {
+      "id": "mpv",
+      "source": "nix",
+      "desktop-ids": [
+        "mpv.desktop"
+      ],
+      "essential": null,
+      "group": "media",
+      "on-this-machine": true,
+      "declined-here": false
+    },
+    {
+      "id": "zsh",
+      "source": "nix",
+      "desktop-ids": [],
+      "essential": "the-login-shell",
+      "group": "base",
+      "on-this-machine": true,
+      "declined-here": true
+    },
+    {
+      "id": "htop",
+      "source": "nix",
+      "desktop-ids": [
+        "htop.desktop"
+      ],
+      "essential": null,
+      "group": "base",
+      "on-this-machine": true,
+      "declined-here": false
+    },
+    {
+      "id": "btop",
+      "source": "nix",
+      "desktop-ids": [
+        "btop.desktop"
+      ],
+      "essential": null,
+      "group": "base",
+      "on-this-machine": true,
+      "declined-here": false
+    },
+    {
+      "id": "ghostty",
+      "source": "nix",
+      "desktop-ids": [
+        "com.mitchellh.ghostty.desktop"
+      ],
+      "essential": null,
+      "group": "base",
+      "on-this-machine": true,
+      "declined-here": false
+    }
+  ]
+}

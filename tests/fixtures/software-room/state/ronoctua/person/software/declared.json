@@ -1,0 +1,94 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "source": "nix",
+      "id": "nix:ripgrep",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "noctua",
+      "attr": "ripgrep",
+      "unfree": false
+    },
+    {
+      "source": "flatpak",
+      "id": "flatpak:org.gnome.Calculator",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "noctua",
+      "app-id": "org.gnome.Calculator",
+      "origin": "flathub"
+    },
+    {
+      "source": "nix",
+      "id": "nix:lighttable",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop",
+      "attr": "lighttable",
+      "unfree": false
+    },
+    {
+      "source": "appimage",
+      "id": "appimage:obsidian",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop",
+      "key": "obsidian",
+      "name": "Obsidian",
+      "pin": {
+        "url": "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.6.7/Obsidian-1.6.7.AppImage",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+        "version": "v1.6.7",
+        "pinned-at": "2026-10-03T09:30:00Z"
+      },
+      "follows": {
+        "github": {
+          "repo": "obsidianmd/obsidian-releases",
+          "asset-pattern": "Obsidian-*.AppImage"
+        }
+      },
+      "icon": null
+    },
+    {
+      "source": "nix",
+      "id": "nix:krita",
+      "machines": [
+        "laptop"
+      ],
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop",
+      "attr": "krita",
+      "unfree": false
+    },
+    {
+      "source": "web",
+      "id": "web:mail",
+      "machines": null,
+      "edited-at": "2026-10-05T08:00:00Z",
+      "edited-on": "noctua",
+      "slug": "mail",
+      "name": "Mail",
+      "url": "https://mail.example.org/",
+      "profile": "Default",
+      "icon": null,
+      "category": "Network"
+    },
+    {
+      "source": "android",
+      "id": "android:org.fdroid.fdroid",
+      "machines": null,
+      "edited-at": "2026-10-03T09:30:00Z",
+      "edited-on": "laptop",
+      "package": "org.fdroid.fdroid",
+      "pin": {
+        "url": "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+        "version": "1.21.1",
+        "version-code": 1021050
+      },
+      "from": "f-droid",
+      "image": "vanilla"
+    }
+  ]
+}

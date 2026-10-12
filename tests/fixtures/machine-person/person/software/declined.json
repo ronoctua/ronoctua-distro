@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "id": "fixture-old-name",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:20Z",
+      "edited-on": "noctua-reference"
+    },
+    {
+      "id": "fixture-essential",
+      "machines": [
+        "noctua-reference"
+      ],
+      "edited-at": "2026-10-05T12:00:21Z",
+      "edited-on": "noctua-reference"
+    },
+    {
+      "id": "fixture-unknown",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:22Z",
+      "edited-on": "noctua-reference"
+    },
+    {
+      "id": "fixture-elsewhere",
+      "machines": [
+        "another-machine"
+      ],
+      "edited-at": "2026-10-05T12:00:23Z",
+      "edited-on": "noctua-reference"
+    }
+  ]
+}

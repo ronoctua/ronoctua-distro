@@ -58,6 +58,26 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
   --screens <scene>     a reading of the screens: one, two, stacked or dark
   --entry <text>        an entry of the clipboard's history, newest first —
                         repeatable
+  --mind <file>         what the brain says, as its socket sends it (one
+                        mind, JSON): the modeline's marks, the strip's
+                        notices — never this machine's brain
+  --room <folder>       the room itself, laid out as a machine's roots
+                        (home/, config/, data/, state/, cache/, runtime/,
+                        and three of the machine's own places: machine/ —
+                        the machine directory —, machine-state/ — its
+                        record's folder — and run/ for /run; each made when
+                        missing) and left as it is after — what a view
+                        reads from files, planted; without it the room is
+                        fresh and goes with the picture
+  --software <host>     the software centre's reading of the room, as the
+                        machine <host> reads it: the person's programs and
+                        declaration (state/), the system's reports (sys/)
+                        and launcher entries (share/) — no program asked,
+                        the window's camera's reading (`photograph --door
+                        software`)
+  --accounts-marks      the LLM accounts' marks, made by their brain module
+                        over the room's files (`--room`) and laid over
+                        `--mind`'s: never a mark written by hand
   --out <file>          where to write                 (default: footer.png)
   --language <id>       pt-BR or en-GB                 (default: pt-BR)
   --theme <id>          a theme of assets/themes       (default: the default)
@@ -70,10 +90,39 @@ Steps — walked in the order they appear:
   --leader              the leader, as the compositor's bind sends it
   --key <notation>      a key, as the keymap writes it: w, s, <down>, RET
   --command <id>        a command of the registry, as `ronoctua-shell
-                        command <id>` sends it";
+                        command <id>` sends it
+  --wheel <lines>       the wheel over the region, in lines (negative: up)
+  --click <line>        a press and a release on line <line> of the region
+                        as it is drawn, counted from its top (0) — twice
+                        for the second click, which acts
+  --sudo <shot>         the sudo bar up, asking: password, touch, finger,
+                        use-password, wrong, checking or window — a deed of
+                        the camera's, never a conversation
+  --sudo-lit <control>  the bar's control under a pointer: answer,
+                        use-password or cancel
+
+Three views read the scene a variable names, in their window camera's shape,
+never this machine's: RONOCTUA_PHOTOGRAPH_INCUS_SCENE (`--door incus
+--scene`), RONOCTUA_PHOTOGRAPH_SECURITY_SCENE (`--door security --state`) and
+RONOCTUA_PHOTOGRAPH_STICK_SCENE (`--door stick --scene`).";
 
 /// The variable that says the camera is already in its room.
 const IN_THE_ROOM: &str = "RONOCTUA_FOOTER_CAMERA_ROOM";
+
+/// The room's folder that stands for the machine directory.
+pub(crate) const MACHINE_DIR: &str = "machine";
+
+/// The room's folder that stands for the folder of the machine's record.
+pub(crate) const MACHINE_STATE: &str = "machine-state";
+
+/// The room this camera runs the footer in, while it does — `None`
+/// everywhere else. A view that reads an ABSOLUTE place of the machine (the
+/// update's records, its root half's report under `/run`) reads it under
+/// the room instead, so a photograph draws what was planted there and never
+/// this machine's: a room of XDG directories alone could not plant those.
+pub(crate) fn room() -> Option<std::path::PathBuf> {
+    std::env::var_os(IN_THE_ROOM).map(std::path::PathBuf::from)
+}
 
 /// The PID the window in focus is said to have: the kernel's default
 /// `pid_max`, which no process can have — so nothing under `/proc` answers
@@ -86,6 +135,14 @@ pub(crate) enum Step {
     Leader,
     Key(ronoctua_keymap::Key),
     Command(String),
+    /// The wheel over the region, in lines.
+    Wheel(i32),
+    /// A click on a line of the region as drawn, from its top.
+    Click(usize),
+    /// The sudo bar up, asking (`crate::sudo_bar::Shot`).
+    Sudo(crate::sudo_bar::Shot),
+    /// A control of the sudo bar under a pointer.
+    SudoLit(crate::sudo_bar::Control),
 }
 
 /// What the footer is given, and walked.
@@ -97,6 +154,10 @@ pub(crate) struct Scene {
     pub window: Option<ronoctua_compositor::Window>,
     pub screens: Option<ronoctua_display::Snapshot>,
     pub clipboard: Vec<ronoctua_clipboard::Entry>,
+    /// What the brain says, delivered as its socket's thread delivers it.
+    pub mind: Option<ronoctua_brain::Mind>,
+    /// The software centre's reading, delivered where its feed delivers one.
+    pub software: Option<crate::software_feed::Readings>,
     pub steps: Vec<Step>,
 }
 
@@ -121,6 +182,10 @@ struct Asked {
     local: Vec<(String, String)>,
     screens: Option<String>,
     entries: Vec<String>,
+    mind: Option<std::path::PathBuf>,
+    room: Option<std::path::PathBuf>,
+    software: Option<String>,
+    accounts_marks: bool,
     out: std::path::PathBuf,
     language: String,
     theme: tokens::theme::Theme,
@@ -145,6 +210,10 @@ fn parse(words: &[String]) -> Result<Asked> {
         local: Vec::new(),
         screens: None,
         entries: Vec::new(),
+        mind: None,
+        room: None,
+        software: None,
+        accounts_marks: false,
         out: std::path::PathBuf::from("footer.png"),
         language: "pt-BR".to_owned(),
         theme: tokens::theme::default_one(),
@@ -209,6 +278,10 @@ fn parse(words: &[String]) -> Result<Asked> {
             }
             "--screens" => me.screens = Some(value()?),
             "--entry" => me.entries.push(value()?),
+            "--mind" => me.mind = Some(std::path::PathBuf::from(value()?)),
+            "--room" => me.room = Some(std::path::PathBuf::from(value()?)),
+            "--software" => me.software = Some(value()?),
+            "--accounts-marks" => me.accounts_marks = true,
             "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
             "--language" => me.language = value()?,
             "--theme" => {
@@ -244,6 +317,30 @@ fn parse(words: &[String]) -> Result<Asked> {
                 me.steps.push(Step::Key(key));
             }
             "--command" => me.steps.push(Step::Command(value()?)),
+            "--wheel" => me
+                .steps
+                .push(Step::Wheel(number("--wheel", &value()?, -1000..=1000)?)),
+            "--click" => me
+                .steps
+                .push(Step::Click(number("--click", &value()?, 0..=1000)?)),
+            "--sudo" => {
+                let word = value()?;
+                let shot = crate::sudo_bar::Shot::of_word(&word).with_context(|| {
+                    let words: Vec<&str> =
+                        crate::sudo_bar::Shot::ALL.iter().map(|(_, w)| *w).collect();
+                    format!("`--sudo {word}` is not one of {}", words.join(", "))
+                })?;
+                me.steps.push(Step::Sudo(shot));
+            }
+            "--sudo-lit" => {
+                let word = value()?;
+                me.steps.push(Step::SudoLit(match word.as_str() {
+                    "answer" => crate::sudo_bar::Control::Answer,
+                    "use-password" => crate::sudo_bar::Control::UsePassword,
+                    "cancel" => crate::sudo_bar::Control::Cancel,
+                    _ => bail!("`--sudo-lit {word}` is not answer, use-password or cancel"),
+                }));
+            }
             other => bail!("unknown option `{other}`.\n\n{USAGE}"),
         }
     }
@@ -273,7 +370,7 @@ pub fn taken(rest: &[String]) -> ! {
         if std::env::var_os(IN_THE_ROOM).is_some() {
             run(&w).map(|()| 0)
         } else {
-            parse(&w).and_then(|_| in_a_room())
+            parse(&w).and_then(|asked| in_a_room(asked.room.as_deref()))
         }
     });
     match done {
@@ -285,15 +382,31 @@ pub fn taken(rest: &[String]) -> ! {
     }
 }
 
-/// Runs this very command again with every XDG directory in a fresh room,
-/// and gives back its exit code.
-fn in_a_room() -> Result<i32> {
-    let room = std::env::temp_dir().join(format!("ronoctua-footer-camera-{}", std::process::id()));
+/// Runs this very command again with every XDG directory in a room — a
+/// fresh one, or the one given (`--room`, kept after) — and gives back its
+/// exit code.
+fn in_a_room(given: Option<&std::path::Path>) -> Result<i32> {
+    let room = match given {
+        Some(folder) => folder
+            .canonicalize()
+            .with_context(|| format!("the room `{}`", folder.display()))?,
+        None => std::env::temp_dir().join(format!("ronoctua-footer-camera-{}", std::process::id())),
+    };
     let made = (|| -> Result<std::process::ExitStatus> {
         use std::os::unix::fs::DirBuilderExt as _;
         let mut dirs = std::fs::DirBuilder::new();
         dirs.recursive(true).mode(0o700);
-        for d in ["home", "config", "data", "state", "cache", "runtime"] {
+        for d in [
+            "home",
+            "config",
+            "data",
+            "state",
+            "cache",
+            "runtime",
+            MACHINE_DIR,
+            MACHINE_STATE,
+            "run",
+        ] {
             dirs.create(room.join(d))
                 .with_context(|| format!("could not make the room `{}`", room.display()))?;
         }
@@ -323,7 +436,9 @@ fn in_a_room() -> Result<i32> {
         }
         child.status().context("the camera in its room")
     })();
-    let _ = std::fs::remove_dir_all(&room);
+    if given.is_none() {
+        let _ = std::fs::remove_dir_all(&room);
+    }
     Ok(made?.code().unwrap_or(1))
 }
 
@@ -366,6 +481,30 @@ fn run(words: &[String]) -> Result<()> {
     let width = asked.output.0;
     std::thread::spawn(move || stand_in::serve(theirs, width));
     let conn = wayland_client::Connection::from_socket(ours).context("a connection")?;
+    // THE BRAIN'S MIND, read as its socket's line is: one JSON object.
+    let mind = asked
+        .mind
+        .as_ref()
+        .map(|file| -> Result<ronoctua_brain::Mind> {
+            let text = std::fs::read_to_string(file)
+                .with_context(|| format!("could not read `{}`", file.display()))?;
+            serde_json::from_str(&text)
+                .with_context(|| format!("`{}` is not a mind of the brain", file.display()))
+        })
+        .transpose()?;
+    // THE ACCOUNTS' MARKS, as their module makes them from the room's files
+    // — the same reading and the same colouring the brain does.
+    let mind = if asked.accounts_marks {
+        let now = crate::agents::now_s();
+        let mut mind = mind.unwrap_or_default();
+        if mind.now == 0 {
+            mind.now = now;
+        }
+        crate::agents::with_accounts_marks(&mut mind, now);
+        Some(mind)
+    } else {
+        mind
+    };
     let scene = Scene {
         texts,
         output: asked.output,
@@ -377,6 +516,22 @@ fn run(words: &[String]) -> Result<()> {
             .iter()
             .map(|e| ronoctua_clipboard::Entry::of_text(e.clone()))
             .collect(),
+        mind,
+        // THE SOFTWARE CENTRE'S READING of this very room — the window's
+        // camera's, so one room is one machine in both doors.
+        software: match asked.software.as_deref() {
+            Some(host) => {
+                let room = std::env::var_os(IN_THE_ROOM)
+                    .map(std::path::PathBuf::from)
+                    .context("the camera is not in its room")?;
+                Some(crate::software_window::camera::readings_of_room(
+                    &room,
+                    host,
+                    crate::software_window::camera::NOW,
+                )?)
+            }
+            None => None,
+        },
         steps: asked.steps.clone(),
     };
     let taken = crate::surface::photographed(&conn, scene)?;

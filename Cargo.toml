@@ -93,6 +93,18 @@ members = [
   "crates/ronoctua-security",
   "crates/ronoctua-belongings",
   "crates/ronoctua-resolve",
+  # THE 2026-10-05 WAVE: the person's machine, its data and its keys. Each is
+  # a boundary of its own (AGENTS.md's table), frozen by its first package.
+  "crates/ronoctua-person",
+  "crates/ronoctua-pq",
+  "crates/ronoctua-machine",
+  "crates/ronoctua-incus",
+  "crates/ronoctua-private",
+  "crates/ronoctua-stick",
+  "crates/ronoctua-llm",
+  # THE 2026-10-11 WAVE: the person's binary cache (Cachix) — a boundary of
+  # its own (AGENTS.md's table).
+  "crates/ronoctua-cachix",
   "crates/ronoctua-shell",
 ]
 
@@ -260,14 +272,25 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `ronoctua-world` owning a private copy of it: two TLS stacks in one workspace
 # is the defect `one-http-writer` exists to refuse, one layer up.
 #
-# `ring` and not `aws-lc-rs`: the default provider needs cmake and a Go
-# toolchain in the build closure. It is also where the WebSocket's SHA-1 and
-# ClipCascade's PBKDF2/AES-GCM come from, so the cryptography of this tree has
-# exactly one implementation behind it.
-rustls = { version = "0.23", default-features = false, features = [ "ring", "std", "tls12", "logging" ] }
+# `aws-lc-rs` and not `ring`, since 2026-10-05: `ring` has no ML-KEM, so a
+# connection through it could only ever agree a CLASSICAL key — one a record
+# taken today gives up to whoever has a quantum computer later. With
+# `prefer-post-quantum` the hello offers `X25519MLKEM768` first and X25519
+# beside it: a host that knows the hybrid gets it, and one that does not is
+# still reached (`tls-is-post-quantum-first`). The fear that kept `ring` —
+# cmake and a Go toolchain in the build — belonged to an older `aws-lc-sys`;
+# the one pinned builds with `cc` and its pregenerated bindings.
+#
+# ONE PROVIDER of the primitives this tree calls itself: the WebSocket's
+# SHA-1, ClipCascade's PBKDF2, every SHA-256 and the F-Droid index's RSA
+# signature come from `aws-lc-rs` too (declared under the wave's anchor
+# below), and `one-crypto-implementation` refuses `ring` coming back. Two
+# stay apart because no provider has what they need: `age` brings its own
+# RustCrypto for the age format, and ClipCascade's GCM takes a SIXTEEN-byte
+# nonce (`aes-gcm`, see `crates/ronoctua-clipcascade/Cargo.toml`).
+rustls = { version = "0.23", default-features = false, features = [ "aws_lc_rs", "prefer-post-quantum", "std", "tls12", "logging" ] }
 rustls-pki-types = "1"
 rustls-pemfile = "2"
-ring = "0.17"
 base64 = "0.22"
 
 # --- the 2026-09-30 wave: search, arithmetic, catalogues, belongings ----
@@ -304,6 +327,45 @@ age = { version = "0.12.1", default-features = false }
 # A secret wiped from memory when it is dropped (`ronoctua_consent::keys::Secret`).
 # Already in the lock, underneath the TLS stack.
 zeroize = "1.9.0"
+
+# --- the 2026-10-05 wave: one region per package, after its anchor -----
+# ── anchor: L01 ──
+# ── anchor: L02 ──
+# THE PRIMITIVES OUR OWN CODE CALLS — digests, PBKDF2, randomness, the RSA
+# check of an F-Droid index — from the same library rustls agrees its keys
+# with (see the TLS section above). No default features: `ring-io` and
+# `ring-sig-verify` are shims for code written against `ring`'s `untrusted`
+# inputs, and nothing here is.
+aws-lc-rs = { version = "1.18", default-features = false, features = [ "aws-lc-sys", "alloc" ] }
+# ── anchor: L07 ──
+# THE LENIENT STORES (`ronoctua-store`): WHERE a value failed to read
+# (`serde_path_to_error`) and WHICH keys a type passed over (`serde_ignored`),
+# so a broken field costs that field and a newer machine's field survives an
+# older machine's write. The repair ledger names the file it judged by its
+# SHA-256 (`sha2`, already in the lock under `age`).
+serde_path_to_error = "0.1.20"
+serde_ignored = "0.1.14"
+sha2 = "0.10.9"
+# ── anchor: L08 ──
+# THE BELONGINGS' CHUNKS: FastCDC (v2020, content-defined), so no repository
+# file reaches GitHub's limit and an edit moves few chunks. No default
+# features: the async readers would bring tokio for a synchronous engine.
+fastcdc = { version = "3.2.1", default-features = false }
+# ── anchor: L10 ──
+# THE BELONGINGS' IDENTITY KEPT FOR THE SESSION, in the kernel's keyring
+# (`@u`, a `user` key with a timeout): the `keyctl` and `add_key` system calls
+# behind a safe interface, so `ronoctua-belongings` keeps forbidding
+# `unsafe`. No default features: `std` only brings `bitflags/std`.
+linux-keyutils = { version = "0.2.5", default-features = false }
+# ── anchor: L13 ──
+# ── anchor: L14 ──
+# THE CODEX LOGS THAT COME COMPRESSED (`rollout-….jsonl.zst`), read by a zstd
+# decoder in Rust: no C library and no store path in the LLM CLI's closure.
+# `std` only — no checksum hashing (a damaged frame loses its own lines, and
+# a count is all that is read out of it).
+ruzstd = { version = "0.9", default-features = false, features = [ "std" ] }
+# ── anchor: L17 ──
+# ── anchor: L22 ──
 
 [workspace.lints.rust]
 unsafe_code = "warn"

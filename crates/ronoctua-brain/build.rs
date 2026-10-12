@@ -22,6 +22,13 @@
 //! folder added or removed since the environment was entered is a list the
 //! compiler would otherwise build wrong in silence — a module missing from
 //! the daemon, or a shim pointing at a folder that is gone.
+//!
+//! # The person's modules
+//!
+//! A machine may also compile the PERSON's modules (`my-…`), which live
+//! outside this repository: `ids.txt` says whose each module is, and a
+//! person's `module.rs` is loaded from `RONOCTUA_BRAIN_PERSON_MODULES_DIR`
+//! instead of `modules/`, compared with the table the same way.
 
 use std::{
     env, fs,
@@ -43,14 +50,46 @@ fn main() {
 /// The variable `nix/rust.nix` sets to the generated modules' directory.
 const MODULES: &str = "RONOCTUA_BRAIN_MODULES_DIR";
 
+// THE 2026-10-05 WAVE: the person's modules' directory, after its anchor.
+// ── anchor: L11 ──
+
+/// The variable `nix/rust.nix` sets to the PERSON's modules (`my-…`), when
+/// the machine has any: a copy in the store of the folders the person wrote
+/// (`$XDG_CONFIG_HOME/ronoctua/brain-modules/`), which the machine's flake
+/// hands the build. Unset — the distro's own build, the devshell, a test — is
+/// a build with none, and then the table lists none either.
+const PERSON_MODULES: &str = "RONOCTUA_BRAIN_PERSON_MODULES_DIR";
+
+/// Whose a module is — the third column of `ids.txt`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// The distro's: a folder under this crate's `modules/`.
+    Distro,
+    /// The person's: a folder under [`PERSON_MODULES`].
+    Person,
+}
+
+impl Origin {
+    fn of(word: &str) -> Option<Self> {
+        match word {
+            "distro" => Some(Self::Distro),
+            "person" => Some(Self::Person),
+            _ => None,
+        }
+    }
+}
+
 /// Writes `modules.rs`: one shim per module, then the generated registry
 /// (`IDS`, `all` and the rest), for `src/compiled.rs` to include.
 ///
-/// The ids and their Rust names come from `ids.txt`, which the generator
-/// wrote out of the same folders; nothing here derives a name. A mismatch with
-/// the folders on disk stops the build, naming each folder and what fixes it.
+/// The ids, their Rust names and whose they are come from `ids.txt`, which the
+/// generator wrote out of the same folders; nothing here derives a name. A
+/// mismatch with the folders on disk — the distro's under this crate, the
+/// person's under [`PERSON_MODULES`] — stops the build, naming each folder and
+/// what fixes it.
 fn modules(out: &Path) {
     println!("cargo:rerun-if-env-changed={MODULES}");
+    println!("cargo:rerun-if-env-changed={PERSON_MODULES}");
     let generated = PathBuf::from(env::var(MODULES).unwrap_or_else(|_| {
         panic!(
             "{MODULES} is not set.\n\
@@ -67,15 +106,27 @@ fn modules(out: &Path) {
     println!("cargo:rerun-if-changed={}", listed_at.display());
     let listed = fs::read_to_string(&listed_at)
         .unwrap_or_else(|e| panic!("could not read {listed_at:?}: {e}"));
-    // `<id> <snake>` per line, in the generator's order.
-    let named: Vec<(&str, &str)> = listed
+    // `<id> <snake> <origin>` per line, in the generator's order.
+    let named: Vec<(&str, &str, Origin)> = listed
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
-            l.split_once(' ')
-                .unwrap_or_else(|| panic!("{listed_at:?}: `{l}` is not `<id> <snake>`"))
+            let mut words = l.split(' ');
+            match (words.next(), words.next(), words.next().and_then(Origin::of), words.next()) {
+                (Some(id), Some(snake), Some(origin), None) => (id, snake, origin),
+                _ => panic!(
+                    "{listed_at:?}: `{l}` is not `<id> <snake> <origin>`, the origin `distro` or `person`"
+                ),
+            }
         })
         .collect();
+    let of = |origin: Origin| -> Vec<&str> {
+        named
+            .iter()
+            .filter(|(_, _, o)| *o == origin)
+            .map(|(id, _, _)| *id)
+            .collect()
+    };
 
     let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let folder = crate_dir.join("modules");
@@ -84,75 +135,47 @@ fn modules(out: &Path) {
     // the first module's folder appearing has to be noticed.
     let watched = if folder.is_dir() { &folder } else { &crate_dir };
     println!("cargo:rerun-if-changed={}", watched.display());
+    let mut why = disagreement(&folder, &of(Origin::Distro), &listed_at, Origin::Distro);
 
-    let mut present: Vec<String> = match fs::read_dir(&folder) {
-        Ok(entries) => entries
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    present.sort();
-    let ids: Vec<&str> = named.iter().map(|(id, _)| *id).collect();
-    // BOTH DIRECTIONS, EACH NAMED: what fixes a folder Nix did not list is not
-    // what fixes an id with no folder.
-    let unlisted: Vec<&str> = present
-        .iter()
-        .map(String::as_str)
-        .filter(|id| !ids.contains(id))
-        .collect();
-    let gone: Vec<&str> = ids
-        .iter()
-        .copied()
-        .filter(|id| !present.iter().any(|p| p == id))
-        .collect();
-    if !unlisted.is_empty() || !gone.is_empty() {
-        let mut why = String::from("the brain's modules and the generated table disagree.\n");
-        if !unlisted.is_empty() {
-            // THE USUAL CAUSE IS GIT, NOT THE ENVIRONMENT: the table is made
-            // from the folders the FLAKE sees, and the flake sees only what
-            // git tracks. Re-entering the environment without `git add -N`
-            // reads the same tree again and stops here again.
-            why.push_str(&format!(
-                "\n\
-                 folders in {folder:?} that Nix did not list: {}\n\
-                 \n\
-                 Nix reads the folders the flake sees, and the flake sees only the files\n\
-                 git tracks: a new folder is usually one git does not know yet.\n\
-                 \n\
-                 {}\n\
-                 \n\
-                 and then re-enter `nix develop` (or `direnv reload`).\n",
-                unlisted.join(", "),
-                unlisted
-                    .iter()
-                    .map(|id| format!("    git add -N crates/ronoctua-brain/modules/{id}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
+    // THE PERSON'S, where the variable says — and a table that lists one
+    // with nowhere to find it is refused, never compiled without it.
+    let person = env::var_os(PERSON_MODULES)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    let mine = of(Origin::Person);
+    match &person {
+        Some(dir) => {
+            println!("cargo:rerun-if-changed={}", dir.display());
+            if !dir.is_dir() {
+                panic!("{PERSON_MODULES} is {dir:?}, which is not a directory.");
+            }
+            why.push_str(&disagreement(dir, &mine, &listed_at, Origin::Person));
         }
-        if !gone.is_empty() {
-            why.push_str(&format!(
-                "\n\
-                 ids in {listed_at:?} with no folder: {}\n\
-                 \n\
-                 The table was generated when the environment was entered, and the\n\
-                 folder is gone since. Re-enter `nix develop` (or `direnv reload`).\n",
-                gone.join(", "),
-            ));
-        }
-        panic!("{why}");
+        None if !mine.is_empty() => why.push_str(&format!(
+            "\n\
+             the table lists the person's modules ({}), and {PERSON_MODULES} is not\n\
+             set: there is no folder to load them from. The machine's flake sets it\n\
+             with the table (`withPersonModules`); a table and a variable from two\n\
+             different builds are a stale environment.\n",
+            mine.join(", ")
+        )),
+        None => {}
+    }
+    if !why.is_empty() {
+        panic!("the brain's modules and the generated table disagree.\n{why}");
     }
 
     // `{:?}` OF A PATH IS A RUST STRING LITERAL, quotes and escapes included.
     let mut shims = String::new();
-    for (id, snake) in &named {
+    for (id, snake, origin) in &named {
         let manifest = generated.join(id).join("manifest.rs");
-        let module = folder.join(id).join("module.rs");
+        let (module, whose) = match (origin, &person) {
+            (Origin::Person, Some(dir)) => (dir.join(id).join("module.rs"), "the person's folder"),
+            _ => (folder.join(id).join("module.rs"), "its folder `modules/`"),
+        };
         shims.push_str(&format!(
-            "/// The brain module `{id}`, from its folder `modules/{id}/`: the manifest\n\
-             /// Nix generated, and its own `module.rs`.\n\
+            "/// The brain module `{id}`, from {whose}: the manifest Nix\n\
+             /// generated, and its own `module.rs`.\n\
              pub mod {snake} {{\n    \
                  include!({manifest:?});\n    \
                  #[path = {module:?}]\n    \
@@ -169,6 +192,80 @@ fn modules(out: &Path) {
     let _ = fs::remove_file(&destination);
     fs::write(&destination, shims)
         .unwrap_or_else(|e| panic!("could not write {destination:?}: {e}"));
+}
+
+/// What differs between the folders in `folder` and the ids the table lists
+/// for this origin, said with what fixes each — empty when they agree.
+///
+/// BOTH DIRECTIONS, EACH NAMED: what fixes a folder Nix did not list is not
+/// what fixes an id with no folder.
+fn disagreement(folder: &Path, ids: &[&str], listed_at: &Path, origin: Origin) -> String {
+    let mut present: Vec<String> = match fs::read_dir(folder) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    present.sort();
+    let unlisted: Vec<&str> = present
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !ids.contains(id))
+        .collect();
+    let gone: Vec<&str> = ids
+        .iter()
+        .copied()
+        .filter(|id| !present.iter().any(|p| p == id))
+        .collect();
+    let mut why = String::new();
+    if !unlisted.is_empty() {
+        match origin {
+            // THE USUAL CAUSE IS GIT, NOT THE ENVIRONMENT: the table is made
+            // from the folders the FLAKE sees, and the flake sees only what
+            // git tracks. Re-entering the environment without `git add -N`
+            // reads the same tree again and stops here again.
+            Origin::Distro => why.push_str(&format!(
+                "\n\
+                 folders in {folder:?} that Nix did not list: {}\n\
+                 \n\
+                 Nix reads the folders the flake sees, and the flake sees only the files\n\
+                 git tracks: a new folder is usually one git does not know yet.\n\
+                 \n\
+                 {}\n\
+                 \n\
+                 and then re-enter `nix develop` (or `direnv reload`).\n",
+                unlisted.join(", "),
+                unlisted
+                    .iter()
+                    .map(|id| format!("    git add -N crates/ronoctua-brain/modules/{id}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )),
+            // THE PERSON'S FOLDER AND ITS TABLE COME FROM ONE COPY: a folder
+            // the table does not list is a table made from another copy.
+            Origin::Person => why.push_str(&format!(
+                "\n\
+                 folders in the person's modules ({folder:?}) that Nix did not list: {}\n\
+                 \n\
+                 The table and the folder are made from ONE copy of the person's\n\
+                 modules (`withPersonModules`); two different copies are two builds.\n",
+                unlisted.join(", "),
+            )),
+        }
+    }
+    if !gone.is_empty() {
+        why.push_str(&format!(
+            "\n\
+             ids in {listed_at:?} with no folder in {folder:?}: {}\n\
+             \n\
+             The table was generated when the environment was entered, and the\n\
+             folder is gone since. Re-enter `nix develop` (or `direnv reload`).\n",
+            gone.join(", "),
+        ));
+    }
+    why
 }
 
 /// Writes the shim that loads `tests/modules/pilot-sample` — brain.md §3,

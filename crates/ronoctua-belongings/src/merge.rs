@@ -45,6 +45,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::chunks::ChunkRef;
+use crate::fleet::Seen;
 use crate::kept;
 use crate::places::covers;
 use crate::plan::{Conflict, Decision, Entry, Plan, Side, Step};
@@ -52,8 +54,8 @@ use crate::prefs::Belongings;
 use crate::status::Last;
 use crate::walk::Found;
 
-/// The index's format.
-pub const INDEX_VERSION: u32 = 1;
+/// The index's format (format 2's: files are chunks).
+pub const INDEX_VERSION: u32 = 2;
 
 /// One path in the repository.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -61,8 +63,6 @@ pub const INDEX_VERSION: u32 = 1;
 pub struct Blob {
     /// The logical path.
     pub path: String,
-    /// The blob's random id: `blobs/<id>.age`.
-    pub id: String,
     /// What it is.
     #[serde(flatten)]
     pub side: Side,
@@ -70,6 +70,9 @@ pub struct Blob {
     pub machine: String,
     /// Whether a person added it (it travels to every machine).
     pub added: bool,
+    /// Its content, in order: `chunks/<aa>/<id>.age` each (a link's: its
+    /// target's text). Empty for an empty file.
+    pub chunks: Vec<ChunkRef>,
 }
 
 /// The index (`index.age`, decrypted).
@@ -80,12 +83,22 @@ pub struct Index {
     pub version: u32,
     /// Every path, in order.
     pub entries: Vec<Blob>,
-    /// Every machine that synced, and when it last did (seconds since the
-    /// epoch) — its name exists only here, encrypted.
-    pub machines: BTreeMap<String, i64>,
+    /// Every machine that synced: when it last did, and when the distro it
+    /// runs was built — its name exists only here, encrypted.
+    pub machines: BTreeMap<String, Seen>,
     /// The folders and files a person added on any machine: every machine
     /// walks them.
     pub roots: BTreeSet<String>,
+    // ── anchor: L08 ──
+    /// The predefined targets a person stopped keeping on EVERY machine, by
+    /// id: who did and when (the belongings-targets-unlock package fills
+    /// it; this one carries it whole through every sync).
+    pub dropped: BTreeMap<String, Dropped>,
+    /// Folder modes to restore, by logical path — a private target's
+    /// folders come back `0700` (filled by the belongings-targets-unlock
+    /// package; carried whole by every sync).
+    pub dirs: BTreeMap<String, u32>,
+    // ── anchor: L10 ──
 }
 
 impl Index {
@@ -109,7 +122,7 @@ impl Index {
     pub fn last_machine(&self) -> String {
         self.machines
             .iter()
-            .max_by_key(|(_, at)| **at)
+            .max_by_key(|(_, seen)| seen.at_s)
             .map(|(m, _)| m.clone())
             .unwrap_or_default()
     }
@@ -164,6 +177,63 @@ pub fn under_a_root(roots: &BTreeSet<String>, path: &str) -> bool {
     roots.iter().any(|r| covers(r, path))
 }
 
+// ── anchor: L08 ──
+/// A target a person stopped keeping everywhere.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dropped {
+    /// The machine that dropped it — data.
+    pub by: String,
+    /// When, seconds since the epoch.
+    pub at_s: i64,
+}
+
+/// `index.age`, opened: where the index itself is. The index is chunked
+/// like any file — its body grows with the files kept, and only the chunks
+/// a sync changed move — so the one small sealed file names its chunks.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IndexHead {
+    /// [`INDEX_VERSION`]: a newer one is a newer format.
+    pub version: u32,
+    /// The index's size, in bytes.
+    pub size_bytes: u64,
+    /// The index's SHA-256, hexadecimal.
+    pub sha256: String,
+    /// The index's chunks, in order.
+    pub chunks: Vec<ChunkRef>,
+}
+
+/// Every chunk an index and its head name. Pure.
+#[must_use]
+pub fn referenced(index: &Index, head: Option<&IndexHead>) -> BTreeSet<String> {
+    index
+        .entries
+        .iter()
+        .flat_map(|b| &b.chunks)
+        .chain(head.into_iter().flat_map(|h| &h.chunks))
+        .map(|c| c.id.clone())
+        .collect()
+}
+// ── anchor: L09 ──
+// ── anchor: L10 ──
+/// What becomes of a path of a target NO MACHINE KEEPS any more (the index's
+/// `dropped`), given whether the repository has a copy and whether this
+/// machine's last sync kept it: a copy leaves the repository — whichever
+/// machine sees it, the one that dropped the target first, or one whose
+/// push raced the drop — and a path this machine kept is forgotten, the
+/// file left where it is. "Not on any machine" is never "delete". Pure.
+#[must_use]
+pub const fn dropped_rule(in_repository: bool, kept_before: bool) -> Option<Step> {
+    if in_repository {
+        Some(Step::Unkeep)
+    } else if kept_before {
+        Some(Step::Forget)
+    } else {
+        None
+    }
+}
+
 /// The plan for these three sides. `remote_commit` and `made_s` are the
 /// engine's to fill. Pure.
 #[must_use]
@@ -182,15 +252,38 @@ pub fn plan(base: Option<&Last>, local: &Found, remote: &Index, prefs: &Belongin
         first_run: base.is_none(),
         ..Plan::default()
     };
+    // THE TARGETS NO MACHINE KEEPS any more (`dropped_rule`).
+    let dropped: BTreeSet<String> = remote.dropped.keys().cloned().collect();
     for path in paths {
         // UNREADABLE HERE — the path, or a folder it is in — is neither
         // missing nor present: left alone on both sides.
         if local.unreadable.iter().any(|u| covers(u, path)) {
             continue;
         }
+        // SET ASIDE FOR WHAT IT IS (`crate::sift`) — the path, or a link to
+        // a folder it is under: nothing is pulled through it.
+        if let Some((_, why)) = local.never.iter().find(|(n, _)| covers(n, path)) {
+            // THE ACCESS KEY under another name, in the repository already
+            // (pushed before this rule): it leaves it, for every machine —
+            // the others then delete the copy they took. Left there, every
+            // other machine would keep pulling this machine's key into its
+            // own `~/.ssh`.
+            if *why == crate::sift::ACCESS && theirs.contains_key(path) {
+                out.entries.push(entry(path, Step::Unkeep));
+            }
+            // A LINK THE SYSTEM MADE is neither deleted from the repository
+            // (another machine may keep a real file there) nor pulled over.
+            continue;
+        }
         let r = theirs.get(path).copied();
         let b = known.and_then(|k| k.get(path));
         let l = local.files.get(path);
+        if kept::dropped_everywhere(path, &dropped) {
+            if let Some(step) = dropped_rule(r.is_some(), b.is_some()) {
+                out.entries.push(entry(path, step));
+            }
+            continue;
+        }
         let added_now = under_a_root(&after, path);
         if !kept::kept_here(path, prefs, added_now) {
             if r.is_some() && under_a_root(&removed, path) {
@@ -228,6 +321,8 @@ pub fn plan(base: Option<&Last>, local: &Found, remote: &Index, prefs: &Belongin
             added_by_person: added,
             suggested,
             theirs: None,
+            held: None,
+            merge: None,
         };
         let Some(_) = base else {
             // A FIRST SYNC: nothing is deleted, and what differs starts as
@@ -306,10 +401,9 @@ mod tests {
     fn blob(path: &str, sha: &str) -> Blob {
         Blob {
             path: path.to_owned(),
-            id: format!("id-{sha}"),
             side: side(sha),
             machine: "laptop".to_owned(),
-            added: false,
+            ..Blob::default()
         }
     }
 

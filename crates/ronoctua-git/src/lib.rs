@@ -46,6 +46,34 @@
 //! environment ([`Credentials`]). The secret itself never reaches argv or
 //! the environment.
 //!
+//! # Post-quantum only, where it is asked for
+//!
+//! `pq_only: true` — the belongings' credentials, both kinds — lets the
+//! session key be agreed only post-quantum: a server that offers no such
+//! exchange is refused before anything is sent ([`Why::NotPostQuantum`]),
+//! because what travels there is the person's whole encrypted home, and a
+//! recording of a classically keyed session is readable the day a quantum
+//! computer is.
+//!
+//! - **SSH** says [`PQ_KEX`] on ssh's command line (`-o KexAlgorithms=`),
+//!   which no configuration file can widen.
+//! - **HTTPS** is libcurl over OpenSSL, inside git, and git has no setting
+//!   for the key-exchange groups. OpenSSL does: `OPENSSL_CONF` names a file
+//!   whose `system_default` section every TLS context of the process starts
+//!   from, and the one [`Tools::pq_tls`] names (`nix/pq-tls.nix`) lists only
+//!   the hybrid ML-KEM groups, TLS 1.3 and up (and git's own floor,
+//!   `GIT_SSL_VERSION`, says TLS 1.3 too). MEASURED on the pinned git:
+//!   a server with X25519 alone, with the NIST curves alone, or with TLS 1.2
+//!   alone is refused (`alert handshake failure`); one with
+//!   `X25519MLKEM768` or `SecP384r1MLKEM1024` is reached.
+//!
+//! **OpenSSL ignores a configuration it cannot read, SILENTLY** — a missing
+//! file, a relative path, a group name it does not know: the narrowing is
+//! simply gone and every server is reached (measured, all three). So [`base`]
+//! refuses a post-quantum-only token when the file is not there, and
+//! `belongings-https-is-pq-only` proves the file the build ships refuses a
+//! classical server with the git the build ships.
+//!
 //! # Read-only where the person reads
 //!
 //! The file manager's line and browser ([`Repo::status`], [`Repo::log`],
@@ -53,6 +81,14 @@
 //! network call, [`Repo::fetch`], never prompts — a remote that needs
 //! credentials it was not given is a refusal that says so. Every call blocks
 //! until git ends: a thread, never the event loop.
+//!
+//! # And the one that reaches a new host
+//!
+//! [`Repo::clone`] (feature `clone`) makes a repository from an address, and
+//! the host it names is one nobody let yet: so it takes a
+//! [`ronoctua_consent::Pass`] for that host ([`host_of`]), and an address the
+//! pass does not cover starts nothing — nor does a redirect take the clone to
+//! another host (`http.followRedirects=false`).
 
 #![forbid(unsafe_code)]
 
@@ -71,6 +107,10 @@ pub const SSH_VARIABLE: &str = "RONOCTUA_SSH";
 /// The variable naming the askpass helper's store path (`nix/rust.nix`
 /// compiles it in; the environment wins).
 pub const ASKPASS_VARIABLE: &str = "RONOCTUA_GIT_ASKPASS";
+/// The variable naming the OpenSSL configuration a post-quantum-only HTTPS
+/// session runs git under (`nix/rust.nix` compiles it in; the environment
+/// wins).
+pub const PQ_TLS_VARIABLE: &str = "RONOCTUA_GIT_PQ_TLS";
 /// The variable the askpass helper reads: the PATH of the token file.
 pub const SECRET_VARIABLE: &str = "RONOCTUA_GIT_SECRET";
 /// The variable the askpass helper answers a user-name prompt with.
@@ -162,6 +202,51 @@ pub const UNSET: [&str; 22] = [
 /// How long ssh waits for a host that does not answer, in seconds.
 pub const SSH_CONNECT_TIMEOUT_S: u32 = 20;
 
+/// A clone slower than this many bytes a second…
+#[cfg(feature = "clone")]
+pub const CLONE_LOW_SPEED_BYTES_PER_S: u32 = 1024;
+/// …for this many seconds in a row is given up: git over HTTPS has no
+/// deadline of its own, and a stalled line would hold the clone — and the
+/// thread waiting on it — for ever, with nothing said.
+#[cfg(feature = "clone")]
+pub const CLONE_LOW_SPEED_S: u32 = 60;
+
+/// The key exchanges a post-quantum-only SSH session may agree, in ssh's
+/// order of preference: ML-KEM-768 with X25519 (OpenSSH 9.9, the standard
+/// name), then Streamlined NTRU Prime with X25519 under both its names
+/// (OpenSSH 8.5 on). sntrup761 STAYS: GitHub answers it today and only
+/// offers ML-KEM from 2026-10-14, and a list of ML-KEM alone would refuse the
+/// host most belongings live on.
+///
+/// The same three open the system's list (`assets/ssh.nix`, `postQuantum`) —
+/// `belongings-ssh-is-pq-only` holds the two together and proves the list
+/// against a real `sshd`.
+pub const PQ_KEX: [&str; 3] = [
+    "mlkem768x25519-sha256",
+    "sntrup761x25519-sha512",
+    "sntrup761x25519-sha512@openssh.com",
+];
+
+/// What ssh prints when the server offered no key exchange it was allowed —
+/// for a post-quantum-only session, a server with no post-quantum one; for
+/// any other, a server with only what this machine no longer agrees (the
+/// SHA-1 exchanges).
+pub const NO_COMMON_KEX: &str = "no matching key exchange method found";
+
+/// What git prints (curl's words over OpenSSL's) when a TLS server would not
+/// complete a handshake — for a post-quantum-only session, a server with no
+/// hybrid group ([`Tools::pq_tls`]). `alert handshake failure` is the one
+/// MEASURED (a server with X25519 alone, the NIST curves alone, or TLS 1.2
+/// alone); `insufficient security` is the alert a server answers when the
+/// groups offered are below its policy, and the last two say a server that
+/// stops short of TLS 1.3, where the hybrids live.
+pub const PQ_TLS_REFUSED: [&str; 4] = [
+    "alert handshake failure",
+    "alert insufficient security",
+    "alert protocol version",
+    "unsupported protocol",
+];
+
 /// A program's path: this process's environment first (a test's, a unit's),
 /// then what `nix/rust.nix` compiled in.
 fn program_path(variable: &str, built: Option<&'static str>) -> Option<PathBuf> {
@@ -180,6 +265,10 @@ pub struct Tools {
     pub ssh: Option<PathBuf>,
     /// Our askpass helper, when given (a remote over HTTPS with a token).
     pub askpass: Option<PathBuf>,
+    /// The OpenSSL configuration a post-quantum-only HTTPS session runs git
+    /// under — the hybrid ML-KEM groups alone, TLS 1.3 and up
+    /// (`nix/pq-tls.nix`) — when given.
+    pub pq_tls: Option<PathBuf>,
 }
 
 impl Tools {
@@ -195,6 +284,7 @@ impl Tools {
             git: program_path(GIT_VARIABLE, option_env!("RONOCTUA_GIT"))?,
             ssh: program_path(SSH_VARIABLE, option_env!("RONOCTUA_SSH")),
             askpass: program_path(ASKPASS_VARIABLE, option_env!("RONOCTUA_GIT_ASKPASS")),
+            pq_tls: program_path(PQ_TLS_VARIABLE, option_env!("RONOCTUA_GIT_PQ_TLS")),
         })
     }
 }
@@ -208,6 +298,9 @@ pub enum Credentials {
         key: PathBuf,
         /// Our own known-hosts file (new hosts accepted, changed ones refused).
         known_hosts: PathBuf,
+        /// Only [`PQ_KEX`] may key the session: a server with none of them is
+        /// [`Why::NotPostQuantum`].
+        pq_only: bool,
     },
     /// HTTPS with a token kept in a `0600` file; only its path travels.
     Token {
@@ -215,7 +308,21 @@ pub enum Credentials {
         file: PathBuf,
         /// The user name a prompt is answered with, when the host wants one.
         user: Option<String>,
+        /// Only the hybrid ML-KEM groups may key the TLS session
+        /// ([`Tools::pq_tls`]), and only [`PQ_KEX`] an SSH one: a server with
+        /// none of them is [`Why::NotPostQuantum`].
+        pq_only: bool,
     },
+}
+
+impl Credentials {
+    /// Whether the session may be keyed only post-quantum.
+    #[must_use]
+    pub const fn pq_only(&self) -> bool {
+        match self {
+            Self::Ssh { pq_only, .. } | Self::Token { pq_only, .. } => *pq_only,
+        }
+    }
 }
 
 /// Why git answered nothing, as a closed set (`files-git-why-<id>`).
@@ -244,11 +351,17 @@ pub enum Why {
     Unreachable,
     /// The answer is larger than a view shows.
     TooLarge,
+    /// A post-quantum-only session met a server that offers no post-quantum
+    /// key exchange ([`PQ_KEX`], or no hybrid TLS group): nothing was sent.
+    NotPostQuantum,
+    /// The SSH server offers only key exchanges this machine no longer
+    /// agrees (the SHA-1 ones): it was reached, and nothing was sent.
+    NoCommonKeyExchange,
 }
 
 impl Why {
     /// Every refusal, for the keys' census.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::NoGit,
         Self::NoSsh,
         Self::NoAskpass,
@@ -260,6 +373,8 @@ impl Why {
         Self::Refused,
         Self::Unreachable,
         Self::TooLarge,
+        Self::NotPostQuantum,
+        Self::NoCommonKeyExchange,
     ];
 
     /// Its kebab-case name, the suffix of its key.
@@ -277,6 +392,8 @@ impl Why {
             Self::Refused => "refused",
             Self::Unreachable => "unreachable",
             Self::TooLarge => "too-large",
+            Self::NotPostQuantum => "not-post-quantum",
+            Self::NoCommonKeyExchange => "no-common-key-exchange",
         }
     }
 }
@@ -306,7 +423,8 @@ fn quoted(text: &OsStr) -> String {
 /// # Errors
 ///
 /// [`Why::NoSsh`] for SSH credentials without ssh, [`Why::NoAskpass`] for a
-/// token without the helper.
+/// token without the helper, [`Why::Unstartable`] for a post-quantum-only
+/// token without the configuration that narrows its TLS ([`Tools::pq_tls`]).
 pub fn base(
     tools: &Tools,
     repo: &Path,
@@ -338,27 +456,62 @@ pub fn base(
         .as_deref()
         .map_or_else(|| "ssh".to_owned(), |s| quoted(s.as_os_str()));
     let timeout = format!("-o ConnectTimeout={SSH_CONNECT_TIMEOUT_S}");
+    // ON THE COMMAND LINE, where it beats every configuration file: the list
+    // a post-quantum-only session may agree, for SSH.
+    let kex = if credentials.is_some_and(Credentials::pq_only) {
+        format!(" -o KexAlgorithms={}", PQ_KEX.join(","))
+    } else {
+        String::new()
+    };
     match credentials {
-        Some(Credentials::Ssh { key, known_hosts }) => {
+        Some(Credentials::Ssh {
+            key, known_hosts, ..
+        }) => {
             if tools.ssh.is_none() {
                 return Err(refused(Why::NoSsh));
             }
+            // `-F none` READS NO CONFIGURATION, the system's included — and
+            // the key exchanges were said above, so nothing a file says can
+            // widen them.
             command.env(
                 "GIT_SSH_COMMAND",
                 format!(
                     "{ssh} -i {} -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile={} \
-                     -o StrictHostKeyChecking=accept-new {timeout} -F none",
+                     -o StrictHostKeyChecking=accept-new {timeout}{kex} -F none",
                     quoted(key.as_os_str()),
                     quoted(known_hosts.as_os_str()),
                 ),
             );
         }
-        Some(Credentials::Token { file, user }) => {
+        Some(Credentials::Token {
+            file,
+            user,
+            pq_only,
+        }) => {
             let askpass = tools.askpass.as_deref().ok_or(refused(Why::NoAskpass))?;
+            if *pq_only {
+                // NOT THERE IS NOT "NO NARROWING": OpenSSL would read a
+                // missing file as no configuration at all, and every server
+                // would be reached. A store path is absolute and does not
+                // move; anything else is refused before git starts.
+                let narrowing = tools
+                    .pq_tls
+                    .as_deref()
+                    .filter(|p| p.is_absolute() && p.is_file())
+                    .ok_or(refused(Why::Unstartable))?;
+                // AND GIT'S OWN FLOOR, TLS 1.3, where the hybrids live: curl
+                // sets the lowest version on top of OpenSSL's, and a
+                // repository's `http.sslVersion` or a session's
+                // `GIT_SSL_VERSION` could otherwise lower it. The
+                // environment beats the configuration.
+                command
+                    .env("OPENSSL_CONF", narrowing)
+                    .env("GIT_SSL_VERSION", "tlsv1.3");
+            }
             command
                 .env(
                     "GIT_SSH_COMMAND",
-                    format!("{ssh} -o BatchMode=yes {timeout}"),
+                    format!("{ssh} -o BatchMode=yes {timeout}{kex}"),
                 )
                 .env("GIT_ASKPASS", askpass)
                 .env(SECRET_VARIABLE, file);
@@ -393,6 +546,8 @@ pub fn subcommand<'a>(command: &'a mut Command, name: &str) -> &'a mut Command {
 /// What a finished git said.
 struct Ran {
     ok: bool,
+    /// Its exit code; `None` when a signal ended it.
+    code: Option<i32>,
     out: Vec<u8>,
     err: String,
 }
@@ -444,20 +599,58 @@ fn run(mut command: Command, most: usize) -> Result<Ran, Refusal> {
     read.map_err(|_| refused(Why::Failed))?;
     Ok(Ran {
         ok: status.success(),
+        code: status.code(),
         out: bytes,
         err,
     })
 }
 
-/// What a failed git's stderr means; `network` for a call that reached a
-/// remote (only there is a "permission denied" the remote's). Pure.
+/// Where a failed call went — which decides what its stderr can mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// This machine only: a "permission denied" is the file system's.
+    Local,
+    /// A remote, with the key exchanges this machine agrees.
+    Remote,
+    /// A remote, over a session keyed only post-quantum
+    /// ([`Credentials::pq_only`]).
+    PostQuantumOnly,
+}
+
+/// Where `name`, run with `credentials`, goes. Pure.
+fn reach_of(credentials: Option<&Credentials>, name: &str) -> Reach {
+    match credentials {
+        Some(c) if c.pq_only() => Reach::PostQuantumOnly,
+        Some(_) => Reach::Remote,
+        None if name == "fetch" => Reach::Remote,
+        None => Reach::Local,
+    }
+}
+
+/// What a failed git's stderr means, for a call that went where `reach`
+/// says (only a remote's "permission denied" is the remote's). Pure.
 #[must_use]
-fn verdict(err: &str, network: bool) -> Why {
+fn verdict(err: &str, reach: Reach) -> Why {
     let says = |words: &[&str]| words.iter().any(|w| err.contains(w));
+    let narrowed = reach == Reach::PostQuantumOnly;
     if says(&["not a git repository"]) {
         Why::NotARepo
-    } else if !network {
+    } else if reach == Reach::Local {
         Why::Failed
+    } else if says(&[NO_COMMON_KEX]) {
+        // BEFORE "unreachable": git closes the same sentence with "Could not
+        // read from remote repository", and the host WAS reached. A
+        // post-quantum-only session refused it for that; any other session
+        // offered everything this machine agrees, and the host had none of it.
+        if narrowed {
+            Why::NotPostQuantum
+        } else {
+            Why::NoCommonKeyExchange
+        }
+    } else if narrowed && says(&PQ_TLS_REFUSED) {
+        // Before "unable to access", which curl writes in front of it: the
+        // server was reached and would not agree a hybrid group.
+        Why::NotPostQuantum
     } else if says(&[
         "terminal prompts disabled",
         "could not read Username",
@@ -706,6 +899,57 @@ fn commit_arg(commit: &Oid) -> Result<&str, Refusal> {
         .ok_or(refused(Why::Garbled))
 }
 
+/// A whole commit id as an argument (never an abbreviation, never a name),
+/// or [`Why::Garbled`].
+fn full_oid(commit: &Oid) -> Result<&str, Refusal> {
+    parse::is_oid(&commit.0, false)
+        .then_some(commit.0.as_str())
+        .ok_or(refused(Why::Garbled))
+}
+
+/// Who wrote or committed a commit, and when — as `--date=raw` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Signature {
+    /// The name.
+    pub name: String,
+    /// The address.
+    pub email: String,
+    /// `<seconds since the epoch> <±hhmm>`.
+    pub date: String,
+}
+
+impl Signature {
+    /// Whether git would write it back as it is: no line end, no NUL, no
+    /// angle bracket in the name or the address, and a raw date.
+    #[must_use]
+    pub fn fits(&self) -> bool {
+        let plain = |t: &str| !t.contains(['\n', '\0', '<', '>']);
+        let date = self.date.split_once(' ').is_some_and(|(s, z)| {
+            !s.is_empty()
+                && s.bytes().all(|b| b.is_ascii_digit())
+                && z.len() == 5
+                && z.starts_with(['+', '-'])
+                && z[1..].bytes().all(|b| b.is_ascii_digit())
+        });
+        plain(&self.name) && plain(&self.email) && date
+    }
+}
+
+/// A commit written again over another parent ([`Repo::commit_tree`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recommit {
+    /// The tree it holds.
+    pub tree: Oid,
+    /// Its parent; `None` for a new root.
+    pub parent: Option<Oid>,
+    /// Its message, as it was.
+    pub message: String,
+    /// Its author, as it was.
+    pub author: Signature,
+    /// Its committer, as it was.
+    pub committer: Signature,
+}
+
 /// The pages git counts in, as arguments.
 fn page(skip: usize, most: usize) -> [String; 2] {
     [format!("--skip={skip}"), format!("--max-count={most}")]
@@ -718,6 +962,40 @@ fn ceiling(command: &mut Command, root: &Path) {
     if let Some(parent) = root.parent().filter(|p| p.is_absolute()) {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
+}
+
+/// The transports an address may name for a clone, by scheme.
+#[cfg(feature = "clone")]
+const CLONE_SCHEMES: [&str; 4] = ["https", "http", "git", "ssh"];
+
+/// The host a remote's address names, as consent keeps it
+/// ([`ronoctua_consent::normal`]): `https://host/…`, `http://`, `git://`,
+/// `ssh://[user@]host[:port]/…`, and SSH's short form `[user@]host:path`.
+/// `None` for an address that names no host — a local path, `file://`,
+/// `ext::`, an option (`-…`) — or a host consent would not keep. Pure.
+#[cfg(feature = "clone")]
+#[must_use]
+pub fn host_of(url: &str) -> Option<String> {
+    if url.starts_with('-') || url.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let authority = if let Some((scheme, rest)) = url.split_once("://") {
+        if !CLONE_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()) {
+            return None;
+        }
+        rest.split('/').next()?
+    } else {
+        // `host:path` is SSH only when no `/` comes before the colon (git's
+        // own rule); `./a:b` and `/x:y` are paths.
+        let (before, _) = url.split_once(':')?;
+        if before.contains('/') || before.is_empty() {
+            return None;
+        }
+        before
+    };
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = host.split_once(':').map_or(host, |(h, _)| h);
+    ronoctua_consent::normal(host)
 }
 
 impl Repo {
@@ -795,7 +1073,7 @@ impl Repo {
         // No match is exit 1 with nothing said: no drivers. Anything said is
         // a failure, and the call is not made blind.
         if !ran.ok && !ran.err.is_empty() {
-            return Err(refused(verdict(&ran.err, false)));
+            return Err(refused(verdict(&ran.err, Reach::Local)));
         }
         let drivers = parse::filter_drivers(&ran.out).ok_or(refused(Why::Garbled))?;
         let mut command = base(tools, &self.root, credentials)?;
@@ -839,26 +1117,36 @@ impl Repo {
         args: &[S],
         most: usize,
     ) -> Result<Vec<u8>, Refusal> {
-        let ran = self.ran(credentials, name, args, most)?;
+        let ran = self.ran(credentials, name, args, None, most)?;
         if ran.ok {
             Ok(ran.out)
         } else {
-            Err(refused(verdict(
-                &ran.err,
-                credentials.is_some() || name == "fetch",
-            )))
+            Err(refused(verdict(&ran.err, reach_of(credentials, name))))
         }
     }
 
+    /// Runs `name` with `args`; `signed` is the author and the committer a
+    /// `commit-tree` writes ([`Repo::commit_tree`]) — the six variables git
+    /// reads them from, and no other.
     fn ran<S: AsRef<OsStr>>(
         &self,
         credentials: Option<&Credentials>,
         name: &str,
         args: &[S],
+        signed: Option<(&Signature, &Signature)>,
         most: usize,
     ) -> Result<Ran, Refusal> {
         let mut command = self.command(credentials)?;
         subcommand(&mut command, name).args(args);
+        if let Some((author, committer)) = signed {
+            command
+                .env("GIT_AUTHOR_NAME", &author.name)
+                .env("GIT_AUTHOR_EMAIL", &author.email)
+                .env("GIT_AUTHOR_DATE", &author.date)
+                .env("GIT_COMMITTER_NAME", &committer.name)
+                .env("GIT_COMMITTER_EMAIL", &committer.email)
+                .env("GIT_COMMITTER_DATE", &committer.date);
+        }
         run(command, most)
     }
 
@@ -890,12 +1178,13 @@ impl Repo {
             None,
             "rev-parse",
             &["--verify", "--quiet", "HEAD^{commit}"],
+            None,
             LISTING_MOST_BYTES,
         )?;
         if ran.ok {
             return Ok(true);
         }
-        match verdict(&ran.err, false) {
+        match verdict(&ran.err, Reach::Local) {
             Why::NotARepo => Err(refused(Why::NotARepo)),
             _ => Ok(false),
         }
@@ -1189,10 +1478,11 @@ impl Repo {
             None,
             "rev-parse",
             &["--verify", "--quiet", "refs/stash"],
+            None,
             LISTING_MOST_BYTES,
         )?;
         if !has.ok {
-            return match verdict(&has.err, false) {
+            return match verdict(&has.err, Reach::Local) {
                 Why::NotARepo => Err(refused(Why::NotARepo)),
                 _ => Ok(Vec::new()),
             };
@@ -1222,11 +1512,12 @@ impl Repo {
             None,
             "config",
             &["--null", "--get-regexp", r"^remote\..*\.(url|pushurl)$"],
+            None,
             LISTING_MOST_BYTES,
         )?;
         // No match is exit 1 with nothing said: no remotes.
         if !ran.ok && !ran.err.is_empty() {
-            return Err(refused(verdict(&ran.err, false)));
+            return Err(refused(verdict(&ran.err, Reach::Local)));
         }
         Ok(parse::remotes(&ran.out))
     }
@@ -1273,6 +1564,422 @@ impl Repo {
         }
         first.map_or(Ok(()), Err)
     }
+
+    /// Writes a commit of `commit.tree` over `commit.parent` (none: a new
+    /// root) with its message and both signatures as they were — what a
+    /// history is rewritten with (`commit-tree`, the belongings'
+    /// compaction). Gives back the new commit's id.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Garbled`] for an id that is not one, or a name, an address, a
+    /// date or a message git would read as something else; and what git
+    /// refuses.
+    pub fn commit_tree(&self, commit: &Recommit) -> Result<Oid, Refusal> {
+        let tree = full_oid(&commit.tree)?;
+        let mut args: Vec<&str> = vec![tree];
+        if let Some(parent) = &commit.parent {
+            args.extend(["-p", full_oid(parent)?]);
+        }
+        if commit.message.contains('\0') || !commit.author.fits() || !commit.committer.fits() {
+            return Err(refused(Why::Garbled));
+        }
+        args.extend(["-m", commit.message.as_str()]);
+        let ran = self.ran(
+            None,
+            "commit-tree",
+            &args,
+            Some((&commit.author, &commit.committer)),
+            LISTING_MOST_BYTES,
+        )?;
+        if !ran.ok {
+            return Err(refused(verdict(&ran.err, Reach::Local)));
+        }
+        let id = String::from_utf8_lossy(&ran.out).trim().to_owned();
+        parse::is_oid(&id, false)
+            .then_some(Oid(id))
+            .ok_or(refused(Why::Garbled))
+    }
+
+    /// Pushes `local` to `branch` of the remote `remote` over whatever is
+    /// there, but ONLY while the remote's branch is still `expected`
+    /// (`--force-with-lease`): a push another machine made after `expected`
+    /// was fetched refuses this one instead of being lost. The remote's own
+    /// `git-receive-pack`, never a command the repository's config names.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Garbled`] for an id, a remote or a branch that is not one; a
+    /// lease another push broke is a refusal like any other, and the caller
+    /// fetches to see why.
+    pub fn push_force_with_lease(
+        &self,
+        credentials: Option<&Credentials>,
+        remote: &str,
+        local: &Oid,
+        branch: &str,
+        expected: &Oid,
+    ) -> Result<(), Refusal> {
+        let named = |name: &str| {
+            !name.is_empty()
+                && !name.starts_with('-')
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
+                && !name.contains("..")
+        };
+        if !named(remote) || !named(branch) {
+            return Err(refused(Why::Garbled));
+        }
+        let lease = format!(
+            "--force-with-lease=refs/heads/{branch}:{}",
+            full_oid(expected)?
+        );
+        let refspec = format!("{}:refs/heads/{branch}", full_oid(local)?);
+        self.output(
+            credentials,
+            "push",
+            &[
+                "-q",
+                "--receive-pack=git-receive-pack",
+                lease.as_str(),
+                remote,
+                refspec.as_str(),
+            ],
+            LISTING_MOST_BYTES,
+        )
+        .map(|_| ())
+    }
+
+    /// Clones `url` into `into` — the one call of this crate that makes a
+    /// repository, and so the one that takes a [`ronoctua_consent::Pass`]:
+    /// the person let the host the address names, or nothing is asked
+    /// (`LEADER / c`, the distro's own repository). Hardened like every call
+    /// ([`base`]): no hook, no template, no submodule, no prompt, the
+    /// remote's own `git-upload-pack`. The tools come from the environment.
+    ///
+    /// # Errors
+    ///
+    /// As [`Repo::clone_with`], and [`Why::NoGit`] without git.
+    #[cfg(feature = "clone")]
+    pub fn clone(pass: &ronoctua_consent::Pass, url: &str, into: &Path) -> Result<Self, Refusal> {
+        let tools = Tools::from_env().ok_or(refused(Why::NoGit))?;
+        Self::clone_with(&tools, pass, url, into)
+    }
+
+    /// [`Repo::clone`], with these tools (a test's).
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Garbled`] for an address that names no host ([`host_of`]), one
+    /// whose host the pass does not cover, or a folder that is not an
+    /// absolute path — nothing is started; [`Why::NeedsCredentials`],
+    /// [`Why::Refused`], [`Why::Unreachable`] and [`Why::Failed`] (a folder
+    /// that is there and not empty among them) from what git said. git
+    /// removes what it made when it fails.
+    #[cfg(feature = "clone")]
+    pub fn clone_with(
+        tools: &Tools,
+        pass: &ronoctua_consent::Pass,
+        url: &str,
+        into: &Path,
+    ) -> Result<Self, Refusal> {
+        let covered = host_of(url).is_some_and(|host| pass.covers(&host));
+        if !covered || !into.is_absolute() {
+            return Err(refused(Why::Garbled));
+        }
+        let command = clone_command(tools, url, into)?;
+        let ran = run(command, LISTING_MOST_BYTES)?;
+        if !ran.ok {
+            return Err(refused(verdict(&ran.err, Reach::Remote)));
+        }
+        Ok(Self {
+            root: into.to_path_buf(),
+            git_dir: into.join(".git"),
+            tools: Some(tools.clone()),
+        })
+    }
+}
+
+/// How [`merge_file`] settles a hunk both sides changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Favor {
+    /// It does not: the hunk is a conflict, counted.
+    None,
+    /// This side's lines (`--ours`).
+    Ours,
+    /// The other side's (`--theirs`).
+    Theirs,
+    /// Both sides' lines, ours first (`--union`) — a list whose lines are
+    /// each a fact (`known_hosts`, `allowed_signers`).
+    Union,
+}
+
+/// What [`merge_file`] made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMerge {
+    /// The merged text — with conflict markers where `conflicts` says, when
+    /// nothing was favoured.
+    pub bytes: Vec<u8>,
+    /// How many hunks clash (0: a clean merge). git counts at most 127.
+    pub conflicts: u32,
+}
+
+/// The names of the three sides inside the scratch folder.
+const MERGE_SIDES: [&str; 3] = ["ours", "base", "theirs"];
+
+/// A three-way merge of texts, hunk by hunk — `git merge-file -p`, through
+/// the hardened command ([`base`]): `ours` and `theirs` joined over `base`,
+/// each hunk both changed settled by `favor` or counted as a conflict.
+///
+/// The three are written into `scratch` — a folder of the caller's that
+/// nobody else reads (they may be a person's files), made `0700` beforehand —
+/// born `0600`, and deleted before this returns, whatever it returns. No
+/// repository is read: `merge-file` takes three files.
+///
+/// # Errors
+///
+/// [`Why::NoGit`]… as [`base`]; [`Why::Failed`] when git could not merge
+/// them (a binary file, a file it could not read) or the files could not be
+/// written.
+pub fn merge_file(
+    tools: &Tools,
+    scratch: &Path,
+    base_text: &[u8],
+    ours: &[u8],
+    theirs: &[u8],
+    favor: Favor,
+) -> Result<FileMerge, Refusal> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let paths: Vec<PathBuf> = MERGE_SIDES.iter().map(|n| scratch.join(n)).collect();
+    let written = paths
+        .iter()
+        .zip([ours, base_text, theirs])
+        .try_for_each(|(path, bytes)| {
+            let _ = std::fs::remove_file(path);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)?
+                .write_all(bytes)
+        });
+    let merged = written.map_err(|_| refused(Why::Failed)).and_then(|()| {
+        let mut command = base(tools, scratch, None)?;
+        subcommand(&mut command, "merge-file").arg("-p");
+        match favor {
+            Favor::None => {}
+            Favor::Ours => {
+                command.arg("--ours");
+            }
+            Favor::Theirs => {
+                command.arg("--theirs");
+            }
+            Favor::Union => {
+                command.arg("--union");
+            }
+        }
+        // THE LABELS of the markers: fixed words, never a path.
+        command.args(["-L", "ours", "-L", "base", "-L", "theirs"]);
+        command.args(MERGE_SIDES);
+        run(command, LISTING_MOST_BYTES)
+    });
+    for path in &paths {
+        let _ = std::fs::remove_file(path);
+    }
+    let ran = merged?;
+    // THE EXIT CODE IS THE COUNT of conflicting hunks (at most 127); a
+    // negative one — 255 — is a failure, and so is a signal.
+    match ran.code {
+        Some(n) if (0..=127).contains(&n) => Ok(FileMerge {
+            bytes: ran.out,
+            conflicts: u32::try_from(n).unwrap_or(0),
+        }),
+        _ => Err(refused(Why::Failed)),
+    }
+}
+
+/// The clone's command, hardened like every call ([`base`]) and then some:
+///
+/// * NO REDIRECT. git's default (`initial`) follows a redirect of the first
+///   request to ANY host, and the pass covers only the host the address
+///   names — so the clone would go where the person never let it. A remote
+///   that redirects is a failure.
+/// * A LOW-SPEED LIMIT ([`CLONE_LOW_SPEED_BYTES_PER_S`] for
+///   [`CLONE_LOW_SPEED_S`]): a stalled line ends with a refusal the person
+///   reads, instead of a clone that never ends.
+///
+/// # Errors
+///
+/// As [`base`].
+#[cfg(feature = "clone")]
+fn clone_command(tools: &Tools, url: &str, into: &Path) -> Result<Command, Refusal> {
+    // FROM THE ROOT, with the folder absolute: `-C` needs a folder that
+    // exists, and the clone makes the ones that do not.
+    let mut command = base(tools, Path::new("/"), None)?;
+    command
+        .args(["-c", "http.followRedirects=false", "-c"])
+        .arg(format!("http.lowSpeedLimit={CLONE_LOW_SPEED_BYTES_PER_S}"))
+        .arg("-c")
+        .arg(format!("http.lowSpeedTime={CLONE_LOW_SPEED_S}"));
+    subcommand(&mut command, "clone")
+        .args([
+            "--quiet",
+            "--no-recurse-submodules",
+            "--template=",
+            "--upload-pack=git-upload-pack",
+            "--",
+            url,
+        ])
+        .arg(into);
+    Ok(command)
+}
+
+/// Whether `key` may name a setting: `section.name` (a subsection between
+/// them allowed), ASCII, nothing git would read as an option or a pattern.
+/// Pure.
+fn a_setting(key: &str) -> bool {
+    let fits = !key.is_empty()
+        && key.len() <= 256
+        && !key.starts_with(['-', '.'])
+        && !key.ends_with('.')
+        && key.contains('.')
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./@".contains(&b));
+    fits && !key.contains("..")
+}
+
+/// A `git config --global` call for the person whose home is `home`: their
+/// `~/.gitconfig` (or `~/.config/git/config` when only that one exists),
+/// whatever this process's own variables say — `HOME` and
+/// `XDG_CONFIG_HOME` from `home`, no `GIT_CONFIG_GLOBAL`. Run from `/`, so no
+/// repository's configuration is read along.
+fn global_config(tools: &Tools, home: &Path) -> Result<Command, Refusal> {
+    let mut command = base(tools, Path::new("/"), None)?;
+    command
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env_remove("GIT_CONFIG_GLOBAL");
+    subcommand(&mut command, "config").arg("--global");
+    Ok(command)
+}
+
+/// Sets `key` to `value` in the person's GLOBAL git configuration file,
+/// every value it had replaced. The hardened command ([`base`]), no
+/// repository, no prompt. (The belongings' "sign commits with this SSH key"
+/// writes its settings into a file of its own, [`set_in_file`], and only
+/// the include into this one, [`add_global`].)
+///
+/// # Errors
+///
+/// [`Why::Garbled`] for a key that is not a setting's name or a value with
+/// a line break or a NUL in it; [`Why::NoGit`]…, and [`Why::Failed`] when git
+/// could not write the file.
+pub fn set_global(tools: &Tools, home: &Path, key: &str, value: &str) -> Result<(), Refusal> {
+    if !a_setting(key) || value.contains(['\n', '\r', '\0']) {
+        return Err(refused(Why::Garbled));
+    }
+    let mut command = global_config(tools, home)?;
+    command.args(["--replace-all", "--", key, value]);
+    let ran = run(command, LISTING_MOST_BYTES)?;
+    if ran.ok {
+        Ok(())
+    } else {
+        Err(refused(verdict(&ran.err, Reach::Local)))
+    }
+}
+
+/// The value of `key` in the person's global git configuration — the last
+/// one when it has several; `None` when it is not set. What the files it
+/// INCLUDES (`include.path`) say counts, as it counts for git when it
+/// commits: `git config --global` alone reads one file.
+///
+/// # Errors
+///
+/// [`Why::Garbled`] for a key that is not a setting's name; [`Why::NoGit`]…,
+/// and [`Why::Failed`] when git could not read the file.
+pub fn get_global(tools: &Tools, home: &Path, key: &str) -> Result<Option<String>, Refusal> {
+    if !a_setting(key) {
+        return Err(refused(Why::Garbled));
+    }
+    let mut command = global_config(tools, home)?;
+    command.args(["--includes", "--get", "--", key]);
+    let ran = run(command, LISTING_MOST_BYTES)?;
+    match ran.code {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&ran.out)
+                .trim_end_matches(['\n', '\r'])
+                .to_owned(),
+        )),
+        // `--get` SAYS 1 for a key that is not set.
+        Some(1) => Ok(None),
+        _ => Err(refused(verdict(&ran.err, Reach::Local))),
+    }
+}
+
+/// Adds `value` to the key `key` of the person's GLOBAL git configuration
+/// file — a key that holds several (`include.path`) — unless that file has
+/// it already: every other value stays, and asking twice adds it once.
+///
+/// # Errors
+///
+/// As [`set_global`].
+pub fn add_global(tools: &Tools, home: &Path, key: &str, value: &str) -> Result<(), Refusal> {
+    if !a_setting(key) || value.contains(['\n', '\r', '\0']) {
+        return Err(refused(Why::Garbled));
+    }
+    let mut command = global_config(tools, home)?;
+    command.args(["--get-all", "--", key]);
+    let ran = run(command, LISTING_MOST_BYTES)?;
+    let there = match ran.code {
+        Some(0) => String::from_utf8_lossy(&ran.out)
+            .lines()
+            .any(|line| line == value),
+        // `--get-all` SAYS 1 for a key that is not set.
+        Some(1) => false,
+        _ => return Err(refused(verdict(&ran.err, Reach::Local))),
+    };
+    if there {
+        return Ok(());
+    }
+    let mut command = global_config(tools, home)?;
+    command.args(["--add", "--", key, value]);
+    let ran = run(command, LISTING_MOST_BYTES)?;
+    if ran.ok {
+        Ok(())
+    } else {
+        Err(refused(verdict(&ran.err, Reach::Local)))
+    }
+}
+
+/// Sets `key` to `value` in the git configuration file at `file` (`git
+/// config --file`, an absolute path), every value it had replaced — a file
+/// of settings the global configuration includes. git keeps the mode of a
+/// file it rewrites, so one the caller made private stays private.
+///
+/// # Errors
+///
+/// [`Why::Garbled`] for a key that is not a setting's name, a value with a
+/// line break or a NUL in it, or a path that is not absolute;
+/// [`Why::NoGit`]…, and [`Why::Failed`] when git could not write the file.
+pub fn set_in_file(tools: &Tools, file: &Path, key: &str, value: &str) -> Result<(), Refusal> {
+    if !a_setting(key) || value.contains(['\n', '\r', '\0']) || !file.is_absolute() {
+        return Err(refused(Why::Garbled));
+    }
+    let mut command = base(tools, Path::new("/"), None)?;
+    command.env_remove("GIT_CONFIG_GLOBAL");
+    subcommand(&mut command, "config")
+        .arg("--file")
+        .arg(file)
+        .args(["--replace-all", "--", key, value]);
+    let ran = run(command, LISTING_MOST_BYTES)?;
+    if ran.ok {
+        Ok(())
+    } else {
+        Err(refused(verdict(&ran.err, Reach::Local)))
+    }
 }
 
 #[cfg(test)]
@@ -1289,6 +1996,7 @@ mod tests {
             askpass: Some(PathBuf::from(
                 "/nix/store/x-askpass/bin/ronoctua-git-askpass",
             )),
+            pq_tls: None,
         }
     }
 
@@ -1309,6 +2017,7 @@ mod tests {
         let key = Credentials::Ssh {
             key: PathBuf::from("/home/someone/.config/ronoctua/belongings-keys/id_ed25519"),
             known_hosts: PathBuf::from("/home/someone/it's/known_hosts"),
+            pq_only: false,
         };
         let mut command = base(&fake_tools(), Path::new("/home/someone/repo"), Some(&key)).unwrap();
         subcommand(&mut command, "show");
@@ -1356,10 +2065,15 @@ mod tests {
         let token = Credentials::Token {
             file: PathBuf::from("/run/user/1000/ronoctua-belongings/token"),
             user: Some("someone".to_owned()),
+            pq_only: false,
         };
         let mut command = base(&fake_tools(), Path::new("/r"), Some(&token)).unwrap();
         subcommand(&mut command, "status");
         let env = envs(&command);
+        assert!(
+            !env.contains_key("OPENSSL_CONF"),
+            "a session that is not narrowed leaves OpenSSL as it is"
+        );
         assert_eq!(
             env["GIT_ASKPASS"].as_deref(),
             Some("/nix/store/x-askpass/bin/ronoctua-git-askpass")
@@ -1399,23 +2113,120 @@ mod tests {
         assert_eq!(ids.len(), Why::ALL.len());
     }
 
+    /// FAILS IF: a post-quantum-only session leaves ssh free to agree a
+    /// classical key, or one that is not asks for the narrower list.
+    #[test]
+    fn a_post_quantum_only_session_names_only_post_quantum_exchanges() {
+        let key = |pq_only| Credentials::Ssh {
+            key: PathBuf::from("/k"),
+            known_hosts: PathBuf::from("/h"),
+            pq_only,
+        };
+        let ssh_of = |credentials: &Credentials| {
+            let command = base(&fake_tools(), Path::new("/r"), Some(credentials)).unwrap();
+            envs(&command)["GIT_SSH_COMMAND"].clone().unwrap()
+        };
+        let narrow = ssh_of(&key(true));
+        let list = narrow
+            .split_whitespace()
+            .find_map(|word| word.strip_prefix("KexAlgorithms="))
+            .unwrap_or_default();
+        let said: Vec<&str> = list.split(',').collect();
+        assert_eq!(said, PQ_KEX, "{narrow}");
+        assert!(
+            narrow.ends_with(" -F none"),
+            "no configuration file can widen it: {narrow}"
+        );
+        assert!(!ssh_of(&key(false)).contains("KexAlgorithms"));
+        for name in PQ_KEX {
+            assert!(
+                name.starts_with("mlkem") || name.starts_with("sntrup"),
+                "{name} is not a post-quantum exchange"
+            );
+        }
+    }
+
+    /// FAILS IF: a post-quantum-only token reaches git without the file
+    /// that narrows its TLS — OpenSSL would read none, silently, and agree a
+    /// classical key with anybody — or its ssh is not narrowed too.
+    #[test]
+    fn a_post_quantum_only_token_runs_git_under_the_narrowing() {
+        // A FOLDER OF ITS OWN NAME: the TLS server test's is `pq-tls`, and
+        // the two run at once.
+        let dir = place("narrowing-file");
+        let file = dir.join("pq-tls.cnf");
+        std::fs::write(&file, "openssl_conf = openssl_init\n").unwrap();
+        let token = |pq_only| Credentials::Token {
+            file: PathBuf::from("/run/token"),
+            user: None,
+            pq_only,
+        };
+        let with = |pq_tls: Option<PathBuf>| Tools {
+            pq_tls,
+            ..fake_tools()
+        };
+
+        let command = base(
+            &with(Some(file.clone())),
+            Path::new("/r"),
+            Some(&token(true)),
+        )
+        .unwrap();
+        let env = envs(&command);
+        assert_eq!(
+            env["OPENSSL_CONF"].as_deref(),
+            Some(file.to_str().unwrap()),
+            "git's curl reads the narrowing"
+        );
+        assert_eq!(
+            env["GIT_SSL_VERSION"].as_deref(),
+            Some("tlsv1.3"),
+            "and git's own floor cannot be lowered below the hybrids"
+        );
+        let ssh = env["GIT_SSH_COMMAND"].clone().unwrap();
+        assert!(
+            ssh.contains(&format!(" -o KexAlgorithms={}", PQ_KEX.join(","))),
+            "an ssh remote reached with a token is narrowed too: {ssh}"
+        );
+
+        // NOTHING TO NARROW WITH IS A REFUSAL, never a session that is not.
+        for missing in [
+            None,
+            Some(dir.join("gone.cnf")),
+            Some(PathBuf::from("pq-tls.cnf")),
+        ] {
+            assert_eq!(
+                base(&with(missing.clone()), Path::new("/r"), Some(&token(true)))
+                    .unwrap_err()
+                    .why,
+                Why::Unstartable,
+                "{missing:?}"
+            );
+        }
+        // And a token that is not narrowed needs none.
+        let command = base(&with(None), Path::new("/r"), Some(&token(false))).unwrap();
+        assert!(!envs(&command).contains_key("OPENSSL_CONF"));
+        assert!(!envs(&command).contains_key("GIT_SSL_VERSION"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_failure_is_read_as_one_refusal() {
         assert_eq!(
-            verdict("fatal: not a git repository (or any parent)", false),
+            verdict("fatal: not a git repository (or any parent)", Reach::Local),
             Why::NotARepo
         );
         assert_eq!(
             verdict(
                 "fatal: could not read Username for 'https://h': terminal prompts disabled",
-                true
+                Reach::Remote
             ),
             Why::NeedsCredentials
         );
         assert_eq!(
             verdict(
                 "git@h: Permission denied (publickey).\nfatal: Could not read from remote repository.",
-                true
+                Reach::Remote
             ),
             Why::Refused,
             "refused before unreachable: both lines come together"
@@ -1423,15 +2234,73 @@ mod tests {
         assert_eq!(
             verdict(
                 "fatal: unable to access 'https://h/': Could not resolve host: h",
-                true
+                Reach::Remote
             ),
             Why::Unreachable
         );
         assert_eq!(
-            verdict("error: open(\"x\"): Permission denied", false),
+            verdict("error: open(\"x\"): Permission denied", Reach::Local),
             Why::Failed,
             "a local permission is not the remote's"
         );
+    }
+
+    /// FAILS IF: a server that would not agree a key is blamed on the wrong
+    /// thing — called "not post-quantum" when the session never asked for
+    /// that (the file manager's own fetch), or "unreachable" when it was
+    /// reached and refused only what a post-quantum-only session may agree.
+    #[test]
+    fn a_key_exchange_refusal_says_whose_it_is() {
+        // OpenSSH's own words, and git's line after them: the host was
+        // reached, and offered nothing this session may agree.
+        let ssh = "Unable to negotiate with 140.82.121.4 port 22: no matching key exchange \
+                   method found. Their offer: diffie-hellman-group14-sha1\r\nfatal: Could not \
+                   read from remote repository.";
+        assert_eq!(
+            verdict(ssh, Reach::PostQuantumOnly),
+            Why::NotPostQuantum,
+            "not post-quantum before unreachable"
+        );
+        assert_eq!(
+            verdict(ssh, Reach::Remote),
+            Why::NoCommonKeyExchange,
+            "a session that is not narrowed offered everything: the server has only old ones"
+        );
+        // curl's words over OpenSSL's, MEASURED on the pinned git against a
+        // server with X25519 alone.
+        let tls = "fatal: unable to access 'https://127.0.0.1:26103/x.git/': TLS connect error: \
+                   error:0A000410:SSL routines::ssl/tls alert handshake failure";
+        assert_eq!(verdict(tls, Reach::PostQuantumOnly), Why::NotPostQuantum);
+        assert_eq!(
+            verdict(tls, Reach::Remote),
+            Why::Unreachable,
+            "a handshake that failed for a session that was not narrowed is not ours to explain"
+        );
+
+        // WHERE A CALL GOES decides which of these it can be.
+        let key = |pq_only| Credentials::Ssh {
+            key: PathBuf::from("/k"),
+            known_hosts: PathBuf::from("/h"),
+            pq_only,
+        };
+        let token = |pq_only| Credentials::Token {
+            file: PathBuf::from("/t"),
+            user: None,
+            pq_only,
+        };
+        assert_eq!(reach_of(Some(&key(true)), "push"), Reach::PostQuantumOnly);
+        assert_eq!(
+            reach_of(Some(&token(true)), "fetch"),
+            Reach::PostQuantumOnly
+        );
+        assert_eq!(reach_of(Some(&key(false)), "push"), Reach::Remote);
+        assert_eq!(reach_of(Some(&token(false)), "push"), Reach::Remote);
+        assert_eq!(
+            reach_of(None, "fetch"),
+            Reach::Remote,
+            "the file manager's fetch"
+        );
+        assert_eq!(reach_of(None, "status"), Reach::Local);
     }
 
     #[test]
@@ -2313,5 +3182,897 @@ mod tests {
         let repo = opened(&tools, &dir);
         assert_eq!(repo.fetch(None).unwrap_err().why, Why::Unreachable);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- against a real sshd -----------------------------------------
+
+    /// An `sshd` of this test's own, on the loopback, agreeing only `kex`,
+    /// stopped when dropped.
+    struct Sshd {
+        child: std::process::Child,
+        port: u16,
+    }
+
+    impl Drop for Sshd {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// A program the `belongings-ssh-is-pq-only` check hands this test by
+    /// its store path. Missing, the test FAILS: it is never run by a plain
+    /// `cargo test` (it is ignored there), and run by the check it must run.
+    fn given(variable: &str) -> PathBuf {
+        let path = std::env::var_os(variable)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                panic!("{variable} is not set: `belongings-ssh-is-pq-only` runs this test")
+            });
+        assert!(path.is_absolute(), "{variable} is not a store path");
+        path
+    }
+
+    /// An ed25519 key at `path`, no passphrase.
+    fn key_at(path: &Path) {
+        let made = Command::new(given("RONOCTUA_SSH_KEYGEN"))
+            .args(["-q", "-t", "ed25519", "-N", "", "-C", "test", "-f"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+    }
+
+    fn sshd(dir: &Path, kex: &str) -> Sshd {
+        let host_key = dir.join("host_ed25519");
+        if !host_key.exists() {
+            key_at(&host_key);
+        }
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .unwrap()
+            .port();
+        let config = dir.join(format!("sshd_config-{port}"));
+        // NOBODY CAN LOG IN: no authorized key, no password. The session is
+        // refused AFTER the key exchange, which is the half under test.
+        std::fs::write(
+            &config,
+            format!(
+                "ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nKexAlgorithms {kex}\n\
+                 PidFile none\nStrictModes no\nUsePAM no\nPasswordAuthentication no\n\
+                 KbdInteractiveAuthentication no\nAuthorizedKeysFile none\n",
+                host_key.display()
+            ),
+        )
+        .unwrap();
+        let log = std::fs::File::create(dir.join(format!("sshd-{port}.log"))).unwrap();
+        let child = Command::new(given("RONOCTUA_SSHD"))
+            .args(["-D", "-e", "-f"])
+            .arg(&config)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let server = Sshd { child, port };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sshd did not listen: {}",
+                std::fs::read_to_string(dir.join(format!("sshd-{port}.log"))).unwrap_or_default()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        server
+    }
+
+    /// FAILS IF: the belongings' session (`pq_only`) agrees a classical key
+    /// with a server that offers nothing else, the refusal reads as anything
+    /// but `NotPostQuantum`, a server offering ML-KEM — or only sntrup761, as
+    /// GitHub until 2026-10-14 — is refused, or the list drifts from the
+    /// system's (`RONOCTUA_SSH_PQ_KEX`, out of `assets/ssh.nix`).
+    ///
+    /// Ignored in a plain `cargo test`, which has no `sshd`; the
+    /// `belongings-ssh-is-pq-only` check runs it on its own, with one.
+    #[test]
+    #[ignore = "needs sshd: run by the belongings-ssh-is-pq-only check"]
+    fn a_post_quantum_only_session_refuses_a_classical_server() {
+        let system = std::env::var("RONOCTUA_SSH_PQ_KEX")
+            .expect("RONOCTUA_SSH_PQ_KEX is not set: `belongings-ssh-is-pq-only` runs this test");
+        assert_eq!(
+            system.split(',').collect::<Vec<_>>(),
+            PQ_KEX,
+            "assets/ssh.nix"
+        );
+
+        let tools = real();
+        assert!(tools.ssh.is_some(), "RONOCTUA_SSH is not set");
+        let dir = place("pq-only");
+        let client_key = dir.join("client_ed25519");
+        key_at(&client_key);
+        let credentials = |pq_only| Credentials::Ssh {
+            key: client_key.clone(),
+            known_hosts: dir.join("known_hosts"),
+            pq_only,
+        };
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        fixture(&tools, &work, &["init", "-q", "-b", "main"]);
+        fixture(
+            &tools,
+            &work,
+            &["remote", "add", "origin", "ssh://127.0.0.1:1/x.git"],
+        );
+        let fetch_from = |server: &Sshd, pq_only: bool| {
+            fixture(
+                &tools,
+                &work,
+                &[
+                    "remote",
+                    "set-url",
+                    "origin",
+                    &format!("ssh://127.0.0.1:{}/x.git", server.port),
+                ],
+            );
+            opened(&tools, &work)
+                .fetch(Some(&credentials(pq_only)))
+                .unwrap_err()
+                .why
+        };
+
+        let classical = sshd(&dir, "curve25519-sha256");
+        assert_eq!(fetch_from(&classical, true), Why::NotPostQuantum);
+        assert_eq!(
+            fetch_from(&classical, false),
+            Why::Refused,
+            "the same server is reached by a session that is not narrowed: \
+             the refusal above is the narrowing's"
+        );
+        drop(classical);
+
+        for kex in [
+            "mlkem768x25519-sha256",
+            "sntrup761x25519-sha512@openssh.com",
+        ] {
+            let quantum = sshd(&dir, kex);
+            assert_eq!(
+                fetch_from(&quantum, true),
+                Why::Refused,
+                "{kex}: the key was agreed and only the login refused"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- against a real TLS server -----------------------------------
+
+    /// An `openssl s_server` of this test's own, on the loopback, agreeing
+    /// only what `limits` allows, answering every request with a page —
+    /// stopped when dropped.
+    struct TlsServer {
+        child: std::process::Child,
+        port: u16,
+    }
+
+    impl Drop for TlsServer {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// `openssl`, under no configuration but its own defaults: the test's
+    /// server and certificate are never shaped by the machine running it.
+    fn openssl() -> Command {
+        let mut command = Command::new(given("RONOCTUA_OPENSSL"));
+        command
+            .env("OPENSSL_CONF", "/dev/null")
+            .stdin(Stdio::null());
+        command
+    }
+
+    /// A P-256 certificate for `127.0.0.1` and its key, in `dir`, made once:
+    /// `(cert.pem, key.pem)`.
+    fn certificate(dir: &Path) -> (PathBuf, PathBuf) {
+        let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));
+        if !cert.exists() {
+            let made = openssl()
+                .args(["req", "-x509", "-newkey", "ec", "-pkeyopt"])
+                .args(["ec_paramgen_curve:P-256", "-days", "2", "-nodes"])
+                .args([
+                    "-subj",
+                    "/CN=127.0.0.1",
+                    "-addext",
+                    "subjectAltName=IP:127.0.0.1",
+                ])
+                .arg("-keyout")
+                .arg(&key)
+                .arg("-out")
+                .arg(&cert)
+                .output()
+                .unwrap();
+            assert!(
+                made.status.success(),
+                "{}",
+                String::from_utf8_lossy(&made.stderr)
+            );
+        }
+        (cert, key)
+    }
+
+    fn tls_server(dir: &Path, limits: &[&str]) -> TlsServer {
+        let (cert, key) = certificate(dir);
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .unwrap()
+            .port();
+        let child = openssl()
+            .args(["s_server", "-quiet", "-www", "-accept"])
+            .arg(format!("127.0.0.1:{port}"))
+            .arg("-cert")
+            .arg(&cert)
+            .arg("-key")
+            .arg(&key)
+            .args(limits)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let server = TlsServer { child, port };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "openssl s_server {limits:?} did not listen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        server
+    }
+
+    /// FAILS IF: the belongings' token (`pq_only`) agrees a classical key
+    /// with a TLS server that offers nothing else — X25519 alone, the NIST
+    /// curves alone, TLS 1.2 alone — the refusal reads as anything but
+    /// `NotPostQuantum`, or a server offering a hybrid ML-KEM group is
+    /// refused. The configuration is the one the build ships
+    /// (`RONOCTUA_GIT_PQ_TLS`), with the git the build ships: OpenSSL ignores
+    /// a configuration it cannot use without a word, so only this shows the
+    /// narrowing is there.
+    ///
+    /// Ignored in a plain `cargo test`, which has no `openssl` program; the
+    /// `belongings-https-is-pq-only` check runs it on its own, with one.
+    #[test]
+    #[ignore = "needs openssl s_server: run by the belongings-https-is-pq-only check"]
+    fn a_post_quantum_only_token_refuses_a_classical_tls_server() {
+        let tools = real();
+        let narrowing = tools
+            .pq_tls
+            .clone()
+            .expect("RONOCTUA_GIT_PQ_TLS is not set: the build ships the narrowing");
+        assert!(narrowing.is_file(), "{}", narrowing.display());
+        let dir = place("pq-tls");
+        let token = dir.join("token");
+        std::fs::write(&token, b"a-token\n").unwrap();
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let credentials = |pq_only| Credentials::Token {
+            file: token.clone(),
+            user: None,
+            pq_only,
+        };
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        fixture(&tools, &work, &["init", "-q", "-b", "main"]);
+        fixture(
+            &tools,
+            &work,
+            &["remote", "add", "origin", "https://127.0.0.1:1/x.git"],
+        );
+        let fetch_from = |server: &TlsServer, pq_only: bool| {
+            fixture(
+                &tools,
+                &work,
+                &[
+                    "remote",
+                    "set-url",
+                    "origin",
+                    &format!("https://127.0.0.1:{}/x.git", server.port),
+                ],
+            );
+            opened(&tools, &work)
+                .fetch(Some(&credentials(pq_only)))
+                .unwrap_err()
+                .why
+        };
+        // THE TEST'S OWN AUTHORITY, in the repository: the certificate
+        // verifies, so what is left to fail is the key exchange.
+        let (cert, _) = certificate(&dir);
+        fixture(
+            &tools,
+            &work,
+            &["config", "http.sslCAInfo", cert.to_str().unwrap()],
+        );
+
+        // REACHED is what a page that is no repository answers: git got past
+        // TLS, asked for `info/refs`, and read HTML.
+        let reached = Why::Failed;
+        for limits in [
+            &["-groups", "X25519"][..],
+            &["-groups", "P-256:P-384"][..],
+            &["-tls1_2"][..],
+        ] {
+            let classical = tls_server(&dir, limits);
+            assert_eq!(
+                fetch_from(&classical, true),
+                Why::NotPostQuantum,
+                "{limits:?}"
+            );
+            assert_eq!(
+                fetch_from(&classical, false),
+                reached,
+                "{limits:?}: the same server is reached by a token that is not narrowed — \
+                 the refusal above is the narrowing's"
+            );
+        }
+        for group in ["X25519MLKEM768", "SecP384r1MLKEM1024"] {
+            let quantum = tls_server(&dir, &["-groups", group]);
+            assert_eq!(
+                fetch_from(&quantum, true),
+                reached,
+                "{group}: the key was agreed, and only the page was not a repository"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a rewritten commit loses its tree, message or dates, a
+    /// lease another push broke still forces, or a name that is not one
+    /// becomes an argument.
+    #[test]
+    fn a_history_is_rewritten_and_forced_only_under_its_lease() {
+        let tools = real();
+        let dir = place("rewrite");
+        let bare = dir.join("remote.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        fixture(&tools, &bare, &["init", "-q", "--bare", "-b", "main"]);
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        fixture(&tools, &work, &["init", "-q", "-b", "main"]);
+        for n in 0..3 {
+            std::fs::write(work.join("f"), format!("{n}")).unwrap();
+            fixture(&tools, &work, &["add", "-A"]);
+            fixture(&tools, &work, &["commit", "-q", "-m", &format!("c{n}")]);
+        }
+        fixture(
+            &tools,
+            &work,
+            &["remote", "add", "origin", &bare.to_string_lossy()],
+        );
+        fixture(&tools, &work, &["push", "-q", "origin", "main"]);
+        let head = Oid(fixture(&tools, &work, &["rev-parse", "HEAD"]));
+        let tree = Oid(fixture(&tools, &work, &["rev-parse", "HEAD^{tree}"]));
+        let repo = opened(&tools, &work);
+
+        // THE HEAD'S TREE AS A NEW ROOT, its message and dates kept.
+        let signed = Signature {
+            name: "Ada".to_owned(),
+            email: "ada@example.org".to_owned(),
+            date: "1700000000 +0000".to_owned(),
+        };
+        let root = repo
+            .commit_tree(&Recommit {
+                tree: tree.clone(),
+                parent: None,
+                message: "c2".to_owned(),
+                author: signed.clone(),
+                committer: signed.clone(),
+            })
+            .unwrap();
+        assert_ne!(root, head);
+        assert_eq!(
+            fixture(
+                &tools,
+                &work,
+                &["log", "--format=%T|%s|%ad|%cd", "--date=raw", &root.0]
+            ),
+            format!("{}|c2|1700000000 +0000|1700000000 +0000", tree.0),
+            "one commit, the same tree, message and dates"
+        );
+
+        // A LEASE ON THE HEAD IT FETCHED forces the new root up.
+        repo.push_force_with_lease(None, "origin", &root, "main", &head)
+            .unwrap();
+        assert_eq!(fixture(&tools, &bare, &["rev-parse", "main"]), root.0);
+        // AND A LEASE ANOTHER PUSH BROKE refuses, leaving the other's push.
+        assert!(
+            repo.push_force_with_lease(None, "origin", &head, "main", &head)
+                .is_err()
+        );
+        assert_eq!(fixture(&tools, &bare, &["rev-parse", "main"]), root.0);
+
+        // NOTHING THAT IS NOT A NAME becomes an argument.
+        for (remote, branch) in [("--exec=x", "main"), ("origin", "-x"), ("origin", "a..b")] {
+            assert_eq!(
+                repo.push_force_with_lease(None, remote, &root, branch, &root)
+                    .unwrap_err()
+                    .why,
+                Why::Garbled
+            );
+        }
+        let short = Oid(root.0[..8].to_owned());
+        assert_eq!(
+            repo.push_force_with_lease(None, "origin", &short, "main", &root)
+                .unwrap_err()
+                .why,
+            Why::Garbled
+        );
+        let forged = Signature {
+            name: "Ada\nCommitter: Eve".to_owned(),
+            ..signed.clone()
+        };
+        let refused = repo.commit_tree(&Recommit {
+            tree,
+            parent: Some(root),
+            message: "x".to_owned(),
+            author: forged,
+            committer: signed,
+        });
+        assert_eq!(refused.unwrap_err().why, Why::Garbled);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: two changes in different hunks are not joined, a hunk both
+    /// changed is not counted, a favour does not settle it to its side, the
+    /// union does not keep both lines, or the three sides outlive the call.
+    #[test]
+    fn merge_file_joins_hunks_and_counts_the_clashes() {
+        let tools = real();
+        let dir = place("merge-file");
+        let base_text = b"one\ntwo\nthree\nfour\nfive\nsix\nseven\n";
+        let ours = b"ONE\ntwo\nthree\nfour\nfive\nsix\nseven\n";
+        let theirs = b"one\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n";
+        let clean = merge_file(&tools, &dir, base_text, ours, theirs, Favor::None).unwrap();
+        assert_eq!(clean.conflicts, 0);
+        assert_eq!(clean.bytes, b"ONE\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n");
+
+        let theirs = b"uno\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n";
+        let clash = merge_file(&tools, &dir, base_text, ours, theirs, Favor::None).unwrap();
+        assert_eq!(clash.conflicts, 1);
+        assert!(String::from_utf8_lossy(&clash.bytes).contains("<<<<<<< ours"));
+        let mine = merge_file(&tools, &dir, base_text, ours, theirs, Favor::Ours).unwrap();
+        assert_eq!(mine.conflicts, 0);
+        assert_eq!(mine.bytes, b"ONE\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n");
+        let other = merge_file(&tools, &dir, base_text, ours, theirs, Favor::Theirs).unwrap();
+        assert_eq!(other.bytes, b"uno\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n");
+        let both = merge_file(&tools, &dir, base_text, ours, theirs, Favor::Union).unwrap();
+        assert_eq!(
+            both.bytes,
+            b"ONE\nuno\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the three sides outlived the merge"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a global setting is written anywhere but the person's
+    /// `~/.gitconfig` (this process's `HOME` or `GIT_CONFIG_GLOBAL` would
+    /// win), a second write leaves two values, an unset key is an error, or
+    /// a key git would read as an option or a value with a line break in it
+    /// is taken.
+    #[test]
+    fn a_global_setting_is_the_persons_and_replaces_itself() {
+        let tools = real();
+        let home = place("global-config");
+        set_global(&tools, &home, "gpg.format", "ssh").unwrap();
+        set_global(&tools, &home, "gpg.format", "ssh").unwrap();
+        set_global(&tools, &home, "user.signingkey", "~/.ssh/id_ed25519.pub").unwrap();
+        let file = std::fs::read_to_string(home.join(".gitconfig")).unwrap();
+        assert_eq!(file.matches("format = ssh").count(), 1, "{file}");
+        assert_eq!(
+            get_global(&tools, &home, "user.signingkey")
+                .unwrap()
+                .as_deref(),
+            Some("~/.ssh/id_ed25519.pub")
+        );
+        assert_eq!(get_global(&tools, &home, "commit.gpgsign").unwrap(), None);
+        for key in ["--add", "nosection", "a..b", ".x", "a.b c"] {
+            assert_eq!(
+                set_global(&tools, &home, key, "v").unwrap_err().why,
+                Why::Garbled,
+                "{key}"
+            );
+        }
+        assert_eq!(
+            set_global(&tools, &home, "user.name", "a\n[core]\n\tpager = x")
+                .unwrap_err()
+                .why,
+            Why::Garbled
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// FAILS IF: a value added to a key that holds several replaces the
+    /// others or is added twice; a setting in a file of its own is not
+    /// written there, or the file's private mode is lost; what an included
+    /// file says is not read as the person's — or an include whose file is
+    /// missing is an error (a machine without the file reads nothing from
+    /// it).
+    #[test]
+    fn an_included_file_counts_and_is_added_once() {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let tools = real();
+        let home = place("global-include");
+        add_global(&tools, &home, "include.path", "~/.other.inc").unwrap();
+        add_global(&tools, &home, "include.path", "~/.ssh/signing.inc").unwrap();
+        add_global(&tools, &home, "include.path", "~/.ssh/signing.inc").unwrap();
+        let file = std::fs::read_to_string(home.join(".gitconfig")).unwrap();
+        assert_eq!(file.matches("path = ").count(), 2, "{file}");
+        assert!(file.contains("~/.other.inc"), "{file}");
+        // MISSING: nothing read from it, and no error.
+        assert_eq!(get_global(&tools, &home, "commit.gpgsign").unwrap(), None);
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let inc = home.join(".ssh/signing.inc");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&inc)
+            .unwrap();
+        set_in_file(&tools, &inc, "commit.gpgsign", "true").unwrap();
+        set_in_file(&tools, &inc, "commit.gpgsign", "true").unwrap();
+        let text = std::fs::read_to_string(&inc).unwrap();
+        assert_eq!(text.matches("gpgsign = true").count(), 1, "{text}");
+        assert_eq!(
+            std::fs::metadata(&inc).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "git widened the file it rewrote"
+        );
+        assert_eq!(
+            get_global(&tools, &home, "commit.gpgsign")
+                .unwrap()
+                .as_deref(),
+            Some("true"),
+            "what the included file says is not the person's"
+        );
+        assert_eq!(
+            set_in_file(&tools, Path::new("relative.inc"), "a.b", "c")
+                .unwrap_err()
+                .why,
+            Why::Garbled
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    // ---- the clone -----------------------------------------------------
+
+    #[cfg(feature = "clone")]
+    #[test]
+    fn an_address_names_its_host_or_none() {
+        for (url, host) in [
+            (
+                "https://github.com/ronoctua/ronoctua-distro.git",
+                Some("github.com"),
+            ),
+            ("HTTPS://GitHub.com./a", Some("github.com")),
+            (
+                "https://user:token@Example.org:8443/a.git",
+                Some("example.org"),
+            ),
+            ("ssh://git@example.org:22/a.git", Some("example.org")),
+            ("git://127.0.0.1:9418/a.git", Some("127.0.0.1")),
+            (
+                "git@github.com:ronoctua/ronoctua-distro.git",
+                Some("github.com"),
+            ),
+            ("github.com:a/b", Some("github.com")),
+            ("file:///srv/a.git", None),
+            ("/srv/a.git", None),
+            ("./a:b", None),
+            ("ext::sh -c touch% /tmp/x", None),
+            ("--upload-pack=touch x", None),
+            ("ftp://example.org/a", None),
+            ("https://[::1]/a", None),
+            ("https:///a", None),
+        ] {
+            assert_eq!(host_of(url).as_deref(), host, "{url}");
+        }
+    }
+
+    /// A pass for `host`, over a consent file of this test's own.
+    #[cfg(feature = "clone")]
+    fn pass_for(dir: &Path, host: &str) -> ronoctua_consent::Pass {
+        let store = ronoctua_consent::store_at(Some(dir.join("consent")));
+        ronoctua_consent::let_hosts_in(&store, &[host], true).unwrap();
+        ronoctua_consent::pass_in(&store, host).unwrap()
+    }
+
+    /// A folder of a clone test's own, under the temporary directory (run
+    /// with `TMPDIR` pointing where scratch belongs), removed when dropped —
+    /// on a panic too.
+    #[cfg(feature = "clone")]
+    struct Scratch(PathBuf);
+
+    #[cfg(feature = "clone")]
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            Self(place(name))
+        }
+    }
+
+    #[cfg(feature = "clone")]
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_clone_asks_only_the_host_its_pass_lets() {
+        let tools = real();
+        let scratch = Scratch::new("clone-refused");
+        let dir = &scratch.0;
+        let other = pass_for(dir, "example.org");
+        let into = dir.join("into");
+        for (url, into) in [
+            // The pass is another host's.
+            (
+                "https://github.com/ronoctua/ronoctua-distro.git",
+                into.as_path(),
+            ),
+            // No host at all: a path is never what a pass lets.
+            ("/srv/a.git", into.as_path()),
+            ("file:///srv/a.git", into.as_path()),
+            // An option where the address goes.
+            ("--upload-pack=touch x", into.as_path()),
+            // A folder that is not absolute.
+            ("https://example.org/a.git", Path::new("relative")),
+        ] {
+            let refusal = Repo::clone_with(&tools, &other, url, into).unwrap_err();
+            assert_eq!(refusal.why, Why::Garbled, "{url}");
+        }
+        assert!(!into.exists(), "a refused clone made its folder");
+        assert!(!Path::new("relative").exists());
+    }
+
+    /// FAILS IF: the clone's command stops refusing a redirect or loses its
+    /// low-speed limit — the two things only the clone adds to [`base`].
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_clone_follows_no_redirect_and_gives_up_on_a_stalled_line() {
+        let command = clone_command(
+            &fake_tools(),
+            "https://github.com/ronoctua/ronoctua-distro.git",
+            Path::new("/home/ada/ronoctua-distro"),
+        )
+        .unwrap();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let clone_at = args.iter().position(|a| a == "clone").unwrap();
+        for pair in [
+            "http.followRedirects=false".to_owned(),
+            format!("http.lowSpeedLimit={CLONE_LOW_SPEED_BYTES_PER_S}"),
+            format!("http.lowSpeedTime={CLONE_LOW_SPEED_S}"),
+        ] {
+            let at = args.iter().position(|a| *a == pair).unwrap_or_else(|| {
+                panic!("{pair} is not in {args:?}");
+            });
+            // A `-c` pair is git's, so it goes before the subcommand.
+            assert!(at < clone_at && args[at - 1] == "-c", "{args:?}");
+        }
+    }
+
+    /// FAILS IF: a remote that answers with a redirect to ANOTHER host takes
+    /// the clone there. A real HTTP exchange on the loopback: the first host
+    /// (127.0.0.1, the one the pass lets) answers every request with a 302
+    /// to a second (127.0.0.2), which counts who reaches it.
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_redirect_to_another_host_is_not_followed() {
+        use std::io::{Read as _, Write as _};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let tools = real();
+        let scratch = Scratch::new("clone-redirect");
+        let dir = &scratch.0;
+        let elsewhere = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
+        let elsewhere_port = elsewhere.local_addr().unwrap().port();
+        elsewhere.set_nonblocking(true).unwrap();
+        let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let served = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&served);
+        std::thread::spawn(move || {
+            for stream in first.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                counted.fetch_add(1, Ordering::SeqCst);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2:{elsewhere_port}/distro.git/info/refs?service=git-upload-pack\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+        });
+        let pass = pass_for(dir, "127.0.0.1");
+        let url = format!("http://127.0.0.1:{port}/distro.git");
+        let into = dir.join("into");
+        let refusal = Repo::clone_with(&tools, &pass, &url, &into).unwrap_err();
+        assert!(
+            served.load(Ordering::SeqCst) >= 1,
+            "the first host was never asked: {refusal:?}"
+        );
+        assert!(
+            elsewhere.accept().is_err(),
+            "the clone followed the redirect to a host nobody let"
+        );
+        assert!(!into.exists(), "a failed clone left its folder");
+    }
+
+    /// A real `git://` remote on a free port of the loopback, serving
+    /// `base` — and it lives IN THIS PROCESS: a thread of the test holds the
+    /// listening socket, and each connection is served by `git-daemon
+    /// --inetd`, which this thread waits for and which ends with its
+    /// connection. A listening daemon of its own would outlive a test that
+    /// is killed (it did once, reparented, holding every descriptor the
+    /// test had); a thread cannot. Dropped — on a panic too — the thread is
+    /// woken, stops, and the port closes.
+    #[cfg(feature = "clone")]
+    struct Remote {
+        port: u16,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        serving: Option<std::thread::JoinHandle<()>>,
+    }
+
+    #[cfg(feature = "clone")]
+    impl Remote {
+        fn serving(tools: &Tools, base: &Path) -> Self {
+            use std::os::fd::OwnedFd;
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let exec_path = Command::new(&tools.git)
+                .arg("--exec-path")
+                .output()
+                .unwrap();
+            let core = PathBuf::from(String::from_utf8(exec_path.stdout).unwrap().trim());
+            let daemon = core.join("git-daemon");
+            assert!(daemon.is_file(), "{} is not there", daemon.display());
+            let base = base.to_path_buf();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopped = std::sync::Arc::clone(&stop);
+            let serving = std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stopped.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(stream) = stream else { continue };
+                    let Ok(reading) = stream.try_clone() else {
+                        continue;
+                    };
+                    // The command and its copies of the socket go at the end
+                    // of this statement, so the connection ends when the
+                    // child does.
+                    let child = Command::new(&daemon)
+                        .args([
+                            "--inetd",
+                            "--export-all",
+                            "--timeout=30",
+                            "--init-timeout=10",
+                        ])
+                        .arg(format!("--base-path={}", base.display()))
+                        .arg(&base)
+                        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                        .env("GIT_CONFIG_NOSYSTEM", "1")
+                        // `git-daemon` runs `git upload-pack` by NAME, and,
+                        // unlike `git` itself, never puts its own folder on
+                        // the PATH: without this the server is git's only
+                        // where the test's PATH happens to carry git (a
+                        // workstation), and the build sandbox's does not.
+                        .env("PATH", &core)
+                        .stdin(Stdio::from(OwnedFd::from(reading)))
+                        .stdout(Stdio::from(OwnedFd::from(stream)))
+                        .stderr(Stdio::null())
+                        .spawn();
+                    if let Ok(mut child) = child {
+                        let _ = child.wait();
+                    }
+                }
+            });
+            Self {
+                port,
+                stop,
+                serving: Some(serving),
+            }
+        }
+    }
+
+    #[cfg(feature = "clone")]
+    impl Drop for Remote {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Wakes the thread out of `accept`; it sees the flag and stops.
+            let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+            if let Some(serving) = self.serving.take() {
+                let _ = serving.join();
+            }
+        }
+    }
+
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_clone_makes_the_repository_and_runs_nothing_of_it() {
+        let tools = real();
+        let scratch = Scratch::new("clone-made");
+        let dir = &scratch.0;
+        let source = dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        fixture(&tools, &source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("flake.nix"), "{ }\n").unwrap();
+        // A HOSTILE CHECKOUT: an attribute naming a filter driver. A clone
+        // reads no configuration of the remote's, so the driver has no
+        // command — and the hook a template would bring is not brought.
+        std::fs::write(source.join(".gitattributes"), "* filter=evil\n").unwrap();
+        fixture(&tools, &source, &["add", "-A"]);
+        fixture(&tools, &source, &["commit", "-q", "-m", "first"]);
+        let bare = dir.join("served/distro.git");
+        fixture(
+            &tools,
+            dir,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                source.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let remote = Remote::serving(&tools, &dir.join("served"));
+        let pass = pass_for(dir, "127.0.0.1");
+        let url = format!("git://127.0.0.1:{}/distro.git", remote.port);
+
+        // Into a folder whose parents do not exist yet.
+        let into = dir.join("home/work/distro");
+        let repo = Repo::clone_with(&tools, &pass, &url, &into).unwrap();
+        assert_eq!(repo.root, into);
+        assert_eq!(
+            std::fs::read_to_string(into.join("flake.nix")).unwrap(),
+            "{ }\n"
+        );
+        assert!(repo.head_commit().unwrap().is_some());
+        let hooks: Vec<_> = std::fs::read_dir(into.join(".git/hooks"))
+            .map(|d| d.flatten().collect())
+            .unwrap_or_default();
+        assert!(hooks.is_empty(), "the clone brought hooks: {hooks:?}");
+
+        // THE SAME FOLDER AGAIN: it is there and not empty, and git says so —
+        // a refusal, and what was there stays.
+        let again = Repo::clone_with(&tools, &pass, &url, &into).unwrap_err();
+        assert_eq!(again.why, Why::Failed);
+        assert!(into.join("flake.nix").exists());
+
+        // A REPOSITORY THE REMOTE DOES NOT HAVE: a refusal, and no half
+        // folder left behind.
+        let missing = format!("git://127.0.0.1:{}/missing.git", remote.port);
+        let lost = dir.join("lost");
+        assert!(Repo::clone_with(&tools, &pass, &missing, &lost).is_err());
+        assert!(!lost.exists(), "a failed clone left its folder");
+
+        // A REMOTE THAT IS NOT THERE AT ALL: unreachable, said as such.
+        let port = remote.port;
+        drop(remote);
+        let gone = format!("git://127.0.0.1:{port}/distro.git");
+        let refusal = Repo::clone_with(&tools, &pass, &gone, &lost).unwrap_err();
+        assert_eq!(refusal.why, Why::Unreachable, "{refusal:?}");
+        assert!(!lost.exists(), "a failed clone left its folder");
     }
 }

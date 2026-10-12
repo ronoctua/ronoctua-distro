@@ -569,6 +569,20 @@ pub fn teaching(texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
     out
 }
 
+/// [`teaching`], appended to a line of shortcuts — with the space the line's
+/// last word owes the dot that opens it.
+///
+/// The sentence starts with `·`, and Fluent drops a value's leading blank, so
+/// the space before the dot is the joiner's to put. The footer put it; the
+/// windows' header and the file manager did not, and every window read
+/// `C-d remove· RCtrl ↑↓` (photographed). One joiner, for every door.
+pub fn teach_after(line: &mut Vec<crate::chrome::Piece>, texts: &ronoctua_i18n::Texts) {
+    if line.last().is_some_and(|p| !p.text.ends_with(' ')) {
+        line.push(crate::chrome::Piece::prose(" "));
+    }
+    line.extend(teaching(texts));
+}
+
 /// The name the opened line's own keys go by, for the sentence under the
 /// pointer. Not a command of the registry: nothing runs it, it is walked.
 pub const WALK: &str = "fold-walk";
@@ -640,6 +654,28 @@ mod tests {
         fold.toggle();
         settle(&mut fold, wrap_pieces(pieces, columns).len());
         fold
+    }
+
+    /// FAILS IF: the drawer's teaching is glued to the word before it
+    /// (`remove· RCtrl`), or a line that already ends in a space gets two.
+    #[test]
+    fn the_teaching_keeps_its_space_after_any_line() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).unwrap();
+            for (line, ends) in [("C-d remove", "remove ·"), ("C-d remove ", "remove ·")] {
+                let mut pieces = prose(line);
+                teach_after(&mut pieces, &t);
+                let text: String = pieces.iter().map(|p| p.text.as_str()).collect();
+                assert!(text.contains(ends), "{language}: {text}");
+                assert!(!text.contains("remove  "), "{language}: {text}");
+            }
+            let mut alone = Vec::new();
+            teach_after(&mut alone, &t);
+            assert!(
+                !alone[0].text.starts_with(' '),
+                "{language}: a line of nothing"
+            );
+        }
     }
 
     #[test]

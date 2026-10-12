@@ -33,6 +33,10 @@ let
   };
 in
 {
+  # The registry this module writes its programs into (see `browser.nix` for
+  # why it is imported here too).
+  imports = [ ./distro-apps.nix ];
+
   options.ronoctua.media.enable =
     lib.mkEnableOption "the players and converters: ffmpeg-full, VLC, mpv, gstreamer (~1.0 GiB)"
     // {
@@ -161,61 +165,102 @@ in
   # THE VA-API DRIVERS ARE NOT UNDER THE SWITCH, at the bottom of the file: they
   # are hardware enablement and not an application. A reduced machine has the
   # same GPU, and the compositor decodes with them.
-  # ONE definition, two halves — `mkMerge` and not two bindings, because an
-  # attribute may only be written once in an attrset.
   #
-  # The first half is unconditional (the decoders, argued above). The second is
-  # the players and the rest, under the switch: `ffmpeg-full`, `exiftool` and
-  # `poppler-utils` are NOT in it any more.
-  config.environment.systemPackages = lib.mkMerge [
-    (with pkgs; [
-      ffmpeg-full
-      exiftool
-      poppler-utils # pdftoppm and pdfinfo — a page as a picture, and a page count
-    ])
-    (lib.mkIf config.ronoctua.media.enable (
-      (with pkgs; [
-        # ---- conversion ----
-        imagemagick
-        sox
-        yt-dlp
+  # THE PROGRAMS ARE THE REGISTRY'S (`nix/modules/distro-apps.nix`), one entry
+  # each, so a person can keep any of them off a machine. The decoders are in
+  # the `base` group — every profile, the owner's decision argued above — and
+  # declining one takes the PROGRAM off the `PATH` and nothing from the file
+  # manager, which runs it by the store path in the variables above. The rest
+  # is the `media` group, this module's switch.
+  #
+  # WHAT STAYS HERE is not a program anybody starts: the screenshot editor
+  # the notification offers (by `RONOCTUA_SWAPPY`, so its action disappears
+  # with this switch) and GStreamer, which GTK applications load.
+  config.ronoctua.apps =
+    lib.mapAttrs
+      (_: package: {
+        inherit package;
+        group = "base";
+      })
+      {
+        ffmpeg = pkgs.ffmpeg-full;
+        inherit (pkgs) exiftool;
+        # pdftoppm and pdfinfo — a page as a picture, and a page count.
+        poppler-utils = pkgs.poppler-utils;
+      }
+    //
+      lib.mapAttrs
+        (
+          _: e:
+          {
+            group = "media";
+          }
+          // e
+        )
+        {
+          # ---- conversion ----
+          imagemagick.package = pkgs.imagemagick;
+          sox.package = pkgs.sox;
+          yt-dlp.package = pkgs.yt-dlp;
 
-        # ---- players ----
-        mpv # the everyday one: one binary, keyboard-driven
-        vlc # the one that opens what mpv refuses
+          # ---- players ----
+          # The everyday one: one binary, keyboard-driven.
+          mpv = {
+            package = pkgs.mpv;
+            desktopIds = [
+              "mpv.desktop"
+              "umpv.desktop"
+            ];
+          };
+          # The one that opens what mpv refuses.
+          vlc = {
+            package = pkgs.vlc;
+            desktopIds = [ "vlc.desktop" ];
+          };
 
-        # ---- images ----
-        # THE SCREENSHOT'S EDITOR, and the reason it is HERE and not in
-        # `base.nix`: the notification the compositor raises after a capture
-        # offers to edit it, and `swappy` is what that action starts. It is
-        # Wayland-native, a few MiB, and it is the whole of the "edit" the owner
-        # asked for.
-        #
-        # Under the `media` switch, so a minimal install simply does not offer
-        # the action — see `usable_actions` in the shell: an action whose program
-        # is missing DISAPPEARS from the notification rather than failing when
-        # clicked.
-        swappy
-        libwebp
-        libavif
-        libheif # what a phone photo actually is
-        oxipng
+          # ---- images ----
+          libwebp.package = pkgs.libwebp;
+          libavif.package = pkgs.libavif;
+          # What a phone photo actually is.
+          libheif.package = pkgs.libheif;
+          oxipng.package = pkgs.oxipng;
 
-        # ---- documents ----
-        ghostscript
+          # ---- documents ----
+          ghostscript.package = pkgs.ghostscript;
 
-        # ---- audio, the session's own ----
-        pavucontrol
-        crosspipe # the PipeWire patchbay (helvum was removed upstream)
-        alsa-utils
+          # ---- audio, the session's own ----
+          pavucontrol = {
+            package = pkgs.pavucontrol;
+            desktopIds = [ "org.pulseaudio.pavucontrol.desktop" ];
+          };
+          # The PipeWire patchbay (helvum was removed upstream).
+          crosspipe = {
+            package = pkgs.crosspipe;
+            desktopIds = [ "io.github.dp0sk.Crosspipe.desktop" ];
+          };
+          alsa-utils.package = pkgs.alsa-utils;
 
-        # `vainfo` is how one finds out whether hardware decoding actually took.
-        libva-utils
-      ])
-      ++ [ pkgs.gst_all_1.gstreamer ]
-      ++ gstPlugins
-    ))
-  ];
+          # `vainfo` is how one finds out whether hardware decoding actually took.
+          libva-utils.package = pkgs.libva-utils;
+        };
+
+  config.environment.systemPackages = lib.mkIf config.ronoctua.media.enable (
+    [
+      # THE SCREENSHOT'S EDITOR, and the reason it is HERE and not in
+      # `base.nix`: the notification the compositor raises after a capture
+      # offers to edit it, and `swappy` is what that action starts. It is
+      # Wayland-native, a few MiB, and it is the whole of the "edit" the owner
+      # asked for.
+      #
+      # Under the `media` switch, so a minimal install simply does not offer
+      # the action — see `usable_actions` in the shell: an action whose program
+      # is missing DISAPPEARS from the notification rather than failing when
+      # clicked.
+      pkgs.swappy
+      pkgs.gst_all_1.gstreamer
+    ]
+    ++ gstPlugins
+  );
 
   # THE PLUGIN PATH, EXPLICITLY.
   #

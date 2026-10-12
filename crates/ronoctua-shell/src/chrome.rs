@@ -2056,7 +2056,7 @@ impl Hinted {
         // AND THE KEYS THAT OPEN AND WALK IT, open or shut — see
         // `fold::teaching`.
         if hinting {
-            line.extend(crate::fold::teaching(texts));
+            crate::fold::teach_after(&mut line, texts);
         }
         // THE CONTROL TAKES ITS CELLS BEFORE THE TEXT IS MEASURED, exactly as
         // the sidebar's eject glyph does: a control drawn over text that was
@@ -2382,10 +2382,15 @@ struct Laid {
 /// cells the line may occupy starting at `column`.
 fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
     let mut out = Vec::with_capacity(pieces.len());
+    // WHICH PIECE each run came from, and the first piece the room did not
+    // reach at all — what the end of the line is judged by, below.
+    let mut of: Vec<usize> = Vec::with_capacity(pieces.len());
+    let mut unreached: Option<usize> = None;
     let mut at = column;
     let mut left = room;
-    for p in pieces {
+    for (n, p) in pieces.iter().enumerate() {
         if left == 0 {
+            unreached = Some(n);
             break;
         }
         // A KEY IS DRAWN IN TWO RUNS, so that no ligature can cross its
@@ -2458,9 +2463,36 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
                 id: p.id,
                 press: p.press,
             });
+            of.push(n);
             at = at.saturating_add(drawn);
             left = left.saturating_sub(drawn);
         }
+    }
+    // A KEY WHOSE WORDS THE ROOM DID NOT REACH is not drawn: the footer's
+    // line ended `a stop · p` (photographed) — a key that says nothing about
+    // what it does is a key nobody can use from here. Its words are the
+    // prose right after it; with none of them drawn, the key goes too.
+    if let (Some(next), Some(&last)) = (unreached, of.last())
+        && last + 1 == next
+        && pieces[last].is_a_key()
+        && matches!(pieces[next].register, Register::Prose)
+        && !out.last().is_some_and(|r| r.text.ends_with('…'))
+    {
+        while of.last() == Some(&last) {
+            of.pop();
+            out.pop();
+        }
+    }
+    // A DOT WITH NOTHING AFTER IT is not drawn: it separates two shortcuts,
+    // and the room ran out exactly after it — the window's line read
+    // `C-d default ·` and then air (photographed). The chevron at the edge
+    // already says the rest is in the drawer. A dot the room CUT is not
+    // this case: its `…` says the line goes on, and stays.
+    while out.last().is_some_and(|r| {
+        matches!(r.register, Register::Separator)
+            && r.text.trim() == tokens::mark::SEPARATOR.to_string()
+    }) {
+        out.pop();
     }
     out
 }
@@ -3529,6 +3561,26 @@ pub fn tinted(
     fields
 }
 
+/// [`tinted`] for a line of an [`aligned_pair`]: the VALUE is every piece
+/// from `column` on. On a line after the first, the value is the FIRST
+/// piece whenever the label did not wrap that far, and [`tinted`] left it
+/// in the plain value's tone — a state said in its colour on one line and
+/// in another on the next.
+#[must_use]
+pub fn tinted_value(
+    mut fields: Vec<crate::files::Field>,
+    column: u16,
+    status: Option<tokens::Color>,
+    focused: bool,
+) -> Vec<crate::files::Field> {
+    if let Some(c) = status.filter(|_| !focused) {
+        for f in fields.iter_mut().filter(|f| f.at >= column) {
+            f.color = c;
+        }
+    }
+    fields
+}
+
 /// A field whose letters at `positions` (counted in CLUSTERS of its text, as
 /// `minibuffer::match_up` gives them) MATCHED a filter, split so those letters
 /// are lit — the finder's rule, for a list whose rows are fields.
@@ -4098,8 +4150,8 @@ mod tests {
         aligned_pair, at_the_edge, cell_width, clock_exact, clock_text, content_left_px, date_long,
         field_pair, from_the_edge, hint_marks, hint_of, hint_sentence, hint_spans, key_text,
         list_bar, list_offset_at, list_scroll, lit, on_the_band, on_the_list_bar, section_column,
-        sentence, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier, track_bar,
-        value_column,
+        sentence, shelf_bar, shelf_box, shelf_ground, split_at_the_modifier, tinted_value,
+        track_bar, value_column,
     };
     use ronoctua_tokens as tokens;
 
@@ -4401,6 +4453,38 @@ mod tests {
         assert!(
             spans.last().is_some_and(|s| s.text.ends_with('…')),
             "the cut has to be at the END of the line"
+        );
+    }
+
+    /// FAILS IF: a line whose room ends exactly after a dot draws the dot with
+    /// nothing after it (`C-d default ·`), or a dot the room cut loses the
+    /// `…` that says the line goes on.
+    #[test]
+    fn a_dot_with_nothing_after_it_is_not_drawn() {
+        let line = [
+            piece("C-d", true),
+            piece(" default", false),
+            Piece::separator(),
+            piece("C-k", true),
+            piece(" remove", false),
+        ];
+        let dot = ronoctua_render::layout::width(&Piece::separator().text);
+        let room = 3 + 8 + dot;
+        let spans = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, room);
+        let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text.trim_end(), "C-d default", "{text:?}");
+        let cut = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, room - 1);
+        assert!(cut.last().is_some_and(|s| s.text.ends_with('…')), "{cut:?}");
+        // AND A KEY WHOSE WORDS DID NOT FIT goes with the dot before it:
+        // `C-d default · C-k` says nothing about `C-k`.
+        let bare = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, room + 3);
+        let text: String = bare.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text.trim_end(), "C-d default", "{text:?}");
+        // One cell of its words is room for `…`, which says the line goes on.
+        let begun = hint_spans(&line, ronoctua_render::Size::Grid, 0, 0, room + 4);
+        assert!(
+            begun.last().is_some_and(|s| s.text.ends_with('…')),
+            "{begun:?}"
         );
     }
 
@@ -5021,6 +5105,34 @@ mod tests {
                 .join(" "),
             "Where it sits now"
         );
+    }
+
+    /// FAILS IF: a value said in a state's colour wraps and a line of it
+    /// after the first keeps the plain value's tone — the line where the
+    /// label did not wrap, whose first piece IS the value — or the label
+    /// takes the state's colour, or the cursor's row is tinted at all.
+    #[test]
+    fn a_tinted_value_keeps_its_colour_on_every_line() {
+        let value = "trusts no key yet: your options and brain modules wait";
+        let warn = tokens::color::STATE_WARNING;
+        for label in ["This machine", "Where the machine keeps it today"] {
+            let lines = aligned_pair(1, 15, 40, label, value, Kind::Fact, false);
+            assert!(lines.len() > 1, "{lines:?}");
+            let tinted: Vec<_> = lines
+                .into_iter()
+                .map(|l| tinted_value(l, 15, Some(warn), false))
+                .collect();
+            for f in tinted.iter().flatten() {
+                assert_eq!(f.color == warn, f.at >= 15, "{f:?}");
+            }
+        }
+        let focused = aligned_pair(1, 15, 40, "This machine", value, Kind::Fact, true);
+        let plain = focused.clone();
+        let lit: Vec<_> = focused
+            .into_iter()
+            .map(|l| tinted_value(l, 15, Some(warn), true))
+            .collect();
+        assert_eq!(lit, plain, "the cursor's row says what the cursor says");
     }
 
     /// FAILS IF: a track stops being one weight in every door — the rule's,

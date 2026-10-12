@@ -982,6 +982,12 @@ pub enum Engine {
     Container,
     /// The person's belongings: their sync.
     Belongings,
+    /// Encrypt anything: a file sealed or opened.
+    Seal,
+    /// Incus: a long operation of the daemon.
+    Incus,
+    /// The installer image for a stick.
+    Stick,
 }
 
 /// Where a job is in its life.
@@ -1044,6 +1050,15 @@ pub enum Errand {
     ArchiveTest,
     /// Write an archive again in another format.
     ArchiveConvert,
+    /// Encrypt a file.
+    Seal,
+    /// Open an encrypted file.
+    Unseal,
+    /// An Incus job: an instance made, exported, imported or published, an
+    /// image copied, a file sent in or taken out.
+    Incus,
+    /// Write the installer to a stick.
+    StickWrite,
 }
 
 /// What `done` and `total` are counted in.

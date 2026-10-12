@@ -14,6 +14,9 @@ publish.workspace = true
 [dependencies]
 # The two XDG roots, in the one crate that owns them (zero dependencies).
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# The sidebar's preferences are a `Store`: a row that will not read costs that
+# row, said in the repair ledger, and a write keeps what it did not change.
+ronoctua-store = { path = "../ronoctua-store" }
 # `ronoctua-apps` for two things it already knows: `fold` (accents off, so that
 # sorting puts `Ágil` where a person looks for it) and `DesktopEntry`, which is
 # what answers "who opens this file". Resolving that here keeps the shell from
@@ -51,6 +54,11 @@ rustix = { workspace = true, features = [ "fs", "process", "event" ] }
 # a second border. The host owns both and splices them; see `sidebar::Sidebar`.
 serde = { workspace = true, features = [ "derive" ] }
 serde_json.workspace = true
+# WHETHER /private MAY BE TOUCHED: a listing reads it only while the vault is
+# open (`ronoctua_private::may_touch`, one read of its status file). Pure and
+# small — serde, rustix, zeroize — and no store path: the root binary of this
+# crate carries nothing new.
+ronoctua-private = { path = "../ronoctua-private" }
 
 # THE PRIVILEGED HELPER, as its own binary.
 #

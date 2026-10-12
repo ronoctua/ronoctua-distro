@@ -155,6 +155,13 @@ assert positive "playerPostersMib" declared.playerPostersMib;
 # again, and a history of nothing would remember nothing it opened.
 assert positive "webThumbsMiB" declared.webThumbsMiB;
 assert positive "fastAccessRecentMost" declared.fastAccessRecentMost;
+# THE LLM TOKEN COUNTS: a window of nothing counts nothing, and a memory of
+# nothing counts every answer a resumed session copied twice.
+assert positive "llmTokenDays" declared.llmTokenDays;
+assert positive "llmSeenMost" declared.llmSeenMost;
+# THE TLS GROUPS KEPT: a bound of nothing would keep no host, and the quantum
+# section would have nothing to say about any of them.
+assert positive "tlsGroupsHosts" declared.tlsGroupsHosts;
 
 writeTextFile {
   name = "ronoctua-cache-rs";
@@ -257,5 +264,14 @@ writeTextFile {
 
     /// The most entries fast-access remembers of what was opened from it.
     pub const FAST_ACCESS_RECENT_MOST: usize = ${toString declared.fastAccessRecentMost};
+
+    /// How many days back the LLM accounts' token counts reach.
+    pub const LLM_TOKEN_DAYS: u32 = ${toString declared.llmTokenDays};
+
+    /// The most answers the token count remembers, so each is counted once.
+    pub const LLM_SEEN_MOST: usize = ${toString declared.llmSeenMost};
+
+    /// The most hosts whose agreed TLS group is kept (`tls-groups.json`).
+    pub const TLS_GROUPS_HOSTS: usize = ${toString declared.tlsGroupsHosts};
   '';
 }

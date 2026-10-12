@@ -9,6 +9,13 @@
 //! deletion travels; a path a person stopped keeping is forgotten, not
 //! deleted; a push another machine beat is tried again on top of it, and
 //! three in a row are refused; a new passphrase opens what the old one did.
+//!
+//! And format 2's: no repository file reaches the chunk limit, an edit moves
+//! few chunks, chunk names are keyed, a sync sweeps only what it stopped
+//! naming, a large push goes in batches with the index last, a repository of
+//! another format is refused, nothing is fetched or
+//! pushed before the person let the host, and a compaction keeps the content
+//! and loses no other machine's push.
 
 use std::cell::Cell;
 use std::io::Write as _;
@@ -17,11 +24,62 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use super::*;
 
+// THE PLAIN PART, THE MERGES AND THE INSTALLER'S VERBS (the
+// belongings-plain-merge package), on the helpers above.
+mod plain;
+// THE PREDEFINED TARGETS AND THE IDENTITY KEPT FOR THE SESSION (the
+// belongings-targets-unlock package), on the helpers above.
+mod targets;
+// THE LISTING A DOOR DRAWS IS THE WALK A SYNC MAKES (the belongings-view
+// package), on the helpers above.
+mod listing;
+// ONE SEALED FILE FOR THE INSTALLER, and the push token's sealed home (the
+// person's binary cache, 2026-10-11), on the helpers above.
+mod take;
+
+/// A vault of a test's own: what a session keeps, in memory — never the
+/// kernel's keyring of whoever runs the tests.
+#[derive(Debug, Default)]
+struct Memory(std::sync::Mutex<BTreeMap<String, String>>);
+
+impl crate::unlock::Vault for Memory {
+    fn keep(&self, description: &str, secret: &str, _seconds: u64) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(description.to_owned(), secret.to_owned());
+        true
+    }
+
+    fn take(&self, description: &str) -> Option<zeroize::Zeroizing<String>> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(description)
+            .cloned()
+            .map(zeroize::Zeroizing::new)
+    }
+
+    fn forget(&self, prefix: &str) -> usize {
+        let mut kept = self.0.lock().unwrap();
+        let before = kept.len();
+        kept.retain(|d, _| !d.starts_with(prefix));
+        before - kept.len()
+    }
+}
+
 /// A small scrypt, so a test does not pay a second per sync.
 const WORK: Option<u8> = Some(10);
 
 /// The passphrase both machines type.
 const PASSPHRASE: &str = "a long passphrase, typed twice";
+
+/// The consent of a machine that let no host: a `file://` remote asks none.
+fn nothing_let(host: &str) -> Result<ronoctua_consent::Pass, ronoctua_consent::NotLet> {
+    Err(ronoctua_consent::NotLet {
+        host: host.to_owned(),
+    })
+}
 
 fn tools() -> Tools {
     Tools::from_env().expect(
@@ -55,9 +113,22 @@ struct Machine {
     name: &'static str,
     places: Places,
     prefs: Belongings,
+    /// Where its session keeps the identity; `None`: it keeps nothing.
+    vault: Option<Memory>,
+    /// The signing key root pinned on it; `None`: none is.
+    pinned: Option<ronoctua_pq::sign::PublicKey>,
 }
 
 impl Machine {
+    /// A machine whose session keeps the identity once a sync opened it
+    /// (`keep_unlocked`, on by default): its plain runs sign.
+    fn keeping(root: &Path, name: &'static str, remote: &str) -> Self {
+        Self {
+            vault: Some(Memory::default()),
+            ..Self::new(root, name, remote)
+        }
+    }
+
     fn new(root: &Path, name: &'static str, remote: &str) -> Self {
         let places = Places::under(&root.join(name));
         std::fs::create_dir_all(&places.config).unwrap();
@@ -69,6 +140,8 @@ impl Machine {
                 repository: remote.to_owned(),
                 ..Belongings::default()
             },
+            vault: None,
+            pinned: None,
         }
     }
 
@@ -82,7 +155,22 @@ impl Machine {
             work: WORK,
             now_s: now_s(),
             before_push: None,
+            consent: &nothing_let,
+            built_s: Some(1_700_000_000),
+            push_most_bytes: kept::PUSH_MOST_BYTES,
+            vault: self.vault.as_ref().map(|v| v as &dyn crate::unlock::Vault),
+            pinned: self.pinned.clone(),
         }
+    }
+
+    /// Pins on this machine the signing key `key.age` of `remote_dir` holds
+    /// — what the installer, or the person through the sudo door, does.
+    fn pin_from(&mut self, remote_dir: &Path, root: &Path) {
+        let (names, bytes) = remote_files(remote_dir, root);
+        let at = names.iter().position(|n| n == KEY_FILE).expect("a key.age");
+        let ring = Keyring::open(&bytes[at], &crate::crypt::passphrase(PASSPHRASE.to_owned()))
+            .expect("the passphrase opens it");
+        self.pinned = Some(ring.signing().public().clone());
     }
 
     /// Writes the passphrase's file the way a door does: `create_new`, `0600`.
@@ -104,6 +192,41 @@ impl Machine {
     fn sync(&self) -> Outcome {
         self.say(PASSPHRASE);
         match self.engine().prepare(&mut |_| {}) {
+            Ok(Done::Synced(o)) => o,
+            other => panic!("{}: {other:?}", self.name),
+        }
+    }
+
+    /// A whole sync whose only questions are the repository's changes to
+    /// signed files the signature did not vouch for (`Conflict::held`), each
+    /// asked with no suggestion and taken here — the person's decision,
+    /// which no run takes for them.
+    fn sync_taking_held(&self) -> Outcome {
+        self.say(PASSPHRASE);
+        let plan = match self.engine().prepare(&mut |_| {}) {
+            Ok(Done::Synced(o)) => return o,
+            Ok(Done::Waiting(plan)) => plan,
+            other => panic!("{}: {other:?}", self.name),
+        };
+        assert!(
+            plan.conflicts
+                .iter()
+                .all(|c| c.held.is_some() && c.suggested.is_none()),
+            "{}: {plan:?}",
+            self.name
+        );
+        let file = crate::plan::DecisionsFile::of_paths(
+            plan.conflicts
+                .iter()
+                .map(|c| (c.path.clone(), Decision::TakeRemote))
+                .collect(),
+        );
+        write_private(
+            &self.places.decisions(),
+            &serde_json::to_vec(&file).unwrap(),
+        )
+        .unwrap();
+        match self.engine().apply(&mut |_| {}) {
             Ok(Done::Synced(o)) => o,
             other => panic!("{}: {other:?}", self.name),
         }
@@ -132,7 +255,12 @@ fn remote_files(remote_dir: &Path, root: &Path) -> (Vec<String>, Vec<Vec<u8>>) {
         .args(["-q"])
         .arg(remote_dir)
         .arg(look.join("w"));
-    assert!(clone.output().unwrap().status.success());
+    let cloned = clone.output().unwrap();
+    assert!(
+        cloned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cloned.stderr)
+    );
     let w = look.join("w");
     let repo = Repo::discover(&w).unwrap().with_tools(tools());
     let names = repo
@@ -153,12 +281,12 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
-/// How many blobs the remote's head holds.
-fn remote_blobs(remote_dir: &Path, root: &Path) -> usize {
+/// How many chunks the remote's head holds.
+fn remote_chunks(remote_dir: &Path, root: &Path) -> usize {
     remote_files(remote_dir, root)
         .0
         .iter()
-        .filter(|n| n.starts_with("blobs/"))
+        .filter(|n| crate::chunks::id_of(n).is_some())
         .count()
 }
 
@@ -196,16 +324,42 @@ fn a_round_trip_restores_everything_and_the_repository_holds_nothing_in_the_clea
     );
     assert!(!a.places.session().exists());
 
-    // NOTHING IN THE CLEAR: the tree's names are ours, and no byte of a path,
-    // a content or the machine's name is in any file of it.
+    // NOTHING IN THE CLEAR: the tree's names are ours — the three plain files,
+    // the key, the index's head and keyed chunk names, and the plain part's
+    // signature (its manifest names plain paths only) — and no byte of a
+    // path, a content or the machine's name is in any sealed file of it.
     let (names, bytes) = remote_files(&remote_dir, &root);
+    let plain: [(&str, String); 3] = [
+        (FORMAT_FILE, format!("{}\n", crate::FORMAT)),
+        (RECOVER_FILE, RECOVER.to_owned()),
+        (ATTRIBUTES_FILE, ATTRIBUTES.to_owned()),
+    ];
+    let signature = ["plain/signed.json", "plain/signed.sig", "plain/signer.pub"];
     for name in &names {
-        let fine = [FORMAT_FILE, KEY_FILE, INDEX_FILE].contains(&name.as_str())
-            || name
-                .strip_prefix("blobs/")
-                .and_then(|n| n.strip_suffix(".age"))
-                .is_some_and(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit()));
+        let fine = [KEY_FILE, INDEX_FILE].contains(&name.as_str())
+            || plain.iter().any(|(p, _)| p == name)
+            || signature.contains(&name.as_str())
+            || crate::chunks::id_of(name).is_some();
         assert!(fine, "the repository names {name}");
+    }
+    for (name, text) in &plain {
+        let at = names.iter().position(|n| n == name).expect(name);
+        assert_eq!(
+            bytes[at],
+            text.as_bytes(),
+            "{name} is not what this build writes"
+        );
+    }
+    for (name, content) in names.iter().zip(&bytes) {
+        if crate::chunks::id_of(name).is_some() || [KEY_FILE, INDEX_FILE].contains(&name.as_str()) {
+            let kind = ronoctua_pq::sniff(content);
+            let sealed = if name == KEY_FILE {
+                ronoctua_pq::Kind::Passphrase
+            } else {
+                ronoctua_pq::Kind::Pq
+            };
+            assert_eq!(kind, sealed, "{name} is not sealed post-quantum");
+        }
     }
     for needle in [
         &b"theme.json"[..],
@@ -218,6 +372,9 @@ fn a_round_trip_restores_everything_and_the_repository_holds_nothing_in_the_clea
         b"config/",
     ] {
         for (name, content) in names.iter().zip(&bytes) {
+            if plain.iter().any(|(p, _)| p == name) {
+                continue;
+            }
             assert!(
                 !contains(content, needle),
                 "{name} carries `{}` in the clear",
@@ -730,7 +887,10 @@ fn two_runs_at_once_are_one_run_and_a_refusal() {
         untouched.get(),
         "the refused run touched the status or the passphrase of the one in flight"
     );
-    assert_eq!(remote_blobs(&remote_dir, &root), 40, "blobs went missing");
+    assert!(
+        remote_chunks(&remote_dir, &root) > 40,
+        "chunks went missing"
+    );
     let outcome = b.sync();
     let Outcome::Synced {
         pulled, unwritten, ..
@@ -1009,5 +1169,1078 @@ fn the_deploy_key_is_made_once_and_private() {
     let first = std::fs::read(&key).unwrap();
     assert!(!keygen(&places).unwrap(), "a second key over the first");
     assert_eq!(std::fs::read(&key).unwrap(), first);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the belongings reach their repository over SSH without asking
+/// for a post-quantum key exchange, or a server that offers none is read as
+/// anything but `NotPostQuantum` — the sentence would blame the network.
+/// The negotiation itself is proved against a real `sshd` in `ronoctua-git`
+/// (`belongings-ssh-is-pq-only`).
+#[test]
+fn the_belongings_ssh_is_post_quantum_only() {
+    let root = scratch("pq-only");
+    let places = Places::under(&root);
+    crate::secret::make_private_dir(&places.keys()).unwrap();
+    crate::secret::write_private(&places.deploy_key(), b"a key").unwrap();
+    let prefs = Belongings {
+        auth: Auth::Ssh,
+        ..Belongings::default()
+    };
+    match credentials_of(&places, &prefs).unwrap() {
+        Credentials::Ssh { pq_only, .. } => assert!(pq_only, "the deploy key's session"),
+        other @ Credentials::Token { .. } => panic!("{other:?}"),
+    }
+    assert_eq!(
+        why_of(ronoctua_git::Refusal {
+            why: ronoctua_git::Why::NotPostQuantum
+        }),
+        Why::NotPostQuantum
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the belongings reach their repository over HTTPS with a token
+/// without asking for post-quantum TLS — git's curl would agree a classical
+/// key with any server. The narrowing itself is proved against a real TLS
+/// server in `ronoctua-git` (`belongings-https-is-pq-only`).
+#[test]
+fn the_belongings_https_is_post_quantum_only() {
+    let root = scratch("pq-only-https");
+    let places = Places::under(&root);
+    crate::secret::make_private_dir(&places.keys()).unwrap();
+    crate::secret::write_private(&places.token(), b"a token").unwrap();
+    let prefs = Belongings {
+        auth: Auth::Token,
+        ..Belongings::default()
+    };
+    match credentials_of(&places, &prefs).unwrap() {
+        Credentials::Token { pq_only, .. } => assert!(pq_only, "the token's session"),
+        other @ Credentials::Ssh { .. } => panic!("{other:?}"),
+    }
+    assert_eq!(
+        why_of(ronoctua_git::Refusal {
+            why: ronoctua_git::Why::NoCommonKeyExchange
+        }),
+        Why::NotPostQuantum,
+        "the belongings always ask for post-quantum"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// ---------------------------------------------------------------------------
+// FORMAT 2 (the belongings-sealed package)
+// ---------------------------------------------------------------------------
+
+/// Bytes no chunker finds a pattern in and no compressor shrinks.
+fn noise(seed: u64, len: usize) -> Vec<u8> {
+    let mut x = seed | 1;
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
+/// Writes `len` bytes of noise at `path`, a MiB at a time: a large file is
+/// never held whole by the test either.
+fn write_noise(path: &Path, seed: u64, len: usize) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut f = std::fs::File::create(path).unwrap();
+    let mut left = len;
+    let mut n = seed;
+    while left > 0 {
+        let take = left.min(1 << 20);
+        f.write_all(&noise(n, take)).unwrap();
+        n = n.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        left -= take;
+    }
+}
+
+/// Every file of the remote's head and its size — read from the disk, never
+/// into memory (a test's repository can be hundreds of MiB).
+fn remote_sizes(remote_dir: &Path, root: &Path) -> Vec<(String, u64)> {
+    let look = root.join("look");
+    let _ = std::fs::remove_dir_all(&look);
+    std::fs::create_dir_all(&look).unwrap();
+    let mut clone = ronoctua_git::base(&tools(), &look, None).unwrap();
+    ronoctua_git::subcommand(&mut clone, "clone")
+        .args(["-q"])
+        .arg(remote_dir)
+        .arg(look.join("w"));
+    assert!(clone.output().unwrap().status.success());
+    let w = look.join("w");
+    let repo = Repo::discover(&w).unwrap().with_tools(tools());
+    let names = repo
+        .output(None, "ls-tree", &["-r", "--name-only", "HEAD"], 1 << 24)
+        .unwrap();
+    String::from_utf8_lossy(&names)
+        .lines()
+        .map(|n| (n.to_owned(), std::fs::metadata(w.join(n)).unwrap().len()))
+        .collect()
+}
+
+/// The SHA-256 of a file, streamed.
+fn sha_of(path: &Path) -> String {
+    walk::sha256_of(&mut std::fs::File::open(path).unwrap()).unwrap()
+}
+
+/// The names the remote's last commit added or changed (never those it
+/// deleted: a sweep's), and every commit's subject, newest first.
+fn remote_log(remote_dir: &Path, root: &Path) -> (Vec<String>, Vec<String>) {
+    let _ = remote_files(remote_dir, root);
+    let repo = Repo::discover(&root.join("look/w"))
+        .unwrap()
+        .with_tools(tools());
+    let added = if repo
+        .output(None, "rev-parse", &["--verify", "-q", "HEAD~1"], 1 << 20)
+        .is_ok()
+    {
+        repo.output(
+            None,
+            "diff",
+            &["--name-only", "--diff-filter=AM", "HEAD~1", "HEAD"],
+            1 << 24,
+        )
+        .unwrap()
+    } else {
+        repo.output(None, "ls-tree", &["-r", "--name-only", "HEAD"], 1 << 24)
+            .unwrap()
+    };
+    let subjects = repo.output(None, "log", &["--format=%s"], 1 << 20).unwrap();
+    let lines = |b: &[u8]| {
+        String::from_utf8_lossy(b)
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    (lines(&added), lines(&subjects))
+}
+
+/// FAILS IF: a file larger than a chunk becomes a repository file larger
+/// than a chunk (GitHub refuses one over 100 MB), or does not come back
+/// byte for byte on another machine.
+fn no_file_reaches_the_limit_with(name: &str, len: usize) {
+    let root = scratch(name);
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    let big = a.places.resolve("config/big.bin").unwrap();
+    write_noise(&big, 3, len);
+    let outcome = a.sync();
+    assert!(
+        matches!(outcome, Outcome::Synced { pushed: 1, .. }),
+        "{outcome:?}"
+    );
+    let sizes = remote_sizes(&remote_dir, &root);
+    let limit = crate::chunks::sealed_most_bytes(kept::CHUNK_MAX_BYTES);
+    let (largest_name, largest) = sizes.iter().max_by_key(|(_, b)| *b).unwrap();
+    assert!(
+        *largest <= limit,
+        "{largest_name} is {largest} bytes, past {limit}"
+    );
+    let chunks = sizes
+        .iter()
+        .filter(|(n, _)| crate::chunks::id_of(n).is_some())
+        .count() as u64;
+    assert!(
+        chunks >= len as u64 / kept::CHUNK_MAX_BYTES,
+        "{chunks} chunks for {len} bytes"
+    );
+    let b = Machine::new(&root, "machine-beta", &remote);
+    let outcome = b.sync();
+    assert!(
+        matches!(outcome, Outcome::Synced { pulled: 1, .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        sha_of(&b.places.resolve("config/big.bin").unwrap()),
+        sha_of(&big),
+        "the file did not come back whole"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_file_past_a_chunk_is_chunks_under_the_limit() {
+    no_file_reaches_the_limit_with("limit-small", 20 << 20);
+}
+
+/// The design's own size: 300 MiB. Heavy, so `belongings-no-file-reaches-
+/// the-limit` runs it on its own (`--include-ignored`).
+#[test]
+#[ignore = "300 MiB: run by the check belongings-no-file-reaches-the-limit"]
+fn no_file_reaches_the_limit() {
+    no_file_reaches_the_limit_with("limit", 300 << 20);
+}
+
+/// FAILS IF: one byte changed in a large file sends more than the chunks
+/// around it (and the index's), or one content kept twice is two sets of
+/// chunks.
+fn an_edit_moves_few_chunks_with(name: &str, len: usize) {
+    let root = scratch(name);
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    let big = a.places.resolve("config/big.bin").unwrap();
+    write_noise(&big, 5, len);
+    a.sync();
+    let before = remote_chunks(&remote_dir, &root);
+
+    // ONE BYTE, in the middle.
+    let mut f = std::fs::OpenOptions::new().write(true).open(&big).unwrap();
+    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(len as u64 / 2)).unwrap();
+    f.write_all(b"!").unwrap();
+    drop(f);
+    a.sync();
+    let (added, _) = remote_log(&remote_dir, &root);
+    let new_chunks = added
+        .iter()
+        .filter(|n| crate::chunks::id_of(n).is_some())
+        .count();
+    assert!(
+        (1..=3).contains(&new_chunks),
+        "one byte wrote {new_chunks} chunk files: {added:?}"
+    );
+    // WHAT THE EDIT STOPPED NAMING was swept: the count stays put.
+    let after = remote_chunks(&remote_dir, &root);
+    assert!(
+        after <= before + 1 && after + 1 >= before,
+        "{before} chunks became {after}"
+    );
+
+    // THE SAME CONTENT TWICE is one set of chunks.
+    std::fs::copy(&big, a.places.resolve("config/big-copy.bin").unwrap()).unwrap();
+    a.sync();
+    let (added, _) = remote_log(&remote_dir, &root);
+    let data_chunks = added
+        .iter()
+        .filter(|n| crate::chunks::id_of(n).is_some())
+        .count();
+    assert!(
+        data_chunks <= 2,
+        "a copy wrote {data_chunks} chunk files (only the index's may move)"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_edit_moves_few_chunks_in_eight_mib() {
+    an_edit_moves_few_chunks_with("edit-small", 8 << 20);
+}
+
+/// The design's own size: 64 MiB, run by `belongings-an-edit-moves-few-chunks`.
+#[test]
+#[ignore = "64 MiB: run by the check belongings-an-edit-moves-few-chunks"]
+fn an_edit_moves_few_chunks() {
+    an_edit_moves_few_chunks_with("edit", 64 << 20);
+}
+
+/// FAILS IF: two people keeping the same file share a chunk name, or a name
+/// is the content's own SHA-256 — either says what a file is to anybody
+/// holding a copy of it.
+#[test]
+fn chunk_ids_are_keyed() {
+    let root = scratch("keyed");
+    let one = bare(&root.join("one.git"));
+    let two = bare(&root.join("two.git"));
+    let a = Machine::new(&root, "machine-alpha", &one);
+    let b = Machine::new(&root, "machine-beta", &two);
+    let theme = "{\"theme\":\"owl\"}\n";
+    for m in [&a, &b] {
+        m.write("config/theme.json", theme);
+        write_noise(&m.places.resolve("config/big.bin").unwrap(), 9, 3 << 20);
+        m.sync();
+    }
+    let ids = |dir: &Path| -> BTreeSet<String> {
+        remote_files(dir, &root)
+            .0
+            .iter()
+            .filter_map(|n| crate::chunks::id_of(n).map(str::to_owned))
+            .collect()
+    };
+    let (first, second) = (ids(&root.join("one.git")), ids(&root.join("two.git")));
+    assert!(!first.is_empty());
+    assert!(
+        first.is_disjoint(&second),
+        "two identities named a chunk alike"
+    );
+    // A FILE SMALLER THAN A CHUNK is one chunk, whose name is not its hash.
+    let sha = walk::sha256_of(&mut theme.as_bytes()).unwrap();
+    assert!(!first.contains(&sha) && !second.contains(&sha));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: new chunks past the push budget go up in one push, the index
+/// goes up before every chunk it names is there, or the result does not
+/// restore.
+#[test]
+fn a_large_push_goes_in_batches_and_the_index_last() {
+    let root = scratch("batches");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    write_noise(&a.places.resolve("config/big.bin").unwrap(), 13, 12 << 20);
+    let mut engine = a.engine();
+    engine.push_most_bytes = 4 << 20;
+    a.say(PASSPHRASE);
+    assert!(matches!(engine.prepare(&mut |_| {}), Ok(Done::Synced(_))));
+    let (_, subjects) = remote_log(&remote_dir, &root);
+    assert!(
+        subjects.len() >= 3,
+        "12 MiB under a 4 MiB budget went up in {} pushes",
+        subjects.len()
+    );
+    assert_eq!(subjects[0], COMMIT_MESSAGE, "the index did not go last");
+    assert!(subjects[1..].iter().all(|s| s == CHUNKS_MESSAGE));
+    // EVERY BATCH BUT THE LAST CARRIES CHUNKS ONLY.
+    let repo = Repo::discover(&root.join("look/w"))
+        .unwrap()
+        .with_tools(tools());
+    for back in 1..subjects.len() {
+        let touched = repo
+            .output(
+                None,
+                "diff-tree",
+                &[
+                    "--root",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    &format!("HEAD~{back}"),
+                ],
+                1 << 20,
+            )
+            .unwrap();
+        for name in String::from_utf8_lossy(&touched).lines() {
+            assert!(
+                crate::chunks::id_of(name).is_some(),
+                "a batch carried {name}"
+            );
+        }
+    }
+    let b = Machine::new(&root, "machine-beta", &remote);
+    assert!(matches!(b.sync(), Outcome::Synced { pulled: 1, .. }));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: a sync deletes a chunk it did not name before — another
+/// machine's, pushed for an index it never pushed — or keeps one it stopped
+/// naming.
+#[test]
+fn a_sync_sweeps_only_what_it_stopped_naming() {
+    let root = scratch("sweep");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"v\":1}");
+    a.sync();
+    let orphan = plant_orphan(&remote_dir, &root);
+    a.write("config/theme.json", "{\"v\":2}");
+    a.sync();
+    let (names, _) = remote_files(&remote_dir, &root);
+    assert!(
+        names.contains(&orphan),
+        "a sync swept another machine's chunk"
+    );
+    let ids: Vec<&String> = names
+        .iter()
+        .filter(|n| crate::chunks::id_of(n).is_some())
+        .collect();
+    // THE THEME'S ONE CHUNK, THE INDEX'S ONE, AND THE ORPHAN — the first
+    // theme's chunk and the first index's were swept.
+    assert_eq!(ids.len(), 3, "{ids:?}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Pushes a chunk no index names, the way a machine whose push of the
+/// chunks went up and whose index never did leaves one. Its path.
+fn plant_orphan(remote_dir: &Path, root: &Path) -> String {
+    let work = root.join("orphan");
+    let _ = std::fs::remove_dir_all(&work);
+    let mut clone = ronoctua_git::base(&tools(), root, None).unwrap();
+    ronoctua_git::subcommand(&mut clone, "clone")
+        .args(["-q"])
+        .arg(remote_dir)
+        .arg(&work);
+    assert!(clone.output().unwrap().status.success());
+    let id = "ab".repeat(32);
+    let rel = crate::chunks::relative(&id).unwrap();
+    std::fs::create_dir_all(work.join(&rel).parent().unwrap()).unwrap();
+    std::fs::write(
+        work.join(&rel),
+        b"sealed by a machine that never pushed its index",
+    )
+    .unwrap();
+    commit_all(&work, "belongings: chunks");
+    let repo = Repo::discover(&work).unwrap().with_tools(tools());
+    repo.output(
+        None,
+        "push",
+        &["-q", "origin", "HEAD:refs/heads/main"],
+        1 << 20,
+    )
+    .unwrap();
+    rel
+}
+
+/// Commits everything in `work` as a person's git would.
+fn commit_all(work: &Path, message: &str) {
+    let repo = Repo::discover(work).unwrap().with_tools(tools());
+    for args in [
+        &["config", "user.name", "x"][..],
+        &["config", "user.email", "x@example.org"],
+        &["config", "commit.gpgsign", "false"],
+        &["add", "-A"],
+        &["commit", "-q", "-m", message],
+    ] {
+        repo.output(None, args[0], &args[1..], 1 << 20).unwrap();
+    }
+}
+
+/// FAILS IF: a repository whose `FORMAT` is not this build's is synced,
+/// compacted or restored — a newer one is not refused as newer (update this
+/// machine), or a lower one (format 1 was never deployed) is read as if it
+/// were this one instead of refused as not ours.
+#[test]
+fn a_format_not_its_own_is_refused() {
+    let root = scratch("formats");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{}");
+    assert!(matches!(a.sync(), Outcome::Synced { .. }));
+    let work = root.join("bump");
+    let mut clone = ronoctua_git::base(&tools(), &root, None).unwrap();
+    ronoctua_git::subcommand(&mut clone, "clone")
+        .args(["-q"])
+        .arg(&remote_dir)
+        .arg(&work);
+    assert!(clone.output().unwrap().status.success());
+    for (n, (format, why)) in [("3", Why::Newer), ("1", Why::NotOurs), ("0", Why::NotOurs)]
+        .into_iter()
+        .enumerate()
+    {
+        std::fs::write(
+            work.join(FORMAT_FILE),
+            format!("ronoctua-belongings {format}\n"),
+        )
+        .unwrap();
+        commit_all(&work, &format!("belongings {n}"));
+        Repo::discover(&work)
+            .unwrap()
+            .with_tools(tools())
+            .output(
+                None,
+                "push",
+                &["-q", "origin", "HEAD:refs/heads/main"],
+                1 << 20,
+            )
+            .unwrap();
+        a.say(PASSPHRASE);
+        assert_eq!(
+            a.engine().prepare(&mut |_| {}).unwrap_err().why,
+            why,
+            "a sync of format {format}"
+        );
+        assert_eq!(
+            Status::read(&a.places.status()).unwrap().outcome,
+            Outcome::Refused { why },
+            "the sentence of format {format}"
+        );
+        a.say(PASSPHRASE);
+        assert_eq!(
+            a.engine()
+                .compact(kept::KEEP_DAYS, &mut |_| {})
+                .unwrap_err()
+                .why,
+            why,
+            "a compaction of format {format}"
+        );
+        let engine = a.engine();
+        let ground = engine.ground().unwrap();
+        engine
+            .checkout(&ground.repo, ground.head.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(
+            engine
+                .open_repository(&crate::crypt::passphrase(PASSPHRASE.to_owned()))
+                .unwrap_err()
+                .why,
+            why,
+            "a restore's read of format {format}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: anything is fetched from or pushed to a host the person did
+/// not let — or a host let is not asked.
+#[test]
+fn a_host_not_let_is_never_asked() {
+    let root = scratch("consent");
+    let remote_dir = root.join("remote.git");
+    let local = bare(&remote_dir);
+    // A FIRST MACHINE fills the repository through the folder itself: an
+    // empty repository would make the next ones start their clone over, and
+    // the `insteadOf` below with it.
+    let first = Machine::new(&root, "machine-first", &local);
+    first.write("config/theme.json", "{\"theme\":\"owl\"}");
+    first.sync();
+    // THE ADDRESS HAS A HOST, and git reaches it in a folder of the test's:
+    // the clone's `insteadOf` turns the one into the other.
+    let address = "https://belongings.example/someone/b.git";
+    let store = ronoctua_consent::store_at(Some(root.join("consent")));
+    let mint = |host: &str| ronoctua_consent::pass_in(&store, host);
+    let machine = |name: &'static str| {
+        let m = Machine::new(&root, name, address);
+        m.engine().fresh_clone().unwrap();
+        let repo = Repo::discover(&m.places.repo())
+            .unwrap()
+            .with_tools(tools());
+        repo.output(
+            None,
+            "config",
+            &[&format!("url.{local}.insteadOf"), address],
+            1 << 20,
+        )
+        .unwrap();
+        m
+    };
+    let fetched = |m: &Machine| {
+        Repo::discover(&m.places.repo())
+            .unwrap()
+            .with_tools(tools())
+            .output(None, "for-each-ref", &["refs/remotes/"], 1 << 20)
+            .unwrap()
+    };
+    // THE BARE REMOTE'S BRANCHES, asked of it alone (`-C`): a discovery
+    // from a bare folder would walk up into whatever repository holds it.
+    let remote_head = || {
+        let mut refs = ronoctua_git::base(&tools(), &remote_dir, None).unwrap();
+        ronoctua_git::subcommand(&mut refs, "for-each-ref").arg("refs/heads/");
+        refs.output().unwrap().stdout
+    };
+    let a = machine("machine-alpha");
+    a.write("config/player.json", "{\"volume\":1}");
+    let before = remote_head();
+
+    // NOT LET: refused before anything is asked.
+    a.say(PASSPHRASE);
+    let mut engine = a.engine();
+    engine.consent = &mint;
+    assert_eq!(engine.prepare(&mut |_| {}).unwrap_err().why, Why::NotLet);
+    assert!(fetched(&a).is_empty(), "something was fetched");
+    assert_eq!(remote_head(), before, "something was pushed");
+    assert!(
+        a.read("config/theme.json").is_none(),
+        "something was written"
+    );
+    assert!(!a.places.passphrase().exists());
+    assert_eq!(
+        Status::read(&a.places.status()).unwrap().outcome,
+        Outcome::Refused { why: Why::NotLet }
+    );
+
+    // LET: the same sync goes, both ways.
+    ronoctua_consent::let_hosts_in(&store, &["belongings.example"], true).unwrap();
+    a.say(PASSPHRASE);
+    let synced = engine.prepare(&mut |_| {});
+    assert!(matches!(synced, Ok(Done::Synced(_))), "{synced:?}");
+    assert_ne!(remote_head(), before, "the host let was not asked");
+    assert_eq!(
+        a.read("config/theme.json").as_deref(),
+        Some("{\"theme\":\"owl\"}")
+    );
+
+    // TAKEN BACK: the next machine asks nothing, and nothing is written there.
+    ronoctua_consent::let_hosts_in(&store, &["belongings.example"], false).unwrap();
+    let b = machine("machine-beta");
+    b.say(PASSPHRASE);
+    let mut engine = b.engine();
+    engine.consent = &mint;
+    assert_eq!(engine.prepare(&mut |_| {}).unwrap_err().why, Why::NotLet);
+    assert!(fetched(&b).is_empty());
+    assert!(b.read("config/theme.json").is_none());
+    // AND A COMPACTION ASKS THE SAME.
+    b.say(PASSPHRASE);
+    assert_eq!(engine.compact(0, &mut |_| {}).unwrap_err().why, Why::NotLet);
+    assert!(fetched(&b).is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The clone's weight, in bytes (`git count-objects`).
+fn clone_weight(m: &Machine) -> u64 {
+    let repo = Repo::discover(&m.places.repo())
+        .unwrap()
+        .with_tools(tools());
+    let out = repo
+        .output(None, "count-objects", &["-v"], 1 << 20)
+        .unwrap();
+    crate::size::history_bytes(&String::from_utf8_lossy(&out)).unwrap()
+}
+
+/// FAILS IF: a compaction changes a byte of what is kept, leaves the old
+/// history, keeps an orphan — or another machine, its `last.json` from
+/// before and an edit of its own, deletes anything, meets a conflict, loses
+/// its edit or keeps the old history in its clone.
+#[test]
+fn belongings_compaction_is_safe() {
+    let root = scratch("compact");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"theme\":\"owl\"}");
+    let big = a.places.resolve("config/big.bin").unwrap();
+    write_noise(&big, 21, 2 << 20);
+    a.sync();
+    let b = Machine::new(&root, "machine-beta", &remote);
+    b.sync();
+    // A HISTORY: four versions of 2 MiB of noise, and an orphan.
+    for n in 0..4 {
+        write_noise(&big, 100 + n, 2 << 20);
+        a.sync();
+    }
+    let orphan = plant_orphan(&remote_dir, &root);
+    a.sync();
+    b.sync();
+    let heavy = clone_weight(&b);
+    assert!(heavy > 8 << 20, "the history is only {heavy} bytes");
+    // B EDITS, and does not sync before A compacts.
+    b.write("config/player.json", "{\"volume\":3}");
+
+    a.say(PASSPHRASE);
+    let Compaction::Done {
+        before_bytes: before,
+        after_bytes: after,
+    } = a.engine().compact(0, &mut |_| {}).unwrap()
+    else {
+        panic!("a history of five versions was not compacted");
+    };
+    assert!(after < before / 2, "{before} → {after}");
+    assert!(matches!(
+        Status::read(&a.places.status()).unwrap().outcome,
+        Outcome::Compacted { .. }
+    ));
+    let (names, _) = remote_files(&remote_dir, &root);
+    assert!(
+        !names.contains(&orphan),
+        "the orphan survived the compaction"
+    );
+    let (_, subjects) = remote_log(&remote_dir, &root);
+    assert!(subjects.len() <= 2, "{subjects:?}");
+
+    // B: nothing deleted, no conflict, its edit sent, its clone lighter.
+    let outcome = b.sync();
+    assert!(
+        matches!(
+            outcome,
+            Outcome::Synced {
+                pushed: 1,
+                deleted_here: 0,
+                deleted_there: 0,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        sha_of(&b.places.resolve("config/big.bin").unwrap()),
+        sha_of(&big)
+    );
+    let light = clone_weight(&b);
+    assert!(
+        light < heavy / 2,
+        "B's clone kept the old history: {heavy} → {light}"
+    );
+    a.sync();
+    assert_eq!(
+        a.read("config/player.json").as_deref(),
+        Some("{\"volume\":3}")
+    );
+    // A NEW MACHINE gets it all from the compacted history.
+    let c = Machine::new(&root, "machine-gamma", &remote);
+    assert!(matches!(c.sync(), Outcome::Synced { pulled: 3, .. }));
+    assert_eq!(
+        sha_of(&c.places.resolve("config/big.bin").unwrap()),
+        sha_of(&big)
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: a push another machine makes between a compaction's fetch and
+/// its forced push is lost — the lease must refuse, and the compaction start
+/// over on top of it.
+#[test]
+fn belongings_compaction_loses_no_race() {
+    let root = scratch("compact-race");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"v\":1}");
+    a.sync();
+    a.write("config/theme.json", "{\"v\":2}");
+    a.sync();
+    let b = Machine::new(&root, "machine-beta", &remote);
+    b.sync();
+    b.write("config/audio.json", "{\"from\":\"b\"}");
+    let raced = Cell::new(0);
+    let race = || {
+        if raced.get() == 0 {
+            b.sync();
+        }
+        raced.set(raced.get() + 1);
+    };
+    let mut engine = a.engine();
+    engine.before_push = Some(&race);
+    a.say(PASSPHRASE);
+    engine.compact(0, &mut |_| {}).unwrap();
+    assert_eq!(raced.get(), 2, "the compaction did not start over");
+    let c = Machine::new(&root, "machine-gamma", &remote);
+    c.sync();
+    assert_eq!(
+        c.read("config/audio.json").as_deref(),
+        Some("{\"from\":\"b\"}"),
+        "the push made during the compaction was lost"
+    );
+    assert_eq!(c.read("config/theme.json").as_deref(), Some("{\"v\":2}"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: a machine whose push lost to another machine's compaction
+/// keeps the old history in its clone — its push's own fetch moved the
+/// remote's ref to the compacted head, and the retry must still see a
+/// history rewritten under it.
+#[test]
+fn a_clone_shrinks_after_a_compaction_beat_its_push() {
+    let root = scratch("compact-beaten");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"theme\":\"owl\"}");
+    let big = a.places.resolve("config/big.bin").unwrap();
+    write_noise(&big, 31, 2 << 20);
+    a.sync();
+    let b = Machine::new(&root, "machine-beta", &remote);
+    b.sync();
+    for n in 0..4 {
+        write_noise(&big, 200 + n, 2 << 20);
+        a.sync();
+    }
+    b.sync();
+    let heavy = clone_weight(&b);
+    assert!(heavy > 8 << 20, "the history is only {heavy} bytes");
+    b.write("config/player.json", "{\"volume\":3}");
+    // A COMPACTS right before B's push: B's push is refused, and the fetch
+    // that tells a lost race from a failure brings the compacted head.
+    let compacted = Cell::new(false);
+    let compact = || {
+        if !compacted.get() {
+            compacted.set(true);
+            a.say(PASSPHRASE);
+            a.engine().compact(0, &mut |_| {}).unwrap();
+        }
+    };
+    let mut engine = b.engine();
+    engine.before_push = Some(&compact);
+    b.say(PASSPHRASE);
+    let done = engine.prepare(&mut |_| {});
+    assert!(compacted.get());
+    assert!(
+        matches!(
+            done,
+            Ok(Done::Synced(Outcome::Synced {
+                pushed: 1,
+                deleted_here: 0,
+                deleted_there: 0,
+                ..
+            }))
+        ),
+        "{done:?}"
+    );
+    let light = clone_weight(&b);
+    assert!(
+        light < heavy / 2,
+        "B's clone kept the old history: {heavy} → {light}"
+    );
+    let c = Machine::new(&root, "machine-gamma", &remote);
+    c.sync();
+    assert_eq!(
+        c.read("config/player.json").as_deref(),
+        Some("{\"volume\":3}")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: a compaction that finds nothing to fold says it compacted, or
+/// pushes anything — or the budget of a young history says a compaction
+/// would fold it, which keeps a recommendation on screen that no compaction
+/// can clear.
+#[test]
+fn nothing_to_compact_is_said_and_never_recommended() {
+    let root = scratch("compact-nothing");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    for n in 0..3 {
+        a.write("config/theme.json", &format!("{{\"v\":{n}}}"));
+        let synced = a.sync();
+        let Outcome::Synced {
+            budget: Some(budget),
+            ..
+        } = synced
+        else {
+            panic!("{synced:?}");
+        };
+        assert!(!budget.foldable, "a history younger than keepDays folds");
+        assert_ne!(
+            kept::weight(budget.tree_bytes, budget.history_bytes, budget.foldable),
+            kept::Weight::Compact
+        );
+    }
+    let (_, before) = remote_log(&remote_dir, &root);
+    a.say(PASSPHRASE);
+    assert_eq!(
+        a.engine().compact(kept::KEEP_DAYS, &mut |_| {}).unwrap(),
+        Compaction::Nothing
+    );
+    assert_eq!(
+        Status::read(&a.places.status()).unwrap().outcome,
+        Outcome::NothingToCompact {
+            keep_days: kept::KEEP_DAYS
+        }
+    );
+    assert!(!a.places.passphrase().exists());
+    let (_, after) = remote_log(&remote_dir, &root);
+    assert_eq!(before, after, "a compaction with nothing to fold pushed");
+    // AND WITH NOTHING KEPT, the same history folds.
+    a.say(PASSPHRASE);
+    assert!(matches!(
+        a.engine().compact(0, &mut |_| {}).unwrap(),
+        Compaction::Done { .. }
+    ));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the person's recipient is left for an identity the repository
+/// never received — a first push refused or beaten — so that "to myself"
+/// seals files to a key that exists nowhere.
+#[test]
+fn a_first_push_that_fails_leaves_no_recipient() {
+    let root = scratch("recipient");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"theme\":\"owl\"}");
+    // THE REMOTE GOES AWAY between the fetch and the push.
+    let away = root.join("remote.away");
+    let gone = || {
+        if remote_dir.exists() {
+            std::fs::rename(&remote_dir, &away).unwrap();
+        }
+    };
+    let mut engine = a.engine();
+    engine.before_push = Some(&gone);
+    a.say(PASSPHRASE);
+    assert!(engine.prepare(&mut |_| {}).is_err());
+    assert!(
+        !a.places.recipient().exists(),
+        "a recipient was left for an identity nobody has"
+    );
+    std::fs::rename(&away, &remote_dir).unwrap();
+    a.sync();
+    let remembered = std::fs::read_to_string(a.places.recipient()).unwrap();
+    let (names, bytes) = remote_files(&remote_dir, &root);
+    let key = &bytes[names.iter().position(|n| n == KEY_FILE).unwrap()];
+    let ring = Keyring::open(key, &crate::crypt::passphrase(PASSPHRASE.to_owned())).unwrap();
+    assert_eq!(
+        remembered.trim(),
+        ring.recipient().to_string(),
+        "the recipient is not the repository's identity"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The repository `belongings-recover-without-the-distro` restores with Go
+/// `age`, written into `$RONOCTUA_RECOVER_FIXTURE`: `repo/` (a clone),
+/// `passphrase`, `expected/<logical path>` — every file as it was, a link as
+/// a link — `expected.modes` (`<logical path> <octal mode>` of every file:
+/// the store keeps no mode) and `damage` (`<chunk> <logical path>`: one
+/// file's only chunk, which the check damages to see the script name that
+/// file and go on).
+#[test]
+#[ignore = "writes the fixture of the check belongings-recover-without-the-distro"]
+fn a_repository_for_the_recovery_check() {
+    let out = std::env::var_os("RONOCTUA_RECOVER_FIXTURE")
+        .map(PathBuf::from)
+        .expect("RONOCTUA_RECOVER_FIXTURE names where the fixture goes");
+    let root = scratch("recover");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let mut a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"theme\":\"owl\"}\n");
+    a.write("config/player-keys/tmdb", "tmdb-token");
+    std::fs::set_permissions(
+        a.places.resolve("config/player-keys/tmdb").unwrap(),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    write_noise(
+        &a.places.resolve("home/notes/big.bin").unwrap(),
+        33,
+        5 << 20,
+    );
+    std::fs::write(a.places.resolve("home/notes/empty.md").unwrap(), b"").unwrap();
+    std::os::unix::fs::symlink("big.bin", a.places.home.join("notes/latest")).unwrap();
+    assert!(a.prefs.keep("home/notes"));
+    a.sync();
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let mut clone = ronoctua_git::base(&tools(), &out, None).unwrap();
+    ronoctua_git::subcommand(&mut clone, "clone")
+        .args(["-q"])
+        .arg(&remote_dir)
+        .arg(out.join("repo"));
+    assert!(clone.output().unwrap().status.success());
+    std::fs::write(out.join("passphrase"), PASSPHRASE).unwrap();
+    let mut modes = String::new();
+    for logical in Last::read(&a.places.last()).unwrap().entries.keys() {
+        let from = a.places.resolve(logical).unwrap();
+        let to = out.join("expected").join(logical);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        let meta = std::fs::symlink_metadata(&from).unwrap();
+        if meta.file_type().is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&from).unwrap(), &to).unwrap();
+        } else {
+            std::fs::copy(&from, &to).unwrap();
+            std::fs::set_permissions(&to, meta.permissions()).unwrap();
+            modes.push_str(&format!(
+                "{logical} {:o}\n",
+                meta.permissions().mode() & 0o7777
+            ));
+        }
+    }
+    std::fs::write(out.join("expected.modes"), modes).unwrap();
+    // THE CHUNK TO DAMAGE: the theme's only one, which no other file shares.
+    let engine = a.engine();
+    let ground = engine.ground().unwrap();
+    engine
+        .checkout(&ground.repo, ground.head.as_deref().unwrap())
+        .unwrap();
+    let (_, index) = engine
+        .open_repository(&crate::crypt::passphrase(PASSPHRASE.to_owned()))
+        .unwrap();
+    let theme = index
+        .entries
+        .iter()
+        .find(|b| b.path == "config/theme.json")
+        .unwrap();
+    assert_eq!(theme.chunks.len(), 1);
+    let chunk = crate::chunks::relative(&theme.chunks[0].id).unwrap();
+    std::fs::write(out.join("damage"), format!("{chunk} config/theme.json\n")).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: "keep both" loses the repository's side. It is pulled beside
+/// this machine's AFTER the push, and by then the new index names this
+/// machine's side alone — its chunks are swept, and must wait aside.
+#[test]
+fn keeping_both_lands_the_other_side_beside() {
+    let root = scratch("both");
+    let remote = bare(&root.join("remote.git"));
+    let mut a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("home/notes/a.md", "first\n");
+    assert!(a.prefs.keep("home/notes"));
+    a.sync();
+    let b = Machine::new(&root, "machine-beta", &remote);
+    b.sync();
+    a.write("home/notes/a.md", "from alpha\n");
+    a.sync();
+    b.write("home/notes/a.md", "from beta\n");
+    b.say(PASSPHRASE);
+    let plan = match b.engine().prepare(&mut |_| {}) {
+        Ok(Done::Waiting(plan)) => plan,
+        other => panic!("{other:?}"),
+    };
+    assert!(Decision::KeepBoth.allowed(&plan.conflicts[0]));
+    let mut decisions = Decisions::new();
+    decisions.insert("home/notes/a.md".to_owned(), Decision::KeepBoth);
+    write_private(
+        &b.places.decisions(),
+        &serde_json::to_vec(&decisions).unwrap(),
+    )
+    .unwrap();
+    let outcome = match b.engine().apply(&mut |_| {}) {
+        Ok(Done::Synced(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    let Outcome::Synced { unwritten, .. } = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(unwritten.is_empty(), "{unwritten:?}");
+    assert_eq!(b.read("home/notes/a.md").as_deref(), Some("from beta\n"));
+    assert_eq!(
+        b.read(&beside("home/notes/a.md", "machine-alpha"))
+            .as_deref(),
+        Some("from alpha\n"),
+        "the repository's side did not land beside"
+    );
+    assert!(
+        !b.engine().aside().exists(),
+        "the aside folder outlived the sync"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A store's file for [`a_sync_says_which_files_wait_for_their_repairs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum Waiting {
+    #[default]
+    Calm,
+    Busy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Waits {
+    mode: Waiting,
+}
+
+/// FAILS IF: a sync's outcome does not name the person's files whose
+/// repairs wait for an answer (`Synced.repaired`, by logical path) — the
+/// one place a sync tells the page there is something to decide — or names
+/// one the person already answered.
+#[test]
+fn a_sync_says_which_files_wait_for_their_repairs() {
+    let root = scratch("repaired");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write("config/theme.json", "{\"theme\":\"owl\"}");
+    a.write("config/waits.json", "{\"mode\":\"frantic\"}");
+    a.write("config/left.json", "{\"mode\":\"later\"}");
+    let store = |file: &'static str| {
+        ronoctua_store::Store::<Waits>::at(Some(a.places.config.clone()), file)
+            .with_roots(Some(a.places.config.clone()), Some(a.places.state.clone()))
+    };
+    let _ = store("waits.json").read();
+    let _ = store("left.json").read();
+    let left = store("left.json").ledger().expect("a ledger");
+    ronoctua_store::repair::dismiss(
+        &a.places.repairs(),
+        &a.places.config.join("left.json"),
+        &left,
+    )
+    .unwrap();
+    let outcome = a.sync();
+    let Outcome::Synced { repaired, .. } = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(repaired, ["config/waits.json"]);
     let _ = std::fs::remove_dir_all(root);
 }

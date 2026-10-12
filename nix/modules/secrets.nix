@@ -29,7 +29,15 @@
 
 let
   cfg = config.ronoctua;
-  secretsFile = ../../secrets/secrets.yaml;
+
+  # WHERE THE SHARED SECRETS ARE: the machine's own flake first — it is what an
+  # installed machine builds from, and the distro's tree is not the machine's
+  # (`nix/machine.nix`) — and the distro's `secrets/` for a system built
+  # without one (the VM). Neither exists in the public repository.
+  source = cfg.machine.source or null;
+  ownFile = if source == null then null else source + "/${(import ../machine.nix).parts.secrets}";
+  secretsFile =
+    if ownFile != null && builtins.pathExists ownFile then ownFile else ../../secrets/secrets.yaml;
 in
 {
   imports = [ inputs.sops-nix.nixosModules.sops ];
@@ -39,9 +47,11 @@ in
     # Enabled only when there is something to decrypt. An empty secrets.yaml would
     # make sops-nix fail at boot, which is worse than having no secret at all.
     default = builtins.pathExists secretsFile;
-    defaultText = lib.literalExpression "secrets/secrets.yaml exists";
+    defaultText = lib.literalExpression "secrets.yaml exists in the machine's flake (or, without one, in secrets/)";
     description = ''
-      Switches sops-nix on. It switches itself on when `secrets/secrets.yaml` exists.
+      Switches sops-nix on. It switches itself on when the machine's own
+      flake carries a `secrets.yaml` — or, for a system built without one,
+      when the distro's `secrets/secrets.yaml` exists.
     '';
   };
 

@@ -100,6 +100,7 @@
   coreutils,
   gawk,
   gnugrep,
+  gnused,
   jq,
   lib,
   system,
@@ -192,7 +193,7 @@ let
           exit 1
         fi
         if ! nix flake check --keep-going -L --max-jobs "$jobs" --cores "$cores" "$@"; then
-          blame_earlyoom
+          blame_memory
           exit 1
         fi
         echo ""
@@ -221,6 +222,7 @@ writeShellApplication {
     coreutils
     gawk
     gnugrep
+    gnused
     jq
   ];
   text = ''
@@ -270,6 +272,30 @@ writeShellApplication {
     peak_kb=$(( 1792 * 1024 ))
 
     budget_kb=$(( available_kb - floor_kb - reserve_kb ))
+    # AND NEVER PAST THE DAEMON'S OWN CEILING. On this distro the builds run in
+    # `nix-daemon.service`, whose `MemoryHigh` is `ronoctua.memory.buildCeiling`
+    # (half the RAM by default): past it the kernel throttles every compiler,
+    # the stall grows, and `systemd-oomd` — watching `system.slice` — kills
+    # the build. Sized by what is FREE alone, the gate planned for more than
+    # the daemon is let to hold. `infinity`, an empty answer or no systemd
+    # (another distro, a container) leave the budget as it was.
+    # Read ONCE, and every budget below (the builds' here, the VMs' in phase
+    # 3, which QEMU spends inside the same daemon) is clamped by it.
+    ceiling_b=$(systemctl show -p MemoryHigh --value nix-daemon.service 2>/dev/null || true)
+    ceiling_kb=""
+    if [[ "$ceiling_b" =~ ^[0-9]+$ ]]; then
+      ceiling_kb=$(( ceiling_b / 1024 - reserve_kb ))
+      printf 'nix-daemon MemoryHigh: %s MiB, and every budget follows it\n' "$(( ceiling_b / 1048576 ))"
+    fi
+    # `under_the_ceiling <kB>`: the smaller of what is free and the ceiling.
+    under_the_ceiling() {
+      if [ -n "$ceiling_kb" ] && [ "$ceiling_kb" -lt "$1" ]; then
+        echo "$ceiling_kb"
+      else
+        echo "$1"
+      fi
+    }
+    budget_kb=$(under_the_ceiling "$budget_kb")
     if [ "$budget_kb" -lt "$peak_kb" ]; then
       slots=1
     else
@@ -313,21 +339,42 @@ writeShellApplication {
       failed+=("$1")
     }
 
-    # WHAT TELLS THE TRUTH ABOUT A `signal: 15`, and the reason this function
-    # exists at all: without it the message names the compiler, and the compiler
-    # is not what went wrong. It names every process earlyoom took, because a
-    # VM's QEMU and an evaluator die the same silent way.
-    blame_earlyoom() {
+    # WHAT TELLS THE TRUTH ABOUT A `signal: 15` — or a `signal: 9` — and the
+    # reason this function exists at all: without it the message names the
+    # compiler, and the compiler is not what went wrong. Three killers act on
+    # memory, and each says it in its own place, so each is asked:
+    #
+    # * `earlyoom` on a host that has it (SIGTERM, by name, in its own log);
+    # * `systemd-oomd`, which on this distro watches `system.slice` — where the
+    #   daemon's builds run — and kills a whole cgroup when its pressure stays
+    #   high (`nix/modules/memory.nix`); it logs the cgroup it killed;
+    # * the KERNEL's OOM killer, the last one, in the kernel's log
+    #   (`Out of memory: Killed process <pid> (<name>)`).
+    #
+    # It names every process or cgroup they took, because a VM's QEMU and an
+    # evaluator die the same silent way. A journal it may not read (no
+    # `systemd-journal` group) is no answer, not an error.
+    blame_memory() {
       local killed
-      killed=$(journalctl -u earlyoom --since "$started" --no-pager -o cat 2>/dev/null \
-        | awk -F'"' '/^sending SIG/ {print $2}' | sort | uniq -c || true)
+      killed=$(
+        {
+          journalctl -u earlyoom --since "$started" --no-pager -o cat 2>/dev/null \
+            | awk -F'"' '/^sending SIG/ {print "earlyoom: " $2}' || true
+          journalctl -u systemd-oomd --since "$started" --no-pager -o cat 2>/dev/null \
+            | awk '/^Killed / {print "systemd-oomd: " $2}' || true
+          journalctl -k --since "$started" --no-pager -o cat 2>/dev/null \
+            | sed -n 's/^.*[Oo]ut of memory: Killed process [0-9]* (\([^)]*\)).*$/kernel oom-kill: \1/p' || true
+        } | sort | uniq -c
+      )
       if [ -n "$killed" ]; then
         echo ""
-        echo "earlyoom killed, during this round:"
+        echo "Killed for memory during this round (earlyoom, systemd-oomd, the kernel):"
         echo "$killed"
         echo "It is NOT a defect of what was being built: it is the HOST's memory."
         echo "Close what you can and run again — this command fits itself to"
-        echo "whatever is free at the moment it starts."
+        echo "whatever is free at the moment it starts. On a machine that only"
+        echo "builds, ronoctua.memory.buildCeiling raises the daemon's ceiling"
+        echo "(docs/DEVELOPMENT.md)."
       fi
     }
 
@@ -346,7 +393,7 @@ writeShellApplication {
     if ! nix eval --json ".#checks.${system}" \
          --apply "cs: (${factsOf}) $(nix_list "''${names[@]}") cs" \
          | jq -r '.[] | [.n, .mib, .cores, .nodes] | @tsv' > "$work/facts"; then
-      blame_earlyoom
+      blame_memory
       exit 1
     fi
     declare -A mib=() vcores=() nodes=() drv=() driver=() driver_out=()
@@ -397,7 +444,7 @@ writeShellApplication {
       if ! nix eval --json ".#checks.${system}" \
            --apply "cs: (${drvsOf}) $(nix_list "''${batch[@]}") cs" \
            | jq -r '.[] | [.n, .drv, .driver // "-", .out // "-"] | @tsv' >> "$work/drvs"; then
-        blame_earlyoom
+        blame_memory
         exit 1
       fi
     done
@@ -422,7 +469,7 @@ writeShellApplication {
     for i in "''${!heavy[@]}"; do
       echo "-- ''${heavy_name[i]}"
       if ! nix build --out-link "$work/heavy-$i" --max-jobs 1 --cores "$heavy_cores" "''${heavy[i]}"; then
-        blame_earlyoom
+        blame_memory
         exit 1
       fi
     done
@@ -446,7 +493,7 @@ writeShellApplication {
       # `$work` for phase 1's reason.
       if ! nix build --out-link "$work/boot" --keep-going -L \
            --max-jobs "$jobs" --cores "$cores" "''${boots[@]}"; then
-        blame_earlyoom
+        blame_memory
       fi
     fi
     echo ""
@@ -457,7 +504,7 @@ writeShellApplication {
     # Measured again here, because phases 1 and 2 left the page cache full and
     # it is `MemAvailable`, which counts that cache as free, that says what fits.
     available_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
-    vm_budget_mib=$(( (available_kb - floor_kb - reserve_kb) / 1024 ))
+    vm_budget_mib=$(( $(under_the_ceiling $(( available_kb - floor_kb - reserve_kb ))) / 1024 ))
     # QEMU itself, per node, and the driver and the builder around a test.
     vm_node_mib=256
     vm_test_mib=128
@@ -534,7 +581,7 @@ writeShellApplication {
       fi
     done
     if [ "$failures" -gt 0 ]; then
-      blame_earlyoom
+      blame_memory
     fi
     echo ""
 
@@ -548,7 +595,7 @@ writeShellApplication {
       # HELD in `$work` too, for the same reason as phase 3's.
       if ! nix build --out-link "$work/rest" --keep-going -L \
            --max-jobs "$jobs" --cores "$cores" "''${rest[@]}" "$@"; then
-        blame_earlyoom
+        blame_memory
         fail "phase 4 (the failed builds are named above)"
       fi
     fi

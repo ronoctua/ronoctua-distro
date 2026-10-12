@@ -1,0 +1,436 @@
+# The machine's own flake — the options the machine directory is read by.
+#
+# Each installed machine has its own flake in the machine directory, with the
+# distro as an input that follows the `release` branch (`nix/machine.nix`,
+# `templates/machine`). This module hands the configuration that directory's
+# name — spelled once, in `nix/machine.nix` (`machine-dir-has-one-name`) —,
+# the attribute the machine flake builds, the contract between the two, and
+# what `lib.machine` knows of the build: the flake's own source and the
+# distro's revision. The units of the machine's life (the boot trial's bless,
+# the update's apply) join it with their package.
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+
+let
+  machine = import ../machine.nix;
+  cfg = config.ronoctua.machine;
+  tool = "${cfg.package}/bin/ronoctua-machine";
+  # THE UPDATE'S OWN LOCK, which the root half of the update holds for its
+  # whole run (`gen-updates.py`): an apply started beside it — by the software
+  # centre, by the rescue console — is refused at once instead of building
+  # beside it. `update-apply-rule-is-narrow` reads the update's runner and
+  # holds the two names together.
+  updateLock = "${cfg.runDir}/system.lock";
+  # WHERE A SYSTEM CARRIES THE LOCK ITS MACHINE FLAKE WAS BUILT FROM, under
+  # `/etc` (and so under its toplevel's `etc/`): `ronoctua-machine` reads it
+  # there to put the folder back on the system that runs.
+  systemLock = "ronoctua/machine.lock";
+in
+{
+  options.ronoctua.machine = {
+    dir = lib.mkOption {
+      type = lib.types.str;
+      default = machine.machineDir;
+      defaultText = lib.literalExpression "(import nix/machine.nix).machineDir";
+      readOnly = true;
+      description = ''
+        The machine directory: the machine's own flake (`flake.nix`,
+        `flake.lock`, `host.nix`, `facter.json`, `person/`, `local/`). The one
+        place this path is written; programs receive it as
+        `RONOCTUA_MACHINE_DIR`.
+      '';
+    };
+
+    attr = lib.mkOption {
+      type = lib.types.str;
+      default = config.ronoctua.user;
+      defaultText = lib.literalExpression "config.ronoctua.user";
+      readOnly = true;
+      description = ''
+        The `nixosConfigurations` attribute the machine flake builds — the
+        same name the rescue's rebuild and `ronoctua-machine apply` ask for.
+      '';
+    };
+
+    contract = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = machine.contract;
+      defaultText = lib.literalExpression "(import nix/machine.nix).contract";
+      readOnly = true;
+      description = ''
+        The version of the contract between the distro and a machine flake
+        (`lib.machine`): a machine flake written for another is refused at
+        evaluation with a sentence.
+      '';
+    };
+
+    # ── anchor: L03 ──
+    source = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        The machine flake's own source, as `lib.machine` received it (`./.` in
+        the machine's `flake.nix`, a store path once evaluated). `null` for a
+        system the distro builds without one (the VM, a test).
+      '';
+    };
+
+    distroRev = lib.mkOption {
+      type = lib.types.str;
+      default = "unknown";
+      description = ''
+        The distro's revision this system is built from — `lib.machine` sets
+        it from the distro flake (`<rev>-dirty` for a tree with changes).
+        `unknown` is the VM's and a test's: they are built from no machine
+        flake. It goes into `/etc/ronoctua/person-applied.json`.
+      '';
+    };
+
+    # ── anchor: L05 ──
+    # THE MACHINE'S LIFE (`ronoctua-machine`): migrating the old layout,
+    # building before switching, the boot trial and its bless, a hold.
+    tool = lib.mkOption {
+      type = lib.types.package;
+      description = ''
+        `ronoctua-machine`, EXTRACTED from the workspace (`rust.machine`): it
+        runs as root on every update, every rescue rebuild and every boot,
+        and must not carry the desktop. The flake sets it next to the import
+        of this module.
+      '';
+    };
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      internal = true;
+      default = pkgs.runCommand "ronoctua-machine" { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
+        makeWrapper ${config.ronoctua.machine.tool}/bin/ronoctua-machine $out/bin/ronoctua-machine ${
+          lib.concatStringsSep " " (
+            lib.mapAttrsToList (
+              name: value: "--set-default ${name} ${lib.escapeShellArg value}"
+            ) config.ronoctua.machine.environment
+          )
+        }
+      '';
+      defaultText = "the tool, wrapped with ronoctua.machine.environment";
+      description = ''
+        `ronoctua-machine` with the machine's environment already set: what
+        the units run and what root finds on the `PATH` (`sudo
+        ronoctua-machine hold <rev>`). `--set-default`, so a unit's own
+        `Environment=` (the same table) says the same thing twice and a test
+        can point it elsewhere.
+      '';
+    };
+
+    applyCommand = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = "${pkgs.util-linux}/bin/flock --nonblock --conflict-exit-code 75 ${updateLock} ${tool} apply";
+      defaultText = "flock --nonblock on the update's lock, then ronoctua-machine apply";
+      description = ''
+        The command line of an apply that does not run inside the update: the
+        update's own lock first, not waited for (busy is an answer, exit 75),
+        then `ronoctua-machine apply`. The software centre's
+        `ronoctua-update-apply.service` and the rescue's rebuild run it.
+      '';
+    };
+
+    environment = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = {
+        RONOCTUA_MACHINE_DIR = config.ronoctua.machine.dir;
+        RONOCTUA_MACHINE_ATTR = config.ronoctua.machine.attr;
+        RONOCTUA_MACHINE_STATE = config.ronoctua.machine.stateDir;
+        RONOCTUA_MACHINE_RUN = config.ronoctua.machine.runDir;
+        # Where a toplevel carries its lock (`etc/…`, below).
+        RONOCTUA_MACHINE_SYSTEM_LOCK = "etc/${systemLock}";
+        RONOCTUA_MACHINE_BLESS_WAIT_S = toString config.ronoctua.machine.blessWaitSeconds;
+        # HOW MANY GENERATIONS THE BOOT MENU LISTS: `apply` refuses the
+        # generation that would push the last good one out of it. The store
+        # module caps every loader at the count the trim keeps; the loader's
+        # own limit is read first, so a machine that imports this module
+        # alone (a test) still has one.
+        RONOCTUA_MACHINE_MENU_LIMIT = toString (
+          if config.boot.loader.systemd-boot.enable then
+            config.boot.loader.systemd-boot.configurationLimit
+          else if config.boot.loader.grub.enable then
+            config.boot.loader.grub.configurationLimit
+          else
+            config.ronoctua.store.systemGenerations
+        );
+        # The template a migrated machine's `flake.nix` is written from.
+        RONOCTUA_MACHINE_TEMPLATE = "${../../templates/machine}";
+        # By store path: a unit's `PATH` is minimal, and the machine's own
+        # Nix is the one that filled this store.
+        RONOCTUA_NIX = "${config.nix.package}/bin/nix";
+        RONOCTUA_BOOTCTL = "${config.systemd.package}/bin/bootctl";
+      };
+      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix and bootctl";
+      description = ''
+        What `ronoctua-machine` is told, by every unit that runs it and by
+        its wrapper: one table, so the rescue's rebuild, the update and the
+        boot's bless cannot disagree about which flake or which `nix`.
+      '';
+    };
+
+    stateDir = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      default = "/var/lib/ronoctua-machine";
+      description = ''
+        The machine's record (`state.json`: the last good generation, the
+        boot trial, a hold, the last apply), the lock snapshots and the old
+        layout a migration set aside. Persisted; the generations' trim reads
+        the record to keep the last good system and the one on trial.
+      '';
+    };
+
+    runDir = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      default = "/run/ronoctua-update";
+      description = ''
+        The update's folder under `/run`, shared with it: the out-link of a
+        built system lives here while it is applied, and the update's own
+        lock — which `ronoctua-update-apply.service` and the rescue's rebuild
+        take too (`applyCommand`).
+      '';
+    };
+
+    blessAfterSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 60;
+      description = ''
+        How long after the system's default target (`systemd.defaultUnit`) the
+        boot is judged: a system that reached it and stayed up this long
+        booted well, and the trial is blessed.
+      '';
+    };
+
+    blessWaitSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 4 * 60 * 60;
+      description = ''
+        How long the bless waits for root's lock of the person's data, which
+        an update holds for its whole root half. What booted is written down
+        before the wait, so a bless that never gets the lock loses nothing:
+        the next one judges by that boot.
+      '';
+    };
+
+    trialBootSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 600;
+      description = ''
+        How long a boot TRYING a new system has, from the start of stage 2, to
+        reach the system's default target. A trial that does not — a mount
+        that failed into emergency mode, a unit that never ends — is
+        restarted, and the boot loader takes the last good system.
+      '';
+    };
+  };
+
+  # ── anchor: L03 ──
+  # ── anchor: L05 ──
+  config =
+    let
+      user = config.ronoctua.user;
+      # The target a boot comes up to — `multi-user.target` here: the session
+      # is a console login and a user unit, with no display manager, so
+      # `graphical.target` is never reached.
+      target = config.systemd.defaultUnit;
+      # THE DEADLINE OF A TRIAL BOOT. Only a boot that TRIES a new system is
+      # bounded: the boot loader's default names the last good entry and it
+      # booted another (`LoaderEntrySelected`, which systemd-boot writes at
+      # every boot) — no other boot has a default set, since every judgement
+      # unsets it. Then: the default target, in time, or a restart, and the
+      # one-shot is spent, so the boot loader takes the last good system.
+      deadline = pkgs.writeShellScript "ronoctua-boot-trial-deadline" ''
+        vars=/sys/firmware/efi/efivars loader=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+        # An entry id, from the boot loader's UTF-16 variable: the four bytes
+        # of attributes off, the zero half of every character off.
+        value() {
+          if [ -r "$vars/$1-$loader" ]; then
+            ${pkgs.coreutils}/bin/tail -c +5 "$vars/$1-$loader" | ${pkgs.coreutils}/bin/tr -d '\000'
+          fi
+        }
+        up() { ${config.systemd.package}/bin/systemctl is-active --quiet ${target}; }
+        default=$(value LoaderEntryDefault) selected=$(value LoaderEntrySelected)
+        if [ -z "$default" ] || [ "$default" = "$selected" ] || up; then
+          exit 0
+        fi
+        echo "<5>this boot tries $selected: ${target} within ${toString cfg.trialBootSeconds} s, or back to $default"
+        ${pkgs.coreutils}/bin/sleep ${toString cfg.trialBootSeconds}
+        if up; then
+          exit 0
+        fi
+        # Said to the kernel's log too: on every console, where somebody
+        # looking at a stuck boot is looking.
+        said="the boot trial did not reach ${target} in time: restarting into the last good system"
+        echo "<2>$said"
+        echo "<2>ronoctua: $said" > /dev/kmsg || true
+        exec ${config.systemd.package}/bin/systemctl reboot --force
+      '';
+    in
+    {
+      # THE BOOT TRIAL'S WAY BACK, which has to happen without anybody:
+      #
+      # - `panic=10`: a kernel that panics reboots ten seconds later instead
+      #   of hanging on the message;
+      # - `boot.panic_on_fail`: a stage 1 that fails (no `init=` to switch
+      #   to, a root that does not mount) panics instead of waiting in an
+      #   emergency shell whose root account is locked anyway — nixpkgs'
+      #   systemd initrd turns it into a crash (`panic-on-fail.service`);
+      # - the hardware watchdog: a system that hangs with the kernel alive
+      #   stops being petted and is reset;
+      # - a stage 2 that does not reach the default target in time (a mount
+      #   that failed into emergency mode, whose root account is locked; a
+      #   unit that never ends): `ronoctua-boot-trial-deadline.service`,
+      #   below, restarts a TRIAL boot that does.
+      #
+      # Each of those boots again, and the one-shot entry was spent: the boot
+      # loader takes the default, which during a trial is the last good one.
+      # Three wrong passphrases at the disk's prompt are such a failure too,
+      # and reboot to try again.
+      boot.kernelParams = [
+        "panic=10"
+        "boot.panic_on_fail"
+      ];
+      systemd.settings.Manager.RuntimeWatchdogSec = lib.mkDefault "30s";
+
+      # Started at the very beginning of stage 2, before anything it waits
+      # for, and kept through `emergency.target` and `rescue.target` (which
+      # isolate, and would stop it — and which want it, in case they came
+      # first). It does nothing on a boot that tries nothing, and nothing once
+      # the default target is up: a switch that starts it again is harmless.
+      systemd.services.ronoctua-boot-trial-deadline = {
+        description = "Restarts a boot trial that does not reach the default target in time";
+        wantedBy = [
+          "sysinit.target"
+          "emergency.target"
+          "rescue.target"
+        ];
+        conflicts = [ "shutdown.target" ];
+        before = [ "shutdown.target" ];
+        unitConfig = {
+          DefaultDependencies = false;
+          IgnoreOnIsolate = true;
+        };
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = deadline;
+        };
+        restartIfChanged = false;
+        stopIfChanged = false;
+      };
+
+      # THE LOCK THE SYSTEM WAS BUILT FROM, carried by the system: the folder
+      # can always be put back on the system that runs — the first apply after
+      # an installation, the first trial that fails, a rollback by hand —
+      # with no snapshot taken before. The text, not a link: a link would put
+      # the whole machine flake (its secrets file included) in the closure.
+      environment.etc = lib.mkIf (
+        cfg.source != null && builtins.pathExists (cfg.source + "/flake.lock")
+      ) { ${systemLock}.text = builtins.readFile (cfg.source + "/flake.lock"); };
+
+      # The record's folder: root's, readable by everybody — the person's
+      # half publishes a copy of `state.json`, and the update's view reads it.
+      #
+      # AND THE UPDATE'S LOCK, root's `0600` before anybody opens it. Every
+      # system change takes it (the update's root half, `applyCommand`,
+      # apply-here), and `flock` needs only a READ descriptor: the file their
+      # shells would create is `0644` in a `0755` folder, and any local uid
+      # could then hold it for ever — every update refused as "already
+      # running", every apply busy, until a reboot. Made at boot (`f`, the
+      # folder is a tmpfs) and brought back to `0600` at every switch (`z`)
+      # on a machine that ran with the old mode; the folder is the same line
+      # the update module writes, and identical lines are one.
+      systemd.tmpfiles.rules = [
+        "d ${cfg.stateDir} 0755 root root -"
+        "d ${cfg.runDir} 0755 root root -"
+        "f ${updateLock} 0600 root root -"
+        "z ${updateLock} 0600 root root -"
+      ];
+
+      # `sudo ronoctua-machine hold <rev>` from a terminal; anybody else is
+      # refused before anything runs (`not-root`).
+      environment.systemPackages = [ cfg.package ];
+
+      # THE BLESS, ONCE PER BOOT, a while after the boot came up.
+      #
+      # Wanted by the system's DEFAULT target and ordered after it, with the
+      # wait in front: the boot is judged good when it reached that target
+      # and stayed up. `RemainAfterExit`, so the switches of this boot (which
+      # start the targets again) do not run it again; and `bless` itself
+      # never judges a trial armed during this same boot — the first switch
+      # that brings this unit starts it right away, and that boot tried
+      # nothing. It writes down what booted before it waits for root's lock
+      # of the person's data, and waits long (`blessWaitSeconds`).
+      # `Before=boot-complete.target`: whatever waits for a complete boot
+      # waits for the judgement.
+      systemd.services.${lib.removeSuffix ".service" "ronoctua-boot-bless.service"} = {
+        description = "Blesses the boot trial, or puts the machine back on the last good system";
+        wantedBy = [ target ];
+        after = [ target ];
+        before = [ "boot-complete.target" ];
+        environment = cfg.environment;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStartPre = "${pkgs.coreutils}/bin/sleep ${toString cfg.blessAfterSeconds}";
+          ExecStart = "${tool} bless";
+          # The wait, the lock's wait, and a quarter of an hour for the way
+          # back to write the boot menu again; a unit that never ends is not.
+          TimeoutStartSec = "${toString (cfg.blessAfterSeconds + cfg.blessWaitSeconds + 900)}s";
+        };
+        restartIfChanged = false;
+        stopIfChanged = false;
+      };
+
+      # APPLY WITHOUT MOVING THE INPUTS — what the software centre starts after
+      # the person declared or forgot a program, so it lands now and not at
+      # the next weekly update. The update's lock first (`flock -n`: busy is
+      # an answer, said with its own code), then root's lock of the person's
+      # data, which `ronoctua-machine` takes itself.
+      systemd.services.${lib.removeSuffix ".service" "ronoctua-update-apply.service"} = {
+        description = "Applies the machine directory without moving its inputs";
+        environment = cfg.environment;
+        serviceConfig = {
+          Type = "oneshot";
+          # A build compiles; the default start timeout is 90 seconds.
+          TimeoutStartSec = "infinity";
+          ExecStart = cfg.applyCommand;
+          RuntimeDirectory = baseNameOf cfg.runDir;
+          RuntimeDirectoryPreserve = "yes";
+          CPUSchedulingPolicy = "idle";
+          IOSchedulingClass = "idle";
+        };
+        # The switch it runs must not stop or restart the unit running it.
+        restartIfChanged = false;
+        stopIfChanged = false;
+      };
+
+      # WHO MAY START IT: the person, verb `start`, this unit and no other,
+      # `YES` — there is no polkit agent in this session, and the software
+      # centre starts it when nobody is looking at a prompt. The width is
+      # bought back the way the update's rule buys it: one unit, one verb,
+      # one user, no argument (`update-apply-rule-is-narrow`).
+      security.polkit.extraConfig = ''
+        polkit.addRule(function (action, subject) {
+          if (action.id == "org.freedesktop.systemd1.manage-units" &&
+              action.lookup("unit") == "ronoctua-update-apply.service" &&
+              action.lookup("verb") == "start" &&
+              subject.user == "${user}") {
+            return polkit.Result.YES;
+          }
+        });
+      '';
+    };
+}

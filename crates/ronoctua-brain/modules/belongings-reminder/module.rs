@@ -24,11 +24,39 @@
 //! opens them asking the passphrase — a COMMAND of the footer's, which the
 //! mark's id names ([`crate::module::MarkId::opens`]), not an action of this
 //! module.
+//!
+//! # The plain part, sent by itself
+//!
+//! The person's declarations and brain modules travel IN CLEAR, with no
+//! passphrase (the plain part): nothing to ask, so the machine may send them
+//! by itself. This module watches the plain roots as TREES (inotify, never a
+//! poll; `Source::Tree`: every folder under them, the ones made after the
+//! brain started included — `software/` is made by the first declaration)
+//! and, once they have stayed QUIET for [`QUIET_S`], starts the unit that
+//! syncs the plain part alone (`sync-plain`, declared beside this file).
+//! Only once this machine synced with the repository it has set (the plain
+//! part of a repository nobody made yet has nowhere to go), never in a
+//! rehearsal (the development loop's copy), and a change while it waits
+//! waits again.
+//!
+//! # A send is kept until a run read it
+//!
+//! Starting the unit is not sending: a run of the belongings that holds
+//! their lock (a sync the person started) refuses it (`Busy`), and a
+//! `sync-plain` already running is only joined. So the move is kept, and
+//! settled by what the state folder says when a run ends ([`Plain`]): a run
+//! that took the lock after the send was asked read the plain part after the
+//! move, and the move is done (sent, or failed: the next move or sync sends
+//! it, and a send that fails never loops); no run took it since — the send
+//! was refused, or left to the run that held the lock — and it is asked
+//! again at once, a few times at most ([`AGAIN_MOST`]). A move heard while a
+//! run reads is a move like any other: sent once quiet, after that run.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::SystemTime;
 
-use ronoctua_belongings::places::{OWN, RUNTIME_LEAF, SESSION_DIR};
+use ronoctua_belongings::places::{LOCK_FILE, OWN, RUNTIME_LEAF, Root, SESSION_DIR};
 use ronoctua_belongings::plan::PLAN_FILE;
 use ronoctua_belongings::prefs::{Belongings, FILE};
 use ronoctua_belongings::status::{Last, Outcome, Status, due, due_at};
@@ -44,10 +72,36 @@ const SYNC: &str = "belongings-sync";
 /// The footer's command that opens the belongings — where decisions are made.
 const OPEN: &str = "belongings-open";
 
+/// How long the plain part stays quiet before it is sent, in seconds: a
+/// software centre that writes a list and then its icons is one send.
+pub const QUIET_S: Moment = 30;
+
+/// How many times one move is asked again of a run that never took the
+/// lock — the send refused for a run that held it, or left to it. Past it,
+/// the move waits for the next one, or the next sync: a send that never
+/// reaches the lock never loops.
+pub const AGAIN_MOST: u8 = 3;
+
+/// What starts the unit: systemd's `--user` manager — a test's recorder.
+type Starter = fn(&str) -> Result<(), crate::systemd::Trouble>;
+
 /// The entry: a reminder reading the files under this birth's roots, and the
 /// runtime folder of this instance.
 #[must_use]
 pub fn new(birth: &Birth) -> impl Module + use<> {
+    let root = |r: Root| match r {
+        Root::Config => birth.roots.config.clone(),
+        Root::State => birth.roots.state.clone(),
+        Root::Home => None,
+    };
+    // THE PLAIN ROOTS, as the one reader of the tables names them.
+    let plain = ronoctua_belongings::scope::plain_roots()
+        .iter()
+        .filter_map(|p| {
+            let (r, rest) = Root::split(p.path)?;
+            Some(root(r)?.join(rest))
+        })
+        .collect();
     Reminder::reading(Paths {
         prefs: birth.roots.config.as_ref().map(|c| c.join(FILE)),
         own: birth.roots.state.as_ref().map(|s| s.join(OWN)),
@@ -56,6 +110,7 @@ pub fn new(birth: &Birth) -> impl Module + use<> {
             .config
             .as_ref()
             .and_then(|_| ronoctua_xdg::runtime_file(RUNTIME_LEAF)),
+        plain,
     })
 }
 
@@ -68,6 +123,18 @@ struct Paths {
     own: Option<PathBuf>,
     /// The runtime folder: the session a sync prepared.
     runtime: Option<PathBuf>,
+    /// The plain part's roots: what changes anywhere under them is sent once
+    /// quiet.
+    plain: Vec<PathBuf>,
+}
+
+impl Paths {
+    /// The lock one run of the belongings at a time holds (`run.lock` of the
+    /// state folder): held while a run reads and writes, its time set when
+    /// one takes it, closed when one ends.
+    fn lock(&self) -> Option<PathBuf> {
+        self.own.as_ref().map(|o| o.join(LOCK_FILE))
+    }
 }
 
 /// What the files said when they were last read.
@@ -155,11 +222,31 @@ impl Seen {
     }
 }
 
+/// The plain part's send, as far as the reminder knows (see the module's
+/// header, "A send is kept until a run read it").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Plain {
+    /// When the plain part last moved, while no run is known to have read it
+    /// since.
+    moved: Option<Moment>,
+    /// When a run was asked to send it — the unit started, or the run that
+    /// held the lock left to end first — by the wall clock the lock's time
+    /// is written in. `None` while none is asked: the quiet's clock runs.
+    asked: Option<SystemTime>,
+    /// How many times this move was asked again of a run that never took
+    /// the lock.
+    again: u8,
+}
+
 /// The reminder.
 struct Reminder {
     paths: Paths,
     /// What was read, and the page's generation — moved whenever it changes.
     kept: Mutex<(Seen, u64)>,
+    /// The plain part's send.
+    plain: Mutex<Plain>,
+    /// What starts the plain sync's unit.
+    start: Starter,
 }
 
 impl Reminder {
@@ -168,7 +255,115 @@ impl Reminder {
         Self {
             paths,
             kept: Mutex::new((seen, 1)),
+            plain: Mutex::new(Plain::default()),
+            start: crate::systemd::start,
         }
+    }
+
+    /// The plain part's send, as it is.
+    fn plain(&self) -> Plain {
+        self.plain.lock().map(|p| *p).unwrap_or_default()
+    }
+
+    /// Changes the plain part's send.
+    fn with_plain(&self, change: impl FnOnce(&mut Plain)) {
+        if let Ok(mut p) = self.plain.lock() {
+            change(&mut p);
+        }
+    }
+
+    /// The moment the plain part, moved and quiet since, is sent — while no
+    /// run is asked to send it already.
+    fn send_at(&self) -> Option<Moment> {
+        let p = self.plain();
+        p.moved
+            .filter(|_| p.asked.is_none())
+            .map(|at| at.saturating_add(QUIET_S))
+    }
+
+    /// The plain part moved at `now`: it is sent [`QUIET_S`] after the last
+    /// move — when this machine has a repository it synced with. A send
+    /// asked before is no answer for it: a run that read the plain part
+    /// already did not read this.
+    fn plain_moved(&self, now: Moment) {
+        let (seen, _) = self.seen();
+        let synced = seen.repository && seen.last_s.is_some();
+        self.with_plain(|p| {
+            *p = Plain {
+                moved: synced.then_some(now),
+                asked: None,
+                again: 0,
+            };
+        });
+    }
+
+    /// Whether a run of the belongings holds their lock now.
+    fn busy(&self) -> bool {
+        self.paths
+            .lock()
+            .is_some_and(|l| ronoctua_belongings::running::busy_at(&l))
+    }
+
+    /// When a run last took the lock (it sets the file's time then).
+    fn lock_taken(&self) -> Option<SystemTime> {
+        let lock = self.paths.lock()?;
+        std::fs::metadata(lock).and_then(|m| m.modified()).ok()
+    }
+
+    /// Asks a run to send the plain part when it has been quiet long enough:
+    /// starts the unit — or, while another run holds the lock (a sync the
+    /// person started, which would refuse it), leaves it to that run's end,
+    /// heard in the state folder ([`Reminder::settle_send`]). Never in a
+    /// rehearsal. Says whether it started the unit.
+    fn send_if_quiet(&self, ctx: &Ctx) -> bool {
+        if self.send_at().is_none_or(|at| ctx.now() < at) {
+            return false;
+        }
+        if ctx.rehearsing() {
+            self.with_plain(|p| *p = Plain::default());
+            return false;
+        }
+        // ASKED BEFORE IT STARTS: the run sets the lock's time after this.
+        self.with_plain(|p| p.asked = Some(SystemTime::now()));
+        if self.busy() {
+            return false;
+        }
+        match (self.start)(super::unit::PLAIN) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "the plain part of the belongings could not be sent");
+                self.with_plain(|p| *p = Plain::default());
+                false
+            }
+        }
+    }
+
+    /// Something moved in the state folder — a run of the belongings may
+    /// have ended: settles the send asked of one, once no run holds the
+    /// lock. Says whether the clock may have changed.
+    fn settle_send(&self) -> bool {
+        let Some(asked) = self.plain().asked else {
+            return false;
+        };
+        if self.busy() {
+            return false;
+        }
+        let taken_since = self.lock_taken().is_some_and(|at| at >= asked);
+        self.with_plain(|p| {
+            if !taken_since && p.again < AGAIN_MOST {
+                // NO RUN TOOK THE LOCK since the send was asked: it was
+                // refused for the run that held it, or left to it. Asked
+                // again, at once.
+                p.asked = None;
+                p.again += 1;
+            } else {
+                // A RUN READ THE PLAIN PART after the move and ended: sent,
+                // or failed — the next move or sync sends it, and a send
+                // that fails never loops. Or asked too often already.
+                *p = Plain::default();
+            }
+        });
+        true
     }
 
     /// What it saw last.
@@ -278,14 +473,30 @@ impl Module for Reminder {
     }
 }
 
-impl Watcher for Reminder {
-    fn sources(&self) -> Vec<Source> {
+impl Reminder {
+    /// What it listens to, and which are the plain part's — one list, so a
+    /// source's number says which it is. The plain roots are TREES: a folder
+    /// made under one after the brain started is heard inside too.
+    fn listened(&self) -> Vec<(Source, bool)> {
         [&self.paths.prefs, &self.paths.own, &self.paths.runtime]
             .into_iter()
             .flatten()
             .cloned()
-            .map(Source::Path)
+            .map(|p| (Source::Path(p), false))
+            .chain(
+                self.paths
+                    .plain
+                    .iter()
+                    .cloned()
+                    .map(|p| (Source::Tree(p), true)),
+            )
             .collect()
+    }
+}
+
+impl Watcher for Reminder {
+    fn sources(&self) -> Vec<Source> {
+        self.listened().into_iter().map(|(s, _)| s).collect()
     }
 
     /// What moved while the brain was off — a sync from another door, a
@@ -297,23 +508,48 @@ impl Watcher for Reminder {
 
     fn heard(&self, heard: Heard<'_>, ctx: &Ctx) {
         match heard {
-            // THE CLOCK: the reminder came due. Nothing on disk moved, the
-            // face did.
-            Heard::Wake => ctx.changed(),
-            Heard::Path { .. } | Heard::Back { .. } if self.reread() => ctx.changed(),
+            // THE CLOCK: the reminder came due, or the plain part has been
+            // quiet long enough. Nothing on disk moved, the face did.
+            Heard::Wake => {
+                self.send_if_quiet(ctx);
+                ctx.changed();
+            }
+            // THE PLAIN PART MOVED: sent once it stays quiet — the clock is
+            // asked for again (`next_wake`).
+            Heard::Path { source, .. }
+                if self.listened().get(source).is_some_and(|(_, plain)| *plain) =>
+            {
+                self.plain_moved(ctx.now());
+                ctx.changed();
+            }
+            // THE STATE FOLDER OR THE SETTINGS: a run may have ended, and
+            // the face may say something else.
+            Heard::Path { .. } | Heard::Back { .. } => {
+                let settled = self.settle_send();
+                if self.reread() || settled {
+                    ctx.changed();
+                }
+            }
             _ => {}
         }
     }
 
-    /// ONE CLOCK, for `last + period`, and only while a repository is set, a
-    /// period is chosen and the sync is not yet due.
+    /// TWO CLOCKS AT MOST, the earlier armed: `last + period`, only while a
+    /// repository is set, a period is chosen and the sync is not yet due; and
+    /// the plain part's send, only while a move waits for its quiet.
     fn next_wake(&self, now: Moment) -> Option<Moment> {
-        self.seen().0.next_due(now)
+        let due = self.seen().0.next_due(now);
+        match (due, self.send_at()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use ronoctua_belongings::status::Known;
 
@@ -333,6 +569,7 @@ mod tests {
             prefs: Some(root.join("config").join(FILE)),
             own: Some(root.join("state/belongings")),
             runtime: Some(root.join("run")),
+            plain: Vec::new(),
         };
         (root, paths)
     }
@@ -489,6 +726,264 @@ mod tests {
         assert_eq!(kept.changes().len(), 2);
         let (_, generation) = r.seen();
         assert!(generation > 1, "the page's generation did not move");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// How many times a test's starter was asked — one counter per test,
+    /// since tests run at once.
+    static STARTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static STARTED_LOCKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static STARTED_WATCHED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn recorded(unit: &str) -> Result<(), crate::systemd::Trouble> {
+        assert_eq!(unit, super::super::unit::PLAIN);
+        STARTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn recorded_locked(unit: &str) -> Result<(), crate::systemd::Trouble> {
+        assert_eq!(unit, super::super::unit::PLAIN);
+        STARTED_LOCKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn recorded_watched(unit: &str) -> Result<(), crate::systemd::Trouble> {
+        assert_eq!(unit, super::super::unit::PLAIN);
+        STARTED_WATCHED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn started() -> usize {
+        STARTED.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The plain part moved (heard on the source `source`), at `now`.
+    fn moved(r: &Reminder, source: usize, path: &std::path::Path, now: Moment) {
+        let (ctx, _) = Ctx::kept("fixture", now);
+        r.heard(Heard::Path { source, path }, &ctx);
+    }
+
+    /// The clock rang at `now`.
+    fn wake(r: &Reminder, now: Moment) {
+        let (ctx, _) = Ctx::kept("fixture", now);
+        r.heard(Heard::Wake, &ctx);
+    }
+
+    /// FAILS IF: the plain part is sent before it has been quiet for
+    /// `QUIET_S` (a second move restarts the wait), not sent once it has, sent
+    /// twice for one move, sent from a machine that never synced with the
+    /// repository it has set (there is nowhere to send it), or sent by a
+    /// rehearsing brain — or the plain roots are not listened to as trees.
+    #[test]
+    fn the_plain_part_is_sent_once_quiet_and_only_where_it_has_somewhere_to_go() {
+        let (root, mut paths) = scratch("plain");
+        let person = root.join("state/person");
+        paths.plain = vec![person.clone()];
+        let mut r = Reminder::reading(paths.clone());
+        r.start = recorded;
+        assert_eq!(
+            r.sources().last(),
+            Some(&Source::Tree(person.clone())),
+            "the plain root is not a tree"
+        );
+        let declared = person.join("software/declared.json");
+        let moved = |r: &Reminder, now: Moment| moved(r, 3, &declared, now);
+
+        // NEVER SYNCED: nowhere to send it.
+        moved(&r, 100);
+        assert_eq!(r.next_wake(100), None, "a clock with nowhere to send");
+
+        prefs(&paths, REPO, None);
+        last(&paths, REPO, 0);
+        assert!(r.reread());
+        let before = started();
+        moved(&r, 100);
+        assert_eq!(r.next_wake(100), Some(100 + QUIET_S));
+        moved(&r, 120);
+        assert_eq!(
+            r.next_wake(120),
+            Some(120 + QUIET_S),
+            "a move did not restart the wait"
+        );
+        wake(&r, 140);
+        assert_eq!(started(), before, "sent before it was quiet");
+        wake(&r, 120 + QUIET_S);
+        assert_eq!(started(), before + 1, "not sent once quiet");
+        assert_eq!(r.next_wake(200), None, "a clock after it was sent");
+        wake(&r, 300);
+        assert_eq!(started(), before + 1, "one move, two sends");
+
+        // A REHEARSING BRAIN (the development loop's) sends nothing.
+        moved(&r, 400);
+        let kept = Arc::new(crate::module::Kept::default());
+        let sink: Arc<dyn crate::module::Sink> = kept;
+        let rehearsing = Ctx::new(
+            "fixture",
+            400 + QUIET_S,
+            crate::Where::default(),
+            true,
+            sink,
+        );
+        r.heard(Heard::Wake, &rehearsing);
+        assert_eq!(started(), before + 1, "a rehearsal sent the plain part");
+        assert_eq!(r.next_wake(500), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The places whose lock the reminder of `scratch(name)` reads.
+    fn places_of(root: &std::path::Path) -> ronoctua_belongings::places::Places {
+        ronoctua_belongings::places::Places {
+            home: root.join("home"),
+            config: root.join("config"),
+            state: root.join("state"),
+            runtime: root.join("run"),
+        }
+    }
+
+    /// FAILS IF: a send is started while another run holds the lock (it
+    /// would be refused, `Busy`) or is not started once that run ended; a
+    /// move heard while a run reads the plain part is not sent after it; a
+    /// send a run took (it took the lock after the send was asked) is sent
+    /// again — the end of a run that failed would loop — or a send that
+    /// never reaches the lock is asked again more than `AGAIN_MOST` times.
+    #[test]
+    fn a_send_is_kept_until_a_run_took_it() {
+        let (root, mut paths) = scratch("locked");
+        let places = places_of(&root);
+        assert_eq!(paths.own.as_deref(), Some(places.own().as_path()));
+        let person = root.join("state/person");
+        paths.plain = vec![person.clone()];
+        prefs(&paths, REPO, None);
+        last(&paths, REPO, 0);
+        let mut r = Reminder::reading(paths);
+        r.start = recorded_locked;
+        let started = || STARTED_LOCKED.load(std::sync::atomic::Ordering::SeqCst);
+        let own = places.own();
+        // THE STATE FOLDER MOVED: a run took the lock, or let it go.
+        let ended = |r: &Reminder, now: Moment| moved(r, 1, &own, now);
+        let declared = person.join("software/declared.json");
+
+        // A SYNC OF THE PERSON'S HOLDS THE LOCK when the quiet is over: no
+        // start (it would be refused), no clock — and its end starts it.
+        let held = ronoctua_belongings::running::hold(&places).expect("the lock");
+        moved(&r, 3, &declared, 100);
+        wake(&r, 100 + QUIET_S);
+        assert_eq!(started(), 0, "started while another run held the lock");
+        assert_eq!(r.next_wake(200), None, "a clock while the run holds it");
+        ended(&r, 200);
+        assert_eq!(started(), 0);
+        drop(held);
+        ended(&r, 210);
+        assert!(
+            r.next_wake(210).is_some_and(|at| at <= 210),
+            "not asked again"
+        );
+        wake(&r, 210);
+        assert_eq!(started(), 1, "not started once the lock was let go");
+
+        // OURS RUNS (it takes the lock after the send was asked) and a move
+        // lands meanwhile: sent again, after it — and once only.
+        let ours = ronoctua_belongings::running::hold(&places).expect("the lock");
+        ended(&r, 220);
+        moved(&r, 3, &declared, 230);
+        wake(&r, 230 + QUIET_S);
+        assert_eq!(started(), 1, "started while ours still ran");
+        drop(ours);
+        ended(&r, 300);
+        wake(&r, 300);
+        assert_eq!(started(), 2, "the move made while ours ran was never sent");
+        let ours = ronoctua_belongings::running::hold(&places).expect("the lock");
+        drop(ours);
+        ended(&r, 310);
+        assert_eq!(r.next_wake(310), None, "a send a run took is asked again");
+        wake(&r, 400);
+        assert_eq!(started(), 2);
+
+        // A SEND THAT NEVER REACHES THE LOCK (refused before it, every
+        // time): asked again a few times, then left for the next move.
+        moved(&r, 3, &declared, 500);
+        wake(&r, 500 + QUIET_S);
+        for n in 0..u64::from(AGAIN_MOST) {
+            ended(&r, 600);
+            wake(&r, 600);
+            assert_eq!(started(), 4 + usize::try_from(n).unwrap());
+        }
+        ended(&r, 700);
+        assert_eq!(
+            r.next_wake(700),
+            None,
+            "a send that never reached the lock loops"
+        );
+        assert_eq!(started(), 3 + usize::from(AGAIN_MOST));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// FAILS IF: a declaration written in a folder of the plain part made
+    /// AFTER the reminder started listening is not heard — inotify is not
+    /// recursive, and a list of the folders there at the start is deaf to
+    /// `software/`, which the first declaration makes. The real watch
+    /// thread, the real reminder.
+    #[test]
+    fn a_folder_of_the_plain_part_made_later_is_heard_inside() {
+        use crate::fake::Hand;
+        use std::time::{Duration, Instant};
+        let (root, mut paths) = scratch("watched");
+        let person = root.join("state/person");
+        std::fs::create_dir_all(&person).expect("person");
+        paths.plain = vec![person.clone()];
+        prefs(&paths, REPO, None);
+        last(&paths, REPO, 0);
+        let mut r = Reminder::reading(paths);
+        r.start = recorded_watched;
+        let hand = Hand::at(1000);
+        let clock = Arc::clone(&hand.0);
+        let core = Arc::new(crate::hub::Core::new(
+            Arc::new(crate::mind::Shared::of(crate::prefs::Prefs::default())),
+            crate::registry::Registry::of(vec![Box::new(r) as Box<dyn Module>])
+                .expect("the registry"),
+            crate::Where::default(),
+            Box::new(hand),
+        ));
+        let watching = crate::watch::Watch::new(Arc::clone(&core))
+            .reading(None)
+            .keeping_cursor_in(None)
+            .start()
+            .expect("start")
+            .expect("a watch");
+        let wants = || {
+            let now = clock.load(std::sync::atomic::Ordering::SeqCst);
+            core.modules()
+                .find(super::super::MANIFEST.id)
+                .and_then(|m| m.watcher())
+                .and_then(|w| w.next_wake(now))
+        };
+        // Waits until the reminder wants to send at `at`, doing `write`
+        // again meanwhile (a watch raised a moment after a write misses it).
+        let heard_at = |at: Moment, write: &dyn Fn()| {
+            clock.store(at - QUIET_S, std::sync::atomic::Ordering::SeqCst);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while wants() != Some(at) {
+                write();
+                std::thread::sleep(Duration::from_millis(200));
+                assert!(
+                    Instant::now() < deadline,
+                    "never heard: the reminder wants {:?}",
+                    wants()
+                );
+            }
+        };
+        // `software/` IS MADE after the start: heard at the root.
+        let software = person.join("software");
+        heard_at(2000 + QUIET_S, &|| {
+            let _ = std::fs::remove_dir(&software);
+            std::fs::create_dir(&software).expect("software");
+        });
+        std::thread::sleep(Duration::from_millis(1600));
+        // AND A DECLARATION WRITTEN INSIDE IT, later.
+        heard_at(3000 + QUIET_S, &|| {
+            std::fs::write(software.join("declared.json"), "[]").expect("declared");
+        });
+        drop(watching);
         let _ = std::fs::remove_dir_all(root);
     }
 }

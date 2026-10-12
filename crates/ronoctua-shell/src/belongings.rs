@@ -33,23 +33,55 @@
 //! with the difference of a text a `RET` away. `Apply` sends the decisions;
 //! `Drop` sends `abandon`, which deletes the passphrase and the session.
 //!
-//! # Five more sections
+//! # What goes to the repository, one listing
 //!
-//! What is kept (the table `assets/belongings.nix` generates, each with its
-//! reason, and what the person added or took out), how the repository is
-//! reached (a deploy key this machine makes, or a token), the passphrase
-//! (changing it re-encrypts one small file), and how often the brain reminds.
+//! "What goes to your repository" is ONE section, generated from the walk a
+//! sync makes (`ronoctua_belongings::inventory`, over the one reader of the
+//! tables, `ronoctua_belongings::scope`): grouped by where each file comes
+//! from — a rule of the table, a predefined target, what the person added
+//! here or on another machine, the plain part — one row per file, with its
+//! state against the last sync and its size, and what is never kept with
+//! why. It is counted in a thread of the door's ([`Counting`]): a home can
+//! keep a lot, and the loop never waits for a walk.
+//!
+//! # Around it
+//!
+//! What a restore offers ("no" first), the files a lenient read repaired
+//! ("leave it" first, "write the fix"), the weight of the history and its
+//! compaction (asked, "no" first), the
+//! targets' "not on this machine" and "not on any machine", every field of a
+//! JSON conflict decided on its own, how the repository is reached, the
+//! passphrase and whether the session remembers it, and how often the brain
+//! reminds.
+//!
+//! # The signature
+//!
+//! The plain part is signed with the person's key (`ronoctua_belongings::plain`):
+//! the listing names what the repository changed that this machine HELD and
+//! why, and what this machine changed that waits for the passphrase to be
+//! signed ("sign now"); a section says which key is the person's (the one
+//! their passphrase opened, as the last run left it), which one this
+//! machine's root pinned (`local/signer.json`), what root last refused or kept
+//! back — and pins the person's key, a root gesture asked in the sudo bar,
+//! when the machine has none, or another ([`pin_in_background`]).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ronoctua_belongings::Why;
+use ronoctua_belongings::inventory::{Here, Item, Origin, Part};
 use ronoctua_belongings::kept::{self, Pattern};
 use ronoctua_belongings::order::Op;
 use ronoctua_belongings::places::{Places, Root, covers};
-use ronoctua_belongings::plan::{Conflict, Decision, Decisions, Plan, Side};
+use ronoctua_belongings::plan::{
+    Conflict, Decision, Decisions, DecisionsFile, FieldDecisions, Merging, Plan, Side,
+};
 use ronoctua_belongings::prefs::{self, Auth, Belongings};
+use ronoctua_belongings::requests::{Request, Requests};
+use ronoctua_belongings::scope::{self, Scope};
 use ronoctua_belongings::secret::Typed;
-use ronoctua_belongings::status::{Last, Outcome, Status};
+use ronoctua_belongings::status::{Budget, Last, Offer, Outcome, Status};
 use ronoctua_i18n::key;
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
@@ -94,6 +126,16 @@ pub const OF_THE_ROWS: &[&str] = &[
     "belongings-user",
     "belongings-passphrase",
     "belongings-period",
+    // A TEXT WHOSE HUNKS CLASH, merged with one side's hunks — rows of a
+    // conflict once the belongings-plain-merge package draws them.
+    "belongings-take-merged-ours",
+    "belongings-take-merged-theirs",
+    // ── anchor: L09 ──
+    // THE SIGNATURE: pin the person's key on this machine (through the sudo
+    // door), and sign this machine's plain part now.
+    "belongings-pin",
+    "belongings-sign",
+    // ── anchor: L21 ──
 ];
 
 /// The command that opens the view in the footer (`LEADER s v v`).
@@ -143,6 +185,9 @@ pub enum Press {
     Decide(Decision),
     /// Sync now.
     Sync,
+    /// Let the repository's host be asked — the consent row's own key
+    /// (`consent_rows::OF_THE_CONSENT`), meaningful while the row is drawn.
+    Allow,
     /// Back one level, and out.
     Escape,
 }
@@ -173,6 +218,12 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         return Some(Press::Escape);
     }
     let notation = key.notation();
+    if crate::consent_rows::OF_THE_CONSENT
+        .iter()
+        .any(|(taught, _)| *taught == notation)
+    {
+        return Some(Press::Allow);
+    }
     let id = OF_THE_VIEW
         .iter()
         .find(|(taught, _, _)| *taught == notation)
@@ -205,8 +256,11 @@ pub struct Readings {
     pub places: Option<Places>,
     /// What the person chose.
     pub prefs: Belongings,
-    /// `belongings.json` is there and does not parse: nothing is written
-    /// over it, and the view says so.
+    /// `belongings.json` is there and does not read WHOLE — not JSON, or a
+    /// value of it the store would repair: nothing is written over it, and
+    /// the view says so. Whole, because the engine reads it strictly
+    /// (`engine::read_prefs`): a file it refuses must not look like
+    /// settings a sync will use.
     pub prefs_refused: bool,
     /// How the last run ended.
     pub status: Option<Status>,
@@ -230,8 +284,51 @@ pub struct Readings {
     /// last sync (`last.json`'s roots) — shown with what is kept, and taken
     /// out by the same row.
     pub followed: Vec<String>,
+    /// The plain part as its last run left it, for the repository set now
+    /// (`last.json`'s plain section): what it left out for its size, and
+    /// what waits for a sync with the person.
+    pub plain: ronoctua_belongings::plain::PlainBase,
+    /// The repository's host, while the person has not let it be asked
+    /// (`consent.json` under the config root): no sync reaches it, and the
+    /// view draws the consent row instead (`consent_rows`).
+    pub unlet: Option<String>,
     /// Now, seconds since the epoch.
     pub now_s: i64,
+    /// `last.json` whole, when it is of the repository set now — what the
+    /// listing is compared with, and what this machine follows.
+    pub last_file: Option<Last>,
+    /// What a door asked of the next sync (`requests.json`): a target kept
+    /// on no machine, or on every machine again.
+    pub requests: Requests,
+    /// The fields of a JSON conflict decided one by one, by path and pointer
+    /// (`decisions.json`'s `fields`).
+    pub fields: FieldDecisions,
+    /// The files a lenient read repaired that wait for "write the fix" or
+    /// "leave it", whose file is still the one judged.
+    pub repairs: Vec<ronoctua_store::Ledger>,
+    /// Whether this machine runs the newest distro of the person's machines
+    /// (`fleet.json`): its sync writes those repairs by itself.
+    pub newest: bool,
+    /// Until when the session keeps the identity of this repository
+    /// (`runtime/unlocked`), when it does now: a sync asks nothing.
+    pub kept_until: Option<i64>,
+    /// What the person answered of the offers the last sync made.
+    pub answered: Answered,
+    /// What goes to the repository, one row per file — counted off the
+    /// loop ([`Counting`]); `None` until the first count is in.
+    pub count: Option<Arc<Counted>>,
+    /// The person's signing key this machine's root pinned
+    /// (`local/signer.json` in the machine directory, read with the person
+    /// crate's one reader), and what its last apply made of the signature;
+    /// `None` with no key pinned (or a pin that does not read).
+    pub pin: Option<ronoctua_person::local::Signer>,
+    /// The pin the person asked for through the sudo door, and how it went
+    /// ([`PIN_ANSWERED_FILE`]).
+    pub pinning: Option<Pinning>,
+    /// What the listing is made of ([`Readings::scope`]), made once per
+    /// reading: it holds what the last sync left, and the page is drawn on
+    /// every frame.
+    scope: Scope,
 }
 
 impl Readings {
@@ -247,7 +344,7 @@ impl Readings {
                 ..Self::default()
             };
         };
-        let (prefs, prefs_refused) = match store_of(&p).parsed() {
+        let (prefs, prefs_refused) = match store_of(&p).whole() {
             Some(prefs) => (prefs, false),
             None => (Belongings::default(), true),
         };
@@ -257,29 +354,56 @@ impl Readings {
             .filter(|l| l.repository == prefs.repository)
             .map(|l| l.roots.iter().cloned().collect())
             .unwrap_or_default();
-        let last = last_file.map(|l| Summary {
+        let plain = last_file
+            .as_ref()
+            .and_then(|l| l.plain.of(&prefs.repository).cloned())
+            .unwrap_or_default();
+        let last = last_file.as_ref().map(|l| Summary {
             files: l.entries.len() as u64,
             bytes: l.entries.values().map(|k| k.size_bytes).sum(),
-            repository: l.repository,
+            repository: l.repository.clone(),
             at_s: l.at_s,
         });
+        let last_file = last_file.filter(|l| l.repository == prefs.repository);
         let plan: Option<Plan> = std::fs::read(p.plan())
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
-        let decisions: Decisions = std::fs::read(p.decisions())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        // THE PATHS' DECISIONS of the file both doors write — and the
+        // fields' (`DecisionsFile`), kept when it is written again.
+        let file = DecisionsFile::read(&p.decisions()).unwrap_or_default();
+        let (decisions, fields) = (file.paths, file.fields);
         let public_key = std::fs::read_to_string(p.deploy_public())
             .ok()
             .map(|k| k.trim().to_owned())
             .filter(|k| !k.is_empty());
+        // THE HOST, ASKED OF THE SAME ROOT the settings come from: in the
+        // product it is the person's `consent.json` the CLI mints its pass
+        // from; under a photograph's folder or a test's, that folder's.
+        let unlet = prefs::host_of(&prefs.repository)
+            .filter(|host| !ronoctua_consent::allows_under(&p.config, host));
+        let kept_until = ronoctua_belongings::unlock::Marker::read(&p)
+            .filter(|m| prefs.keep_unlocked && m.holds(&prefs.repository, now_s))
+            .map(|m| m.until_s);
         Self {
+            last_file,
+            requests: Requests::read(&p.requests()),
+            fields,
+            repairs: ronoctua_belongings::inventory::repairs_waiting(&p),
+            newest: ronoctua_belongings::fleet::Fleet::read(&p.fleet())
+                .is_some_and(|f| f.newest_here()),
+            kept_until,
+            answered: Answered::read(&p),
+            count: None,
+            pin: machine_pin(),
+            pinning: Pinning::read(&p),
+            scope: Scope::default(),
             status: Status::read(&p.status()),
+            unlet,
             has_key: p.deploy_key().is_file(),
             has_token: p.token().is_file(),
             busy: ronoctua_belongings::running::busy(&p),
             followed,
+            plain,
             public_key,
             last,
             plan,
@@ -289,6 +413,24 @@ impl Readings {
             places: Some(p),
             now_s,
         }
+        .scoped()
+    }
+
+    /// The same readings with their scope made.
+    fn scoped(mut self) -> Self {
+        let waiting = self
+            .plan
+            .as_ref()
+            .map(|p| {
+                p.conflicts
+                    .iter()
+                    .map(|c| c.path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        self.scope =
+            Scope::of(&self.prefs, self.last_file.as_ref(), &self.requests).waiting_on(waiting);
+        self
     }
 
     /// Whether this machine has never synced with the repository set now —
@@ -302,14 +444,117 @@ impl Readings {
                 .is_none_or(|l| l.repository != self.prefs.repository)
     }
 
-    /// The decision a conflict has now: the person's, else its suggestion.
+    /// The decision a conflict has now: the person's, else its suggestion —
+    /// which a field decided by the person sets aside (they decide it field
+    /// by field).
     #[must_use]
     pub fn decision_of(&self, c: &Conflict) -> Option<Decision> {
         self.decisions
             .get(&c.path)
             .copied()
             .filter(|d| d.allowed(c))
-            .or(c.suggested)
+            .or_else(|| c.suggested.filter(|_| !self.fields.contains_key(&c.path)))
+    }
+
+    /// Whether a conflict is decided: a decision of its whole path, or —
+    /// a JSON conflict — one of every field (what the CLI reads,
+    /// `Plan::settled`).
+    #[must_use]
+    pub fn settled(&self, c: &Conflict) -> bool {
+        self.decision_of(c).is_some() || self.fields_file().fields_settle(c)
+    }
+
+    /// The decisions file as the person left it: paths and fields.
+    #[must_use]
+    pub fn fields_file(&self) -> DecisionsFile {
+        DecisionsFile {
+            paths: self.decisions.clone(),
+            fields: self.fields.clone(),
+        }
+    }
+
+    /// What the listing is made of: the settings, what the last sync left,
+    /// what the person asked of the next one, and what a prepared sync waits
+    /// on (`ronoctua_belongings::scope`).
+    #[must_use]
+    pub const fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    /// The same readings, with the listing of `before` (a count is not
+    /// thrown away by a reading: the next one replaces it).
+    #[must_use]
+    pub fn keeping(mut self, before: &Self) -> Self {
+        self.count.clone_from(&before.count);
+        self
+    }
+
+    /// The files of the last count — none before the first.
+    #[cfg(test)]
+    #[must_use]
+    pub fn items(&self) -> &[Item] {
+        self.count.as_deref().map_or(&[], |c| c.items.as_slice())
+    }
+
+    /// What the last sync weighed, when it was measured.
+    #[must_use]
+    pub fn budget(&self) -> Option<Budget> {
+        match self.status.as_ref().map(|s| &s.outcome) {
+            Some(Outcome::Synced { budget, .. }) => *budget,
+            _ => None,
+        }
+    }
+
+    /// The offers the last sync made that the person has not answered, with
+    /// their place in the list.
+    #[cfg(test)]
+    #[must_use]
+    pub fn offers_waiting(&self) -> Vec<(usize, &Offer)> {
+        self.offers()
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| self.answer_of(o).is_none())
+            .collect()
+    }
+
+    /// The offers the last sync made.
+    #[must_use]
+    pub fn offers(&self) -> &[Offer] {
+        match self.status.as_ref().map(|s| &s.outcome) {
+            Some(Outcome::Synced { offers, .. }) => offers,
+            _ => &[],
+        }
+    }
+
+    /// What the person answered of `offer`, for the sync that made it.
+    #[must_use]
+    pub fn answer_of(&self, offer: &Offer) -> Option<&Said> {
+        let at_s = self.status.as_ref()?.at_s;
+        (self.answered.at_s == at_s)
+            .then(|| {
+                self.answered
+                    .answers
+                    .iter()
+                    .find(|a| a.offer == *offer)
+                    .map(|a| &a.said)
+            })
+            .flatten()
+    }
+
+    /// Whether a sync may go with the identity the session keeps, asking
+    /// nothing: kept for this repository now, not a first sync (its
+    /// passphrase is asked twice), and the last run not refused for want of
+    /// one — a marker the kernel outlived, said once and then asked.
+    #[must_use]
+    pub fn asks_nothing(&self) -> bool {
+        self.kept_until.is_some()
+            && !self.first_run()
+            && !matches!(
+                self.status.as_ref().map(|s| &s.outcome),
+                Some(Outcome::Refused {
+                    why: Why::NoPassphrase | Why::WrongPassphrase
+                })
+            )
     }
 
     /// Every decision as it stands — the person's over the suggestions.
@@ -349,6 +594,631 @@ pub fn now_s() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A RESTORE OFFERED, AND WHAT THE PERSON SAID
+// ---------------------------------------------------------------------------
+
+/// The file of the person's answers to the last sync's offers, under the
+/// belongings' own folder: both doors draw an offer answered alike, and a
+/// "no" stops asking until a sync offers it again.
+pub const ANSWERED_FILE: &str = "offers-answered.json";
+
+/// What the person said to an offer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "said", rename_all = "kebab-case")]
+pub enum Said {
+    /// No: it stays off.
+    No,
+    /// Yes, and it is being turned on (a thread runs git).
+    Turning,
+    /// Yes, and it is on.
+    Yes,
+    /// Yes, and it could not be turned on, and why.
+    Refused {
+        /// Why.
+        why: Why,
+    },
+    /// Yes, and the sudo door refused what it needed — the sudo bar
+    /// cancelled, the password wrong, the footer not there — and why.
+    RootRefused {
+        /// Why.
+        why: ronoctua_security::Why,
+    },
+}
+
+/// One answer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Answer {
+    /// What was offered.
+    pub offer: Offer,
+    /// What the person said.
+    pub said: Said,
+}
+
+/// The person's answers to the offers of the sync that ended at `at_s` —
+/// another sync's answers are nobody's now.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Answered {
+    /// When the sync that offered ended, seconds since the epoch
+    /// (`status.json`'s `at_s`).
+    pub at_s: i64,
+    /// What was said, one per offer.
+    pub answers: Vec<Answer>,
+}
+
+impl Answered {
+    /// The answers under `places`; none when there is no file or it does not
+    /// read.
+    #[must_use]
+    pub fn read(places: &Places) -> Self {
+        std::fs::read(places.own().join(ANSWERED_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// Writes what the person said to `offer` of the sync that ended at `at_s`,
+/// over what they said of it before — `0600`, like every file of the
+/// belongings' own folder.
+///
+/// # Errors
+///
+/// The key of the sentence that says it could not be written.
+pub fn answer(places: &Places, at_s: i64, offer: &Offer, said: Said) -> Result<(), &'static str> {
+    let mut now = Answered::read(places);
+    if now.at_s != at_s {
+        now = Answered {
+            at_s,
+            answers: Vec::new(),
+        };
+    }
+    now.answers.retain(|a| a.offer != *offer);
+    now.answers.push(Answer {
+        offer: offer.clone(),
+        said,
+    });
+    let text = serde_json::to_vec_pretty(&now).map_err(|_| key::BELONGINGS_NOT_WRITTEN)?;
+    ronoctua_belongings::secret::make_private_dir(&places.own())
+        .and_then(|()| {
+            ronoctua_belongings::secret::write_private(&places.own().join(ANSWERED_FILE), &text)
+        })
+        .map_err(|e| {
+            tracing::warn!(error = %e, "an answer to an offer could not be written");
+            key::BELONGINGS_NOT_WRITTEN
+        })
+}
+
+/// "Yes" to an offer: said at once ("turning on"), and turned on in a thread
+/// of its own — SSH signing runs git; the security keys are root's list, so
+/// their yes is a root gesture of the door's (`gate`), asked in the sudo bar
+/// in the same gesture as the yes — whose ending is written where both
+/// doors read it ([`ANSWERED_FILE`], the file is the broadcast).
+pub fn accept_in_background(places: Places, at_s: i64, offer: Offer, gate: crate::sudo_bar::Gate) {
+    if let Err(said) = answer(&places, at_s, &offer, Said::Turning) {
+        tracing::warn!(said, "the offer is turned on without saying so first");
+    }
+    let spawned = std::thread::Builder::new()
+        .name("belongings-offer".to_owned())
+        .spawn(move || {
+            let said = match (&offer, ronoctua_git::Tools::from_env()) {
+                (Offer::PamU2f, _) => {
+                    bring_the_keys(&places, gate.gesture(crate::sudo_bar::Asker::Belongings))
+                }
+                (_, None) => Said::Refused { why: Why::NoTools },
+                (_, Some(tools)) => {
+                    match ronoctua_belongings::offers::accept(&offer, &places, &tools) {
+                        Ok(()) => Said::Yes,
+                        Err(r) => Said::Refused { why: r.why },
+                    }
+                }
+            };
+            if let Err(said) = answer(&places, at_s, &offer, said) {
+                tracing::warn!(said, "what an offer came to could not be written");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread to turn an offer on");
+    }
+}
+
+/// The security keys' yes: the keys of the person's own list that root's
+/// list lacks (`offers::security_keys`) go into root's list WITH the ones it
+/// has for the person (`u2f::listed`) — one root gesture, the sudo door's
+/// `u2f-keys` verb, asked in the sudo bar. BLOCKS: the offer's thread.
+fn bring_the_keys(places: &Places, mut gesture: crate::sudo_bar::Gesture) -> Said {
+    use ronoctua_security::u2f;
+    let user = std::env::var("USER").unwrap_or_default();
+    let Ok(mut credentials) = u2f::listed(&user) else {
+        return Said::RootRefused {
+            why: ronoctua_security::Why::Unreadable,
+        };
+    };
+    let brought = ronoctua_belongings::offers::security_keys(places);
+    if brought.is_empty() {
+        // BROUGHT ALREADY (another door's yes, a key registered meanwhile).
+        return Said::Yes;
+    }
+    for credential in &brought {
+        credentials = u2f::with_key(&credentials, credential);
+    }
+    if credentials.len() > u2f::MOST_KEYS {
+        return Said::RootRefused {
+            why: ronoctua_security::Why::Invalid,
+        };
+    }
+    match gesture.run(
+        ronoctua_security::verb::RootVerb::U2fKeys { credentials }.into(),
+        &mut |_| {},
+    ) {
+        Ok(()) => Said::Yes,
+        Err(why) => Said::RootRefused { why },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THE PERSON'S KEY, PINNED ON THIS MACHINE through the sudo bar
+// ---------------------------------------------------------------------------
+
+/// The file of the pin the person asked for, under the belongings' own
+/// folder: both doors draw it alike, and it outlives the door that asked.
+pub const PIN_ANSWERED_FILE: &str = "pin-answered.json";
+
+/// How a pin the person asked for went.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "said", rename_all = "kebab-case")]
+pub enum PinSaid {
+    /// The door is asked (a thread runs the gesture; the sudo bar asks).
+    Pinning,
+    /// The machine trusts the key now.
+    Pinned,
+    /// The door said yes and the machine's pin is not that key (the unit
+    /// refused it: its reason is in the journal).
+    NotPinned,
+    /// The door refused — the sudo bar cancelled, the password wrong, the
+    /// footer not there — and why.
+    Refused {
+        /// Why.
+        why: ronoctua_security::Why,
+    },
+}
+
+/// The pin the person asked for: of which key, and how it went.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pinning {
+    /// The fingerprint of the key asked to be pinned.
+    pub fingerprint: String,
+    /// How it went.
+    pub said: PinSaid,
+}
+
+impl Pinning {
+    /// The pin asked for under `places`; none when there is no file or it
+    /// does not read.
+    #[must_use]
+    pub fn read(places: &Places) -> Option<Self> {
+        serde_json::from_slice(&std::fs::read(places.own().join(PIN_ANSWERED_FILE)).ok()?).ok()
+    }
+
+    /// Writes it — `0600`, like every file of the belongings' own folder.
+    fn write(&self, places: &Places) {
+        let written = serde_json::to_vec_pretty(self)
+            .map_err(std::io::Error::other)
+            .and_then(|text| {
+                ronoctua_belongings::secret::make_private_dir(&places.own())?;
+                ronoctua_belongings::secret::write_private(
+                    &places.own().join(PIN_ANSWERED_FILE),
+                    &text,
+                )
+            });
+        if let Err(e) = written {
+            tracing::warn!(error = %e, "how a pin went could not be written");
+        }
+    }
+}
+
+/// The machine directory a photograph reads the pin from, instead of this
+/// machine's (`photograph --door belongings --machine <folder>`).
+static PHOTOGRAPHED_MACHINE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Points this process's reading of the pin at `dir` — the belongings'
+/// camera only, before anything is read.
+pub fn photograph_machine(dir: PathBuf) {
+    let _ = PHOTOGRAPHED_MACHINE.set(dir);
+}
+
+/// The key this machine's root pinned (`local/signer.json` under the
+/// machine directory, by its one name); `None` with none pinned. Everybody
+/// may read it; only `ronoctua-person`, as root, writes it.
+#[must_use]
+pub fn machine_pin() -> Option<ronoctua_person::local::Signer> {
+    // THE FOOTER CAMERA'S ROOM has a machine directory of its own: its
+    // picture reads the pin planted there, never this machine's.
+    let machine = PHOTOGRAPHED_MACHINE
+        .get()
+        .cloned()
+        .or_else(|| {
+            crate::footer_photograph::room()
+                .map(|room| room.join(crate::footer_photograph::MACHINE_DIR))
+        })
+        .unwrap_or_else(|| PathBuf::from(env!("RONOCTUA_MACHINE_DIR")));
+    machine_pin_in(&machine)
+}
+
+/// [`machine_pin`] of the machine directory `machine`.
+#[must_use]
+pub fn machine_pin_in(machine: &Path) -> Option<ronoctua_person::local::Signer> {
+    let bytes = std::fs::read(machine.join(ronoctua_person::names::SIGNER)).ok()?;
+    ronoctua_person::parse(&bytes).ok()
+}
+
+/// "Pin my key": said at once ("pinning"), and run in a thread of its own as
+/// a root gesture of the door's (`gate`), asked in the sudo bar —
+/// `RootVerb::PersonSignerPin` with the key the person's passphrase opened
+/// (what the last run left, never the repository's copy) — whose ending is
+/// written where both doors read it ([`PIN_ANSWERED_FILE`]): pinned when the
+/// machine's pin is that key afterwards, else why not.
+pub fn pin_in_background(
+    places: Places,
+    key: String,
+    fingerprint: String,
+    gate: crate::sudo_bar::Gate,
+) {
+    Pinning {
+        fingerprint: fingerprint.clone(),
+        said: PinSaid::Pinning,
+    }
+    .write(&places);
+    let spawned = std::thread::Builder::new()
+        .name("belongings-pin".to_owned())
+        .spawn(move || {
+            let mut gesture = gate.gesture(crate::sudo_bar::Asker::Belongings);
+            let said = match gesture.run(
+                ronoctua_security::verb::RootVerb::PersonSignerPin { key }.into(),
+                &mut |_| {},
+            ) {
+                Ok(()) => {
+                    if machine_pin().is_some_and(|p| p.fingerprint == fingerprint) {
+                        PinSaid::Pinned
+                    } else {
+                        PinSaid::NotPinned
+                    }
+                }
+                Err(why) => PinSaid::Refused { why },
+            };
+            Pinning { fingerprint, said }.write(&places);
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread to pin the key");
+    }
+}
+
+/// Whether a gesture of another view that changes the person's signed
+/// declarations (the software centre's "install only for you", a program
+/// declined or forgotten for good) asks the belongings' passphrase FIRST:
+/// a repository is configured, this machine synced with it (its clone has
+/// `key.age`, so there is a key to open), and the session keeps no identity.
+/// The person is there, at the gesture: with the passphrase, `sign` signs the
+/// change before it is staged and pushed, and it arrives on every machine;
+/// without it, the change waits for the next sync that opens the identity.
+#[must_use]
+pub fn signing_asks(places: &Places, now_s: i64) -> bool {
+    let Some(prefs) = store_of(places).whole() else {
+        return false;
+    };
+    if !prefs.has_repository() || !places.key_age().is_file() {
+        return false;
+    }
+    !ronoctua_belongings::unlock::Marker::read(places)
+        .is_some_and(|m| prefs.keep_unlocked && m.holds(&prefs.repository, now_s))
+}
+
+/// Writes the passphrase another view asked to sign with where `sign`
+/// reads it (and deletes it, once it opened `key.age` or refused): a `0600`
+/// file of the belongings' runtime folder, as the belongings' own questions
+/// write it.
+///
+/// # Errors
+///
+/// The key of the sentence that says the file could not be written.
+pub fn write_passphrase_to_sign(places: &Places, typed: &str) -> Result<(), &'static str> {
+    if typed.is_empty() {
+        return Err(key::BELONGINGS_EMPTY_SECRET);
+    }
+    ronoctua_belongings::secret::write_private(&places.passphrase(), typed.as_bytes()).map_err(
+        |e| {
+            tracing::warn!(error = %e, "the passphrase to sign could not be written");
+            key::BELONGINGS_NOT_WRITTEN
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// THE COUNT OF WHAT GOES TO THE REPOSITORY, off the loop
+// ---------------------------------------------------------------------------
+
+/// One count of what goes to the repository, made off the loop and read by
+/// both doors: the files ([`ronoctua_belongings::inventory`]), and what
+/// drawing them asks — so that a frame, a key or a pointer's motion pays
+/// for no `stat` and formats no file twice.
+#[derive(Debug, Default)]
+pub struct Counted {
+    /// Every file, by path.
+    pub items: Vec<Item>,
+    /// Where each origin's files are in `items`, in path order: the page
+    /// draws group by group.
+    by_origin: BTreeMap<Origin, Vec<usize>>,
+    /// The paths of the targets and of what is never kept that are on this
+    /// machine, and whether each is a folder (drawn ending in `/`).
+    there: BTreeMap<&'static str, bool>,
+    /// The folders a door hears what the listing is made of in.
+    pub heard: Heard,
+    /// The files' rows, formatted once per language: a large addition is
+    /// thousands of rows, and the page is drawn on every key.
+    formatted: Mutex<Option<(String, Arc<Vec<Formatted>>)>>,
+}
+
+impl Counted {
+    /// Counts what goes to the repository from `places` — a walk: a door's
+    /// thread's, or a photograph's and a test's in place.
+    #[must_use]
+    pub fn of(scope: &Scope, places: &Places) -> Self {
+        let items = ronoctua_belongings::inventory::inventory(scope, places);
+        let mut by_origin: BTreeMap<Origin, Vec<usize>> = BTreeMap::new();
+        for (n, item) in items.iter().enumerate() {
+            by_origin.entry(item.origin.clone()).or_default().push(n);
+        }
+        let named = scope::targets()
+            .iter()
+            .flat_map(|t| t.paths.iter().copied())
+            .chain(scope::never_rules().iter().filter_map(|n| match n.pattern {
+                Pattern::Path(path) => Some(path),
+                Pattern::Name(_) => None,
+            }));
+        let there = named
+            .filter_map(|logical| {
+                let meta = std::fs::symlink_metadata(places.resolve(logical)?).ok()?;
+                Some((logical, meta.is_dir()))
+            })
+            .collect();
+        Self {
+            items,
+            by_origin,
+            there,
+            heard: Heard::of(scope, places),
+            formatted: Mutex::new(None),
+        }
+    }
+
+    /// The files of `origin`, in path order.
+    fn of_origin(&self, origin: &Origin) -> &[usize] {
+        self.by_origin.get(origin).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether `path` is a file of the listing.
+    fn lists(&self, path: &str) -> bool {
+        self.items
+            .binary_search_by(|i| i.path.as_str().cmp(path))
+            .is_ok()
+    }
+
+    /// Whether the logical `path` is a folder on this machine; `None` when it
+    /// is not here (or nothing was counted).
+    fn folder(&self, path: &str) -> Option<bool> {
+        self.there.get(path).copied()
+    }
+
+    /// The files' rows in the language of `texts`, made the first time this
+    /// count is drawn in it.
+    fn formatted(
+        &self,
+        places: Option<&Places>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Arc<Vec<Formatted>> {
+        let mut slot = self
+            .formatted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((language, rows)) = slot.as_ref()
+            && language == texts.language()
+        {
+            return Arc::clone(rows);
+        }
+        let rows: Arc<Vec<Formatted>> = Arc::new(
+            self.items
+                .iter()
+                .map(|item| Formatted::of(item, places, texts))
+                .collect(),
+        );
+        *slot = Some((texts.language().to_owned(), Arc::clone(&rows)));
+        rows
+    }
+}
+
+/// The most folders of each kind a door hears the listing's files in
+/// ([`Heard`]) — each tree itself bounded by the notice
+/// (`ronoctua_files::notice::TREE_MOST`): a watch is one of the session's
+/// `max_user_watches`.
+const HEARD_MOST: usize = 64;
+
+/// The folders a door hears what the listing is made of in, while it shows
+/// it: every root of the walk that is a folder here, as a TREE (a file
+/// changed in `~/.ssh` or deep in an addition), and the folder of every root
+/// that is a file (`~/.gitconfig`, `~/.shellrc.local`) — or the nearest one
+/// that is there, so that its making is heard, and the count after it hears
+/// the folder itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Heard {
+    dirs: Vec<PathBuf>,
+    trees: Vec<PathBuf>,
+}
+
+impl Heard {
+    /// The folders of what `scope` walks under `places` — a `stat` per root,
+    /// in the count's thread.
+    #[must_use]
+    pub fn of(scope: &Scope, places: &Places) -> Self {
+        let mut dirs = BTreeSet::new();
+        let mut trees = BTreeSet::new();
+        for root in scope.roots() {
+            let Some(at) = places.resolve(&root) else {
+                continue;
+            };
+            if std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
+                trees.insert(at);
+            } else if let Some(dir) = at.ancestors().skip(1).find(|a| a.is_dir()) {
+                dirs.insert(dir.to_path_buf());
+            }
+        }
+        // A FOLDER INSIDE A TREE is heard by the tree.
+        dirs.retain(|d| !trees.iter().any(|t| d.starts_with(t)));
+        Self {
+            dirs: dirs.into_iter().take(HEARD_MOST).collect(),
+            trees: trees.into_iter().take(HEARD_MOST).collect(),
+        }
+    }
+
+    /// One notice over these folders, `ring` told of every change; `None`
+    /// with nothing to hear, or when the notice could not be raised (said in
+    /// the journal).
+    #[must_use]
+    pub fn raise<F>(&self, ring: F) -> Option<ronoctua_files::notice::Notice>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        use ronoctua_files::notice::{Notice, Pace};
+        if self.dirs.is_empty() && self.trees.is_empty() {
+            return None;
+        }
+        Notice::on_dirs(&self.dirs, &self.trees, Pace::Coalesced, ring)
+            .map_err(|e| tracing::warn!(error = %e, "what the belongings keep is not heard"))
+            .ok()
+    }
+}
+
+/// What a door hears the listing's files by: one notice over the folders of
+/// the last count ([`Heard`]), raised again when a count finds others — a
+/// folder the person added, one made since — and gone with the door.
+#[derive(Debug, Default)]
+pub struct Ears {
+    heard: Heard,
+    notice: Option<ronoctua_files::notice::Notice>,
+}
+
+impl Ears {
+    /// Hears the folders of the count in `r`, when they are not the ones
+    /// heard already.
+    pub fn follow<F>(&mut self, r: &Readings, ring: F)
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        let Some(count) = r.count.as_ref() else {
+            return;
+        };
+        if count.heard == self.heard {
+            return;
+        }
+        // THE OLD NOTICE GOES FIRST: two over one tree would ring twice.
+        self.notice = None;
+        self.notice = count.heard.raise(ring);
+        self.heard = count.heard.clone();
+    }
+}
+
+/// How long until the session forgets the passphrase it remembers, and the
+/// note that says until when is not true any more: a door arms one timer at
+/// it while the view shows it (`Readings::kept_until`), and reads again when
+/// it rings — event, not clock: nothing else says the marker ran out.
+#[must_use]
+pub fn until(at_s: i64) -> std::time::Duration {
+    std::time::Duration::from_secs(u64::try_from(at_s.saturating_sub(now_s())).unwrap_or(0) + 1)
+}
+
+/// The listing's count: a walk of what the belongings keep, in a thread
+/// of its own (`ronoctua_belongings::inventory` — `stat` alone, but a home
+/// can keep a lot). One at a time: a reading that comes while one runs asks
+/// for one more after it, never two at once. A photograph and a test count
+/// in place, at once.
+pub struct Counting {
+    /// Where a thread's count is sent; `None`: counted in place.
+    sender: Option<smithay_client_toolkit::reexports::calloop::channel::Sender<Arc<Counted>>>,
+    running: bool,
+    again: bool,
+}
+
+impl Counting {
+    /// Counted in place — a photograph's, a test's.
+    #[must_use]
+    pub const fn in_place() -> Self {
+        Self {
+            sender: None,
+            running: false,
+            again: false,
+        }
+    }
+
+    /// Counted in a thread, sent through `sender` to the door's loop.
+    #[must_use]
+    pub const fn through(
+        sender: smithay_client_toolkit::reexports::calloop::channel::Sender<Arc<Counted>>,
+    ) -> Self {
+        Self {
+            sender: Some(sender),
+            running: false,
+            again: false,
+        }
+    }
+
+    /// Something the listing is made of changed (a watch rang, the view
+    /// opened): count again.
+    pub fn ask(&mut self, r: &mut Readings) {
+        let Some(places) = r.places.clone() else {
+            r.count = Some(Arc::new(Counted::default()));
+            return;
+        };
+        let scope = r.scope().clone();
+        let Some(sender) = self.sender.clone() else {
+            r.count = Some(Arc::new(Counted::of(&scope, &places)));
+            return;
+        };
+        if self.running {
+            self.again = true;
+            return;
+        }
+        self.running = true;
+        let spawned = std::thread::Builder::new()
+            .name("belongings-count".to_owned())
+            .spawn(move || {
+                let _ = sender.send(Arc::new(Counted::of(&scope, &places)));
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "no thread to count the belongings in");
+            self.running = false;
+            r.count = Some(Arc::new(Counted::default()));
+        }
+    }
+
+    /// The files were read again by a gesture of this door: counted again at
+    /// once in place; a thread's count waits for a watch to ring — a key
+    /// that only moved the cursor walks nothing.
+    pub fn reread(&mut self, r: &mut Readings) {
+        if self.sender.is_none() {
+            self.ask(r);
+        }
+    }
+
+    /// A thread's count came back: it is the listing now — and another
+    /// starts when a reading asked for one while it ran.
+    pub fn came(&mut self, r: &mut Readings, counted: Arc<Counted>) {
+        self.running = false;
+        r.count = Some(counted);
+        if std::mem::take(&mut self.again) {
+            self.ask(r);
+        }
+    }
+}
+
 /// The watches that make a door hear the belongings' files: the settings,
 /// the state folder and the runtime folder, each made first — a watch on a
 /// folder that does not exist never fires. `ring` is told of every change.
@@ -363,12 +1233,31 @@ where
     use ronoctua_belongings::secret::make_private_dir;
     use ronoctua_files::notice::{Notice, Pace};
     let mut out = Vec::new();
-    if std::fs::create_dir_all(&places.config).is_ok()
-        && let Ok(n) = Notice::on_file(&places.config, prefs::FILE, Pace::Coalesced, ring.clone())
-    {
-        out.push(n);
+    if std::fs::create_dir_all(&places.config).is_ok() {
+        // THE CONFIGURATION FOLDER: the settings, the consents beside them —
+        // a host let in the other door, or in any app's consent row, takes
+        // this one's row away — and every preference the listing says the
+        // state of (a theme changed is "changed" at once). Its folders below
+        // are the next count's: inotify is not recursive.
+        match Notice::watching(Some(&places.config), ring.clone()) {
+            Ok(n) => out.push(n),
+            Err(e) => {
+                tracing::warn!(error = %e, "the configuration folder cannot be watched");
+                for file in [prefs::FILE, ronoctua_consent::FILE] {
+                    if let Ok(n) =
+                        Notice::on_file(&places.config, file, Pace::Coalesced, ring.clone())
+                    {
+                        out.push(n);
+                    }
+                }
+            }
+        }
     }
-    for dir in [places.own(), places.runtime.clone()] {
+    // THE STATE FOLDER (a sync's record, the offers answered, the
+    // machines), THE RUNTIME FOLDER (the session, the decisions, the marker
+    // of a remembered passphrase) AND THE REPAIR LEDGER (a store that
+    // repaired a file, a fix written).
+    for dir in [places.own(), places.runtime.clone(), places.repairs()] {
         if let Err(e) = make_private_dir(&dir) {
             tracing::warn!(dir = %dir.display(), error = %e, "no folder to watch the belongings in");
             continue;
@@ -398,12 +1287,50 @@ pub struct Open {
     pub watches: Vec<ronoctua_files::notice::Notice>,
     /// Their channel on the footer's loop.
     pub token: Option<smithay_client_toolkit::reexports::calloop::RegistrationToken>,
+    /// The count of what goes to the repository.
+    pub counting: Counting,
+    /// Its channel on the footer's loop.
+    pub count_token: Option<smithay_client_toolkit::reexports::calloop::RegistrationToken>,
+    /// What the listing's files are heard by — ringing the same channel as
+    /// the watches.
+    pub ears: Ears,
+    /// That channel, for the ears raised after a count.
+    pub ring: Option<smithay_client_toolkit::reexports::calloop::channel::Sender<()>>,
+    /// The timer at the moment the session forgets the passphrase, and that
+    /// moment ([`until`]).
+    pub clock: Option<(
+        i64,
+        smithay_client_toolkit::reexports::calloop::RegistrationToken,
+    )>,
 }
 
 impl Open {
-    /// Reads the files again, as they are now.
+    /// Reads the files again, as they are now — the listing kept until the
+    /// next count replaces it.
     pub fn reread(&mut self) {
-        self.readings = Readings::read(self.places.clone(), now_s());
+        self.readings = Readings::read(self.places.clone(), now_s()).keeping(&self.readings);
+        self.counting.reread(&mut self.readings);
+    }
+
+    /// A watch rang: read again, and count again.
+    pub fn heard(&mut self) {
+        self.readings = Readings::read(self.places.clone(), now_s()).keeping(&self.readings);
+        self.counting.ask(&mut self.readings);
+        self.listen();
+    }
+
+    /// A count came back.
+    pub fn counted(&mut self, counted: Arc<Counted>) {
+        self.counting.came(&mut self.readings, counted);
+        self.listen();
+    }
+
+    /// Hears the folders of the count that is in.
+    fn listen(&mut self) {
+        if let Some(ring) = self.ring.clone() {
+            self.ears
+                .follow(&self.readings, move || ring.send(()).is_ok());
+        }
     }
 }
 
@@ -465,19 +1392,86 @@ pub enum Target {
     Passphrase,
     /// How often the brain reminds.
     Period,
+    /// The repository's host, not let yet: `RET` lets it be asked.
+    Let(String),
+    /// A file of the listing, and what `RET` does to it.
+    File(String, FileAct),
+    /// A predefined target, "not on this machine" (its id).
+    NotHere(&'static str),
+    /// A target, "not on any machine": a question first, "no" first.
+    Nowhere(&'static str),
+    /// A target taken out here, "keep it on this machine again".
+    HereAgain(&'static str),
+    /// A target kept on no machine, "keep it on every machine again".
+    Everywhere(&'static str),
+    /// One field of a JSON conflict: its path and its pointer. The
+    /// conflict's keys decide THE FIELD.
+    Field(String, String),
+    /// One field decided: this machine's value or the repository's.
+    DecideField(String, String, Decision),
+    /// A file a lenient read repaired: "write the fix".
+    WriteFix(String),
+    /// The same: "leave it".
+    LeaveIt(String),
+    /// What a sync offered — the offer itself, never its place in the
+    /// list, which a later sync may reorder: yes or no.
+    Offer(Offer, bool),
+    /// Whether the session remembers the passphrase.
+    Unlock,
+    /// Compact the history: a question first, "no" first.
+    Compact,
+    /// The answer to the question on the page.
+    Answer(bool),
+    /// Pin the person's key on this machine (root asked in the sudo bar).
+    Pin,
+    /// Sign this machine's plain part now (the passphrase asked when the
+    /// session does not keep the identity).
+    Sign,
+}
+
+/// What `RET` does to a file of the listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAct {
+    /// It is kept: stop keeping it (it stays where it is).
+    StopKeeping,
+    /// The person took it out here: keep it again.
+    KeepAgain,
+    /// Never kept by default, and a person may add it: keep it anyway.
+    KeepAnyway,
 }
 
 impl Target {
     /// Whether `S-<arrows>` mean anything here.
     const fn turns(&self) -> bool {
-        matches!(self, Self::Period | Self::Auth)
+        matches!(self, Self::Period | Self::Auth | Self::Unlock)
     }
 
     /// The conflict this row is about, when it is about one.
     fn conflict(&self) -> Option<&str> {
         match self {
-            Self::Conflict(p) | Self::Decide(p, _) | Self::DiffLine(p, _) => Some(p),
+            Self::Conflict(p)
+            | Self::Decide(p, _)
+            | Self::DiffLine(p, _)
+            | Self::Field(p, _)
+            | Self::DecideField(p, _, _) => Some(p),
             _ => None,
+        }
+    }
+
+    /// The field of a conflict this row is about, when it is about one.
+    fn field(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Field(p, f) | Self::DecideField(p, f, _) => Some((p, f)),
+            _ => None,
+        }
+    }
+
+    /// Whether `other` is the same row: a file's by its path alone — what
+    /// `RET` does to it changes when it is done, and the cursor stays.
+    fn same_row(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::File(a, _), Self::File(b, _)) => a == b,
+            _ => self == other,
         }
     }
 
@@ -500,6 +1494,8 @@ impl Target {
             Self::User => "belongings-user",
             Self::Passphrase => "belongings-passphrase",
             Self::Period => "belongings-period",
+            Self::Pin => "belongings-pin",
+            Self::Sign => "belongings-sign",
             _ => return None,
         })
     }
@@ -510,11 +1506,28 @@ impl Target {
             return Some(texts.t(&format!("cmd-{id}")));
         }
         Some(texts.t(match self {
+            Self::Let(_) => key::ABOUT_CONSENT_ALLOW,
             Self::Conflict(_) => key::ABOUT_BELONGINGS_CONFLICT,
             Self::Rule(_) => key::ABOUT_BELONGINGS_RULE,
-            Self::Kept(_) => key::ABOUT_BELONGINGS_KEPT,
-            Self::Excluded(_) => key::ABOUT_BELONGINGS_EXCLUDED,
-            Self::Never(_) => key::ABOUT_BELONGINGS_NEVER,
+            Self::Kept(_) | Self::File(_, FileAct::StopKeeping) => key::ABOUT_BELONGINGS_KEPT,
+            Self::Excluded(_) | Self::File(_, FileAct::KeepAgain) | Self::HereAgain(_) => {
+                key::ABOUT_BELONGINGS_EXCLUDED
+            }
+            Self::Never(_) | Self::File(_, FileAct::KeepAnyway) => key::ABOUT_BELONGINGS_NEVER,
+            Self::NotHere(_) => key::ABOUT_BELONGINGS_NOT_HERE,
+            Self::Nowhere(_) => key::ABOUT_BELONGINGS_NOWHERE,
+            Self::Everywhere(_) => key::ABOUT_BELONGINGS_EVERYWHERE,
+            Self::Field(..) => key::ABOUT_BELONGINGS_FIELD,
+            Self::DecideField(_, _, Decision::TakeRemote) => key::ABOUT_BELONGINGS_FIELD_THEIRS,
+            Self::DecideField(..) => key::ABOUT_BELONGINGS_FIELD_OURS,
+            Self::WriteFix(_) => key::ABOUT_BELONGINGS_WRITE_FIX,
+            Self::LeaveIt(_) => key::ABOUT_BELONGINGS_LEAVE_IT,
+            Self::Offer(_, false) => key::ABOUT_BELONGINGS_OFFER_NO,
+            Self::Offer(_, true) => key::ABOUT_BELONGINGS_OFFER_YES,
+            Self::Unlock => key::ABOUT_BELONGINGS_UNLOCK,
+            Self::Compact => key::ABOUT_BELONGINGS_COMPACT,
+            Self::Answer(false) => key::ABOUT_BELONGINGS_ANSWER_NO,
+            Self::Answer(true) => key::ABOUT_BELONGINGS_ANSWER_YES,
             _ => return None,
         }))
     }
@@ -550,10 +1563,26 @@ enum Entry {
         /// Cells in from the section's left: a decision under its conflict.
         indent: u16,
     },
+    /// A value of a field of a JSON conflict, in under the field: the JSON
+    /// elided to the room the section's value column leaves it — one line,
+    /// however long the list it holds ([`field_text`]).
+    Field {
+        label: String,
+        /// The JSON; `None`: the field is not on that side.
+        value: Option<String>,
+        /// Whether the person chose it.
+        chosen: bool,
+        target: Target,
+        indent: u16,
+    },
     /// A line of air between two items of one list.
     Air,
     /// A sentence under the row before it, wrapped.
     Note(String, tokens::Color),
+    /// A sentence in under the rows it belongs to, wrapped in what is left:
+    /// a field's value before both sides changed it, under that field's two
+    /// values.
+    NoteIn(String, u16),
     /// Lines drawn as they are — a difference.
     Lines(Vec<(Vec<Field>, Target)>),
 }
@@ -602,10 +1631,35 @@ impl Builder<'_> {
                     layout::width(label),
                     layout::width(value),
                 )),
+                // A FIELD'S VALUE TAKES THE ROOM IT IS LEFT, and moves no
+                // column: a long list would push every value of the page to
+                // the floor.
+                Entry::Field { label, indent, .. } => {
+                    Some((self.left + indent, layout::width(label), 0))
+                }
                 _ => None,
             })
             .collect();
         let column = crate::chrome::section_column(self.left, self.room, &pairs);
+        let room = end.saturating_sub(column);
+        let texts = self.texts;
+        let entries = entries.into_iter().map(|entry| match entry {
+            Entry::Field {
+                label,
+                value,
+                chosen,
+                target,
+                indent,
+            } => Entry::Pair {
+                label,
+                value: field_text(value.as_deref(), chosen, room, texts),
+                kind: crate::chrome::Kind::Setting,
+                target,
+                tint: None,
+                indent,
+            },
+            other => other,
+        });
         for entry in entries {
             match entry {
                 Entry::Pair {
@@ -626,18 +1680,17 @@ impl Builder<'_> {
                         kind,
                         focused,
                     );
+                    // EVERY LINE of a wrapped value is said in its state's
+                    // colour, not only the first.
                     for (n, fields) in lines.into_iter().enumerate() {
-                        let fields = if n == 0 {
-                            crate::chrome::tinted(fields, tint, focused)
-                        } else {
-                            fields
-                        };
                         self.out.push(Row {
-                            fields,
+                            fields: crate::chrome::tinted_value(fields, column, tint, focused),
                             target: (n == 0).then(|| target.clone()),
                         });
                     }
                 }
+                // MADE A PAIR ABOVE, once the column was known.
+                Entry::Field { .. } => {}
                 Entry::Air => self.out.push(Row {
                     fields: crate::chrome::AIR,
                     target: None,
@@ -646,6 +1699,20 @@ impl Builder<'_> {
                     for line in crate::chrome::note_lines(&text, self.room) {
                         self.out.push(Row {
                             fields: vec![piece(self.left, line, colour, self.room)],
+                            target: None,
+                        });
+                    }
+                }
+                Entry::NoteIn(text, indent) => {
+                    let room = self.room.saturating_sub(indent).max(1);
+                    for line in crate::chrome::note_lines(&text, room) {
+                        self.out.push(Row {
+                            fields: vec![piece(
+                                self.left + indent,
+                                line,
+                                tokens::color::TEXT_DIM,
+                                room,
+                            )],
                             target: None,
                         });
                     }
@@ -696,12 +1763,9 @@ fn indented(label: String, value: String, target: Target) -> Entry {
         kind: crate::chrome::Kind::Setting,
         target,
         tint: None,
-        indent: DECISION_INDENT,
+        indent: tokens::space::VIEW_NESTCELLS,
     }
 }
-
-/// How far in a conflict's decisions are.
-const DECISION_INDENT: u16 = 2;
 
 /// The same, with its value in a colour that says a state.
 fn tinted(label: String, value: String, target: Target, acts: bool, tint: tokens::Color) -> Entry {
@@ -808,6 +1872,29 @@ pub fn outcome_text(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> String {
         Outcome::Abandoned => texts.t(key::BELONGINGS_OUTCOME_ABANDONED),
         Outcome::Keyed => texts.t(key::BELONGINGS_OUTCOME_KEYED),
         Outcome::Rekeyed => texts.t(key::BELONGINGS_OUTCOME_REKEYED),
+        Outcome::Compacted {
+            before_bytes,
+            after_bytes,
+        } => texts.t_with(
+            key::BELONGINGS_OUTCOME_COMPACTED,
+            &[
+                ("before", &bytes_text(*before_bytes, texts)),
+                ("after", &bytes_text(*after_bytes, texts)),
+            ],
+        ),
+        Outcome::PlainSynced { pulled, pushed } => texts.t_args(
+            key::BELONGINGS_OUTCOME_PLAIN_SYNCED,
+            &[("pulled", n(*pulled)), ("pushed", n(*pushed))],
+        ),
+        // ── anchor: L08 ──
+        Outcome::NothingToCompact { keep_days } => texts.t_args(
+            key::BELONGINGS_OUTCOME_NOTHING_TO_COMPACT,
+            &[(
+                "days",
+                Arg::Number(i64::try_from(*keep_days).unwrap_or(i64::MAX)),
+            )],
+        ),
+        // ── anchor: L09 ──
     }
 }
 
@@ -842,6 +1929,12 @@ pub enum Ask {
     User,
     /// A path to keep.
     Path,
+    /// The passphrase, to compact the history (asked when the session does
+    /// not remember it).
+    Compact,
+    /// The passphrase, to sign this machine's plain part (asked when the
+    /// session does not remember it).
+    Sign,
 }
 
 impl Ask {
@@ -851,11 +1944,15 @@ impl Ask {
     pub const fn command(&self) -> &'static str {
         match self {
             Self::Repository => "belongings-repository",
-            Self::Passphrase | Self::Confirm(_) => SYNC_COMMAND,
+            // THE PASSPHRASE OF A COMPACTION answers as a sync's does: one
+            // command reaches the view's question, and the question says
+            // which.
+            Self::Passphrase | Self::Confirm(_) | Self::Compact => SYNC_COMMAND,
             Self::Old | Self::New(_) | Self::Again(..) => "belongings-passphrase",
             Self::Token => "belongings-token",
             Self::User => "belongings-user",
             Self::Path => "belongings-add",
+            Self::Sign => "belongings-sign",
         }
     }
 
@@ -867,6 +1964,7 @@ impl Ask {
             Self::New(_) => Some(key::ASK_BELONGINGS_PASSPHRASE_NEW),
             Self::Again(..) => Some(key::ASK_BELONGINGS_PASSPHRASE_AGAIN),
             Self::Confirm(_) => Some(key::ASK_BELONGINGS_SYNC_AGAIN),
+            Self::Compact => Some(key::ASK_BELONGINGS_COMPACT),
             _ => None,
         }
     }
@@ -882,6 +1980,8 @@ impl Ask {
                 | Self::New(_)
                 | Self::Again(..)
                 | Self::Token
+                | Self::Compact
+                | Self::Sign
         )
     }
 
@@ -919,6 +2019,18 @@ pub enum Errand {
     Copy(String),
     /// Put this order on the queue — every file it reads is written already.
     Queue(Op),
+    /// "Yes" to what the sync that ended at this moment offered: turn it on
+    /// ([`accept_in_background`] — a photograph writes it down instead).
+    Accept(i64, Offer),
+    /// Pin this key (its text and fingerprint) on this machine, a root
+    /// gesture asked in the sudo bar ([`pin_in_background`] — a photograph
+    /// writes it down instead).
+    Pin {
+        /// The public key, as the last run that opened `key.age` left it.
+        key: String,
+        /// Its fingerprint.
+        fingerprint: String,
+    },
 }
 
 /// Which page of the view is showing.
@@ -929,6 +2041,28 @@ enum Mode {
     List,
     /// The difference of one conflicting text: its path and its lines.
     Diff(String, Vec<String>),
+    /// A question about something that is not undone at once, "no" first
+    /// and the cursor born on it.
+    Question(Question),
+}
+
+/// A question the view asks on a page of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Question {
+    /// Stop keeping this target on every machine?
+    Nowhere(&'static str),
+    /// Compact the history?
+    Compact,
+}
+
+impl Question {
+    /// The row that asked it — where the cursor goes back to.
+    const fn asker(self) -> Target {
+        match self {
+            Self::Nowhere(id) => Target::Nowhere(id),
+            Self::Compact => Target::Compact,
+        }
+    }
 }
 
 /// How many lines of a difference are read.
@@ -958,6 +2092,18 @@ impl View {
     ) -> Self {
         let mut me = Self::default();
         me.settle_in(r, zone, columns, texts);
+        // A QUESTION THAT CAME BY ITSELF — what a sync offered, a file a read
+        // repaired — draws its "no" first, and the cursor is born on it.
+        let rows = me.rows(r, zone, columns, texts);
+        if let Some(n) = rows.iter().position(|row| {
+            matches!(
+                row.target,
+                Some(Target::Offer(_, false) | Target::LeaveIt(_))
+            )
+        }) {
+            me.cursor = n;
+            me.aim = rows[n].target.clone();
+        }
         me
     }
 
@@ -989,8 +2135,17 @@ impl View {
             .and_then(Target::conflict)
             .and_then(|p| conflict_of(r, p))
             .is_some_and(|c| Decision::KeepBoth.allowed(c));
-        let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
+        let asking = matches!(self.mode, Mode::Question(_));
+        let mut here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
+            // ON A QUESTION'S PAGE, only what answers it.
+            .filter(|(_, id, _)| {
+                !asking
+                    || matches!(
+                        *id,
+                        "belongings-down" | "belongings-up" | "belongings-enter"
+                    )
+            })
             .filter(|(_, _, w)| match w {
                 Where::Anywhere => true,
                 Where::OnAValue => target.as_ref().is_some_and(Target::turns),
@@ -999,6 +2154,15 @@ impl View {
             })
             .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
+        // THE CONSENT ROW'S OWN KEY, taught while the row is drawn and only
+        // then: a key that does nothing is not taught.
+        if self.mode == Mode::List && r.unlet.is_some() {
+            here.extend(
+                crate::consent_rows::OF_THE_CONSENT
+                    .iter()
+                    .map(|(k, id)| (*k, *id, false)),
+            );
+        }
         crate::chrome::hint_of_marked(&here, |_| None, texts)
     }
 
@@ -1039,9 +2203,12 @@ impl View {
         }
         let rows = self.rows(r, zone, columns, texts);
         if let Some(aim) = self.aim.as_ref()
-            && let Some(n) = rows.iter().position(|row| row.target.as_ref() == Some(aim))
+            && let Some(n) = rows
+                .iter()
+                .position(|row| row.target.as_ref().is_some_and(|t| t.same_row(aim)))
         {
             self.cursor = n;
+            self.aim = rows[n].target.clone();
             return;
         }
         if rows.get(self.cursor).is_some_and(|row| !row.heading()) {
@@ -1077,6 +2244,10 @@ impl View {
             diff_page(&mut b, r, path, lines);
             return b.out;
         }
+        if let Mode::Question(q) = self.mode {
+            question_page(&mut b, q);
+            return b.out;
+        }
         if r.places.is_none() {
             b.section(
                 &b.t(key::BELONGINGS_STATUS),
@@ -1085,13 +2256,17 @@ impl View {
             return b.out;
         }
         status_section(&mut b, r, zone);
+        offers_section(&mut b, r);
         sync_section(&mut b, r);
         if r.plan.as_ref().is_some_and(|p| !p.conflicts.is_empty()) {
             conflicts_section(&mut b, r, zone);
         }
-        kept_section(&mut b, r);
+        repairs_section(&mut b, r);
+        history_section(&mut b, r);
+        listing_section(&mut b, r);
+        signature_section(&mut b, r);
         access_section(&mut b, r);
-        passphrase_section(&mut b);
+        passphrase_section(&mut b, r, zone);
         period_section(&mut b, r);
         b.out
     }
@@ -1108,6 +2283,21 @@ impl View {
     ) -> Errand {
         let rows = self.rows(r, zone, columns, texts);
         let target = rows.get(self.cursor).and_then(|row| row.target.clone());
+        // A QUESTION'S PAGE: up, down, the answer, and `Esc` for "no".
+        if let Mode::Question(q) = self.mode {
+            return match p {
+                Press::Up | Press::Down => {
+                    self.walk(&rows, p == Press::Down);
+                    Errand::Nothing
+                }
+                Press::Escape => self.answer(q, false, r, zone, columns, texts),
+                Press::Enter => match target {
+                    Some(Target::Answer(yes)) => self.answer(q, yes, r, zone, columns, texts),
+                    _ => Errand::Nothing,
+                },
+                _ => Errand::Nothing,
+            };
+        }
         match p {
             Press::Up | Press::Down => {
                 self.walk(&rows, p == Press::Down);
@@ -1121,7 +2311,7 @@ impl View {
                     self.settle_in(r, zone, columns, texts);
                     Errand::Nothing
                 }
-                Mode::List => Errand::Close,
+                Mode::List | Mode::Question(_) => Errand::Close,
             },
             Press::Less | Press::More => match target {
                 Some(Target::Period) => self.change(r, texts, |prefs| {
@@ -1132,16 +2322,28 @@ impl View {
                     };
                 }),
                 Some(Target::Auth) => self.change(r, texts, flip_auth),
+                Some(Target::Unlock) => self.flip_unlock(r, texts),
                 _ => Errand::Nothing,
             },
-            Press::Decide(d) => match target.as_ref().and_then(Target::conflict) {
-                Some(path) => {
-                    let path = path.to_owned();
-                    self.decide(r, &path, d, texts)
+            // ON A FIELD'S ROWS the conflict's keys decide THE FIELD.
+            Press::Decide(d) => match target.as_ref().and_then(Target::field) {
+                Some((path, pointer)) => {
+                    let (path, pointer) = (path.to_owned(), pointer.to_owned());
+                    decide_field(r, &path, &pointer, d, texts)
                 }
-                None => Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE)),
+                None => match target.as_ref().and_then(Target::conflict) {
+                    Some(path) => {
+                        let path = path.to_owned();
+                        self.decide(r, &path, d, texts)
+                    }
+                    None => Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE)),
+                },
             },
             Press::Sync => self.start_sync(r, texts),
+            Press::Allow => match r.unlet.as_deref() {
+                Some(host) => let_host(r, host, texts),
+                None => Errand::Nothing,
+            },
             Press::Enter => match target {
                 Some(t) => self.enter(t, r, zone, columns, texts),
                 None => Errand::Nothing,
@@ -1163,6 +2365,17 @@ impl View {
         if let Some(p) = press_of(id) {
             return self.press(p, r, zone, columns, texts);
         }
+        // ── anchor: L09 ──
+        // THE TWO MERGED DECISIONS, on the conflict under the cursor — as its
+        // rows decide it (`Target::Decide`).
+        let merged = match id {
+            "belongings-take-merged-ours" => Some(Decision::TakeMergedOurs),
+            "belongings-take-merged-theirs" => Some(Decision::TakeMergedTheirs),
+            _ => None,
+        };
+        if let Some(d) = merged {
+            return self.press(Press::Decide(d), r, zone, columns, texts);
+        }
         let target = match id {
             "belongings-apply" => Target::Apply,
             "belongings-abandon" => Target::Abandon,
@@ -1177,6 +2390,8 @@ impl View {
             "belongings-user" => Target::User,
             "belongings-passphrase" => Target::Passphrase,
             "belongings-period" => Target::Period,
+            "belongings-pin" => Target::Pin,
+            "belongings-sign" => Target::Sign,
             _ => return Errand::Nothing,
         };
         self.enter(target, r, zone, columns, texts)
@@ -1277,6 +2492,178 @@ impl View {
             Target::Period => self.change(r, texts, |p| {
                 p.period_days = Belongings::next_period(p.period_days);
             }),
+            Target::Let(host) => let_host(r, &host, texts),
+            Target::File(path, act) => self.change(r, texts, |p| match act {
+                FileAct::StopKeeping => {
+                    p.stop_keeping(&path);
+                }
+                FileAct::KeepAgain | FileAct::KeepAnyway => {
+                    p.keep(&path);
+                }
+            }),
+            // "NOT ON THIS MACHINE": its paths taken out here; the
+            // repository's copies stay for the others.
+            Target::NotHere(id) => self.change(r, texts, |p| {
+                for path in target_paths(id) {
+                    p.stop_keeping(path);
+                }
+            }),
+            Target::HereAgain(id) => self.change(r, texts, |p| {
+                for path in target_paths(id) {
+                    p.keep(path);
+                }
+            }),
+            // "NOT ON ANY MACHINE" deletes the repository's copies: asked
+            // first, "no" first.
+            Target::Nowhere(id) => self.ask_page(Question::Nowhere(id), r, zone, columns, texts),
+            // "EVERY MACHINE AGAIN": asked of the next sync, which this door
+            // starts now — kept here too.
+            Target::Everywhere(id) => {
+                if let Err(said) = ask_of_the_next_sync(
+                    r,
+                    Request::KeepEverywhere {
+                        target: id.to_owned(),
+                    },
+                ) {
+                    return Errand::Say(texts.t(said));
+                }
+                if let Err(said) = change_the_file(r.places.as_ref(), |p| {
+                    for path in target_paths(id) {
+                        p.keep(path);
+                    }
+                }) {
+                    return Errand::Say(said.sentence(texts));
+                }
+                self.start_sync(r, texts)
+            }
+            Target::Field(path, pointer) => {
+                // `RET` ON A FIELD takes the other value: this machine's
+                // first.
+                let d = match r.fields_file().field(&path, &pointer) {
+                    Some(Decision::KeepLocal) => Decision::TakeRemote,
+                    _ => Decision::KeepLocal,
+                };
+                decide_field(r, &path, &pointer, d, texts)
+            }
+            Target::DecideField(path, pointer, d) => decide_field(r, &path, &pointer, d, texts),
+            Target::WriteFix(path) => repair(r, &path, true, texts),
+            Target::LeaveIt(path) => repair(r, &path, false, texts),
+            Target::Offer(offer, yes) => {
+                let (Some(places), Some(status)) = (r.places.as_ref(), r.status.as_ref()) else {
+                    return Errand::Nothing;
+                };
+                // AN OFFER THE LAST SYNC DID NOT MAKE is answered by nobody:
+                // the row the person read is gone.
+                if !r.offers().contains(&offer) {
+                    return Errand::Nothing;
+                }
+                if yes {
+                    return Errand::Accept(status.at_s, offer);
+                }
+                match answer(places, status.at_s, &offer, Said::No) {
+                    Ok(()) => Errand::Nothing,
+                    Err(said) => Errand::Say(texts.t(said)),
+                }
+            }
+            Target::Unlock => self.flip_unlock(r, texts),
+            Target::Compact => self.ask_page(Question::Compact, r, zone, columns, texts),
+            // AN ANSWER ON THE LIST is no answer: the page is gone.
+            Target::Answer(_) => Errand::Nothing,
+            // THE PIN IS A ROOT GESTURE: its password, key or finger is the
+            // sudo bar's to ask, never this view's line.
+            Target::Pin => match pin_refusal(r) {
+                Some(said) => Errand::Say(texts.t(said)),
+                None => Errand::Pin {
+                    key: r.plain.signer.clone(),
+                    fingerprint: r.plain.fingerprint.clone(),
+                },
+            },
+            Target::Sign => {
+                if let Some(said) = unready(r, texts) {
+                    return Errand::Say(said);
+                }
+                if r.kept_until.is_some() {
+                    return Errand::Queue(Op::Sign);
+                }
+                self.ask(Ask::Sign, r)
+            }
+        }
+    }
+
+    /// A question on a page of its own, "no" first and the cursor on it.
+    fn ask_page(
+        &mut self,
+        q: Question,
+        r: &Readings,
+        zone: &ronoctua_files::when::Zone,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        // A COMPACTION THAT COULD NOT START is refused before anything is
+        // asked.
+        if matches!(q, Question::Compact)
+            && let Some(said) = unready(r, texts).or_else(|| not_let(r, texts))
+        {
+            return Errand::Say(said);
+        }
+        self.mode = Mode::Question(q);
+        self.aim = Some(Target::Answer(false));
+        self.cursor = 0;
+        self.settle_in(r, zone, columns, texts);
+        Errand::Nothing
+    }
+
+    /// The question answered: back to the list, on the row that asked —
+    /// and, for a "yes", what it said.
+    fn answer(
+        &mut self,
+        q: Question,
+        yes: bool,
+        r: &Readings,
+        zone: &ronoctua_files::when::Zone,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        self.mode = Mode::List;
+        self.aim = Some(q.asker());
+        self.settle_in(r, zone, columns, texts);
+        if !yes {
+            return Errand::Nothing;
+        }
+        match q {
+            // ASKED OF THE NEXT SYNC, which this door starts now: only a sync
+            // with the passphrase writes the repository.
+            Question::Nowhere(id) => {
+                if let Err(said) = ask_of_the_next_sync(
+                    r,
+                    Request::DropEverywhere {
+                        target: id.to_owned(),
+                    },
+                ) {
+                    return Errand::Say(texts.t(said));
+                }
+                self.start_sync(r, texts)
+            }
+            Question::Compact => {
+                if let Some(said) = unready(r, texts).or_else(|| not_let(r, texts)) {
+                    return Errand::Say(said);
+                }
+                if r.asks_nothing() {
+                    return Errand::Queue(Op::Compact);
+                }
+                self.ask(Ask::Compact, r)
+            }
+        }
+    }
+
+    /// Turns "remember the passphrase for this session": off forgets what
+    /// the session keeps, at once (`forget` on the queue).
+    fn flip_unlock(&self, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
+        let on = !r.prefs.keep_unlocked;
+        match change_the_file(r.places.as_ref(), |p| p.keep_unlocked = on) {
+            Ok(()) if on => Errand::Nothing,
+            Ok(()) => Errand::Queue(Op::Forget),
+            Err(said) => Errand::Say(said.sentence(texts)),
         }
     }
 
@@ -1291,8 +2678,13 @@ impl View {
     /// Sync now: refused with its sentence when there is nothing to sync
     /// with, else the passphrase is asked.
     fn start_sync(&mut self, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
-        if let Some(said) = unready(r, texts) {
+        if let Some(said) = unready(r, texts).or_else(|| not_let(r, texts)) {
             return Errand::Say(said);
+        }
+        // THE SESSION REMEMBERS IT: the sync asks nothing
+        // (`ronoctua_belongings::unlock`).
+        if r.asks_nothing() {
+            return Errand::Queue(Op::Prepare);
         }
         self.ask(Ask::Passphrase, r)
     }
@@ -1306,13 +2698,14 @@ impl View {
         if r.busy {
             return Errand::Say(texts.t(words::refusal_key(Why::Busy)));
         }
+        // AN APPLY PUSHES: refused by the CLI with no pass, it would take the
+        // session and the decisions with it — so it is refused here first.
+        if let Some(said) = not_let(r, texts) {
+            return Errand::Say(said);
+        }
         let decided = r.decided();
-        if !plan.decided(&decided) {
-            let left = plan
-                .conflicts
-                .iter()
-                .filter(|c| !decided.get(&c.path).is_some_and(|d| d.allowed(c)))
-                .count();
+        if !plan.conflicts.iter().all(|c| r.settled(c)) {
+            let left = plan.conflicts.iter().filter(|c| !r.settled(c)).count();
             return Errand::Say(texts.t_args(
                 key::BELONGINGS_UNDECIDED_LEFT,
                 &[(
@@ -1341,7 +2734,15 @@ impl View {
             return Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE));
         };
         if !d.allowed(c) {
-            return Errand::Say(texts.t(key::BELONGINGS_BOTH_ONLY_ADDED));
+            // EACH REFUSAL WITH ITS OWN WORDS: a merge nobody reached, or
+            // "keep both" on what the person did not add.
+            let why = match d {
+                Decision::TakeMergedOurs | Decision::TakeMergedTheirs => {
+                    key::BELONGINGS_NO_MERGE_HERE
+                }
+                _ => key::BELONGINGS_BOTH_ONLY_ADDED,
+            };
+            return Errand::Say(texts.t(why));
         }
         let mut decided = r.decided();
         decided.insert(path.to_owned(), d);
@@ -1421,6 +2822,14 @@ impl View {
                 if let Err(why) = prefs::repository_is_plain(address) {
                     return Errand::Say(texts.t(words::invalid_key(why)));
                 }
+                // TYPING THE ADDRESS IS THE CONSENT to ask its host, kept in
+                // `consent.json` like any other: no sync or compaction
+                // reaches a host the person did not let.
+                if let Some(host) = prefs::host_of(address)
+                    && let Errand::Say(said) = let_host(r, &host, texts)
+                {
+                    return Errand::Say(said);
+                }
                 self.change(r, texts, |p| address.clone_into(&mut p.repository))
             }
             Ask::User => {
@@ -1432,6 +2841,9 @@ impl View {
                     return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
                 };
                 match logical_of_typed(places, said.trim()) {
+                    Some(logical) if kept::plain_root(&logical).is_some() => {
+                        Errand::Say(texts.t(key::BELONGINGS_PLAIN_ALREADY))
+                    }
                     Some(logical) if kept::may_add(&logical) => self.change(r, texts, |p| {
                         p.keep(&logical);
                     }),
@@ -1462,6 +2874,18 @@ impl View {
                 }
                 send_passphrase(r, &typed, texts)
             }
+            Ask::Compact => {
+                if typed.expose().is_empty() {
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                }
+                if let Some(refused) = unready(r, texts) {
+                    return Errand::Say(refused);
+                }
+                match write_secret(r, Places::passphrase, typed.expose()) {
+                    Ok(()) => Errand::Queue(Op::Compact),
+                    Err(said) => Errand::Say(texts.t(said)),
+                }
+            }
             Ask::Confirm(first) => {
                 if typed != first {
                     return Errand::Say(texts.t(key::BELONGINGS_FIRST_PASSPHRASES_DIFFER));
@@ -1482,6 +2906,18 @@ impl View {
                     return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
                 }
                 self.ask(Ask::Again(old, typed), r)
+            }
+            Ask::Sign => {
+                if typed.expose().is_empty() {
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                }
+                if let Some(refused) = unready(r, texts) {
+                    return Errand::Say(refused);
+                }
+                match write_secret(r, Places::passphrase, typed.expose()) {
+                    Ok(()) => Errand::Queue(Op::Sign),
+                    Err(said) => Errand::Say(texts.t(said)),
+                }
             }
             Ask::Again(old, new) => {
                 if typed != new {
@@ -1534,6 +2970,12 @@ fn unready(r: &Readings, texts: &ronoctua_i18n::Texts) -> Option<String> {
     if !r.prefs.has_repository() {
         return Some(texts.t(words::refusal_key(Why::NoRepository)));
     }
+    // AN ADDRESS KEPT BEFORE A RULE REFUSED IT — a host no consent can name,
+    // which format 1 took — says why here, as it would when typed, instead of
+    // the CLI's "no repository" under an address the page shows.
+    if let Err(why) = prefs::repository_is_plain(&r.prefs.repository) {
+        return Some(texts.t(words::invalid_key(why)));
+    }
     if !r.has_access() {
         return Some(texts.t(match r.prefs.auth {
             Auth::Ssh => key::BELONGINGS_NEEDS_KEY,
@@ -1541,6 +2983,57 @@ fn unready(r: &Readings, texts: &ronoctua_i18n::Texts) -> Option<String> {
         }));
     }
     in_the_way(r, texts)
+}
+
+/// The sentence of a run the repository's host would refuse: the person
+/// has not let it be asked yet (the row under Sync asks it).
+fn not_let(r: &Readings, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    r.unlet
+        .as_ref()
+        .map(|_| texts.t(words::refusal_key(Why::NotLet)))
+}
+
+/// Why the person's key cannot be pinned now, as its sentence's key: no key
+/// is known here yet (only a run that opened `key.age` knows it), the
+/// machine trusts it already, or a pin is on its way. `None` when it can —
+/// a door with no root helper says so when it is asked.
+fn pin_refusal(r: &Readings) -> Option<&'static str> {
+    if r.places.is_none() {
+        return Some(key::BELONGINGS_NO_PLACES);
+    }
+    if r.plain.signer.is_empty() || r.plain.fingerprint.is_empty() {
+        return Some(key::BELONGINGS_SIGNATURE_SYNC_FIRST);
+    }
+    if r.pin
+        .as_ref()
+        .is_some_and(|p| p.fingerprint == r.plain.fingerprint)
+    {
+        return Some(key::BELONGINGS_SIGNATURE_ALREADY);
+    }
+    if r.pinning
+        .as_ref()
+        .is_some_and(|p| p.said == PinSaid::Pinning)
+    {
+        return Some(key::BELONGINGS_PINNING_BUSY);
+    }
+    None
+}
+
+/// Lets `host` be asked: the consent row pressed, or the address typed —
+/// merged into `consent.json` under the config root the view reads, which in
+/// the product is the person's own, where the CLI mints its pass. What could
+/// not be kept is said (`consent_rows::unkept`), never silent.
+fn let_host(r: &Readings, host: &str, texts: &ronoctua_i18n::Texts) -> Errand {
+    let Some(places) = r.places.as_ref() else {
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+    };
+    match ronoctua_consent::let_hosts_under(&places.config, &[host], true) {
+        Ok(()) => Errand::Nothing,
+        Err(why) => {
+            tracing::warn!(why = why.id(), host, "a consent could not be kept");
+            Errand::Say(crate::consent_rows::unkept(why, &[host], texts))
+        }
+    }
 }
 
 /// What stands in the way of a new run: a sync prepared and waiting — a new
@@ -1668,9 +3161,10 @@ const fn said(key: &'static str) -> Explanation {
     }
 }
 
-/// One change to `belongings.json`, read with `parsed` — never `read`: a
-/// file that does not parse is refused, not replaced — laid over the file as
-/// it is NOW, and written whole.
+/// One change to `belongings.json`, read with `whole` — never `read`: a
+/// file that does not read whole is refused, not replaced, nor written with
+/// a repair the engine would still refuse (it reads the file strictly) —
+/// laid over the file as it is NOW, and written whole.
 ///
 /// # Errors
 ///
@@ -1681,7 +3175,7 @@ pub fn change_the_file(
 ) -> Result<(), NotChanged> {
     let places = places.ok_or(NotChanged::Nowhere)?;
     let store = store_of(places);
-    let mut now = store.parsed().ok_or(NotChanged::Unparsed)?;
+    let mut now = store.whole().ok_or(NotChanged::Unparsed)?;
     change(&mut now);
     store.write(&now).map_err(NotChanged::NotWritten)
 }
@@ -1695,10 +3189,17 @@ fn write_secret(r: &Readings, at: fn(&Places) -> PathBuf, text: &str) -> Result<
     })
 }
 
-/// The decisions into their file.
+/// The decisions into their file — the paths' as decided here, the fields'
+/// as the file has them.
 fn write_decisions_file(r: &Readings, decided: &Decisions) -> Result<(), &'static str> {
     let places = r.places.as_ref().ok_or(key::BELONGINGS_NO_PLACES)?;
-    let text = serde_json::to_vec_pretty(decided).map_err(|_| key::BELONGINGS_NOT_WRITTEN)?;
+    let file = DecisionsFile {
+        paths: decided.clone(),
+        fields: DecisionsFile::read(&places.decisions())
+            .map(|f| f.fields)
+            .unwrap_or_default(),
+    };
+    let text = serde_json::to_vec_pretty(&file).map_err(|_| key::BELONGINGS_NOT_WRITTEN)?;
     ronoctua_belongings::secret::write_private(&places.decisions(), &text).map_err(|e| {
         tracing::warn!(error = %e, "the belongings' decisions could not be written");
         key::BELONGINGS_NOT_WRITTEN
@@ -1742,6 +3243,16 @@ pub fn forget_unsent(op: Op, places: &Places) {
         Op::Prepare => vec![places.passphrase()],
         Op::Rekey => vec![places.passphrase(), places.new_passphrase()],
         Op::Apply | Op::Abandon | Op::Keygen => Vec::new(),
+        // THE 2026-10-05 WAVE'S ORDERS: every one that may read a typed
+        // passphrase loses it with the order (their packages refine this).
+        // ── anchor: L08 ──
+        // ── anchor: L09 ──
+        Op::Sign => vec![places.passphrase()],
+        // ── anchor: L10 ──
+        Op::Compact | Op::Restore | Op::Init | Op::VerifyPassphrase => {
+            vec![places.passphrase()]
+        }
+        Op::SyncPlain | Op::Forget | Op::Probe => Vec::new(),
     };
     for file in typed {
         if let Err(e) = std::fs::remove_file(&file)
@@ -1782,10 +3293,14 @@ pub fn keep_under(places: &Places, paths: &[PathBuf]) -> Explanation {
     if logical.is_empty() || logical.len() != paths.len() {
         return said(key::BELONGINGS_OUTSIDE_HOME);
     }
+    // THE PLAIN PART travels already, in clear, and is never sealed too.
+    if logical.iter().any(|l| kept::plain_root(l).is_some()) {
+        return said(key::BELONGINGS_PLAIN_ALREADY);
+    }
     if logical.iter().any(|l| !kept::may_add(l)) {
         return said(key::BELONGINGS_NEVER_KEPT);
     }
-    let Some(prefs) = store_of(places).parsed() else {
+    let Some(prefs) = store_of(places).whole() else {
         return said(key::BELONGINGS_PREFS_REFUSED);
     };
     // WHAT ANOTHER MACHINE ADDED, followed here, is kept here too.
@@ -1976,12 +3491,7 @@ fn sync_section(b: &mut Builder<'_>, r: &Readings) {
     let mut e = Vec::new();
     match r.plan.as_ref() {
         Some(plan) => {
-            let decided = r.decided();
-            let done = plan
-                .conflicts
-                .iter()
-                .filter(|c| decided.get(&c.path).is_some_and(|d| d.allowed(c)))
-                .count();
+            let done = plan.conflicts.iter().filter(|c| r.settled(c)).count();
             e.push(pair(
                 t.t(key::BELONGINGS_APPLY),
                 t.t_args(
@@ -2014,6 +3524,21 @@ fn sync_section(b: &mut Builder<'_>, r: &Readings) {
             }
         }
     }
+    // THE HOST NOBODY LET YET: the row every app draws for it
+    // (`consent_rows`) — its label is the press, its note what for. Without
+    // it no sync, apply or compaction reaches the repository.
+    if let Some(host) = r.unlet.as_deref() {
+        e.push(pair(
+            crate::consent_rows::label(&[host], t),
+            String::new(),
+            Target::Let(host.to_owned()),
+            true,
+        ));
+        e.push(note(crate::consent_rows::note(
+            key::BELONGINGS_CONSENT_FOR,
+            t,
+        )));
+    }
     b.section(&t.t(key::BELONGINGS_SYNC_HEADING), e);
 }
 
@@ -2044,29 +3569,108 @@ fn conflicts_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::w
         // decisions, read as one.
         e.push(Entry::Air);
         let decision = r.decision_of(c);
-        let value = decision.map_or_else(
-            || t.t(key::BELONGINGS_UNDECIDED),
-            |d| t.t(words::decided_key(d)),
-        );
+        let fields = r.fields_file();
+        let value = match decision {
+            Some(d) => t.t(words::decided_key(d)),
+            None if fields.fields_settle(c) => t.t(key::BELONGINGS_DECIDED_FIELDS),
+            None => match &c.merge {
+                Some(Merging::Json { fields: all }) if r.fields.contains_key(&c.path) => t.t_args(
+                    key::BELONGINGS_FIELDS_DECIDED_OF,
+                    &[
+                        (
+                            "n",
+                            count(
+                                all.iter()
+                                    .filter(|f| fields.field(&c.path, &f.pointer).is_some())
+                                    .count(),
+                            ),
+                        ),
+                        ("of", count(all.len())),
+                    ],
+                ),
+                _ => t.t(key::BELONGINGS_UNDECIDED),
+            },
+        };
         let label = shown_path(&c.path, r.places.as_ref(), false);
-        e.push(match decision {
-            Some(_) => pair(label, value, Target::Conflict(c.path.clone()), true),
-            None => tinted(
+        e.push(if r.settled(c) {
+            pair(label, value, Target::Conflict(c.path.clone()), true)
+        } else {
+            tinted(
                 label,
                 value,
                 Target::Conflict(c.path.clone()),
                 true,
                 tokens::color::STATE_WARNING,
-            ),
+            )
         });
-        e.push(note(t.t_with(
-            key::BELONGINGS_SIDES,
-            &[
-                ("here", &side_text(c.local.as_ref(), zone, t)),
-                ("there", &side_text(c.remote.as_ref(), zone, t)),
-                ("machine", &c.machine),
-            ],
-        )));
+        // THE MACHINE THAT CHANGED IT, when one is known: a plain file's
+        // commit names none, and a sentence never says "changed on" nobody.
+        let here = side_text(c.local.as_ref(), zone, t);
+        let there = side_text(c.remote.as_ref(), zone, t);
+        e.push(note(if c.machine.is_empty() {
+            t.t_with(
+                key::BELONGINGS_SIDES_UNNAMED,
+                &[("here", &here), ("there", &there)],
+            )
+        } else {
+            t.t_with(
+                key::BELONGINGS_SIDES,
+                &[("here", &here), ("there", &there), ("machine", &c.machine)],
+            )
+        }));
+        // WHAT A MERGE REACHED: where the two still clash.
+        if let Some(said) = merging_text(c, t) {
+            e.push(note(said));
+        }
+        // WHY THE REPOSITORY'S SIDE WAITS FOR THE PERSON: the signature did
+        // not vouch for it — said, so "take it" is a choice made knowing.
+        if let Some(why) = c.held {
+            e.push(note(t.t(words::held_key(why))));
+        }
+        // EVERY FIELD THAT CLASHES, on rows of its own: the three values,
+        // and this machine's or the repository's decided for it alone.
+        if let Some(Merging::Json { fields: clashing }) = &c.merge {
+            for f in clashing {
+                let chosen = fields.field(&c.path, &f.pointer);
+                e.push(indented(
+                    f.pointer.clone(),
+                    chosen.map_or_else(
+                        || t.t(key::BELONGINGS_UNDECIDED),
+                        |d| {
+                            t.t(if d == Decision::TakeRemote {
+                                key::BELONGINGS_FIELD_THEIRS
+                            } else {
+                                key::BELONGINGS_FIELD_OURS
+                            })
+                        },
+                    ),
+                    Target::Field(c.path.clone(), f.pointer.clone()),
+                ));
+                for (d, label, value) in [
+                    (Decision::KeepLocal, key::BELONGINGS_FIELD_OURS, &f.ours),
+                    (
+                        Decision::TakeRemote,
+                        key::BELONGINGS_FIELD_THEIRS,
+                        &f.theirs,
+                    ),
+                ] {
+                    e.push(Entry::Field {
+                        label: t.t(label),
+                        value: value.clone(),
+                        chosen: chosen == Some(d),
+                        target: Target::DecideField(c.path.clone(), f.pointer.clone(), d),
+                        indent: 2 * tokens::space::VIEW_NESTCELLS,
+                    });
+                }
+                // UNDER THE TWO VALUES, in where they are: at the section's
+                // left it read as a sentence about the whole conflict.
+                let indent = 2 * tokens::space::VIEW_NESTCELLS;
+                e.push(Entry::NoteIn(
+                    before_text(f.base.as_deref(), b.room.saturating_sub(indent), t),
+                    indent,
+                ));
+            }
+        }
         for d in Decision::ALL.into_iter().filter(|d| d.allowed(c)) {
             let chosen = decision == Some(d);
             e.push(indented(
@@ -2087,6 +3691,32 @@ fn conflicts_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::w
         ),
         e,
     );
+}
+
+/// What a merge of a conflict reached, as a sentence: how many hunks of a
+/// text clash, or which fields of a document. `None` when no merge reached
+/// it.
+fn merging_text(c: &Conflict, t: &ronoctua_i18n::Texts) -> Option<String> {
+    Some(match c.merge.as_ref()? {
+        Merging::Text { hunks } => t.t_args(
+            key::BELONGINGS_MERGE_HUNKS,
+            &[("n", ronoctua_i18n::Arg::Number(i64::from(*hunks)))],
+        ),
+        Merging::Json { fields } => {
+            let named: Vec<&str> = fields.iter().map(|f| f.pointer.as_str()).collect();
+            let named = named.join(", ");
+            t.t_args(
+                key::BELONGINGS_MERGE_FIELDS,
+                &[
+                    (
+                        "n",
+                        ronoctua_i18n::Arg::Number(i64::try_from(fields.len()).unwrap_or(i64::MAX)),
+                    ),
+                    ("fields", ronoctua_i18n::Arg::Text(&named)),
+                ],
+            )
+        }
+    })
 }
 
 /// The difference of one conflicting text: its decisions first, then its
@@ -2214,63 +3844,150 @@ fn diff_fields(
     out
 }
 
-/// What is kept: the table, each with its reason; what the person added and
-/// took out; what is never kept.
-fn kept_section(b: &mut Builder<'_>, r: &Readings) {
+/// What goes to your repository: ONE listing, generated from the walk a
+/// sync makes — grouped by where each file comes from (the rules, the
+/// targets, what the person added here and elsewhere, the plain part), one
+/// row per file with its state and size, then what is never kept and why.
+///
+/// THE FILES' ROWS ARE THE COUNT'S, formatted once per count and language
+/// ([`Counted::formatted`]); a folder is told by what the count found, never
+/// by a `stat` here: this runs on every frame and every key.
+fn listing_section(b: &mut Builder<'_>, r: &Readings) {
     let t = b.texts;
     let places = r.places.as_ref();
+    let scope = r.scope();
     let reason = |id: &str| t.t(&words::reason_key(id));
     let mut e = vec![note(t.t(key::BELONGINGS_WHAT_LEAKS))];
-    for (place, folder) in kept::TREES
-        .iter()
-        .map(|p| (p, true))
-        .chain(kept::FILES.iter().map(|p| (p, false)))
-    {
+    let nothing = Counted::default();
+    let count = r.count.as_deref().unwrap_or(&nothing);
+    if r.count.is_none() {
+        e.push(note(t.t(key::BELONGINGS_COUNTING)));
+    }
+    let rows = count.formatted(places, t);
+    let files = |e: &mut Vec<Entry>, origin: &Origin| {
+        e.extend(count.of_origin(origin).iter().map(|n| rows[*n].entry()));
+    };
+
+    // THE RULES OF THE TABLE: each tree and file, with its reason — or
+    // taken out by the person — and its files.
+    for (place, folder) in scope::rules() {
         let label = shown_path(place.path, places, folder);
-        if r.prefs.excluded.iter().any(|x| x == place.path) {
-            e.push(pair(
+        let taken = r.prefs.excluded.iter().any(|x| x == place.path);
+        e.push(if taken {
+            pair(
                 label,
                 t.t(key::BELONGINGS_TAKEN_OUT),
                 Target::Excluded(place.path.to_owned()),
                 true,
-            ));
+            )
         } else {
-            e.push(pair(
+            pair(
                 label,
                 reason(place.reason),
                 Target::Rule(place.path.to_owned()),
                 true,
-            ));
-        }
+            )
+        });
+        files(&mut e, &Origin::Rule(place.path));
     }
+
+    // THE PREDEFINED TARGETS, each with where it is kept and what may be
+    // done about it — and what the passphrase guards now.
+    e.push(Entry::Air);
+    e.push(note(t.t(key::BELONGINGS_TARGETS_NOTE)));
+    for target in scope::targets() {
+        let id = target.id;
+        let asked = scope.asked(id);
+        // A TARGET IS "NOT ON THIS MACHINE" ONLY WHEN EVERY PATH OF IT IS
+        // taken out here; one path taken out (`~/.gitconfig`, by its file's
+        // row) leaves the others travelling, and the target says so.
+        let out = target
+            .paths
+            .iter()
+            .filter(|p| kept::excluded_here(p, &r.prefs))
+            .count();
+        let (all_out, some_out) = (out == target.paths.len(), out > 0);
+        let dropped = scope.dropped(id);
+        let state = match asked {
+            Some(Request::DropEverywhere { .. }) => key::BELONGINGS_TARGET_ASKED_NOWHERE,
+            Some(Request::KeepEverywhere { .. }) => key::BELONGINGS_TARGET_ASKED_EVERYWHERE,
+            _ if dropped => key::BELONGINGS_HERE_NOWHERE,
+            _ if all_out => key::BELONGINGS_HERE_NOT_HERE,
+            _ if some_out => key::BELONGINGS_TARGET_PARTLY_HERE,
+            _ => key::BELONGINGS_TARGET_EVERYWHERE,
+        };
+        e.push(pair(
+            t.t(&words::target_key(id)),
+            t.t(state),
+            Target::Fact(format!("target:{id}")),
+            false,
+        ));
+        // A TARGET'S PATH ENDS IN `/` only when it is a folder HERE: the
+        // table does not say, and `~/.gitconfig` has no extension.
+        let paths: Vec<String> = target
+            .paths
+            .iter()
+            .map(|p| shown_path(p, places, count.folder(p) == Some(true)))
+            .collect();
+        e.push(note(paths.join(", ")));
+        let act = |label: &str, target: Target| indented(t.t(label), String::new(), target);
+        if dropped {
+            e.push(act(
+                key::BELONGINGS_TARGET_ACT_EVERYWHERE,
+                Target::Everywhere(id),
+            ));
+        } else {
+            // SOME PATHS OUT: both — every path back, or every path out.
+            if some_out {
+                e.push(act(
+                    key::BELONGINGS_TARGET_ACT_HERE_AGAIN,
+                    Target::HereAgain(id),
+                ));
+            }
+            if !all_out {
+                e.push(act(
+                    key::BELONGINGS_TARGET_ACT_NOT_HERE,
+                    Target::NotHere(id),
+                ));
+            }
+            e.push(act(key::BELONGINGS_TARGET_ACT_NOWHERE, Target::Nowhere(id)));
+        }
+        files(&mut e, &Origin::Target(id));
+    }
+
+    // WHAT THE PERSON ADDED HERE, and what another machine added and this
+    // one follows: each taken out by its own row, for every machine.
     for extra in &r.prefs.extra {
+        e.push(Entry::Air);
         e.push(pair(
             shown_path(extra, places, false),
             t.t(key::BELONGINGS_ADDED_BY_YOU),
             Target::Kept(extra.clone()),
             true,
         ));
+        files(&mut e, &Origin::Added(extra.clone()));
     }
-    // WHAT ANOTHER MACHINE ADDED, and this one follows: taken out here by the
-    // same row, which takes it out of the repository for every machine.
     for root in r
         .followed
         .iter()
         .filter(|f| !r.prefs.extra.contains(f) && !r.prefs.excluded.contains(f))
     {
+        e.push(Entry::Air);
         e.push(pair(
             shown_path(root, places, false),
             t.t(key::BELONGINGS_ADDED_ELSEWHERE),
             Target::Kept(root.clone()),
             true,
         ));
+        files(&mut e, &Origin::AddedElsewhere(root.clone()));
     }
-    for excluded in r.prefs.excluded.iter().filter(|x| {
-        !kept::TREES
-            .iter()
-            .chain(kept::FILES)
-            .any(|p| p.path == x.as_str())
-    }) {
+    // WHAT THE PERSON TOOK OUT that no rule, target or file row says.
+    let named = |x: &str| {
+        scope::rules().any(|(p, _)| p.path == x)
+            || scope::targets().iter().any(|t| t.paths.contains(&x))
+            || count.lists(x)
+    };
+    for excluded in r.prefs.excluded.iter().filter(|x| !named(x)) {
         e.push(pair(
             shown_path(excluded, places, false),
             t.t(key::BELONGINGS_TAKEN_OUT),
@@ -2278,6 +3995,7 @@ fn kept_section(b: &mut Builder<'_>, r: &Readings) {
             true,
         ));
     }
+    e.push(Entry::Air);
     e.push(pair(
         t.t(key::BELONGINGS_ADD),
         String::new(),
@@ -2288,12 +4006,75 @@ fn kept_section(b: &mut Builder<'_>, r: &Readings) {
         key::BELONGINGS_LARGE_NOTE,
         &[("size", &bytes_text(kept::LARGE_BYTES, t))],
     )));
-    b.section(&t.t(key::BELONGINGS_KEPT), e);
+
+    // THE PLAIN PART, kept IN CLEAR — and the page says who reads it.
+    e.push(Entry::Air);
+    e.push(note(t.t_with(
+        key::BELONGINGS_PLAIN_NOTE,
+        &[("size", &bytes_text(kept::PLAIN_MOST_BYTES, t))],
+    )));
+    for root in scope::plain_roots() {
+        e.push(pair(
+            shown_path(root.path, places, true),
+            reason(root.reason),
+            Target::Fact(format!("plain:{}", root.path)),
+            false,
+        ));
+        files(&mut e, &Origin::Plain(root.path));
+    }
+    // WHAT ITS LAST RUN LEFT OUT FOR ITS SIZE on the repository's side —
+    // this machine's are rows above.
+    for path in r.plain.too_large.iter().filter(|p| !count.lists(p)) {
+        e.push(tinted(
+            shown_path(path, places, false),
+            t.t(words::refusal_key(Why::PlainTooLarge)),
+            Target::Fact(format!("plain-too-large:{path}")),
+            false,
+            tokens::color::STATE_WARNING,
+        ));
+    }
+    // AND WHAT WAITS FOR THE PERSON: a run with nobody to ask left it.
+    if !r.plain.conflicts.is_empty() {
+        e.push(note(t.t_args(
+            key::BELONGINGS_PLAIN_CONFLICTS,
+            &[("n", self::count(r.plain.conflicts.len()))],
+        )));
+    }
+    // WHAT THE REPOSITORY CHANGED AND THIS MACHINE HELD, each with why: the
+    // person's signature did not vouch for it.
+    for (path, why) in &r.plain.held {
+        e.push(tinted(
+            shown_path(path, places, false),
+            t.t(words::held_key(*why)),
+            Target::Fact(format!("plain-held:{path}")),
+            false,
+            tokens::color::STATE_WARNING,
+        ));
+    }
+    // WHAT THIS MACHINE CHANGED AND NOTHING SIGNED yet: it waits, and "sign
+    // now" signs it here.
+    for path in &r.plain.unsigned {
+        e.push(tinted(
+            shown_path(path, places, false),
+            t.t(key::BELONGINGS_UNSIGNED),
+            Target::Fact(format!("plain-unsigned:{path}")),
+            false,
+            tokens::color::STATE_WARNING,
+        ));
+    }
+    if !r.plain.unsigned.is_empty() {
+        e.push(indented(
+            t.t(key::BELONGINGS_SIGN),
+            String::new(),
+            Target::Sign,
+        ));
+    }
 
     // NEVER KEPT: the rules that take things out, with their reasons. A
     // hard one is a fact; the rest a person may add anyway.
-    let mut e = Vec::new();
-    for never in kept::NEVER {
+    e.push(Entry::Air);
+    e.push(note(t.t(key::BELONGINGS_NEVER)));
+    for never in scope::never_rules() {
         let (label, target) = match never.pattern {
             Pattern::Name(name) => (name.to_owned(), Target::Fact(format!("never:{name}"))),
             Pattern::Path(path) => {
@@ -2306,24 +4087,446 @@ fn kept_section(b: &mut Builder<'_>, r: &Readings) {
                 } else {
                     Target::Never(path.to_owned())
                 };
-                (shown_path(path, places, is_folder(places, path)), target)
+                let folder = count
+                    .folder(path)
+                    .unwrap_or_else(|| looks_like_a_folder(path));
+                (shown_path(path, places, folder), target)
             }
         };
         let acts = matches!(target, Target::Never(_));
         e.push(pair(label, reason(never.reason), target, acts));
     }
-    b.section(&t.t(key::BELONGINGS_NEVER), e);
+    b.section(&t.t(key::BELONGINGS_LISTING), e);
 }
 
-/// Whether a logical path is a folder: one on this machine, or — when it is
-/// not here — one whose last name has no extension (`syncthing`, never
-/// `belongings.json`; a dot that begins a name is not an extension).
-fn is_folder(places: Option<&Places>, logical: &str) -> bool {
-    if let Some(at) = places.and_then(|p| p.resolve(logical))
-        && std::fs::symlink_metadata(&at).is_ok()
-    {
-        return at.is_dir();
+/// One file of the listing as a row, formatted once per count and
+/// language ([`Counted::formatted`]): its path below its group's root, and
+/// what it is — its state and size when it travels, else why not — and what
+/// `RET` does to it.
+#[derive(Debug, Clone)]
+struct Formatted {
+    label: String,
+    value: String,
+    target: Target,
+    acts: bool,
+    tint: Option<tokens::Color>,
+}
+
+impl Formatted {
+    fn of(item: &Item, places: Option<&Places>, t: &ronoctua_i18n::Texts) -> Self {
+        let root = group_root(item);
+        let label = item
+            .path
+            .strip_prefix(root)
+            .map(|rest| rest.trim_start_matches('/'))
+            .filter(|rest| !rest.is_empty())
+            .map_or_else(|| shown_path(&item.path, places, false), str::to_owned);
+        let value = match item.here {
+            Here::Kept => t.t_with(
+                key::BELONGINGS_ITEM,
+                &[
+                    ("state", &t.t(words::state_key(item.state))),
+                    ("size", &bytes_text(item.size_bytes, t)),
+                ],
+            ),
+            Here::NotHere => t.t(key::BELONGINGS_HERE_NOT_HERE),
+            Here::Nowhere => t.t(key::BELONGINGS_HERE_NOWHERE),
+            Here::Never(why) => t.t_with(
+                key::BELONGINGS_NEVER_BECAUSE,
+                &[("reason", &t.t(&words::reason_key(why)))],
+            ),
+        };
+        // WHAT `RET` DOES: a file kept stops being kept (one deleted here
+        // then stays in the repository for the others), one taken out comes
+        // back, one never kept by a rule a person may go over is kept anyway;
+        // the plain part and the rest are facts.
+        let act = match (item.part, item.here) {
+            (Part::Plain, _) | (_, Here::Nowhere) => None,
+            (_, Here::Kept) => Some(FileAct::StopKeeping),
+            (_, Here::NotHere) => Some(FileAct::KeepAgain),
+            (_, Here::Never(_)) => match kept::by_default(&item.path) {
+                kept::Verdict::Never(n) if !n.hard && matches!(n.pattern, Pattern::Path(_)) => {
+                    Some(FileAct::KeepAnyway)
+                }
+                _ => None,
+            },
+        };
+        let target = act.map_or_else(
+            || Target::Fact(format!("file:{}", item.path)),
+            |a| Target::File(item.path.clone(), a),
+        );
+        Self {
+            label,
+            value,
+            target,
+            acts: act.is_some(),
+            tint: (item.here.travels() && item.state.troubles())
+                .then_some(tokens::color::STATE_WARNING),
+        }
     }
+
+    /// The row, in under its group.
+    fn entry(&self) -> Entry {
+        Entry::Pair {
+            label: self.label.clone(),
+            value: self.value.clone(),
+            kind: crate::chrome::Kind::of(self.acts),
+            target: self.target.clone(),
+            tint: self.tint,
+            indent: tokens::space::VIEW_NESTCELLS,
+        }
+    }
+}
+
+/// The root of the group a file is drawn under — its row's path is said
+/// below it: the rule, the target's path that covers it, the addition, the
+/// plain root.
+fn group_root(item: &Item) -> &str {
+    match &item.origin {
+        Origin::Rule(root) | Origin::Plain(root) => root,
+        Origin::Added(root) | Origin::AddedElsewhere(root) => root,
+        Origin::Target(id) => target_paths(id)
+            .iter()
+            .copied()
+            .find(|p| covers(p, &item.path))
+            .unwrap_or(&item.path),
+    }
+}
+
+/// The paths of the target `id`.
+fn target_paths(id: &str) -> &'static [&'static str] {
+    kept::target_by_id(id).map_or(&[], |t| t.paths)
+}
+
+/// Asks `request` of the next sync (`requests.json`, `0600`): one answer per
+/// target, the later one in place of the earlier.
+///
+/// # Errors
+///
+/// The key of the sentence that says why not.
+fn ask_of_the_next_sync(r: &Readings, request: Request) -> Result<(), &'static str> {
+    let places = r.places.as_ref().ok_or(key::BELONGINGS_NO_PLACES)?;
+    let mut now = Requests::read(&places.requests());
+    if !now.ask(request) {
+        return Err(key::BELONGINGS_NOT_WRITTEN);
+    }
+    ronoctua_belongings::secret::make_private_dir(&places.own())
+        .and_then(|()| now.write(&places.requests()))
+        .map_err(|e| {
+            tracing::warn!(error = %e, "a request of the next sync could not be written");
+            key::BELONGINGS_NOT_WRITTEN
+        })
+}
+
+/// One field of a JSON conflict decided: this machine's value or the
+/// repository's — written beside the paths' decisions, which leave that
+/// path to its fields (a path's decision would go over them).
+fn decide_field(
+    r: &Readings,
+    path: &str,
+    pointer: &str,
+    d: Decision,
+    texts: &ronoctua_i18n::Texts,
+) -> Errand {
+    if !matches!(d, Decision::KeepLocal | Decision::TakeRemote) {
+        return Errand::Say(texts.t(key::BELONGINGS_FIELD_ONLY_TWO));
+    }
+    let Some(places) = r.places.as_ref() else {
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+    };
+    if conflict_of(r, path).is_none() {
+        return Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE));
+    }
+    let mut file = DecisionsFile::read(&places.decisions()).unwrap_or_default();
+    file.paths.remove(path);
+    file.fields
+        .entry(path.to_owned())
+        .or_default()
+        .insert(pointer.to_owned(), d);
+    let written = serde_json::to_vec_pretty(&file)
+        .map_err(|_| key::BELONGINGS_NOT_WRITTEN)
+        .and_then(|text| {
+            ronoctua_belongings::secret::write_private(&places.decisions(), &text).map_err(|e| {
+                tracing::warn!(error = %e, "a field's decision could not be written");
+                key::BELONGINGS_NOT_WRITTEN
+            })
+        });
+    match written {
+        Ok(()) => Errand::Nothing,
+        Err(said) => Errand::Say(texts.t(said)),
+    }
+}
+
+/// "Write the fix" (`write`) or "leave it" of the file at `path`'s repairs.
+fn repair(r: &Readings, path: &str, write: bool, texts: &ronoctua_i18n::Texts) -> Errand {
+    let Some(places) = r.places.as_ref() else {
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+    };
+    let name = shown_path(path, Some(places), false);
+    let stale = || Errand::Say(texts.t_with(key::BELONGINGS_REPAIR_STALE, &[("file", &name)]));
+    let (Some(ledger), Some(file)) = (
+        r.repairs.iter().find(|l| l.path == path),
+        places.resolve(path),
+    ) else {
+        return stale();
+    };
+    let dir = places.repairs();
+    let done = if write {
+        ronoctua_store::repair::apply(&dir, &file, ledger)
+    } else {
+        ronoctua_store::repair::dismiss(&dir, &file, ledger)
+    };
+    match done {
+        Ok(()) if write => {
+            Errand::Say(texts.t_with(key::BELONGINGS_REPAIR_WRITTEN, &[("file", &name)]))
+        }
+        Ok(()) => Errand::Nothing,
+        Err(ronoctua_store::repair::Stale) => stale(),
+    }
+}
+
+/// A question's page: what is asked, then "no" and "yes" — "no" first, the
+/// cursor born on it, "yes" in the colour of what does not come back.
+fn question_page(b: &mut Builder<'_>, q: Question) {
+    let t = b.texts;
+    let (title, said) = match q {
+        Question::Nowhere(id) => {
+            let target = t.t(&words::target_key(id));
+            (
+                target.clone(),
+                t.t_with(key::BELONGINGS_NOWHERE_QUESTION, &[("target", &target)]),
+            )
+        }
+        Question::Compact => (
+            t.t(key::BELONGINGS_HISTORY),
+            t.t_args(
+                key::BELONGINGS_COMPACT_QUESTION,
+                &[(
+                    "days",
+                    ronoctua_i18n::Arg::Number(i64::try_from(kept::KEEP_DAYS).unwrap_or(i64::MAX)),
+                )],
+            ),
+        ),
+    };
+    b.section(&title, vec![note(said)]);
+    for (yes, k) in [
+        (false, key::BELONGINGS_ANSWER_NO),
+        (true, key::BELONGINGS_ANSWER_YES),
+    ] {
+        let on = b.cursor == b.out.len();
+        // THE CURSOR IS A COLOUR; "yes" is in the colour of danger.
+        let color = if on {
+            tokens::color::TEXT_HERE_ACTS
+        } else if yes {
+            tokens::color::STATE_ERROR
+        } else {
+            crate::chrome::Kind::Setting.tones(false).0
+        };
+        b.out.push(Row {
+            fields: vec![piece(b.left, t.t(k), color, b.room)],
+            target: Some(Target::Answer(yes)),
+        });
+    }
+}
+
+/// What the last sync offered to turn on — each a question that came by
+/// itself, so "no" first.
+fn offers_section(b: &mut Builder<'_>, r: &Readings) {
+    let t = b.texts;
+    let offers = r.offers();
+    if offers.is_empty() {
+        return;
+    }
+    let mut e = Vec::new();
+    for offer in offers {
+        let said = match offer {
+            Offer::SshSigning { key: public } => t.t_with(
+                key::BELONGINGS_OFFER_SSH_SIGNING,
+                &[("key", &shown_path(public, r.places.as_ref(), false))],
+            ),
+            Offer::PamU2f => t.t(key::BELONGINGS_OFFER_PAM_U2F),
+        };
+        match r.answer_of(offer) {
+            None => {
+                if !e.is_empty() {
+                    e.push(Entry::Air);
+                }
+                e.push(note(said));
+                e.push(pair(
+                    t.t(key::BELONGINGS_ANSWER_NO),
+                    String::new(),
+                    Target::Offer(offer.clone(), false),
+                    true,
+                ));
+                e.push(pair(
+                    t.t(key::BELONGINGS_ANSWER_YES),
+                    String::new(),
+                    Target::Offer(offer.clone(), true),
+                    true,
+                ));
+            }
+            Some(Said::No) => {}
+            Some(Said::Turning) => e.push(note(t.t(key::BELONGINGS_OFFER_TURNING))),
+            Some(Said::Yes) => e.push(note(t.t(key::BELONGINGS_OFFER_TAKEN))),
+            Some(Said::Refused { why }) => e.push(Entry::Note(
+                t.t_with(
+                    key::BELONGINGS_OFFER_REFUSED,
+                    &[("why", &t.t(words::refusal_key(*why)))],
+                ),
+                tokens::color::STATE_WARNING,
+            )),
+            Some(Said::RootRefused { why }) => e.push(Entry::Note(
+                t.t_with(
+                    key::BELONGINGS_OFFER_REFUSED,
+                    &[("why", &t.t(crate::security_words::refusal(*why)))],
+                ),
+                tokens::color::STATE_WARNING,
+            )),
+        }
+    }
+    if !e.is_empty() {
+        b.section(&t.t(key::BELONGINGS_OFFERS), e);
+    }
+}
+
+/// The files a lenient read repaired: each with what it could not read and
+/// why — never the value itself, which may be a secret — then "leave it"
+/// first and "write the fix".
+fn repairs_section(b: &mut Builder<'_>, r: &Readings) {
+    let t = b.texts;
+    if r.repairs.is_empty() {
+        return;
+    }
+    let mut e = vec![
+        note(t.t(key::BELONGINGS_REPAIRS_NOTE)),
+        note(t.t(if r.newest {
+            key::BELONGINGS_REPAIRS_NEWEST
+        } else {
+            key::BELONGINGS_REPAIRS_OLDER
+        })),
+    ];
+    for ledger in &r.repairs {
+        e.push(Entry::Air);
+        e.push(pair(
+            shown_path(&ledger.path, r.places.as_ref(), false),
+            t.t_args(
+                key::BELONGINGS_REPAIR_COUNT,
+                &[("n", count(ledger.repairs.len()))],
+            ),
+            Target::Fact(format!("repair:{}", ledger.path)),
+            false,
+        ));
+        for repair in &ledger.repairs {
+            // THE EMPTY POINTER IS THE WHOLE DOCUMENT (RFC 6901): `/` would
+            // name a member called "" at its root.
+            let pointer = if repair.pointer.is_empty() {
+                t.t(key::BELONGINGS_REPAIR_WHOLE_FILE)
+            } else {
+                repair.pointer.clone()
+            };
+            e.push(note(t.t_with(
+                key::BELONGINGS_REPAIR_LINE,
+                &[
+                    ("pointer", &pointer),
+                    (
+                        "why",
+                        &t.t(&format!("belongings-repair-why-{}", repair.why.id())),
+                    ),
+                ],
+            )));
+        }
+        e.push(indented(
+            t.t(key::BELONGINGS_REPAIR_LEAVE),
+            String::new(),
+            Target::LeaveIt(ledger.path.clone()),
+        ));
+        e.push(indented(
+            t.t(key::BELONGINGS_REPAIR_WRITE),
+            String::new(),
+            Target::WriteFix(ledger.path.clone()),
+        ));
+    }
+    b.section(&t.t(key::BELONGINGS_REPAIRS), e);
+}
+
+/// The history: what the repository weighs, against the budget, and its
+/// compaction — offered when a compaction would fold something, recommended
+/// past the line, never done by itself.
+fn history_section(b: &mut Builder<'_>, r: &Readings) {
+    let t = b.texts;
+    let Some(budget) = r.budget() else {
+        return;
+    };
+    let mut e = vec![pair(
+        t.t(key::BELONGINGS_WEIGHS),
+        t.t_with(
+            key::BELONGINGS_WEIGHS_VALUE,
+            &[
+                ("tree", &bytes_text(budget.tree_bytes, t)),
+                ("history", &bytes_text(budget.history_bytes, t)),
+            ],
+        ),
+        Target::Fact("weighs".to_owned()),
+        false,
+    )];
+    let history = bytes_text(budget.history_bytes, t);
+    let recommend = bytes_text(budget.recommend_bytes, t);
+    match kept::weight(budget.tree_bytes, budget.history_bytes, budget.foldable) {
+        kept::Weight::Light => {}
+        kept::Weight::Heavy => e.push(Entry::Note(
+            t.t_with(
+                key::BELONGINGS_WEIGHT_HEAVY,
+                &[("history", &history), ("recommend", &recommend)],
+            ),
+            tokens::color::STATE_WARNING,
+        )),
+        kept::Weight::Compact => e.push(Entry::Note(
+            t.t_with(key::BELONGINGS_WEIGHT_COMPACT, &[("history", &history)]),
+            tokens::color::STATE_WARNING,
+        )),
+    }
+    if budget.foldable {
+        let days = ronoctua_i18n::Arg::Number(i64::try_from(kept::KEEP_DAYS).unwrap_or(i64::MAX));
+        e.push(pair(
+            t.t(key::BELONGINGS_COMPACT),
+            t.t_args(key::BELONGINGS_COMPACT_KEEPS, &[("days", days)]),
+            Target::Compact,
+            true,
+        ));
+        e.push(note(t.t(key::BELONGINGS_COMPACT_NOTE)));
+    }
+    b.section(&t.t(key::BELONGINGS_HISTORY), e);
+}
+
+/// One value of a field of a JSON conflict in `room` cells, on one line:
+/// the JSON elided to what is left beside "chosen" — or "none". The JSON is
+/// data, abbreviated as a long path is; the room is the row's, never a
+/// fixed length.
+fn field_text(value: Option<&str>, chosen: bool, room: u16, t: &ronoctua_i18n::Texts) -> String {
+    let raw = value.map_or_else(|| t.t(key::BELONGINGS_FIELD_NONE), str::to_owned);
+    if !chosen {
+        return layout::elide_end(&raw, room);
+    }
+    let frame = layout::width(&t.t_with(key::BELONGINGS_FIELD_CHOSEN, &[("value", "")]));
+    let shown = layout::elide_end(&raw, room.saturating_sub(frame));
+    t.t_with(key::BELONGINGS_FIELD_CHOSEN, &[("value", &shown)])
+}
+
+/// The value a field had before both sides changed it, as the note under
+/// it says it — on one line of a note `room` cells wide: the JSON elided to
+/// what the sentence leaves, so the sentence itself is never cut.
+fn before_text(value: Option<&str>, room: u16, t: &ronoctua_i18n::Texts) -> String {
+    let raw = value.map_or_else(|| t.t(key::BELONGINGS_FIELD_NONE), str::to_owned);
+    let frame = layout::width(&t.t_with(key::BELONGINGS_FIELD_BEFORE, &[("value", "")]));
+    let shown = layout::elide_end(&raw, room.saturating_sub(frame));
+    t.t_with(key::BELONGINGS_FIELD_BEFORE, &[("value", &shown)])
+}
+
+/// Whether a logical path NOT on this machine reads as a folder: its last
+/// name has no extension (`syncthing`, never `belongings.json`; a dot that
+/// begins a name is not an extension). One that is here is what the count
+/// found ([`Counted::folder`]).
+fn looks_like_a_folder(logical: &str) -> bool {
     Root::split(logical).is_some_and(|(_, rest)| {
         rest.rsplit('/')
             .next()
@@ -2333,6 +4536,133 @@ fn is_folder(places: Option<&Places>, logical: &str) -> bool {
 
 /// Access: how the repository is reached — this machine's deploy key, or a
 /// token.
+/// A fingerprint as a screen shows it: its first 16 digits, in groups of
+/// four — enough to tell two keys apart by eye.
+fn short_fingerprint(fingerprint: &str) -> String {
+    fingerprint
+        .chars()
+        .take(16)
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|c| c.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The logical path of a path under the staged root (`person/options.json`
+/// → `state/person/options.json`) — what root names a file it kept back by.
+fn logical_of_staged(staged: &str) -> String {
+    ronoctua_belongings::plain::logical_of_repo(&format!(
+        "{}/{staged}",
+        ronoctua_belongings::plain::DIR
+    ))
+    .unwrap_or_else(|| staged.to_owned())
+}
+
+/// The person's signature: their key (as the last run that opened
+/// `key.age` left it), the key this machine's root pinned, what root last
+/// refused or kept back, a pin on its way — and "pin my key" when the
+/// machine trusts none, or another.
+fn signature_section(b: &mut Builder<'_>, r: &Readings) {
+    let t = b.texts;
+    let places = r.places.as_ref();
+    let mut e = vec![note(t.t(key::BELONGINGS_SIGNATURE_NOTE))];
+    let mine = &r.plain.fingerprint;
+    e.push(pair(
+        t.t(key::BELONGINGS_SIGNATURE_KEY),
+        if mine.is_empty() {
+            t.t(key::BELONGINGS_SIGNATURE_KEY_UNKNOWN)
+        } else {
+            short_fingerprint(mine)
+        },
+        Target::Fact("signer".to_owned()),
+        false,
+    ));
+    let (state, tint) = match &r.pin {
+        Some(pin) if !mine.is_empty() && pin.fingerprint == *mine => {
+            (key::BELONGINGS_SIGNATURE_PINNED, None)
+        }
+        Some(_) if !mine.is_empty() => (
+            key::BELONGINGS_SIGNATURE_OTHER,
+            Some(tokens::color::STATE_WARNING),
+        ),
+        Some(_) => (key::BELONGINGS_SIGNATURE_PINNED_SOME, None),
+        None => (
+            key::BELONGINGS_SIGNATURE_NONE,
+            Some(tokens::color::STATE_WARNING),
+        ),
+    };
+    let machine = t.t(key::BELONGINGS_SIGNATURE_MACHINE);
+    let target = Target::Fact("pin".to_owned());
+    e.push(match tint {
+        Some(tint) => tinted(machine, t.t(state), target, false, tint),
+        None => pair(machine, t.t(state), target, false),
+    });
+    if let Some(pin) = &r.pin {
+        // WHAT ROOT LAST REFUSED, for its signature: the machine kept the
+        // data it had.
+        if let Some(said) = pin
+            .refused
+            .as_ref()
+            .and_then(|refused| words::root_refused_key(refused.why))
+        {
+            e.push(tinted(
+                t.t(key::BELONGINGS_SIGNATURE_LAST),
+                t.t(key::BELONGINGS_SIGNATURE_REFUSED),
+                Target::Fact("pin-refused".to_owned()),
+                false,
+                tokens::color::STATE_ERROR,
+            ));
+            // THE WHOLE SENTENCE, wrapped: a value would be cut.
+            e.push(note(t.t(said)));
+        }
+        // AND WHAT IT KEPT BACK, file by file.
+        for back in &pin.kept_back {
+            let Some(said) = words::kept_back_key(back.why) else {
+                continue;
+            };
+            e.push(tinted(
+                shown_path(&logical_of_staged(&back.at), places, false),
+                t.t(said),
+                Target::Fact(format!("kept-back:{}", back.at)),
+                false,
+                tokens::color::STATE_WARNING,
+            ));
+        }
+    }
+    // A PIN ASKED FOR, and how it went.
+    if let Some(pinning) = r.pinning.as_ref().filter(|p| p.fingerprint == *mine) {
+        let (said, tint) = match &pinning.said {
+            PinSaid::Pinning => (t.t(key::BELONGINGS_PINNING_NOW), None),
+            PinSaid::Pinned => (t.t(key::BELONGINGS_PINNING_DONE), None),
+            PinSaid::NotPinned => (
+                t.t(key::BELONGINGS_PINNING_NOT),
+                Some(tokens::color::STATE_ERROR),
+            ),
+            PinSaid::Refused { why } => (
+                t.t(crate::security_words::refusal(*why)),
+                Some(tokens::color::STATE_ERROR),
+            ),
+        };
+        let label = t.t(key::BELONGINGS_PINNING);
+        let target = Target::Fact("pinning".to_owned());
+        e.push(match tint {
+            Some(tint) => tinted(label, said, target, false, tint),
+            None => pair(label, said, target, false),
+        });
+    }
+    let pinned_mine = r.pin.as_ref().is_some_and(|p| p.fingerprint == *mine);
+    if !mine.is_empty() && !pinned_mine {
+        e.push(pair(
+            t.t(key::BELONGINGS_PIN),
+            String::new(),
+            Target::Pin,
+            true,
+        ));
+    }
+    b.section(&t.t(key::BELONGINGS_SIGNATURE), e);
+}
+
 fn access_section(b: &mut Builder<'_>, r: &Readings) {
     let t = b.texts;
     let mut e = vec![pair(
@@ -2391,10 +4721,11 @@ fn access_section(b: &mut Builder<'_>, r: &Readings) {
     b.section(&t.t(key::BELONGINGS_ACCESS), e);
 }
 
-/// The passphrase: change it.
-fn passphrase_section(b: &mut Builder<'_>) {
+/// The passphrase: change it — what it guards now — and whether the
+/// session remembers it.
+fn passphrase_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when::Zone) {
     let t = b.texts;
-    let e = vec![
+    let mut e = vec![
         pair(
             t.t(key::BELONGINGS_CHANGE_PASSPHRASE),
             String::new(),
@@ -2402,7 +4733,31 @@ fn passphrase_section(b: &mut Builder<'_>) {
             true,
         ),
         note(t.t(key::BELONGINGS_PASSPHRASE_NOTE)),
+        note(t.t(key::BELONGINGS_TARGETS_NOTE)),
+        pair(
+            t.t(key::BELONGINGS_UNLOCK_SWITCH),
+            t.t(if r.prefs.keep_unlocked {
+                key::BELONGINGS_UNLOCK_ON
+            } else {
+                key::BELONGINGS_UNLOCK_OFF
+            }),
+            Target::Unlock,
+            true,
+        ),
+        note(t.t_args(
+            key::BELONGINGS_UNLOCK_NOTE,
+            &[(
+                "hours",
+                ronoctua_i18n::Arg::Number(i64::try_from(kept::UNLOCK_HOURS).unwrap_or(i64::MAX)),
+            )],
+        )),
     ];
+    if let Some(until) = r.kept_until {
+        e.push(note(t.t_with(
+            key::BELONGINGS_UNLOCK_KEPT,
+            &[("until", &when(until, zone, t))],
+        )));
+    }
     b.section(&t.t(key::BELONGINGS_PASSPHRASE), e);
 }
 
@@ -2463,6 +4818,8 @@ mod tests {
             ..Belongings::default()
         };
         store_of(places).write(&prefs).expect("prefs");
+        // THE HOST LET, as typing the address does.
+        ronoctua_consent::let_hosts_under(&places.config, &["example.org"], true).expect("consent");
         std::fs::create_dir_all(places.keys()).expect("keys");
         std::fs::write(places.deploy_key(), "k").expect("key");
         std::fs::write(
@@ -2522,9 +4879,10 @@ mod tests {
         v.clicked(n, &rows);
     }
 
-    /// FAILS IF: a section of the design is missing — status, sync, what is
-    /// kept, never kept, access, passphrase, period — a word draws as its raw
-    /// key in a language, or the cursor is born on a title.
+    /// FAILS IF: a section of the design is missing — status, sync, what
+    /// goes to the repository (never kept inside it), access, passphrase,
+    /// period — a word draws as its raw key in a language, or the cursor is
+    /// born on a title.
     #[test]
     fn every_section_is_drawn_in_every_language() {
         let places = scratch("sections");
@@ -2537,7 +4895,7 @@ mod tests {
             for heading in [
                 key::BELONGINGS_STATUS,
                 key::BELONGINGS_SYNC_HEADING,
-                key::BELONGINGS_KEPT,
+                key::BELONGINGS_LISTING,
                 key::BELONGINGS_NEVER,
                 key::BELONGINGS_ACCESS,
                 key::BELONGINGS_PASSPHRASE,
@@ -2872,6 +5230,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
+    /// FAILS IF: a `belongings.json` with a value the store would REPAIR —
+    /// one the engine, which reads it strictly, refuses whole — is shown as
+    /// settings a sync will use, or written over by a gesture here, instead
+    /// of being refused with its sentence as one that does not parse is.
+    #[test]
+    fn a_settings_file_the_engine_refuses_is_refused_here_too() {
+        let places = scratch("repaired-prefs");
+        std::fs::create_dir_all(&places.config).unwrap();
+        let file = places.config.join(prefs::FILE);
+        let text = br#"{"repository": "git@example.org:a/b.git", "auth": "passkey"}"#;
+        std::fs::write(&file, text).unwrap();
+        assert!(
+            serde_json::from_slice::<Belongings>(text).is_err(),
+            "the engine would read this file"
+        );
+        let r = Readings::read(Some(places.clone()), 1);
+        assert!(
+            r.prefs_refused,
+            "a file the engine refuses reads as settings"
+        );
+        let t = texts("en-GB");
+        assert_eq!(
+            unready(&r, &t),
+            Some(t.t(key::BELONGINGS_PREFS_REFUSED)),
+            "a sync was offered over it"
+        );
+        assert!(matches!(
+            change_the_file(Some(&places), |p| p.extra.push("home/notes".to_owned())),
+            Err(NotChanged::Unparsed)
+        ));
+        assert_eq!(std::fs::read(&file).unwrap(), text, "it was written over");
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
     /// FAILS IF: a folder another machine added, which this one follows, is
     /// not shown with what is kept, or its row does not take it out — or
     /// keeping a path the table keeps turns it into "added by you".
@@ -2951,7 +5343,23 @@ mod tests {
         );
         std::fs::create_dir_all(places.keys()).unwrap();
         std::fs::write(places.deploy_key(), "k").unwrap();
+        // AN ADDRESS SET BEFORE ITS HOST WAS LET — a machine from before the
+        // consent: the sync is refused with its sentence, and the row under
+        // Sync asks the host.
         let r = Readings::read(Some(places.clone()), 1);
+        assert_eq!(r.unlet.as_deref(), Some("example.org"));
+        assert_eq!(
+            v.press(Press::Sync, &r, &zone(), 100, &t),
+            Errand::Say(t.t(words::refusal_key(Why::NotLet))),
+            "a sync to a host nobody let"
+        );
+        assert_eq!(v.press(Press::Allow, &r, &zone(), 100, &t), Errand::Nothing);
+        assert!(ronoctua_consent::allows_under(
+            &places.config,
+            "example.org"
+        ));
+        let r = Readings::read(Some(places.clone()), 1);
+        assert_eq!(r.unlet, None, "the row stays after the host was let");
         assert!(r.first_run());
         let Errand::Ask(line) = v.press(Press::Sync, &r, &zone(), 100, &t) else {
             panic!("the passphrase was not asked");
@@ -3069,6 +5477,7 @@ mod tests {
             ("https://me:pw@example.org/b.git", true),
             ("http://example.org/b.git", true),
             ("/srv/b.git", true),
+            ("ssh://git@[2001:db8::1]/b.git", true),
             ("git@example.org:me/b.git", false),
         ] {
             let Errand::Ask(line) = v.command("belongings-repository", &r, &zone(), 100, &t) else {
@@ -3086,6 +5495,13 @@ mod tests {
             store_of(&places).read().repository,
             "git@example.org:me/b.git"
         );
+        // TYPING IT LET ITS HOST — in the consent file beside the settings,
+        // never another one.
+        assert!(ronoctua_consent::allows_under(
+            &places.config,
+            "example.org"
+        ));
+        assert_eq!(Readings::read(Some(places.clone()), 1).unlet, None);
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
@@ -3164,11 +5580,1459 @@ mod tests {
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
+    /// FAILS IF: a repository whose host nobody let draws no consent row —
+    /// every sync would be refused with no way out on screen — the row is
+    /// not the press (`RET`, a second click, `C-a` on any row) or its key is
+    /// not taught while it is drawn, or the row stays once the host is let.
+    #[test]
+    fn a_host_nobody_let_is_asked_on_its_row() {
+        let places = scratch("consent-row");
+        let r = waiting(&places);
+        let _ = std::fs::remove_file(places.config.join(ronoctua_consent::FILE));
+        let r = Readings::read(r.places.clone(), r.now_s);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let label = crate::consent_rows::label(&["example.org"], &t);
+            let at = rows
+                .iter()
+                .position(|row| row.target == Some(Target::Let("example.org".into())))
+                .expect("no consent row");
+            assert!(drawn(&rows[at..=at]).contains(&label), "{language}");
+            let about = View::about(&rows, at, &t).unwrap();
+            assert_eq!(about, t.t(key::ABOUT_CONSENT_ALLOW));
+            let taught = v.hint(&r, &zone(), 100, &t);
+            assert!(
+                taught
+                    .iter()
+                    .any(|p| p.id == Some(crate::consent_rows::ALLOW_ID)),
+                "{language}: the row's key is not taught"
+            );
+            // AN APPLY WOULD PUSH: refused here, the session kept.
+            let mut w = View::fresh(&r, &zone(), 100, &t);
+            assert_eq!(
+                w.command("belongings-apply", &r, &zone(), 100, &t),
+                Errand::Say(t.t(words::refusal_key(Why::NotLet)))
+            );
+            assert!(places.plan().is_file());
+        }
+        // THE PRESS, as a second click on the row does it.
+        let t = texts("en-GB");
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        let at = rows
+            .iter()
+            .position(|row| row.target == Some(Target::Let("example.org".into())))
+            .unwrap();
+        assert!(!v.clicked(at, &rows), "the first click is a selection");
+        assert!(v.clicked(at, &rows));
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        let r = Readings::read(r.places.clone(), r.now_s);
+        assert_eq!(r.unlet, None);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row.target, Some(Target::Let(_)))),
+            "the row stays once the host is let"
+        );
+        assert!(
+            !v.hint(&r, &zone(), 100, &t)
+                .iter()
+                .any(|p| p.id == Some(crate::consent_rows::ALLOW_ID)),
+            "a key that does nothing is taught"
+        );
+        // AN ADDRESS KEPT BEFORE ITS HOST COULD BE REFUSED says why, and no
+        // row asks a host no consent can name.
+        store_of(&places)
+            .write(&Belongings::with_repository(
+                "ssh://git@[2001:db8::1]/b.git",
+            ))
+            .unwrap();
+        let r = Readings::read(r.places.clone(), r.now_s);
+        assert_eq!(r.unlet, None);
+        assert_eq!(
+            v.press(Press::Sync, &r, &zone(), 100, &t),
+            Errand::Say(t.t(words::invalid_key(prefs::Invalid::UnnamedHost)))
+        );
+        // `C-a` on a page with no row does nothing.
+        assert_eq!(v.press(Press::Allow, &r, &zone(), 100, &t), Errand::Nothing);
+        let key = ronoctua_keymap::Key::parse("C-a").unwrap();
+        assert_eq!(press_of_key(key), Some(Press::Allow));
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a conflict a merge reached does not say where it clashes
+    /// and offer the two merged decisions, a merged command does not decide
+    /// the conflict under the cursor — or decides one no merge reached —
+    /// a door's write loses the fields another decided, or the page of what
+    /// is kept does not show the plain part and who reads it.
+    #[test]
+    fn a_merged_conflict_is_offered_both_merges_and_the_fields_survive() {
+        let places = scratch("merged");
+        let r = waiting(&places);
+        let mut plan = r.plan.clone().unwrap();
+        plan.conflicts[0].merge = Some(Merging::Json {
+            fields: vec![ronoctua_belongings::plan::FieldConflict {
+                pointer: "/theme".into(),
+                base: Some("\"owl\"".into()),
+                ours: Some("\"paper\"".into()),
+                theirs: Some("\"cyber\"".into()),
+            }],
+        });
+        // A CONFLICT NO MACHINE IS NAMED FOR (a plain file's: no plain
+        // commit says which one wrote it).
+        plan.conflicts[1].machine = String::new();
+        ronoctua_belongings::secret::write_private(
+            &places.plan(),
+            &serde_json::to_vec(&plan).expect("plan"),
+        )
+        .expect("plan written");
+        // ANOTHER DOOR decided a field: this one keeps it.
+        let mut file = DecisionsFile::default();
+        file.fields
+            .entry("config/theme.json".into())
+            .or_default()
+            .insert("/theme".into(), Decision::TakeRemote);
+        ronoctua_belongings::secret::write_private(
+            &places.decisions(),
+            &serde_json::to_vec(&file).expect("decisions"),
+        )
+        .expect("decisions written");
+        // A PLAIN RUN left a file out for its size, and a clash for later.
+        let last = Last {
+            plain: ronoctua_belongings::plain::PlainBase {
+                repository: r.prefs.repository.clone(),
+                too_large: vec!["state/person/software/icons/big.png".into()],
+                conflicts: vec!["state/person/options.json".into()],
+                ..Default::default()
+            },
+            ..Last::default()
+        };
+        ronoctua_belongings::secret::write_private(
+            &places.last(),
+            &serde_json::to_vec(&last).expect("last"),
+        )
+        .expect("last written");
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let text = drawn(&rows);
+            let fields = t.t_args(
+                key::BELONGINGS_MERGE_FIELDS,
+                &[
+                    ("n", ronoctua_i18n::Arg::Number(1)),
+                    ("fields", ronoctua_i18n::Arg::Text("/theme")),
+                ],
+            );
+            assert!(text.contains(&fields), "{language}: {text}");
+            let unnamed = &plan.conflicts[1];
+            let sides = t.t_with(
+                key::BELONGINGS_SIDES_UNNAMED,
+                &[
+                    ("here", &side_text(unnamed.local.as_ref(), &zone(), &t)),
+                    ("there", &side_text(unnamed.remote.as_ref(), &zone(), &t)),
+                ],
+            );
+            assert!(
+                text.contains(&sides),
+                "{language}: a conflict with no machine is not said without one: {text}"
+            );
+            assert!(
+                text.contains(&t.t(key::BELONGINGS_REASON_PERSON_DATA))
+                    && text.contains(&t.t(key::BELONGINGS_REASON_BRAIN_MODULE)),
+                "{language}: the plain part is not on the page: {text}"
+            );
+            let left_out =
+                Target::Fact("plain-too-large:state/person/software/icons/big.png".into());
+            assert!(
+                text.contains(&t.t(words::refusal_key(Why::PlainTooLarge)))
+                    && rows
+                        .iter()
+                        .any(|row| row.target.as_ref() == Some(&left_out)),
+                "{language}: a file left out for its size is not said: {text}"
+            );
+            let waiting = t.t_args(
+                key::BELONGINGS_PLAIN_CONFLICTS,
+                &[("n", ronoctua_i18n::Arg::Number(1))],
+            );
+            assert!(text.contains(&waiting), "{language}: {text}");
+            for d in [Decision::TakeMergedOurs, Decision::TakeMergedTheirs] {
+                let target = Target::Decide("config/theme.json".into(), d);
+                assert!(
+                    rows.iter().any(|row| row.target.as_ref() == Some(&target)),
+                    "{language}: {d:?} is not offered"
+                );
+            }
+        }
+        let t = texts("en-GB");
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(
+            &mut v,
+            &r,
+            &Target::Conflict("config/theme.json".into()),
+            &t,
+        );
+        assert_eq!(
+            v.command("belongings-take-merged-theirs", &r, &zone(), 100, &t),
+            Errand::Nothing
+        );
+        let after = DecisionsFile::read(&places.decisions()).expect("decisions");
+        assert_eq!(
+            after.paths.get("config/theme.json"),
+            Some(&Decision::TakeMergedTheirs)
+        );
+        assert_eq!(after.fields, file.fields, "a door's write lost the fields");
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        assert_eq!(
+            r.decisions.get("config/theme.json"),
+            Some(&Decision::TakeMergedTheirs)
+        );
+        // NO MERGE REACHED THE OTHER: refused, with its own words.
+        stand_on(
+            &mut v,
+            &r,
+            &Target::Conflict("home/notes/todo.md".into()),
+            &t,
+        );
+        assert_eq!(
+            v.command("belongings-take-merged-ours", &r, &zone(), 100, &t),
+            Errand::Say(t.t(key::BELONGINGS_NO_MERGE_HERE))
+        );
+        // A PLAIN PATH given to "keep" travels already.
+        let explained = keep_under(&places, &[places.state.join("person/options.json")]);
+        assert_eq!(explained.key, key::BELONGINGS_PLAIN_ALREADY);
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
     /// FAILS IF: the period stops walking round, both ways.
     #[test]
     fn the_period_turns_both_ways() {
         for p in prefs::PERIODS {
             assert_eq!(previous_period(Belongings::next_period(p)), p);
         }
+    }
+    /// The readings of `places`, with the listing counted in place.
+    fn counted(places: &Places, now_s: i64) -> Readings {
+        let mut r = Readings::read(Some(places.clone()), now_s);
+        Counting::in_place().ask(&mut r);
+        r
+    }
+
+    /// A machine set up to sync: a repository, its host let, a deploy key,
+    /// and a sync behind it (`last.json`), so a sync is not a first.
+    fn ready(places: &Places) {
+        let prefs = Belongings::with_repository("git@example.org:someone/belongings.git");
+        store_of(places).write(&prefs).expect("prefs");
+        ronoctua_consent::let_hosts_under(&places.config, &["example.org"], true).expect("consent");
+        std::fs::create_dir_all(places.keys()).expect("keys");
+        std::fs::write(places.deploy_key(), "k").expect("key");
+        let last = Last {
+            repository: prefs.repository,
+            at_s: 1_700_000_000,
+            ..Last::default()
+        };
+        ronoctua_belongings::secret::write_private(
+            &places.last(),
+            &serde_json::to_vec(&last).expect("last"),
+        )
+        .expect("last written");
+    }
+
+    fn status(places: &Places, outcome: Outcome) {
+        let s = Status {
+            at_s: 1_700_000_100,
+            outcome,
+        };
+        ronoctua_belongings::secret::write_private(
+            &places.status(),
+            &serde_json::to_vec(&s).expect("status"),
+        )
+        .expect("status written");
+    }
+
+    fn synced(offers: Vec<Offer>, budget: Option<Budget>) -> Outcome {
+        Outcome::Synced {
+            pulled: 0,
+            pushed: 0,
+            deleted_here: 0,
+            deleted_there: 0,
+            kept: 0,
+            kept_bytes: 0,
+            large: vec![],
+            unreadable: vec![],
+            unwritten: vec![],
+            offers,
+            repaired: vec![],
+            budget,
+        }
+    }
+
+    fn put(places: &Places, logical: &str, bytes: &[u8]) {
+        let at = places.resolve(logical).expect("logical");
+        std::fs::create_dir_all(at.parent().expect("parent")).expect("folder");
+        std::fs::write(at, bytes).expect("file");
+    }
+
+    fn row_of<'a>(rows: &'a [Row], target: &Target) -> &'a Row {
+        rows.iter()
+            .find(|row| row.target.as_ref() == Some(target))
+            .unwrap_or_else(|| panic!("no row is {target:?}: {}", drawn(rows)))
+    }
+
+    /// A key as a run that opened `key.age` leaves it in `last.json`, and
+    /// what that run held and left unsigned.
+    fn signed_last(places: &Places, fingerprint: &str) {
+        let mut last = Last::read(&places.last()).expect("a last.json");
+        last.plain = ronoctua_belongings::plain::PlainBase {
+            repository: last.repository.clone(),
+            signer: format!("{}{}", ronoctua_person::local::KEY_PREFIX, "A".repeat(2603)),
+            fingerprint: fingerprint.to_owned(),
+            held: BTreeMap::from([(
+                "state/person/options.json".to_owned(),
+                ronoctua_belongings::plain::HeldWhy::NotAsSigned,
+            )]),
+            unsigned: vec!["config/brain-modules/my-tea/module.rs".to_owned()],
+            ..ronoctua_belongings::plain::PlainBase::default()
+        };
+        ronoctua_belongings::secret::write_private(
+            &places.last(),
+            &serde_json::to_vec(&last).expect("last"),
+        )
+        .expect("last written");
+    }
+
+    /// A pin of `fingerprint`, as root writes it.
+    fn pin_of(fingerprint: &str) -> ronoctua_person::local::Signer {
+        ronoctua_person::local::Signer::pinned(
+            format!("{}{}", ronoctua_person::local::KEY_PREFIX, "B".repeat(2603)),
+            fingerprint.to_owned(),
+            ronoctua_person::Stamp::parse("2026-10-11T12:00:00Z").unwrap(),
+        )
+    }
+
+    /// FAILS IF: the page does not say, in every language, what the
+    /// repository changed that this machine held and why, what waits for the
+    /// passphrase to be signed, whose key this is and whether the machine
+    /// trusts it, what root last refused or kept back — or "pin my key" does
+    /// not ask the password hidden and hand the door THE KEY THE PASSPHRASE
+    /// OPENED, or shows where the machine already trusts it; or "sign now"
+    /// does not ask the passphrase hidden (and write it private) when the
+    /// session keeps no identity, and ask nothing when it does.
+    #[test]
+    fn the_signature_says_whose_key_and_pins_it_through_the_door() {
+        let places = scratch("signature");
+        ready(&places);
+        let mine = "ab".repeat(32);
+        signed_last(&places, &mine);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let mut r = Readings::read(Some(places.clone()), 1_700_000_200);
+            r.pin = None;
+            let v = View::fresh(&r, &zone(), 100, &t);
+            // A VALUE THAT WRAPS is read whole: the rows' pieces joined.
+            let flat = |rows: &[Row]| drawn(rows).replace(" | ", " ");
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let text = flat(&rows);
+            for k in [
+                key::BELONGINGS_SIGNATURE,
+                key::BELONGINGS_SIGNATURE_NONE,
+                key::BELONGINGS_HELD_NOT_AS_SIGNED,
+                key::BELONGINGS_UNSIGNED,
+                key::BELONGINGS_SIGN,
+                key::BELONGINGS_PIN,
+            ] {
+                assert!(text.contains(&t.t(k)), "{language}: no {k}: {text}");
+            }
+            assert!(text.contains("abab abab abab abab"), "{language}: {text}");
+            assert!(!text.contains('['), "{language}: a raw key: {text}");
+            // TRUSTED: no pin offered; ANOTHER KEY: offered, and said.
+            r.pin = Some(pin_of(&mine));
+            let text = flat(&v.rows(&r, &zone(), 100, &t));
+            assert!(text.contains(&t.t(key::BELONGINGS_SIGNATURE_PINNED)));
+            assert!(
+                !text.contains(&t.t(key::BELONGINGS_PIN)),
+                "{language}: {text}"
+            );
+            r.pin = Some(pin_of(&"cd".repeat(32)));
+            let text = flat(&v.rows(&r, &zone(), 100, &t));
+            assert!(text.contains(&t.t(key::BELONGINGS_SIGNATURE_OTHER)));
+            assert!(text.contains(&t.t(key::BELONGINGS_PIN)));
+            // WHAT ROOT LAST REFUSED, and kept back.
+            let mut refused = pin_of(&mine);
+            refused.refused = Some(ronoctua_person::local::SignatureRefused {
+                at: ronoctua_person::Stamp::parse("2026-10-11T13:00:00Z").unwrap(),
+                why: ronoctua_person::tree::TreeWhy::RolledBack,
+                detail: "counter 3, took 9".to_owned(),
+            });
+            refused.kept_back.push(ronoctua_person::tree::KeptBack {
+                at: "person/software/declared.json".to_owned(),
+                why: ronoctua_person::tree::TreeWhy::NotAsSigned,
+            });
+            r.pin = Some(refused);
+            let text = flat(&v.rows(&r, &zone(), 100, &t));
+            assert!(text.contains(&t.t(key::BELONGINGS_ROOT_REFUSED_ROLLED_BACK)));
+            assert!(text.contains(&t.t(key::BELONGINGS_KEPT_BACK_NOT_AS_SIGNED)));
+            assert!(
+                !text.contains("counter 3"),
+                "the journal's detail is not the page's"
+            );
+        }
+
+        // PIN: the door handed the key the passphrase opened at once — the
+        // password, key or finger is the sudo bar's to ask, never a line of
+        // this view's.
+        let t = texts("en-GB");
+        let mut r = Readings::read(Some(places.clone()), 1_700_000_200);
+        r.pin = None;
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &Target::Pin, &t);
+        let Errand::Pin { key, fingerprint } = v.press(Press::Enter, &r, &zone(), 100, &t) else {
+            panic!("the door was not asked");
+        };
+        assert_eq!(key, r.plain.signer);
+        assert_eq!(fingerprint, mine);
+        // TRUSTED ALREADY: said, and nothing asked.
+        r.pin = Some(pin_of(&mine));
+        assert_eq!(
+            v.command("belongings-pin", &r, &zone(), 100, &t),
+            Errand::Say(t.t(key::BELONGINGS_SIGNATURE_ALREADY))
+        );
+        // A KEY NOBODY OPENED HERE: refused, never the repository's copy.
+        let mut unknown = r.clone();
+        unknown.plain.signer.clear();
+        unknown.plain.fingerprint.clear();
+        unknown.pin = None;
+        assert_eq!(
+            v.command("belongings-pin", &unknown, &zone(), 100, &t),
+            Errand::Say(t.t(key::BELONGINGS_SIGNATURE_SYNC_FIRST))
+        );
+        // HOW A PIN WENT, as the door's thread wrote it.
+        r.pin = None;
+        r.pinning = Some(Pinning {
+            fingerprint: mine,
+            said: PinSaid::Refused {
+                why: ronoctua_security::Why::WrongPassword,
+            },
+        });
+        let text = drawn(&v.rows(&r, &zone(), 100, &t)).replace(" | ", " ");
+        assert!(text.contains(&t.t(crate::security_words::refusal(
+            ronoctua_security::Why::WrongPassword
+        ))));
+
+        // SIGN: the passphrase asked hidden and written private, then the
+        // order; with the identity kept, the order at once.
+        let Errand::Ask(line) = v.command("belongings-sign", &r, &zone(), 100, &t) else {
+            panic!("the passphrase was not asked");
+        };
+        assert!(line.secret);
+        assert_eq!(
+            v.answered(line.id, "correct horse", &r, &t),
+            Errand::Queue(Op::Sign)
+        );
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(places.passphrase())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "the passphrase is readable by others");
+        let _ = std::fs::remove_file(places.passphrase());
+        let mut kept = r.clone();
+        kept.kept_until = Some(1_700_009_999);
+        assert_eq!(
+            v.command("belongings-sign", &kept, &zone(), 100, &t),
+            Errand::Queue(Op::Sign)
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the listing is not one section, grouped by where each file
+    /// comes from — a rule, a target with its actions, the person's
+    /// addition, the plain part — with each file's state and size, what is
+    /// never kept and why; or `RET` on a file does not take it out and bring
+    /// it back; or a word draws as its raw key.
+    #[test]
+    fn the_listing_is_grouped_by_origin_one_row_per_file() {
+        let places = scratch("listing");
+        ready(&places);
+        store_of(&places)
+            .write(&Belongings {
+                extra: vec!["home/notes".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        put(&places, "config/theme.json", b"{\"theme\":\"owl\"}");
+        put(&places, "config/column-player.pid", b"1");
+        put(&places, "home/.ssh/config", b"Host *\n");
+        put(&places, "home/notes/a.md", b"# a");
+        put(&places, "state/person/options.json", b"{\"format\":1}");
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let r = counted(&places, 1_700_000_500);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let text = drawn(&rows);
+            assert!(
+                text.contains(&t.t(key::BELONGINGS_LISTING)),
+                "{language}: {text}"
+            );
+            assert!(
+                !text.contains(&t.t(key::BELONGINGS_COUNTING)),
+                "{language}: still counting"
+            );
+            let new = t.t_with(
+                key::BELONGINGS_ITEM,
+                &[
+                    ("state", &t.t(key::BELONGINGS_STATE_NEW)),
+                    ("size", &bytes_text(15, &t)),
+                ],
+            );
+            let theme = row_of(
+                &rows,
+                &Target::File("config/theme.json".into(), FileAct::StopKeeping),
+            );
+            assert!(
+                drawn(std::slice::from_ref(theme)).contains(&new),
+                "{language}: {text}"
+            );
+            row_of(
+                &rows,
+                &Target::File("home/.ssh/config".into(), FileAct::StopKeeping),
+            );
+            row_of(
+                &rows,
+                &Target::File("home/notes/a.md".into(), FileAct::StopKeeping),
+            );
+            row_of(
+                &rows,
+                &Target::Fact("file:state/person/options.json".into()),
+            );
+            row_of(&rows, &Target::NotHere("ssh"));
+            row_of(&rows, &Target::Nowhere("ssh"));
+            let pid = t.t_with(
+                key::BELONGINGS_NEVER_BECAUSE,
+                &[("reason", &t.t("belongings-reason-draft"))],
+            );
+            assert!(
+                text.contains(&pid),
+                "{language}: the draft's reason: {text}"
+            );
+            assert!(
+                text.contains(&t.t("belongings-target-ssh")),
+                "{language}: {text}"
+            );
+            assert!(!text.contains('['), "{language}: a raw key: {text}");
+            // EVERY ROW THAT ACTS says what it does under the pointer.
+            for (n, row) in rows.iter().enumerate() {
+                if row
+                    .target
+                    .as_ref()
+                    .is_some_and(|t| !matches!(t, Target::Fact(_) | Target::DiffLine(..)))
+                {
+                    let about = View::about(&rows, n, &t)
+                        .unwrap_or_else(|| panic!("{language}: {:?} says nothing", row.target));
+                    assert!(!about.starts_with('['), "{about}");
+                }
+            }
+        }
+        // `RET` ON A FILE takes it out — and on the same row brings it back.
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(
+            &mut v,
+            &r,
+            &Target::File("config/theme.json".into(), FileAct::StopKeeping),
+            &t,
+        );
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        assert!(
+            store_of(&places)
+                .read()
+                .excluded
+                .contains(&"config/theme.json".to_owned())
+        );
+        let r = counted(&places, 1_700_000_500);
+        v.settle_in(&r, &zone(), 100, &t);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.target == Some(Target::Excluded("config/theme.json".into()))),
+            "a file taken out is listed twice"
+        );
+        assert_eq!(
+            rows[v.cursor()].target,
+            Some(Target::File("config/theme.json".into(), FileAct::KeepAgain)),
+            "the cursor left the file it acted on"
+        );
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        assert!(
+            !store_of(&places)
+                .read()
+                .excluded
+                .contains(&"config/theme.json".to_owned())
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: "not on this machine" does not take a target's paths out
+    /// here, or does not come back; "not on any machine" acts without a
+    /// question, draws "yes" first, or — answered yes — asks nothing of the
+    /// next sync and starts none; or "on every machine again" asks nothing.
+    #[test]
+    fn a_targets_actions_are_here_nowhere_and_back() {
+        let places = scratch("targets");
+        ready(&places);
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &Target::NotHere("ssh"), &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        assert!(
+            store_of(&places)
+                .read()
+                .excluded
+                .contains(&"home/.ssh".to_owned())
+        );
+        let r = counted(&places, 1_700_000_500);
+        stand_on(&mut v, &r, &Target::HereAgain("ssh"), &t);
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        assert!(
+            !store_of(&places)
+                .read()
+                .excluded
+                .contains(&"home/.ssh".to_owned())
+        );
+        // "NOT ON ANY MACHINE": a question, "no" first and the cursor on it.
+        let r = counted(&places, 1_700_000_500);
+        stand_on(&mut v, &r, &Target::Nowhere("gnupg"), &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert_eq!(rows[v.cursor()].target, Some(Target::Answer(false)));
+        let answers: Vec<&Target> = rows.iter().filter_map(|row| row.target.as_ref()).collect();
+        assert_eq!(answers, [&Target::Answer(false), &Target::Answer(true)]);
+        let taught: Vec<&str> = v
+            .hint(&r, &zone(), 100, &t)
+            .iter()
+            .filter_map(|p| p.id)
+            .collect();
+        assert!(!taught.contains(&"belongings-sync"), "{taught:?}");
+        // `Esc` is "no": nothing asked of the next sync.
+        assert_eq!(
+            v.press(Press::Escape, &r, &zone(), 100, &t),
+            Errand::Nothing
+        );
+        assert!(!places.requests().exists());
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert_eq!(rows[v.cursor()].target, Some(Target::Nowhere("gnupg")));
+        // YES: asked of the next sync, which starts — asking the passphrase.
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        v.press(Press::Down, &r, &zone(), 100, &t);
+        let Errand::Ask(line) = v.press(Press::Enter, &r, &zone(), 100, &t) else {
+            panic!("the sync did not start");
+        };
+        assert!(line.secret);
+        assert_eq!(
+            Requests::read(&places.requests()).requests,
+            [Request::DropEverywhere {
+                target: "gnupg".into()
+            }]
+        );
+        v.let_go();
+        let r = counted(&places, 1_700_000_500);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert!(drawn(&rows).contains(&t.t(key::BELONGINGS_TARGET_ASKED_NOWHERE)));
+        // AND BACK, ON EVERY MACHINE.
+        stand_on(&mut v, &r, &Target::Everywhere("gnupg"), &t);
+        assert!(matches!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Ask(_)
+        ));
+        assert_eq!(
+            Requests::read(&places.requests()).requests,
+            [Request::KeepEverywhere {
+                target: "gnupg".into()
+            }]
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: what a sync offered is not drawn with "no" first and the
+    /// cursor born on it; "no" is not kept for both doors (the file) or the
+    /// offer stays; "yes" does not reach the door as the offer to turn on; or
+    /// what it came to is not said.
+    #[test]
+    fn an_offer_is_asked_no_first_and_answered_for_both_doors() {
+        let places = scratch("offers");
+        ready(&places);
+        let key_offer = Offer::SshSigning {
+            key: "home/.ssh/id_ed25519.pub".into(),
+        };
+        status(
+            &places,
+            synced(vec![Offer::PamU2f, key_offer.clone()], None),
+        );
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let r = counted(&places, 1_700_000_500);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            assert_eq!(
+                rows[v.cursor()].target,
+                Some(Target::Offer(Offer::PamU2f, false)),
+                "{language}: the cursor is not born on \"no\""
+            );
+            let no = rows
+                .iter()
+                .position(|row| row.target == Some(Target::Offer(Offer::PamU2f, false)));
+            let yes = rows
+                .iter()
+                .position(|row| row.target == Some(Target::Offer(Offer::PamU2f, true)));
+            assert!(no < yes, "{language}: \"yes\" is drawn first");
+            // A NOTE WRAPS at a space: the rows joined by one space read whole.
+            assert!(
+                drawn(&rows)
+                    .replace(" | ", " ")
+                    .contains(&t.t(key::BELONGINGS_OFFER_PAM_U2F)),
+                "{language}"
+            );
+        }
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        let r = counted(&places, 1_700_000_500);
+        assert_eq!(r.answer_of(&Offer::PamU2f), Some(&Said::No));
+        assert!(
+            !v.rows(&r, &zone(), 100, &t)
+                .iter()
+                .any(|row| row.target == Some(Target::Offer(Offer::PamU2f, false))),
+            "an offer answered no is still asked"
+        );
+        stand_on(&mut v, &r, &Target::Offer(key_offer.clone(), true), &t);
+        assert_eq!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Accept(1_700_000_100, key_offer.clone())
+        );
+        // WHAT IT CAME TO, said.
+        answer(
+            &places,
+            1_700_000_100,
+            &key_offer,
+            Said::Refused { why: Why::Failed },
+        )
+        .unwrap();
+        let r = counted(&places, 1_700_000_500);
+        let said = t.t_with(
+            key::BELONGINGS_OFFER_REFUSED,
+            &[("why", &t.t(words::refusal_key(Why::Failed)))],
+        );
+        let text = drawn(&v.rows(&r, &zone(), 100, &t)).replace(" | ", " ");
+        assert!(text.contains(&said), "{text}");
+        // A LATER SYNC'S OFFERS are asked again: the answers were the other's.
+        status(&places, synced(vec![Offer::PamU2f], None));
+        let mut s = Status::read(&places.status()).unwrap();
+        s.at_s += 1;
+        ronoctua_belongings::secret::write_private(
+            &places.status(),
+            &serde_json::to_vec(&s).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(counted(&places, 1_700_000_500).offers_waiting().len(), 1);
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    enum Mode {
+        #[default]
+        Calm,
+        Busy,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Thing {
+        mode: Mode,
+        other: u32,
+    }
+
+    /// A store of `places` that keeps its ledger where the view reads it.
+    fn thing_store(places: &Places) -> ronoctua_store::Store<Thing> {
+        ronoctua_store::Store::<Thing>::at(Some(places.config.clone()), "thing.json")
+            .with_roots(Some(places.config.clone()), Some(places.state.clone()))
+    }
+
+    /// FAILS IF: a file a lenient read repaired is not listed with what
+    /// could not be read and why — never the value — with "leave it" before
+    /// "write the fix" and the cursor born on it; or either answer does not
+    /// do what it says to the file and the ledger.
+    #[test]
+    fn a_repair_is_listed_and_left_or_written() {
+        let places = scratch("repairs");
+        ready(&places);
+        std::fs::write(
+            places.config.join("thing.json"),
+            br#"{"mode": "frantic-secret-word", "other": 3}"#,
+        )
+        .unwrap();
+        let _ = thing_store(&places).read();
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        assert_eq!(r.repairs.len(), 1, "the ledger is not read");
+        let v = View::fresh(&r, &zone(), 100, &t);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        let text = drawn(&rows);
+        assert!(text.contains("/mode"), "{text}");
+        assert!(
+            text.contains(&t.t("belongings-repair-why-unknown-variant")),
+            "{text}"
+        );
+        assert!(
+            !text.contains("frantic-secret-word"),
+            "a value was drawn: {text}"
+        );
+        assert_eq!(
+            rows[v.cursor()].target,
+            Some(Target::LeaveIt("config/thing.json".into()))
+        );
+        let leave = rows
+            .iter()
+            .position(|row| row.target == Some(Target::LeaveIt("config/thing.json".into())));
+        let write = rows
+            .iter()
+            .position(|row| row.target == Some(Target::WriteFix("config/thing.json".into())));
+        assert!(leave < write, "\"write the fix\" is drawn first");
+        // LEAVE IT: asked no more, the file as it was.
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        assert!(counted(&places, 1).repairs.is_empty());
+        assert!(
+            std::fs::read_to_string(places.config.join("thing.json"))
+                .unwrap()
+                .contains("frantic-secret-word")
+        );
+        // A NEW BREAK, and the fix written.
+        std::fs::write(
+            places.config.join("thing.json"),
+            br#"{"mode": "other", "other": 4}"#,
+        )
+        .unwrap();
+        let _ = thing_store(&places).read();
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(
+            &mut v,
+            &r,
+            &Target::WriteFix("config/thing.json".into()),
+            &t,
+        );
+        assert!(matches!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Say(_)
+        ));
+        let now = std::fs::read_to_string(places.config.join("thing.json")).unwrap();
+        assert!(now.contains("calm") && now.contains('4'), "{now}");
+        assert!(counted(&places, 1).repairs.is_empty());
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the history's weight is not drawn, its compaction is not
+    /// offered when it would fold something, it starts without a question
+    /// ("no" first), or a "yes" does not ask the passphrase and send the
+    /// order — or asks it while the session remembers it.
+    #[test]
+    fn the_history_is_weighed_and_compacted_after_a_question() {
+        let places = scratch("history");
+        ready(&places);
+        let budget = Budget {
+            tree_bytes: 10 << 20,
+            history_bytes: 1_200_000_000,
+            recommend_bytes: 1_000_000_000,
+            foldable: true,
+        };
+        status(&places, synced(vec![], Some(budget)));
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        let text = drawn(&v.rows(&r, &zone(), 100, &t)).replace(" | ", " ");
+        assert!(text.contains(&t.t(key::BELONGINGS_HISTORY)), "{text}");
+        assert!(
+            text.contains(&t.t_with(
+                key::BELONGINGS_WEIGHT_COMPACT,
+                &[("history", &bytes_text(budget.history_bytes, &t))]
+            )),
+            "{text}"
+        );
+        stand_on(&mut v, &r, &Target::Compact, &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        assert_eq!(
+            v.rows(&r, &zone(), 100, &t)[v.cursor()].target,
+            Some(Target::Answer(false))
+        );
+        v.press(Press::Down, &r, &zone(), 100, &t);
+        let Errand::Ask(line) = v.press(Press::Enter, &r, &zone(), 100, &t) else {
+            panic!("the passphrase was not asked");
+        };
+        assert!(line.secret);
+        assert_eq!(line.asks, Some(key::ASK_BELONGINGS_COMPACT));
+        assert_eq!(
+            v.answered(line.id, "correct horse", &r, &t),
+            Errand::Queue(Op::Compact)
+        );
+        assert!(places.passphrase().is_file());
+        // NOTHING TO FOLD: nothing offered.
+        status(
+            &places,
+            synced(
+                vec![],
+                Some(Budget {
+                    foldable: false,
+                    ..budget
+                }),
+            ),
+        );
+        let r = counted(&places, 1_700_000_500);
+        assert!(
+            !v.rows(&r, &zone(), 100, &t)
+                .iter()
+                .any(|row| row.target == Some(Target::Compact))
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the session's switch does not turn both ways, turning it
+    /// off does not forget what the session keeps, or a sync asks the
+    /// passphrase while the session remembers it — or asks nothing when the
+    /// last run said there was none.
+    #[test]
+    fn the_session_remembers_the_passphrase_until_told_not_to() {
+        let places = scratch("unlock");
+        ready(&places);
+        let t = texts("en-GB");
+        let repository = store_of(&places).read().repository;
+        ronoctua_belongings::secret::make_private_dir(&places.runtime).unwrap();
+        ronoctua_belongings::unlock::Marker {
+            format: ronoctua_belongings::unlock::MARKER_FORMAT,
+            repository: ronoctua_belongings::unlock::repository_tag(&repository),
+            until_s: 1_700_009_999,
+        }
+        .write(&places)
+        .unwrap();
+        let r = counted(&places, 1_700_000_500);
+        assert_eq!(r.kept_until, Some(1_700_009_999));
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        assert_eq!(
+            v.press(Press::Sync, &r, &zone(), 100, &t),
+            Errand::Queue(Op::Prepare)
+        );
+        assert!(!places.passphrase().exists(), "a passphrase was written");
+        let text = drawn(&v.rows(&r, &zone(), 100, &t));
+        assert!(
+            text.contains(&t.t_with(
+                key::BELONGINGS_UNLOCK_KEPT,
+                &[("until", &when(1_700_009_999, &zone(), &t))]
+            )),
+            "{text}"
+        );
+        // THE MARKER OUTLIVED BY THE KERNEL: said once, then asked.
+        status(
+            &places,
+            Outcome::Refused {
+                why: Why::NoPassphrase,
+            },
+        );
+        let r = counted(&places, 1_700_000_500);
+        assert!(matches!(
+            v.press(Press::Sync, &r, &zone(), 100, &t),
+            Errand::Ask(_)
+        ));
+        v.let_go();
+        // OFF: written, and what the session keeps forgotten.
+        stand_on(&mut v, &r, &Target::Unlock, &t);
+        assert_eq!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Queue(Op::Forget)
+        );
+        assert!(!store_of(&places).read().keep_unlocked);
+        let r = counted(&places, 1_700_000_500);
+        assert_eq!(r.kept_until, None, "a switch off still remembers");
+        assert_eq!(v.press(Press::More, &r, &zone(), 100, &t), Errand::Nothing);
+        assert!(store_of(&places).read().keep_unlocked);
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a JSON conflict's fields are not each drawn with both
+    /// values and the one they came from, a field's keys decide the whole
+    /// path instead of the field, a decided field leaves a decision of the
+    /// path that would go over it, or every field decided does not let the
+    /// sync be applied with the fields written for the CLI.
+    #[test]
+    fn every_field_of_a_json_conflict_is_decided_on_its_own() {
+        let places = scratch("fields");
+        let r = waiting(&places);
+        let mut plan = r.plan.clone().unwrap();
+        plan.conflicts[0].merge = Some(Merging::Json {
+            fields: vec![
+                ronoctua_belongings::plan::FieldConflict {
+                    pointer: "/theme".into(),
+                    base: Some("\"owl\"".into()),
+                    ours: Some("\"paper\"".into()),
+                    theirs: Some("\"cyber\"".into()),
+                },
+                ronoctua_belongings::plan::FieldConflict {
+                    pointer: "/size".into(),
+                    base: Some("100".into()),
+                    ours: Some("110".into()),
+                    theirs: None,
+                },
+            ],
+        });
+        ronoctua_belongings::secret::write_private(
+            &places.plan(),
+            &serde_json::to_vec(&plan).unwrap(),
+        )
+        .unwrap();
+        let path = "config/theme.json".to_owned();
+        let t = texts("en-GB");
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        let text = drawn(&v.rows(&r, &zone(), 100, &t));
+        for needle in ["\"paper\"", "\"cyber\"", "\"owl\"", "/size"] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        assert!(
+            text.contains(&t.t(key::BELONGINGS_FIELD_NONE)),
+            "a deleted value: {text}"
+        );
+        // `C-r` ON A FIELD decides the field.
+        stand_on(
+            &mut v,
+            &r,
+            &Target::Field(path.clone(), "/theme".into()),
+            &t,
+        );
+        assert_eq!(
+            v.press(Press::Decide(Decision::TakeRemote), &r, &zone(), 100, &t),
+            Errand::Nothing
+        );
+        assert_eq!(
+            v.press(Press::Decide(Decision::KeepBoth), &r, &zone(), 100, &t),
+            Errand::Say(t.t(key::BELONGINGS_FIELD_ONLY_TWO))
+        );
+        let file = DecisionsFile::read(&places.decisions()).unwrap();
+        assert_eq!(file.field(&path, "/theme"), Some(Decision::TakeRemote));
+        assert!(!file.paths.contains_key(&path));
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        stand_on(
+            &mut v,
+            &r,
+            &Target::DecideField(path.clone(), "/size".into(), Decision::KeepLocal),
+            &t,
+        );
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        let c = &r.plan.as_ref().unwrap().conflicts[0];
+        assert!(
+            r.settled(c),
+            "every field decided is not a decided conflict"
+        );
+        assert!(
+            drawn(&v.rows(&r, &zone(), 100, &t)).contains(&t.t(key::BELONGINGS_DECIDED_FIELDS))
+        );
+        // THE OTHER CONFLICT, and the sync applied: the fields for the CLI.
+        stand_on(
+            &mut v,
+            &r,
+            &Target::Decide("home/notes/todo.md".into(), Decision::KeepLocal),
+            &t,
+        );
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        assert_eq!(
+            v.command("belongings-apply", &r, &zone(), 100, &t),
+            Errand::Queue(Op::Apply)
+        );
+        let file = DecisionsFile::read(&places.decisions()).unwrap();
+        assert!(
+            r.plan.as_ref().unwrap().settled(&file),
+            "the CLI would refuse {file:?}"
+        );
+        assert!(
+            !file.paths.contains_key(&path),
+            "a path's decision goes over its fields"
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a target with one path taken out here reads "not on this
+    /// machine", or does not offer both "keep it here again" and "not on
+    /// this machine"; or one with every path out still offers to take it out.
+    #[test]
+    fn a_target_partly_taken_out_says_so_and_offers_both() {
+        let places = scratch("partly");
+        ready(&places);
+        put(&places, "home/.gitconfig", b"[user]\n");
+        put(&places, "home/.config/git/ignore", b"*.o\n");
+        store_of(&places)
+            .write(&Belongings {
+                excluded: vec!["home/.gitconfig".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let v = View::fresh(&r, &zone(), 100, &t);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        let git = drawn(std::slice::from_ref(row_of(
+            &rows,
+            &Target::Fact("target:git".into()),
+        )));
+        assert!(
+            git.contains(&t.t(key::BELONGINGS_TARGET_PARTLY_HERE)),
+            "{git}"
+        );
+        row_of(&rows, &Target::HereAgain("git"));
+        row_of(&rows, &Target::NotHere("git"));
+        row_of(&rows, &Target::Nowhere("git"));
+        // EVERY PATH OUT: "not on this machine", and only "keep it again".
+        store_of(&places)
+            .write(&Belongings {
+                excluded: target_paths("git")
+                    .iter()
+                    .map(|p| (*p).to_owned())
+                    .collect(),
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        let r = counted(&places, 1_700_000_500);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        let git = drawn(std::slice::from_ref(row_of(
+            &rows,
+            &Target::Fact("target:git".into()),
+        )));
+        assert!(git.contains(&t.t(key::BELONGINGS_HERE_NOT_HERE)), "{git}");
+        row_of(&rows, &Target::HereAgain("git"));
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.target == Some(Target::NotHere("git"))),
+            "a target all out offers to take it out"
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a file the last sync left and deleted here is not a row of
+    /// the listing, in the colour of a state to look at, saying it leaves
+    /// the repository — or its `RET` does not stop keeping it (the
+    /// repository's copy then stays for the other machines).
+    #[test]
+    fn a_file_deleted_here_is_a_row_that_says_it_leaves() {
+        let places = scratch("deleted");
+        ready(&places);
+        put(&places, "config/theme.json", b"{}");
+        let mut last = Last::read(&places.last()).expect("last");
+        last.entries.insert(
+            "config/keyboards.json".into(),
+            ronoctua_belongings::status::Known {
+                size_bytes: 31,
+                ..Default::default()
+            },
+        );
+        ronoctua_belongings::secret::write_private(
+            &places.last(),
+            &serde_json::to_vec(&last).expect("last"),
+        )
+        .expect("last written");
+        let target = Target::File("config/keyboards.json".into(), FileAct::StopKeeping);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let r = counted(&places, 1_700_000_500);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let row = row_of(&rows, &target);
+            let said = t.t_with(
+                key::BELONGINGS_ITEM,
+                &[
+                    ("state", &t.t(key::BELONGINGS_STATE_DELETED)),
+                    ("size", &bytes_text(31, &t)),
+                ],
+            );
+            assert!(
+                drawn(std::slice::from_ref(row)).contains(&said),
+                "{language}"
+            );
+            assert!(
+                row.fields
+                    .iter()
+                    .any(|f| f.color == tokens::color::STATE_WARNING),
+                "{language}: a deletion is drawn as nothing to look at"
+            );
+        }
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &target, &t);
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        assert!(
+            store_of(&places)
+                .read()
+                .excluded
+                .contains(&"config/keyboards.json".to_owned())
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a field's value of a JSON conflict wraps over several rows
+    /// or runs past the door's width instead of being elided to the room its
+    /// row has — at any width — or "chosen" is cut off with it.
+    #[test]
+    fn a_fields_value_takes_the_room_its_row_has() {
+        let places = scratch("long-field");
+        let r = waiting(&places);
+        let mut plan = r.plan.clone().unwrap();
+        let long = format!(
+            "[{}]",
+            (0..400)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        plan.conflicts[0].merge = Some(Merging::Json {
+            fields: vec![ronoctua_belongings::plan::FieldConflict {
+                pointer: "/list".into(),
+                base: Some(long.clone()),
+                ours: Some(long),
+                theirs: Some("[]".into()),
+            }],
+        });
+        ronoctua_belongings::secret::write_private(
+            &places.plan(),
+            &serde_json::to_vec(&plan).unwrap(),
+        )
+        .unwrap();
+        let path = "config/theme.json".to_owned();
+        let mut file = DecisionsFile::default();
+        file.fields
+            .entry(path.clone())
+            .or_default()
+            .insert("/list".into(), Decision::KeepLocal);
+        ronoctua_belongings::secret::write_private(
+            &places.decisions(),
+            &serde_json::to_vec(&file).unwrap(),
+        )
+        .unwrap();
+        let t = texts("en-GB");
+        let r = Readings::read(Some(places.clone()), r.now_s);
+        for columns in [60_u16, 100, 240] {
+            let v = View::fresh(&r, &zone(), columns, &t);
+            let rows = v.rows(&r, &zone(), columns, &t);
+            let ours = Target::DecideField(path.clone(), "/list".into(), Decision::KeepLocal);
+            let at = rows
+                .iter()
+                .position(|row| row.target.as_ref() == Some(&ours))
+                .expect("the field's row");
+            let row = &rows[at];
+            let end = row
+                .fields
+                .iter()
+                .map(|f| f.at + layout::width(&f.text))
+                .max()
+                .unwrap_or(0);
+            assert!(end <= columns, "{columns}: the value runs to {end}");
+            let text = drawn(std::slice::from_ref(row));
+            assert!(text.contains('…'), "{columns}: not elided: {text}");
+            let chosen = t.t_with(key::BELONGINGS_FIELD_CHOSEN, &[("value", "")]);
+            assert!(text.contains(chosen.trim()), "{columns}: {text}");
+            // ONE ROW: the next is the other side's value, not the rest.
+            assert!(
+                rows.get(at + 1).is_some_and(|n| n.target.is_some()),
+                "{columns}: the value wrapped"
+            );
+        }
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a repair of the whole file names a pointer `/` (a member
+    /// called "" at the root) instead of saying the whole file.
+    #[test]
+    fn a_repair_of_the_whole_file_says_so() {
+        let places = scratch("whole");
+        ready(&places);
+        std::fs::write(places.config.join("thing.json"), b"[1, 2]").unwrap();
+        let _ = thing_store(&places).read();
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        assert_eq!(r.repairs.len(), 1, "the ledger is not read");
+        let text = drawn(&View::fresh(&r, &zone(), 100, &t).rows(&r, &zone(), 100, &t));
+        assert!(
+            text.contains(&t.t(key::BELONGINGS_REPAIR_WHOLE_FILE)),
+            "{text}"
+        );
+        assert!(!text.contains("/: "), "{text}");
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the cursor on an offer's answer follows its PLACE when a
+    /// sync reorders the offers — `RET` then turns on another offer than the
+    /// one the person read.
+    #[test]
+    fn an_offers_answer_is_the_offer_and_not_its_place() {
+        let places = scratch("offer-order");
+        ready(&places);
+        let key_offer = Offer::SshSigning {
+            key: "home/.ssh/id_ed25519.pub".into(),
+        };
+        status(
+            &places,
+            synced(vec![Offer::PamU2f, key_offer.clone()], None),
+        );
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &Target::Offer(Offer::PamU2f, true), &t);
+        status(&places, synced(vec![key_offer, Offer::PamU2f], None));
+        let r = counted(&places, 1_700_000_500);
+        v.settle_in(&r, &zone(), 100, &t);
+        assert_eq!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Accept(1_700_000_100, Offer::PamU2f)
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: drawing the page formats the count's files again on every
+    /// call in one language, or keeps one language's rows for another.
+    #[test]
+    fn a_counts_rows_are_formatted_once_per_language() {
+        let places = scratch("formatted");
+        ready(&places);
+        put(&places, "config/theme.json", b"{}");
+        let r = counted(&places, 1_700_000_500);
+        let count = r.count.as_ref().expect("counted");
+        let (en, pt) = (texts("en-GB"), texts("pt-BR"));
+        let first = count.formatted(r.places.as_ref(), &en);
+        let _ = View::fresh(&r, &zone(), 100, &en).rows(&r, &zone(), 100, &en);
+        assert!(Arc::ptr_eq(
+            &first,
+            &count.formatted(r.places.as_ref(), &en)
+        ));
+        let other = count.formatted(r.places.as_ref(), &pt);
+        assert!(!Arc::ptr_eq(&first, &other), "pt-BR drew en-GB's rows");
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a root of the walk that is a folder is not heard as a tree
+    /// (a file changed deep in it), one that is a file is not heard by its
+    /// folder, one not made yet is not heard from the nearest folder that is
+    /// — or a folder inside a tree is heard twice.
+    #[test]
+    fn what_the_listing_is_made_of_is_heard() {
+        let places = scratch("heard");
+        ready(&places);
+        put(&places, "home/.ssh/config", b"Host *\n");
+        put(&places, "home/.gitconfig", b"[user]\n");
+        put(&places, "config/studio/scenes.json", b"{}");
+        let r = Readings::read(Some(places.clone()), 1_700_000_500);
+        let heard = Heard::of(r.scope(), &places);
+        let ssh = places.resolve("home/.ssh").unwrap();
+        assert!(heard.trees.contains(&ssh), "{heard:?}");
+        assert!(heard.trees.contains(&places.config), "{heard:?}");
+        assert!(heard.dirs.contains(&places.home), "{heard:?}");
+        // `~/.config/doom/local.el` is not there: `~/.config` is heard.
+        let dot_config = places.resolve("home/.config").unwrap();
+        assert!(heard.dirs.contains(&dot_config), "{heard:?}");
+        assert!(
+            !heard
+                .dirs
+                .iter()
+                .any(|d| heard.trees.iter().any(|t| d.starts_with(t))),
+            "a folder inside a tree is heard twice: {heard:?}"
+        );
+        assert!(heard.dirs.len() <= HEARD_MOST && heard.trees.len() <= HEARD_MOST);
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a file changed deep in what is kept (`~/.ssh/config`) or
+    /// beside a root that is a file (`~/.gitconfig`) rings no door — the row
+    /// would say "in step" until something else rang — or a count that finds
+    /// the same folders raises a second notice over them.
+    #[test]
+    fn a_change_in_what_is_kept_rings_the_door() {
+        let places = scratch("rings");
+        ready(&places);
+        put(&places, "home/.ssh/config", b"Host *\n");
+        put(&places, "home/.gitconfig", b"[user]\n");
+        let r = counted(&places, 1_700_000_500);
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let mut ears = Ears::default();
+        ears.follow(&r, move || tx.send(()).is_ok());
+        assert!(ears.notice.is_some(), "nothing is heard");
+        let heard_after = |logical: &str| {
+            // THE WATCHES ARE ADDED BY THE NOTICE'S THREAD: an edit before
+            // it is ready is not an edit missed by the door, so it is made
+            // again until it rings, for a few seconds at most.
+            while rx.try_recv().is_ok() {}
+            (0..25).any(|n| {
+                put(&places, logical, format!("# edit {n}\n").as_bytes());
+                rx.recv_timeout(std::time::Duration::from_millis(200))
+                    .is_ok()
+            })
+        };
+        assert!(
+            heard_after("home/.ssh/config"),
+            "a file in ~/.ssh rang nothing"
+        );
+        assert!(heard_after("home/.gitconfig"), "~/.gitconfig rang nothing");
+        // THE SAME FOLDERS: the notice stays — the first ring is still the
+        // one told, never the one a second notice would carry.
+        let (tx2, rx2) = std::sync::mpsc::channel::<()>();
+        let again = counted(&places, 1_700_000_500);
+        ears.follow(&again, move || tx2.send(()).is_ok());
+        assert!(heard_after("home/.ssh/config"), "the notice went");
+        assert!(
+            rx2.try_recv().is_err(),
+            "a second notice over the same folders"
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a count asked while one runs starts a second walk at once
+    /// instead of one more after it, or a count that came back is not the
+    /// listing.
+    #[test]
+    fn one_count_at_a_time_and_one_more_after_it() {
+        let places = scratch("counting");
+        ready(&places);
+        put(&places, "config/theme.json", b"{}");
+        let (sender, channel) = smithay_client_toolkit::reexports::calloop::channel::channel();
+        let mut counting = Counting::through(sender);
+        let mut r = Readings::read(Some(places.clone()), 1);
+        counting.ask(&mut r);
+        counting.ask(&mut r);
+        assert!(r.count.is_none(), "a thread's count was waited for");
+        let first = loop {
+            if let Ok(items) = channel.try_recv() {
+                break items;
+            }
+            std::thread::yield_now();
+        };
+        assert!(channel.try_recv().is_err(), "two walks at once");
+        counting.came(&mut r, first);
+        assert!(r.items().iter().any(|i| i.path == "config/theme.json"));
+        // THE ONE ASKED WHILE IT RAN, after it.
+        let second = loop {
+            if let Ok(items) = channel.try_recv() {
+                break items;
+            }
+            std::thread::yield_now();
+        };
+        counting.came(&mut r, second);
+        assert!(channel.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 }

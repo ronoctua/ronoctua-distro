@@ -83,6 +83,10 @@ pub struct FooterSettingsWindow {
     /// photograph's copy — a photograph that pressed `RET` on this machine's
     /// file would change the bars of the session it runs in.
     store: ronoctua_store::Store<Prefs>,
+    /// The sentence the file was owed when the window opened over it — not
+    /// JSON, or a value of it repaired — said on the first turn, as the
+    /// footer says it when it starts (`adapt::at_start`).
+    owed: Option<crate::adapt::Unread>,
     _watch: Option<ronoctua_files::notice::Notice>,
 }
 
@@ -99,7 +103,7 @@ impl FooterSettingsWindow {
         store: ronoctua_store::Store<Prefs>,
         watch: Option<ronoctua_files::notice::Notice>,
     ) -> Self {
-        let prefs = store.parsed().unwrap_or_default();
+        let (prefs, owed) = crate::adapt::at_start(&store);
         // THE CURSOR ON THE FIRST ROW THAT ACTS, which is where it is at any
         // width — a title first, then its setting. The door's own width
         // settles it again on the first key (`View::press`).
@@ -111,20 +115,19 @@ impl FooterSettingsWindow {
             view,
             prefs,
             store,
+            owed,
             _watch: watch,
         }
     }
 
-    /// The file changed: read again with `parsed`, never `read` — a file that
-    /// will not parse keeps the copy held, and the window says so.
+    /// The file changed: read again through `adapt::reread`, never `read` —
+    /// a file that does not read as written keeps the copy held, and the
+    /// window says why, with the footer's sentence.
     fn reread(&mut self, ui: &mut Ui) {
         match crate::adapt::reread(&self.store, &self.prefs) {
             crate::adapt::Reread::Same => return,
-            crate::adapt::Reread::Refused => {
-                ui.say_for(
-                    ui.texts.t(ronoctua_i18n::key::ECHO_MODELINE_WILL_NOT_PARSE),
-                    crate::echo::Echo::Long,
-                );
+            crate::adapt::Reread::Refused(unread) => {
+                ui.say_for(unread.said(&ui.texts), crate::echo::Echo::Long);
             }
             crate::adapt::Reread::Taken(fresh) => self.prefs = fresh,
         }
@@ -213,6 +216,13 @@ impl Content for FooterSettingsWindow {
 
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
+    }
+
+    /// The sentence owed since the window opened, said once.
+    fn each_turn(&mut self, ui: &mut Ui) {
+        if let Some(unread) = self.owed.take() {
+            ui.say_for(unread.said(&ui.texts), crate::echo::Echo::Long);
+        }
     }
 
     /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19.

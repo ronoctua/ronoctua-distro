@@ -114,6 +114,12 @@ pub trait Manager {
     #[zbus(property)]
     fn connectivity(&self) -> zbus::Result<u32>;
 
+    /// Whether the way out is paid by the byte, as the daemon sums it over
+    /// the primary connection: 0 unknown, 1 yes, 2 no, 3 guessed yes,
+    /// 4 guessed no (`NMMetered`).
+    #[zbus(property)]
+    fn metered(&self) -> zbus::Result<u32>;
+
     /// Every connection that is UP: a VPN is one of these, and so is the
     /// Wi-Fi carrying it.
     #[zbus(property)]

@@ -11,7 +11,7 @@ escreve (`/run/ronoctua-security`, `/var/lib/ronoctua-security`). A página da c
 A modeline em repouso é muda (inv. 14). O escudo aparece, na cor de perigo, só enquanto algo está
 fora do esperado, e é UM: o mais alto de cinco casos, cada um com a própria frase sob o ponteiro —
 o firewall falhou (o ajudante disse, ou uma unidade do firewall registrou erro depois da última
-aplicação), o firewall está desligado, o sudo não pede senha até uma hora, os escudos estão
+aplicação), o firewall está desligado, o sudo não pede senha (até uma hora, ou sem prazo), os escudos estão
 erguidos, e conexões recusadas no último quarto de hora (o escudo conta quantas). A hora do fim da
 janela sem senha é da própria modeline do rodapé, ao lado; a dica só pode contar (`count`).
 
@@ -24,7 +24,9 @@ a página do módulo continua listando tudo o que está fora, no `LEADER b`.
 
 Em repouso, nenhum relógio: o diário e o inotify acordam o vigia. Ele arma um só enquanto uma
 recusa é recente (até ela deixar de ser), enquanto a janela sem senha está aberta (até o fim) e
-enquanto o aviso está adiado.
+enquanto o aviso está adiado. Uma janela sem prazo não arma relógio nenhum: ela só acaba pelo gesto
+da pessoa, e o arquivo dela (`/var/lib/ronoctua-security/sudo-window`, que sobrevive ao reboot)
+muda quando acaba — é o inotify da pasta que tira o escudo.
 
 ## O aviso das recusadas
 

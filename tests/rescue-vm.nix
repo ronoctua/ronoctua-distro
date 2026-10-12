@@ -35,8 +35,12 @@ pkgs.testers.runNixOSTest {
       imports = [
         ../nix/modules/base.nix
         ../nix/modules/rescue.nix
+        # The rebuild is the machine's apply, and the rollback disarms its
+        # boot trial: the rescue's units run `ronoctua-machine`.
+        ../nix/modules/machine.nix
       ];
       _module.args.ronoctua = ronoctua;
+      ronoctua.machine.tool = ronoctua.machine;
       virtualisation.memorySize = 2048;
       # `fgconsole` and `chvt` — the unit uses them by store path, and the test
       # asks the same questions from the shell.

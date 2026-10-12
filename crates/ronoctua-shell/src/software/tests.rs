@@ -152,6 +152,7 @@ fn full() -> Snapshot {
             web: true,
         },
         nix_index_rev: Some("5b4f72e".into()),
+        declarations: Declarations::default(),
     }
 }
 
@@ -307,7 +308,6 @@ fn every_level_draws_in_every_language() {
         gimp_nix(),
         Ok(Details {
             description: vec!["A long description.".into()],
-            declaration: Some("environment.systemPackages = [ pkgs.gimp ];".into()),
             ..Details::default()
         }),
     ));
@@ -1010,6 +1010,20 @@ fn every_question_opens_on_no() {
         Question::EraseAndroid,
         Question::Foreign("/tmp/x.apk".into()),
         Question::LeaveDraft,
+        Question::Forget {
+            key: gimp_flatpak(),
+            name: "GIMP".into(),
+        },
+        Question::Decline {
+            id: "gimp".into(),
+            name: "GIMP".into(),
+            everywhere: false,
+        },
+        Question::Decline {
+            id: "gimp".into(),
+            name: "GIMP".into(),
+            everywhere: true,
+        },
     ];
     for t in every_language() {
         for q in &questions {
@@ -1079,8 +1093,15 @@ fn an_unfree_package_asks_first_and_the_yes_carries_the_consent() {
     ));
     v.at = Spot::Answer(Answer::Yes);
     let e = press(&mut v, Press::Enter, &r);
+    // `C-RET` IS "INSTALL ONLY FOR YOU": declared, the consent carried.
     match &queued(&e)[..] {
-        [Order::Install { key, consent }] => {
+        [
+            Order::Declare {
+                key,
+                consent,
+                machines: None,
+            },
+        ] => {
             assert_eq!(*key, chrome);
             assert!(consent.unfree);
         }
@@ -1156,12 +1177,21 @@ fn a_sheet_opens_on_its_first_verb_and_asks_for_its_details() {
     let rows = rows_of(&v, &r, &en());
     assert_eq!(
         focused(&rows).target,
-        Target::Deed(Deed::Install {
+        Target::Deed(Deed::DeclareForMe {
             key: gimp_nix(),
             name: "GIMP".into(),
             consent: Consent::default(),
+            machines: None,
         })
     );
+    // AND INSTALLING HERE ONLY, undeclared, is the row after it.
+    assert!(rows.iter().any(|x| x.spot == Spot::Deed("install")
+        && x.target
+            == Target::Deed(Deed::Install {
+                key: gimp_nix(),
+                name: "GIMP".into(),
+                consent: Consent::default(),
+            })));
     // THE SOURCE RING turns to the Flatpak and asks for ITS details.
     walk_to(&mut v, &r, &Spot::Ring("member"));
     let e = press(&mut v, Press::More, &r);
@@ -1280,29 +1310,128 @@ fn the_flake_s_own_are_opened_and_never_removed() {
 }
 
 #[test]
-fn make_it_permanent_copies_the_line_and_an_unfree_one_says_it_is_not_enough() {
-    let mut r = readings(Some(full()));
-    let line = "environment.systemPackages = [ pkgs.ripgrep ];";
+fn keeping_a_program_declares_it_in_one_press() {
+    // "MAKE IT PERMANENT" WAS A LINE TO COPY; now it is the declaration.
+    let r = readings(Some(full()));
     let rg = AppKey::Nix {
         attr: "ripgrep".into(),
     };
-    r.details = Some((
-        rg.clone(),
-        Ok(Details {
-            declaration: Some(line.into()),
-            ..Details::default()
-        }),
-    ));
-    r.snapshot.as_mut().unwrap().installed[0].unfree = true;
     let mut v = open(Opening::Home, &r);
-    v.level = Level::Sheet(rg);
-    v.at = Spot::Deed("declare");
-    assert_eq!(press(&mut v, Press::Enter, &r), Errand::Copy(line.into()));
-    let said = drawn(&rows_of(&v, &r, &en()));
+    v.level = Level::Sheet(rg.clone());
+    v.at = Spot::Deed("declare-for-me");
+    let rows = rows_of(&v, &r, &en());
     assert!(
-        said.contains(&en().t(ronoctua_i18n::key::SOFTWARE_NOTE_DECLARE_UNFREE)[..20]),
-        "{said}"
+        drawn(&rows).contains(&en().t(ronoctua_i18n::key::SOFTWARE_DECLARED_ROW_KEEP)),
+        "{}",
+        drawn(&rows)
     );
+    let e = press(&mut v, Press::Enter, &r);
+    assert_eq!(
+        queued(&e),
+        vec![Order::Declare {
+            key: rg,
+            consent: Consent::default(),
+            machines: None,
+        }]
+    );
+    assert!(
+        !drawn(&rows).contains("host.nix"),
+        "a line for host.nix is still offered"
+    );
+}
+
+/// FAILS IF: a change of the declaration made while the session keeps no
+/// identity goes to the queue unsigned instead of asking the belongings'
+/// passphrase first; the passphrase is not written where `sign` reads it,
+/// as typed and private; an empty answer still queues the change; or the
+/// question is asked with the identity kept, or with no repository synced.
+#[test]
+fn a_change_of_the_declaration_asks_the_passphrase_to_sign_it() {
+    use ronoctua_belongings::places::Places;
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = std::env::temp_dir().join(format!(
+        "ronoctua-shell-software-sign-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let places = Places::under(&root);
+    let repository = "git@example.org:someone/belongings.git";
+    crate::belongings::store_of(&places)
+        .write(&ronoctua_belongings::prefs::Belongings::with_repository(
+            repository,
+        ))
+        .unwrap();
+    let rg = AppKey::Nix {
+        attr: "ripgrep".into(),
+    };
+    let declare = || Order::Declare {
+        key: rg.clone(),
+        consent: Consent::default(),
+        machines: None,
+    };
+    let mut r = readings(Some(full()));
+    r.belongings = Some(places.clone());
+    let keep = |v: &mut View, r: &Readings| {
+        v.level = Level::Sheet(rg.clone());
+        v.at = Spot::Deed("declare-for-me");
+        press(v, Press::Enter, r)
+    };
+
+    // NO CLONE YET: there is no key to open, so nothing is asked.
+    let mut v = open(Opening::Home, &r);
+    assert_eq!(queued(&keep(&mut v, &r)), vec![declare()]);
+
+    // SYNCED, AND NO IDENTITY KEPT: the passphrase first.
+    std::fs::create_dir_all(places.repo()).unwrap();
+    std::fs::write(places.key_age(), b"age").unwrap();
+    let mut v = open(Opening::Home, &r);
+    assert_eq!(
+        keep(&mut v, &r),
+        Errand::Ask {
+            ask: Ask::Sign,
+            initial: None
+        }
+    );
+    assert!(Ask::Sign.secret() && !Ask::FilePath.secret());
+    assert_eq!(Ask::of_command("software-sign"), Some(Ask::Sign));
+    // AS TYPED — a space is part of a passphrase — and then the change.
+    let e = v.typed("software-sign", " a passphrase ", &r, &en());
+    assert_eq!(queued(&e), vec![declare()]);
+    let written = places.passphrase();
+    assert_eq!(std::fs::read(&written).unwrap(), b" a passphrase ");
+    assert_eq!(
+        std::fs::metadata(&written).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    std::fs::remove_file(&written).unwrap();
+    // AN EMPTY ANSWER IS `Esc`: the change is dropped, and a later answer
+    // has nothing to queue.
+    assert!(matches!(keep(&mut v, &r), Errand::Ask { .. }));
+    assert_eq!(v.typed("software-sign", "", &r, &en()), Errand::Nothing);
+    assert_eq!(v.typed("software-sign", "late", &r, &en()), Errand::Nothing);
+    assert!(!written.exists(), "a passphrase was written for nothing");
+    // A DECLINE asks the same way.
+    v.asking = Some(Question::Decline {
+        id: "nix:ripgrep".into(),
+        name: "ripgrep".into(),
+        everywhere: true,
+    });
+    assert!(matches!(
+        v.answered(Answer::Yes, &r, &en()),
+        Errand::Ask { ask: Ask::Sign, .. }
+    ));
+
+    // THE IDENTITY KEPT FOR THE SESSION: no question, the change goes.
+    ronoctua_belongings::unlock::Marker {
+        format: ronoctua_belongings::unlock::MARKER_FORMAT,
+        repository: ronoctua_belongings::unlock::repository_tag(repository),
+        until_s: i64::try_from(r.now).unwrap() + 600,
+    }
+    .write(&places)
+    .unwrap();
+    let mut v = open(Opening::Home, &r);
+    assert_eq!(queued(&keep(&mut v, &r)), vec![declare()]);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -2520,4 +2649,658 @@ fn ctrl_return_is_install_in_the_notation_both_doors_write() {
         smithay_client_toolkit::seat::keyboard::Keysym::Return
     );
     assert!(mods.ctrl);
+}
+
+// ─── the declaration ───────────────────────────────────────────────────────
+
+/// A machine whose person declared five programs — applied, left out for a
+/// name nixpkgs dropped, held for a download that changed, on another
+/// computer only, and waiting — and declined six of the distro's, one of
+/// each state.
+fn declared_machine() -> Snapshot {
+    use ronoctua_software::declaration::{
+        DeclaredRow, DeclineState, DeclinedRow, DistroRow, Standing,
+    };
+    use ronoctua_software::person::Stamp;
+    use ronoctua_software::person::declared::{AppImageApp, Entry, NixApp, Pin};
+    use ronoctua_software::person::declined::Declining;
+    use ronoctua_software::person::reports::{DistroApp, SkipWhy};
+    let at = Stamp::parse("2026-10-05T12:00:00Z").unwrap();
+    let nix = |attr: &str, machines: Option<Vec<String>>| {
+        Entry::Nix(NixApp {
+            id: format!("nix:{attr}"),
+            machines,
+            edited_at: at.clone(),
+            edited_on: "noctua".into(),
+            attr: attr.into(),
+            unfree: false,
+        })
+    };
+    let obsidian = Entry::AppImage(AppImageApp {
+        id: "appimage:obsidian".into(),
+        machines: None,
+        edited_at: at.clone(),
+        edited_on: "laptop".into(),
+        key: "obsidian".into(),
+        name: "Obsidian".into(),
+        pin: Pin {
+            url: "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.6.7/Obsidian-1.6.7.AppImage".into(),
+            hash: "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=".into(),
+            version: "v1.6.7".into(),
+            pinned_at: at.clone(),
+        },
+        follows: None,
+        icon: None,
+    });
+    let declining = |id: &str, machines: Option<Vec<String>>| Declining {
+        id: id.into(),
+        machines,
+        edited_at: at.clone(),
+        edited_on: "noctua".into(),
+    };
+    let distro = |id: &str, name: &str, essential: Option<&str>| DistroRow {
+        app: DistroApp {
+            id: id.into(),
+            source: ronoctua_software::person::declared::Source::Nix,
+            desktop_ids: vec![format!("{id}.desktop")],
+            essential: essential.map(str::to_owned),
+            group: "base".into(),
+            on_this_machine: true,
+            declined_here: false,
+        },
+        name: name.into(),
+    };
+    let mut s = full();
+    s.installed[0].origin = Origin::MineDeclared;
+    s.declarations = Declarations {
+        host: "noctua".into(),
+        declared: vec![
+            DeclaredRow {
+                entry: nix("ripgrep", None),
+                standing: Standing::Applied,
+            },
+            DeclaredRow {
+                entry: nix("gone", None),
+                standing: Standing::Skipped {
+                    reason: SkipWhy::AttrMissing,
+                    detail: String::new(),
+                },
+            },
+            DeclaredRow {
+                entry: obsidian,
+                standing: Standing::Skipped {
+                    reason: SkipWhy::Held,
+                    detail: "upstream-changed".into(),
+                },
+            },
+            DeclaredRow {
+                entry: nix("rarely", Some(vec!["laptop".into()])),
+                standing: Standing::Elsewhere,
+            },
+            DeclaredRow {
+                entry: nix("fresh", None),
+                standing: Standing::Waiting,
+            },
+        ],
+        declined: vec![
+            DeclinedRow {
+                declining: declining("gimp", None),
+                name: "GIMP".into(),
+                state: DeclineState::Honoured,
+            },
+            DeclinedRow {
+                declining: declining("vlc", None),
+                name: "VLC".into(),
+                state: DeclineState::StillPresent,
+            },
+            DeclinedRow {
+                declining: declining("zsh", None),
+                name: "Zsh".into(),
+                state: DeclineState::Essential {
+                    reason: "the-login-shell".into(),
+                },
+            },
+            DeclinedRow {
+                declining: declining("old-thing", None),
+                name: "old-thing".into(),
+                state: DeclineState::Unknown,
+            },
+            DeclinedRow {
+                declining: declining("htop", Some(vec!["laptop".into()])),
+                name: "htop".into(),
+                state: DeclineState::Elsewhere,
+            },
+            DeclinedRow {
+                declining: declining("btop", None),
+                name: "btop".into(),
+                state: DeclineState::Waiting,
+            },
+        ],
+        distro: vec![
+            distro("gimp", "GIMP", None),
+            distro("vlc", "VLC", None),
+            distro("zsh", "Zsh", Some("the-login-shell")),
+            distro("firefox", "Firefox", None),
+            distro("htop", "htop", None),
+            distro("btop", "btop", None),
+        ],
+        unreadable: Vec::new(),
+        reported: true,
+        android_pending: Vec::new(),
+        leaving: Vec::new(),
+    };
+    s
+}
+
+/// DECLINED-LIST-IS-DRAWN: "Declined by you" names every declined program
+/// with what the decline did here — removed, still present (in the danger
+/// tone), kept with the distro's reason, unknown, elsewhere with its
+/// computers, waiting — in every language; the rest of the distro's
+/// programs follow, each one press from being kept uninstalled; and a
+/// declined one brings itself back.
+#[test]
+fn declined_list_is_drawn() {
+    let r = readings(Some(declared_machine()));
+    for t in every_language() {
+        let v = open(Opening::Declined, &r);
+        let rows = rows_of(&v, &r, &t);
+        let said = drawn(&rows);
+        use ronoctua_software::declaration::DeclineState;
+        for (name, state) in [
+            ("GIMP", DeclineState::Honoured),
+            ("VLC", DeclineState::StillPresent),
+            ("old-thing", DeclineState::Unknown),
+            ("btop", DeclineState::Waiting),
+        ] {
+            let row = rows
+                .iter()
+                .find(|x| x.fields.iter().any(|f| f.text == name))
+                .unwrap_or_else(|| panic!("{name} is not drawn in {}:\n{said}", t.language()));
+            let line = drawn(std::slice::from_ref(row));
+            let sentence = t.t(words::decline_key(&state));
+            assert!(
+                line.contains(&sentence[..sentence.len().min(12)]),
+                "{name}: {line}"
+            );
+        }
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::SOFTWARE_ESSENTIAL_WHY_THE_LOGIN_SHELL)[..16]),
+            "the distro's reason is not said in {}:\n{said}",
+            t.language()
+        );
+        assert!(said.contains("laptop"), "where it is declined:\n{said}");
+        let vlc = rows
+            .iter()
+            .find(|x| x.spot == Spot::Declined("vlc".into()))
+            .expect("vlc's row");
+        assert!(
+            vlc.fields
+                .iter()
+                .any(|f| f.color == tokens::color::STATE_ERROR),
+            "still present is not in the danger tone"
+        );
+        // THE REST OF THE DISTRO'S: firefox, which nothing declined.
+        let firefox = rows
+            .iter()
+            .find(|x| x.spot == Spot::Distro("firefox".into()))
+            .unwrap_or_else(|| panic!("the distro's other programs are not listed:\n{said}"));
+        assert!(matches!(
+            firefox.can.remove,
+            Some(Deed::KeepUninstalled {
+                everywhere: false,
+                ..
+            })
+        ));
+        assert!(
+            !rows.iter().any(|x| x.spot == Spot::Distro("gimp".into())),
+            "listed twice"
+        );
+    }
+    // A DECLINED ONE, PRESSED, IS ITS PAGE; BRINGING IT BACK IS ONE PRESS.
+    let mut v = open(Opening::Declined, &r);
+    walk_to(&mut v, &r, &Spot::Declined("gimp".into()));
+    press(&mut v, Press::Enter, &r);
+    assert_eq!(v.level, Level::Distro("gimp".into()));
+    walk_to(&mut v, &r, &Spot::Deed("bring-back"));
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Undecline { id: "gimp".into() }]
+    );
+}
+
+/// FORGET-EXPLAINS-ITSELF: removing a declared program for good is asked on
+/// "no", and the question says what the yes does beyond this computer — it
+/// leaves the declaration, the other computers remove it at their next
+/// update, what it saved stays unless erased — in every language; the
+/// second yes erases, the first keeps.
+#[test]
+fn forget_explains_itself() {
+    let r = readings(Some(declared_machine()));
+    let rg = AppKey::Nix {
+        attr: "ripgrep".into(),
+    };
+    for t in every_language() {
+        let mut v = open(Opening::Home, &r);
+        v.level = Level::Sheet(rg.clone());
+        walk_to(&mut v, &r, &Spot::Deed("remove"));
+        let rows = rows_of(&v, &r, &t);
+        assert!(
+            matches!(
+                &focused(&rows).target,
+                Target::Deed(Deed::ForgetForever { .. })
+            ),
+            "a declared program is removed only for good"
+        );
+        press(&mut v, Press::Enter, &r);
+        let rows = rows_of(&v, &r, &t);
+        let said = drawn(&rows);
+        for k in [
+            ronoctua_i18n::key::SOFTWARE_DECLARED_FORGET_HERE,
+            ronoctua_i18n::key::SOFTWARE_DECLARED_FORGET_ELSEWHERE,
+            ronoctua_i18n::key::SOFTWARE_DECLARED_FORGET_DATA,
+        ] {
+            let sentence = t.t(k);
+            let first: String = sentence.chars().take(20).collect();
+            assert!(
+                said.contains(&first),
+                "{k} is not said in {}:\n{said}",
+                t.language()
+            );
+        }
+        let answers: Vec<&Row> = rows.iter().filter(|x| !x.heading).collect();
+        assert_eq!(answers[0].target, Target::Answer(Answer::No));
+        assert!(answers[0].focused, "the cursor was not born on no");
+        assert_eq!(answers.len(), 3, "no, yes, and yes with the data");
+    }
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Sheet(rg.clone());
+    walk_to(&mut v, &r, &Spot::Deed("remove"));
+    press(&mut v, Press::Enter, &r);
+    assert_eq!(press(&mut v, Press::Enter, &r), Errand::Nothing, "no");
+    walk_to(&mut v, &r, &Spot::Deed("remove"));
+    press(&mut v, Press::Enter, &r);
+    v.at = Spot::Answer(Answer::YesAndMore);
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Forget {
+            key: rg.clone(),
+            keep_data: false
+        }]
+    );
+    // THE LAUNCHER'S `C-d` on a declared program opens the same question.
+    let (v, _) = View::fresh(
+        Opening::Remove {
+            key: rg,
+            name: "ripgrep".into(),
+        },
+        &r,
+        &en(),
+    );
+    assert!(matches!(v.asking, Some(Question::Forget { .. })));
+}
+
+/// Every declared entry says how this computer stands to it; a left-out one
+/// is in the danger tone and its page offers the fix its reason calls for —
+/// a newer download for a held pin, another program for a name nixpkgs
+/// dropped, this computer too for one declared elsewhere.
+#[test]
+fn the_declared_say_how_they_stand_and_offer_their_fix() {
+    let r = readings(Some(declared_machine()));
+    for t in every_language() {
+        let v = open(Opening::Declared, &r);
+        let rows = rows_of(&v, &r, &t);
+        let said = drawn(&rows);
+        for id in [
+            "nix:ripgrep",
+            "nix:gone",
+            "appimage:obsidian",
+            "nix:rarely",
+            "nix:fresh",
+        ] {
+            assert!(
+                rows.iter().any(|x| x.spot == Spot::Declared(id.into())),
+                "{id} is not listed in {}:\n{said}",
+                t.language()
+            );
+        }
+        let gone = rows
+            .iter()
+            .find(|x| x.spot == Spot::Declared("nix:gone".into()))
+            .unwrap();
+        assert!(
+            gone.fields
+                .iter()
+                .any(|f| f.color == tokens::color::STATE_ERROR)
+        );
+        assert!(rows.iter().any(|x| x.spot == Spot::Deed("refresh-pins")));
+    }
+    // A NAME NIXPKGS DROPPED: another program is searched for.
+    let mut v = open(Opening::Declared, &r);
+    walk_to(&mut v, &r, &Spot::Declared("nix:gone".into()));
+    press(&mut v, Press::Enter, &r);
+    assert_eq!(v.level, Level::Declaration("nix:gone".into()));
+    walk_to(&mut v, &r, &Spot::Deed("find-replacement"));
+    let e = press(&mut v, Press::Enter, &r);
+    assert!(matches!(e, Errand::Feed(Want::Search { ref query, .. }) if query == "gone"));
+    // A HELD PIN: a newer download is looked for.
+    let mut v = open(Opening::Declared, &r);
+    v.level = Level::Declaration("appimage:obsidian".into());
+    let said = drawn(&rows_of(&v, &r, &en()));
+    assert!(
+        said.contains(&en().t(ronoctua_i18n::key::SOFTWARE_DECLARED_HELD_UPSTREAM_CHANGED)),
+        "{said}"
+    );
+    walk_to(&mut v, &r, &Spot::Deed("refresh-pins"));
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::RefreshPins]
+    );
+    // DECLARED ELSEWHERE: this computer too.
+    let mut v = open(Opening::Declared, &r);
+    v.level = Level::Declaration("nix:rarely".into());
+    walk_to(&mut v, &r, &Spot::Deed("declare-for-me"));
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Declare {
+            key: AppKey::Nix {
+                attr: "rarely".into()
+            },
+            consent: Consent::default(),
+            machines: Some(vec!["laptop".into(), "noctua".into()]),
+        }]
+    );
+}
+
+/// One of the distro's programs is kept uninstalled after a question on
+/// "no" — here, or on every computer — and the launcher's `C-d` on it asks
+/// the same; one the distro needs says why and offers nothing.
+#[test]
+fn a_distro_program_is_declined_here_or_everywhere_after_a_question() {
+    let r = readings(Some(declared_machine()));
+    let firefox = AppKey::System {
+        desktop_id: "firefox.desktop".into(),
+    };
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Sheet(firefox.clone());
+    for (spot, machines) in [
+        ("keep-uninstalled-here", Some(vec!["noctua".to_owned()])),
+        ("keep-uninstalled-everywhere", None),
+    ] {
+        walk_to(&mut v, &r, &Spot::Deed(spot));
+        assert_eq!(press(&mut v, Press::Enter, &r), Errand::Nothing);
+        let rows = rows_of(&v, &r, &en());
+        assert!(focused(&rows).target == Target::Answer(Answer::No));
+        assert!(
+            drawn(&rows).contains(&en().t(ronoctua_i18n::key::SOFTWARE_DECLARED_DECLINE_REBUILD))
+        );
+        v.at = Spot::Answer(Answer::Yes);
+        assert_eq!(
+            queued(&press(&mut v, Press::Enter, &r)),
+            vec![Order::Decline {
+                id: "firefox".into(),
+                machines
+            }]
+        );
+    }
+    let (v, e) = View::fresh(
+        Opening::Remove {
+            key: firefox,
+            name: "Firefox".into(),
+        },
+        &r,
+        &en(),
+    );
+    assert_eq!(e, Errand::Nothing);
+    assert!(matches!(
+        v.asking,
+        Some(Question::Decline {
+            everywhere: false,
+            ..
+        })
+    ));
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Distro("zsh".into());
+    let rows = rows_of(&v, &r, &en());
+    assert!(
+        drawn(&rows).contains(&en().t(ronoctua_i18n::key::SOFTWARE_ESSENTIAL_WHY_THE_LOGIN_SHELL))
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|x| matches!(x.target, Target::Deed(Deed::KeepUninstalled { .. })))
+    );
+}
+
+/// A decline is always reachable from its page, whatever came of it.
+///
+/// FAILS IF: a decline of other computers only does not also offer keeping
+/// the program uninstalled HERE (the launcher's removal asks exactly that);
+/// a decline the system refused because the distro needs the program, or
+/// one of a program the distro no longer carries, cannot be brought back
+/// from either door; or a program no longer declined here, which the
+/// system still leaves out, does not say it comes back with the next update.
+#[test]
+fn every_decline_can_be_brought_back_and_kept_here_too() {
+    let r = readings(Some(declared_machine()));
+    let deeds = |level: Level, r: &Readings| -> Vec<Deed> {
+        let mut v = open(Opening::Home, r);
+        v.level = level;
+        rows_of(&v, r, &en())
+            .into_iter()
+            .filter_map(|x| match x.target {
+                Target::Deed(d) => Some(d),
+                _ => None,
+            })
+            .collect()
+    };
+    // DECLINED ON LAPTOP ONLY: here too, or everywhere, or back.
+    let htop = deeds(Level::Distro("htop".into()), &r);
+    assert!(
+        htop.iter()
+            .any(|d| matches!(d, Deed::BringBack { id, .. } if id == "htop"))
+    );
+    assert!(htop.iter().any(|d| matches!(
+        d,
+        Deed::KeepUninstalled { id, everywhere: false, .. } if id == "htop"
+    )));
+    assert!(htop.iter().any(|d| matches!(
+        d,
+        Deed::KeepUninstalled { id, everywhere: true, .. } if id == "htop"
+    )));
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Distro("htop".into());
+    walk_to(&mut v, &r, &Spot::Deed("keep-uninstalled-here"));
+    press(&mut v, Press::Enter, &r);
+    v.at = Spot::Answer(Answer::Yes);
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Decline {
+            id: "htop".into(),
+            machines: Some(vec!["noctua".into()])
+        }]
+    );
+    // DECLINED EVERYWHERE ALREADY: nothing more to keep uninstalled.
+    let gimp = deeds(Level::Distro("gimp".into()), &r);
+    assert!(
+        !gimp
+            .iter()
+            .any(|d| matches!(d, Deed::KeepUninstalled { .. }))
+    );
+    // REFUSED, the distro needing it: said, and still brought back.
+    for t in every_language() {
+        let mut v = open(Opening::Home, &r);
+        v.level = Level::Distro("zsh".into());
+        let said = drawn(&rows_of(&v, &r, &t));
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::SOFTWARE_DECLARED_ROW_DECLINED)),
+            "{said}"
+        );
+        assert!(
+            said.contains(&t.t(ronoctua_i18n::key::SOFTWARE_DECLARED_ROW_BRING_BACK)),
+            "{said}"
+        );
+    }
+    let mut v = open(Opening::Declined, &r);
+    walk_to(&mut v, &r, &Spot::Declined("zsh".into()));
+    press(&mut v, Press::Enter, &r);
+    assert_eq!(v.level, Level::Distro("zsh".into()));
+    walk_to(&mut v, &r, &Spot::Deed("bring-back"));
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Undecline { id: "zsh".into() }]
+    );
+    // A PROGRAM THE DISTRO NO LONGER CARRIES: its page, and back.
+    let mut v = open(Opening::Declined, &r);
+    walk_to(&mut v, &r, &Spot::Declined("old-thing".into()));
+    press(&mut v, Press::Enter, &r);
+    assert_eq!(v.level, Level::Distro("old-thing".into()));
+    walk_to(&mut v, &r, &Spot::Deed("bring-back"));
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Undecline {
+            id: "old-thing".into()
+        }]
+    );
+    // NO LONGER DECLINED, STILL LEFT OUT: it comes back with the update.
+    let mut snap = declared_machine();
+    let firefox = snap
+        .declarations
+        .distro
+        .iter_mut()
+        .find(|d| d.app.id == "firefox")
+        .unwrap();
+    firefox.app.on_this_machine = false;
+    firefox.app.declined_here = true;
+    let r = readings(Some(snap));
+    for t in every_language() {
+        let mut v = open(Opening::Home, &r);
+        v.level = Level::Distro("firefox".into());
+        let said = drawn(&rows_of(&v, &r, &t));
+        let returning = t.t(ronoctua_i18n::key::SOFTWARE_DECLARED_RETURNING);
+        let first: String = returning.chars().take(20).collect();
+        assert!(said.contains(&first), "{said}");
+    }
+}
+
+/// FAILS IF: what left the declaration and is still here (the update held
+/// the machine when it was removed, or another computer removed it) does
+/// not say so on its row, or cannot be asked again to go.
+#[test]
+fn what_leaves_at_the_next_update_says_so() {
+    let mut snap = declared_machine();
+    snap.installed[0].trouble = Some(Refusal::LeavesAtNextApply);
+    let key = snap.installed[0].key.clone();
+    let r = readings(Some(snap));
+    for t in every_language() {
+        let v = open(Opening::Home, &r);
+        let rows = rows_of(&v, &r, &t);
+        let row = rows
+            .iter()
+            .find(|x| x.spot == Spot::Program(key.clone()))
+            .expect("still listed");
+        let sentence = t.t(words::refusal_key(Refusal::LeavesAtNextApply));
+        let first: String = sentence.chars().take(16).collect();
+        assert!(
+            drawn(std::slice::from_ref(row)).contains(&first),
+            "{}",
+            drawn(std::slice::from_ref(row))
+        );
+        assert!(matches!(row.can.remove, Some(Deed::ForgetForever { .. })));
+        // ITS PAGE does not call it declared, and says why it is here.
+        let mut v = open(Opening::Home, &r);
+        v.level = Level::Sheet(key.clone());
+        let page = drawn(&rows_of(&v, &r, &t));
+        assert!(
+            !page.contains(&t.t(words::origin_key(Origin::MineDeclared))),
+            "{page}"
+        );
+        assert!(page.contains(&first), "{page}");
+    }
+}
+
+/// FAILS IF: the editor of a DECLARED web app does not say that saving
+/// changes the declaration — the person's other computers take it — or the
+/// editor of one of the person's own says it.
+#[test]
+fn a_declared_web_app_says_its_editor_declares() {
+    use ronoctua_software::declaration::{DeclaredRow, Standing};
+    use ronoctua_software::person::declared::{Entry, WebApp as Declared};
+    let mut snap = declared_machine();
+    snap.declarations.declared.push(DeclaredRow {
+        entry: Entry::Web(Declared {
+            id: "web:mail".into(),
+            machines: None,
+            edited_at: ronoctua_software::person::Stamp::parse("2026-10-05T12:00:00Z").unwrap(),
+            edited_on: "noctua".into(),
+            slug: "mail".into(),
+            name: "Mail".into(),
+            url: "https://mail.example.org/".into(),
+            profile: "Default".into(),
+            icon: None,
+            category: "Network".into(),
+        }),
+        standing: Standing::Applied,
+    });
+    let r = readings(Some(snap));
+    for (slug, declared) in [("mail", true), ("notes", false)] {
+        for t in every_language() {
+            let mut v = open(Opening::Home, &r);
+            v.draft = Some(WebDraft {
+                slug: Some(slug.into()),
+                url: "https://mail.example.org/".into(),
+                adopted: true,
+                ..WebDraft::default()
+            });
+            v.level = Level::WebEditor;
+            let said = drawn(&rows_of(&v, &r, &t));
+            let note = t.t(ronoctua_i18n::key::SOFTWARE_DECLARED_WEB_EDIT);
+            let first: String = note.chars().take(20).collect();
+            assert_eq!(said.contains(&first), declared, "{slug}: {said}");
+        }
+    }
+}
+
+/// The first page has the two doors of the declaration, with how many.
+/// Every level of the declaration draws, in every language, with something
+/// to stand on.
+#[test]
+fn every_level_of_the_declaration_draws_in_every_language() {
+    let r = readings(Some(declared_machine()));
+    let levels = [
+        Level::Declared,
+        Level::Declaration("nix:ripgrep".into()),
+        Level::Declaration("nix:gone".into()),
+        Level::Declaration("appimage:obsidian".into()),
+        Level::Declaration("nix:rarely".into()),
+        Level::Declaration("nix:fresh".into()),
+        Level::Declined,
+        Level::Distro("gimp".into()),
+        Level::Distro("zsh".into()),
+        Level::Distro("firefox".into()),
+        Level::Sheet(AppKey::Nix {
+            attr: "ripgrep".into(),
+        }),
+    ];
+    for t in every_language() {
+        for level in &levels {
+            let mut v = open(Opening::Home, &r);
+            v.level = level.clone();
+            let rows = rows_of(&v, &r, &t);
+            assert!(
+                rows.iter().any(|x| !x.heading),
+                "{level:?} has nothing to stand on"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_first_page_has_the_declarations_doors() {
+    let r = readings(Some(declared_machine()));
+    let v = open(Opening::Home, &r);
+    let rows = rows_of(&v, &r, &en());
+    assert!(rows.iter().any(|x| x.spot == Spot::Door("declared")));
+    assert!(rows.iter().any(|x| x.spot == Spot::Door("declined")));
+    let said = drawn(&rows);
+    assert!(said.contains("5"), "{said}");
 }

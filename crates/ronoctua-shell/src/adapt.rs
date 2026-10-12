@@ -489,6 +489,45 @@ pub fn store() -> ronoctua_store::Store<Prefs> {
     ronoctua_store::Store::at(ronoctua_store::config_dir(), FILE)
 }
 
+/// Why `modeline.json` was not taken as it is written — each with its
+/// sentence, said at the start and on a change alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unread {
+    /// Nothing of it reads: not JSON, or nothing like the switches. Writing
+    /// would replace it, so nothing is written (`write_the_modeline`).
+    Whole,
+    /// A value of it does not read — a word misspelt by hand, a newer
+    /// machine's mode: the store repaired it in the value read, and the file
+    /// keeps it as written (a write of another switch puts it back).
+    Part,
+}
+
+impl Unread {
+    /// What a read owes the person, if anything.
+    #[must_use]
+    pub fn of(reading: &ronoctua_store::Reading<Prefs>) -> Option<Self> {
+        if reading.lost_everything() {
+            Some(Self::Whole)
+        } else if reading.part_not_read() {
+            Some(Self::Part)
+        } else {
+            None
+        }
+    }
+
+    /// Its sentence.
+    #[must_use]
+    pub fn said(self, texts: &Texts) -> String {
+        match self {
+            Self::Whole => texts.t(ronoctua_i18n::key::ECHO_MODELINE_WILL_NOT_PARSE),
+            Self::Part => texts.t_with(
+                ronoctua_i18n::key::BELONGINGS_REPAIR_PART_NOT_READ,
+                &[("file", FILE)],
+            ),
+        }
+    }
+}
+
 /// What the footer does with `modeline.json` as it reads now, against the
 /// copy it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -497,24 +536,42 @@ pub enum Reread {
     Same,
     /// Another hand changed it: this is the file now.
     Taken(Prefs),
-    /// The file does not parse: the copy held is kept, and the footer says
-    /// so (`echo-modeline-will-not-parse`).
-    Refused,
+    /// The file did not read as written: the copy held is kept, and the
+    /// footer says why ([`Unread::said`]).
+    Refused(Unread),
 }
 
-/// The file read again, for the watcher — with `parsed`, never `read`.
+/// The file read again, for the watcher — never as a plain `read`.
 ///
-/// `read` answers a file that does not parse with the DEFAULT, and the
-/// default is the bars visible and every switch reset: a word misspelt by
-/// hand (`"Cover"`) turned the bars back on and said nothing. A refusal is a
-/// value with a sentence (`AGENTS.md`), and the copy held stays what it was.
+/// A lenient read keeps the rest of a file and REPAIRS the value it cannot
+/// take, and the repair of `hidden` is the bars visible: a word misspelt by
+/// hand (`"Cover"`) would turn the bars back on with nothing on the line. So
+/// a file with a repair is refused here, as one that does not parse is — a
+/// refusal is a value with a sentence (`AGENTS.md`), and the copy held stays
+/// what it was. The repair is in the ledger, and a write of another switch
+/// keeps the person's word in the file.
 #[must_use]
 pub fn reread(store: &ronoctua_store::Store<Prefs>, held: &Prefs) -> Reread {
-    match store.parsed() {
-        None => Reread::Refused,
-        Some(fresh) if fresh == *held => Reread::Same,
-        Some(fresh) => Reread::Taken(fresh),
+    let reading = store.reading();
+    if let Some(unread) = Unread::of(&reading) {
+        return Reread::Refused(unread);
     }
+    if reading.value == *held {
+        Reread::Same
+    } else {
+        Reread::Taken(reading.value)
+    }
+}
+
+/// The file as the footer STARTS with it: the switches read (repaired where
+/// a value did not read — there is no copy to keep yet), and what the read
+/// owes the person — the same [`Unread`] a change of the same bytes gives
+/// ([`reread`]), so one content never behaves two ways.
+#[must_use]
+pub fn at_start(store: &ronoctua_store::Store<Prefs>) -> (Prefs, Option<Unread>) {
+    let reading = store.reading();
+    let unread = Unread::of(&reading);
+    (reading.value, unread)
 }
 
 #[cfg(test)]
@@ -593,17 +650,37 @@ mod tests {
         assert!(serde_json::from_str::<Prefs>(r#"{"hidden":"Push"}"#).is_err());
     }
 
-    /// FAILS IF: `Store::parsed` answers a file with an unknown mode with
-    /// anything but `None` — which is what makes the toggle refuse, with the
-    /// sentence, instead of writing over the person's file.
+    /// FAILS IF: the store reads a file with an unknown mode as anything but
+    /// the rest of the file with the mode REPAIRED and listed — what makes
+    /// the watcher refuse it with the sentence (`reread`) — or a write of
+    /// another switch erases the person's word from the file.
     #[test]
-    fn an_unknown_mode_is_refused_by_the_store() {
+    fn an_unknown_mode_is_repaired_by_the_store_and_kept_in_the_file() {
         let dir = std::env::temp_dir().join(format!("ronoctua-hidden-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory");
-        std::fs::write(dir.join(FILE), r#"{"adapt":{},"hidden":"sideways"}"#).expect("written");
+        std::fs::write(
+            dir.join(FILE),
+            r#"{"adapt":{"kiosk":false},"hidden":"sideways"}"#,
+        )
+        .expect("written");
         let store: ronoctua_store::Store<Prefs> =
             ronoctua_store::Store::at(Some(dir.clone()), FILE);
-        assert_eq!(store.parsed(), None);
+        let reading = store.reading();
+        assert_eq!(reading.value.hidden, None);
+        assert!(
+            !reading.value.adapts("kiosk"),
+            "the rest of the file was lost"
+        );
+        let repaired: Vec<&str> = reading.repairs.iter().map(|r| r.pointer.as_str()).collect();
+        assert_eq!(repaired, ["/hidden"]);
+        // ANOTHER SWITCH IS WRITTEN, and the person's word stays.
+        let mut p = reading.value;
+        p.address_line = true;
+        store.write(&p).expect("written");
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(FILE)).expect("read")).expect("json");
+        assert_eq!(raw["hidden"], "sideways");
+        assert_eq!(raw["address_line"], true);
         std::fs::write(dir.join(FILE), r#"{"hidden":"push"}"#).expect("written");
         assert_eq!(store.parsed().and_then(|p| p.hidden), Some(Hidden::Push));
         let _ = std::fs::remove_dir_all(&dir);
@@ -612,7 +689,9 @@ mod tests {
     /// FAILS IF: the WATCHER takes a file that does not parse as the default
     /// — the bars back on and every switch reset, in silence — instead of
     /// keeping the copy it holds and refusing; or stops taking a file another
-    /// hand changed, or takes its own write as news.
+    /// hand changed, or takes its own write as news; or the footer STARTING
+    /// over the same bytes owes the person a different sentence, or none —
+    /// one content behaving two ways.
     #[test]
     fn the_watcher_refuses_an_unknown_mode_and_keeps_its_copy() {
         let dir = std::env::temp_dir().join(format!("ronoctua-reread-{}", std::process::id()));
@@ -627,7 +706,20 @@ mod tests {
         // A WORD MISSPELT BY HAND: capital C.
         std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"Cover"}"#)
             .expect("written");
-        assert_eq!(reread(&store, &held), Reread::Refused);
+        assert_eq!(reread(&store, &held), Reread::Refused(Unread::Part));
+        // AT THE START, the same bytes: the rest of the switches, and the
+        // same sentence owed.
+        let (start, owed) = at_start(&store);
+        assert!(
+            start.address_line,
+            "the rest of the file was lost at the start"
+        );
+        assert_eq!(start.hidden, None);
+        assert_eq!(owed, Some(Unread::Part));
+        // NOT JSON: the same refusal both ways, the other sentence.
+        std::fs::write(dir.join(FILE), "{ not json").expect("written");
+        assert_eq!(reread(&store, &held), Reread::Refused(Unread::Whole));
+        assert_eq!(at_start(&store), (Prefs::default(), Some(Unread::Whole)));
         std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"push"}"#)
             .expect("written");
         assert_eq!(reread(&store, &held), Reread::Same);
@@ -642,6 +734,7 @@ mod tests {
         // NO FILE is a fresh machine, and the default is right there.
         std::fs::remove_file(dir.join(FILE)).expect("removed");
         assert_eq!(reread(&store, &held), Reread::Taken(Prefs::default()));
+        assert_eq!(at_start(&store), (Prefs::default(), None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

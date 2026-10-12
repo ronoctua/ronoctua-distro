@@ -160,7 +160,9 @@ não envelheça, e um check novo entra no `most` sozinho.
 O **`gate`** roda o `nix flake check` depois de **medir a memória livre**: ele limita quantas
 compilações correm juntas e constrói as três pesadas uma de cada vez. Sem isso, numa máquina com
 `earlyoom`, o `rustc` morre com `signal: 15` **sem diagnóstico nenhum** — parece defeito de compilação
-e é falta de RAM. Se acontecer mesmo assim, ele diz quem o `earlyoom` matou.
+e é falta de RAM. Se acontecer mesmo assim, ele diz quem foi morto e por quem — o `earlyoom`, o
+`systemd-oomd` ou o OOM killer do kernel. Numa máquina da distro ele também não passa do teto do
+`nix-daemon` (ver [O que a máquina precisa ter](#o-que-a-máquina-precisa-ter)).
 
 As duas baterias andam em fases: **0** avalia o `.drv` de cada alvo em lotes, antes de construir
 qualquer coisa (um teste de VM avaliado custa ~260 MiB, e todos juntos passam de 8 GiB); **1** as
@@ -197,7 +199,10 @@ do app de ícones (`--door icons`, idem: `--screen`, `--type`, `--key`), a do na
 sobre um histórico vazio dela, que teclas e cliques enchem), a do video-metrics
 (`--door video-metrics --catalog <arquivo>`, sobre uma cópia do catálogo dado), a dos containers
 (`--door containers`, com um podman de mentira que responde o que foi gravado), a dos pertences
-(`--door belongings --places <pasta>`, sobre uma cópia da máquina plantada nela), e quatro sobre uma
+(`--door belongings --places <pasta>`, sobre uma cópia da máquina plantada nela), a do pendrive
+(`--door stick --scene <arquivo>`), a central de programas (`--door software --room <pasta>`), a do
+Incus (`--door incus --scene <arquivo>`), a das contas LLM (`--door agents --places <pasta>`), a da
+atualização sobre uma cena inteira (`--door update-scene --scene <arquivo>`), e quatro sobre uma
 cena dada inteira (`scene_photograph.rs`): a das telas (`--door display --screens
 one|two|stacked|dark`), a do clipboard (`--door clipboard --entry <texto> --image <png>`), a cortina
 de baixo do redimensionador (`--door curtain --screen <l>x<a> --room <l>x<a>`) e a linha de vida
@@ -206,7 +211,10 @@ de baixo do redimensionador (`--door curtain --screen <l>x<a> --room <l>x<a>`) e
 `--app`, `--state`, `--tone`, `--states` e `--local` descrevem a janela em foco, `--screens` e
 `--entry` dão as telas e o histórico, e os passos são `--leader`, `--key` e `--command`), tirada por
 `ronoctua-shell photograph`; toda porta que lê o resto da linha diz as opções dela em
-`photograph --door <porta> --help`. A porta é a de produção, desligada, e o quadro sai da mesma
+`photograph --door <porta> --help`. No rodapé, as vistas do Incus, da segurança e do pendrive leem a
+cena que uma variável nomeia, no formato da câmera da janela delas, nunca a desta máquina
+(`RONOCTUA_PHOTOGRAPH_INCUS_SCENE`, `RONOCTUA_PHOTOGRAPH_SECURITY_SCENE` e
+`RONOCTUA_PHOTOGRAPH_STICK_SCENE`). A porta é a de produção, desligada, e o quadro sai da mesma
 função com que ela se desenha na tela (`door::compose`); a comparação pixel a
 pixel com a porta numa tela ainda está no `docs/PENDING.md`. O player dela não age fora da porta: o
 que um clique faria sai impresso (`asked the player: …`, `would have …`), e a resposta do daemon é o
@@ -297,7 +305,9 @@ namespace morre com o shell, eles não.
 nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)
 nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
 nix build .#iso        o ISO instalável
+nix run .#fetch-iso    baixa o ISO da versão publicada, confere e junta as partes
 nix run .#install      instala (ensaia sem --execute)
+nix run .#apply-here   a máquina instalada com este checkout no lugar do input
 ```
 
 ### Quando o ponteiro parece atrasado
@@ -315,19 +325,88 @@ um compositor a mais entre a mão e a tela. Medir a outra metade exige a distro 
 Boot, TPM, hibernação e desempenho gráfico não se provam em VM.
 
 **O ISO carrega o que ninguém tem em cache** — o shell, o compositor pinado, o `libghostty-vt`, os
-buffers wasm e as fontes vão no `isoImage.storeContents`. A máquina alvo não compila nada; o resto ela
-baixa do `cache.nixos.org`.
+buffers wasm e as fontes vão no `isoImage.storeContents`, sempre: a distro não tem cache binário. A
+máquina alvo não compila nada; o resto ela baixa do `cache.nixos.org` — e do cache binário da pessoa,
+quando os pertences dela nomeiam um.
 
-**A instalação `minimal` tem 6,9 GiB contra 22,8 da `full`.** Ela deixa de fora os aplicativos, não a
-distro — e um deles é uma linha depois:
+**A instalação `minimal` tem ~11,8 GiB contra ~29 da `full`.** Ela deixa de fora os aplicativos, não a
+distro nem o trabalho nela — o toolchain do devshell e os agentes estão nas duas — e um deles é uma
+linha depois:
 
 ```
-ronoctua.browser.enable = true;    # em /etc/nixos/host.nix, depois nixos-rebuild switch
+ronoctua.browser.enable = true;    # no host.nix da máquina, depois sudo systemctl start ronoctua-rescue-rebuild.service
 ```
 
-Depois da primeira instalação, o laço deixa de passar pelo ISO: edite, e rode
-`nixos-rebuild switch --flake /etc/nixos#noctua` na própria máquina. E o `.#dev` continua servindo
-ali dentro, com o nome próprio que ele tem (ver [`.#dev`](#dev--o-compositor-numa-janela)).
+Depois da primeira instalação, o laço deixa de passar pelo ISO. O `/etc/nixos` é o flake da
+máquina, e o código da distro não está lá: ele vem do input `ronoctua`, então editar ali não muda
+nada. No checkout, `nix run .#apply-here` constrói a máquina com o checkout no lugar do input e troca
+para ela, sem gravar o lock (ver [Publicar uma versão](#publicar-uma-versão)). E o `.#dev` continua
+servindo ali dentro, com o nome próprio que ele tem (ver [`.#dev`](#dev--o-compositor-numa-janela)).
+
+<!-- anchor: L01 -->
+
+**O age pós-quântico se confere sem VM.** `cargo test -p ronoctua-pq` responde aos vetores dos três
+textos que definem o `mlkem768x25519` (o X-Wing, o HPKE e o spec do age); `cargo run -p ronoctua-pq
+--bin ronoctua-test-pq -- vectors` os lista um a um. O cruzamento com o `age` do Go, nos dois
+sentidos, é o `pq-age-interop`, que pede o workspace de `release`.
+
+<!-- anchor: L15 -->
+
+## O que a máquina precisa ter
+
+Numa máquina instalada com a distro, nos dois perfis, tudo abaixo já vem pronto: o toolchain do
+devshell está no store, saída por saída e com o `stdenv` (o `nix develop` não baixa toolchain
+nenhum), o rust, o `cc` com que ele linka e os agentes de código estão no PATH, a pessoa está no grupo
+`kvm`, o daemon oferece as quatro `system-features` e o direnv do sistema já
+carrega o `nix-direnv`. **`LEADER / c`** clona este repositório numa pasta e a abre — a pergunta nomeia
+o host que o endereço nomeia, e respondê-la é deixá-lo ser consultado. O que o checkout gera (os ganchos, o WIT, os
+buffers, as tabelas `-rs`) e os programas que o build assa seguem o commit: o primeiro `nix develop`
+os constrói, e o que essas construções pedem de fora (as crates de um buffer) ainda vem da rede. Em
+outro sistema, confira um a um:
+
+| | o quê | por quê |
+|---|---|---|
+| memória | 14 GiB na máquina de referência | o `rustc` do `ronoctua-shell` em `release` chega a 5 GiB sozinho; o gate mede o que está livre e se encolhe, mas abaixo de ~10 GiB livres as pesadas vão com um núcleo e podem não caber |
+| disco | dezenas de GB livres | o diretório de build do cargo (`nix/cargo-dirs.nix`, fora da árvore) passa de 70 GB com os perfis `loop` e `release`; o store cresce a cada bateria |
+| KVM | `/dev/kvm` legível e gravável por você | os testes de VM e o `.#vm` sem aceleração emulam cada instrução |
+| `system-features` | `kvm nixos-test big-parallel benchmark` no `nix.conf` do daemon | um teste de VM pede `kvm` e `nixos-test`; sem eles o Nix recusa construí-lo |
+| `trusted-users` | o seu usuário, como na distro (`nix/modules/base.nix`) | de quem não é confiável o daemon ignora, com um aviso, os ajustes restritos de um `--option` (os substituters, o sandbox), e recusa um caminho sem assinatura trazido de outra máquina (`nix copy`) |
+| rede | na primeira avaliação | os inputs do flake e as fontes (~1,4 GB comprimidos, assets do Release `fonts-v1`); depois, só o que muda |
+
+**Uma máquina que só constrói** pode dar mais memória ao daemon: na distro, o `nix-daemon` tem
+`MemoryHigh` em `ronoctua.memory.buildCeiling` (metade da RAM, por padrão), e o gate nunca planeja
+além dele. Num servidor de build, `ronoctua.memory.buildCeiling = "85%";` no `host.nix` sobe o teto;
+o `systemd-oomd` continua vigiando a `system.slice` como antes.
+
+**O superpacote de ícones não é mais entrada do devshell.** Na `full` ele já está no store; na
+`minimal` o devshell não o exporta e imprime a linha que o traz (`nix build .#noctua-icon-theme
+--out-link ~/.cache/ronoctua-distro/icons`, 0,61 GiB). O `.#dev`, que é onde os ícones aparecem,
+continua com ele como entrada: rodar o laço o traz, em qualquer máquina.
+
+
+<!-- anchor: L16 -->
+
+## Publicar uma versão
+
+As máquinas seguem a branch `release`, e só o `nix run .#release` a move — para frente, depois do
+gate. Ele roda na `main` limpa e igual à `origin/main`, e recusa antes de qualquer custo o que não
+estiver assim (o login do `gh` também).
+
+```
+nix run .#release -- --dry-run          confere tudo que é de graça e diz o que faria
+nix run .#release                       gate, sistemas, ISO (com a semente), rascunho, release, publicação
+nix run .#release -- --sign             e as checksums numa tag assinada (pede a chave)
+nix run .#release -- --rollback-to <rev>    a release volta a uma versão publicada antes, que volta a ser a mais recente
+```
+
+A distro não tem cache binário: nada é enviado a cache nenhum. O trabalho fica em
+`~/.cache/ronoctua-distro/release/<tag>`; rodar de novo depois de uma falha retoma: o rascunho do
+GitHub recebe os assets de novo. Ele nunca faz commit.
+
+Para ver o checkout na própria máquina sem publicar, `nix run .#apply-here` (`-- --dry-run` só mede):
+constrói o flake da máquina com o checkout no lugar do input e troca para ele, sem tocar o lock; a
+próxima atualização volta à `release`. A troca recusa enquanto a atualização roda, enquanto um ensaio
+de boot espera ser julgado e quando a geração nova tiraria do menu de boot a última que deu certo.
 
 ## Se algo der errado
 

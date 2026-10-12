@@ -190,6 +190,31 @@ pub fn read(roots: &Roots, slug: &str) -> Option<WebApp> {
     web_app_of(slug, &text)
 }
 
+/// One web app, wherever its entry is: the person's own first (it shadows
+/// the system's of the same name, as the launcher reads them), then each
+/// folder of `$XDG_DATA_DIRS` — where a DECLARED web app's entry is, in the
+/// person's profile the system built. Reads the disk.
+#[must_use]
+pub fn read_anywhere(roots: &Roots, slug: &str) -> Option<WebApp> {
+    if !is_slug(slug) {
+        return None;
+    }
+    read(roots, slug).or_else(|| read_system(roots, slug))
+}
+
+/// One web app's entry in the folders of `$XDG_DATA_DIRS` only — the
+/// declared copy the system built, never the person's own. Reads the disk.
+#[must_use]
+pub fn read_system(roots: &Roots, slug: &str) -> Option<WebApp> {
+    if !is_slug(slug) {
+        return None;
+    }
+    roots.data_dirs.iter().find_map(|dir| {
+        let text = std::fs::read_to_string(dir.join("applications").join(desktop_id(slug))).ok()?;
+        web_app_of(slug, &text)
+    })
+}
+
 /// A web app out of its `.desktop` text; `None` when the file is not one of
 /// ours (no `X-Ronoctua-Web-Url`). Pure.
 #[must_use]
@@ -488,8 +513,8 @@ fn is_format(n: u32) -> bool {
 /// file system's words when a write failed.
 pub fn run(ctx: &Context, order: &Order, report: &mut dyn Report) -> Done {
     match order {
-        Order::WebCreate { spec } => write(ctx, None, spec, report),
-        Order::WebEdit { slug, spec } => write(ctx, Some(slug), spec, report),
+        Order::WebCreate { spec } => write(ctx, None, false, spec, report),
+        Order::WebEdit { slug, spec } => write(ctx, Some(slug), false, spec, report),
         Order::Remove {
             key: AppKey::Web { slug },
             ..
@@ -501,8 +526,33 @@ pub fn run(ctx: &Context, order: &Order, report: &mut dyn Report) -> Done {
     }
 }
 
-/// Create (`existing` `None`) or rewrite a web app.
-fn write(ctx: &Context, existing: Option<&str>, spec: &WebSpec, report: &mut dyn Report) -> Done {
+/// Write the person's own entry of a DECLARED web app — made when the
+/// system's declared one is the only one: the editor's change to it
+/// ([`crate::declare::edit_declared_web`], which declares it again).
+///
+/// # Errors
+///
+/// As an edit.
+#[cfg(all(feature = "net", feature = "draw"))]
+pub(crate) fn write_declared(
+    ctx: &Context,
+    slug: &str,
+    spec: &WebSpec,
+    report: &mut dyn Report,
+) -> Done {
+    write(ctx, Some(slug), true, spec, report)
+}
+
+/// Create (`existing` `None`) or rewrite a web app; `may_make` lets a
+/// rewrite make the person's entry the slug does not have yet (a declared
+/// one's).
+fn write(
+    ctx: &Context,
+    existing: Option<&str>,
+    may_make: bool,
+    spec: &WebSpec,
+    report: &mut dyn Report,
+) -> Done {
     report.step(Phase::Resolving, 0, 0, &spec.name);
     if ctx.tools.chrome.is_none() {
         return Err(Failure::refused(Refusal::NoBrowser));
@@ -518,7 +568,7 @@ fn write(ctx: &Context, existing: Option<&str>, spec: &WebSpec, report: &mut dyn
         .unwrap_or_else(|| host.clone());
     let slug = match existing {
         Some(slug) => {
-            if read(&ctx.roots, slug).is_none() {
+            if !is_slug(slug) || (!may_make && read(&ctx.roots, slug).is_none()) {
                 return Err(Failure {
                     refusal: Some(Refusal::UnknownItem),
                     trouble: format!("no web app `{slug}`"),
@@ -712,8 +762,9 @@ fn wrote(path: &Path, e: &std::io::Error) -> Failure {
 /// Never `--kiosk`, never `--enable-features` (the last one given wins, and it
 /// would replace the wrapper's), never a `--user-data-dir`.
 ///
-/// Reads the web app's `.desktop`. The address is checked again on the way
-/// out: the file is the person's and may have been edited by hand.
+/// Reads the web app's `.desktop` — the person's own, else a declared one in
+/// `$XDG_DATA_DIRS` ([`read_anywhere`]). The address is checked again on the
+/// way out: the file is the person's and may have been edited by hand.
 ///
 /// # Errors
 ///
@@ -721,7 +772,7 @@ fn wrote(path: &Path, e: &std::io::Error) -> Failure {
 /// bad one.
 pub fn open_argv(ctx: &Context, slug: &str) -> Result<Vec<String>, crate::Refusal> {
     let chrome = ctx.tools.chrome.as_deref().ok_or(Refusal::NoBrowser)?;
-    let app = read(&ctx.roots, slug).ok_or(Refusal::UnknownItem)?;
+    let app = read_anywhere(&ctx.roots, slug).ok_or(Refusal::UnknownItem)?;
     argv_for(chrome, &app.url, &app.profile)
 }
 
@@ -801,9 +852,26 @@ fn unique_slug(roots: &Roots, name: &str, host: &str) -> String {
         .into_iter()
         .find(|s| !s.is_empty())
         .unwrap_or_else(|| "web".to_owned());
+    // NOR A DECLARED ONE'S: the system's entry of that name (a new app of
+    // the person's would shadow it, and the reconciler would take the new
+    // one for the copy the declaration replaces), or a slug the declaration
+    // names for another computer.
+    let declared: Vec<String> = crate::declaration::read_declared(roots)
+        .map(|d| {
+            d.apps
+                .iter()
+                .filter_map(|e| match e {
+                    ronoctua_person::declared::Entry::Web(w) => Some(w.slug.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let taken = |s: &str| {
         roots.applications().join(desktop_id(s)).exists()
             || roots.ours().join("webapps").join(s).exists()
+            || read_system(roots, s).is_some()
+            || declared.iter().any(|d| d == s)
     };
     if !taken(&base) {
         return base;
@@ -925,6 +993,52 @@ fn storable(choice: &IconChoice, copy: &Path) -> IconChoice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a declared web app — its entry in the person's profile the
+    /// system built, a folder of `$XDG_DATA_DIRS` — does not open, or the
+    /// person's own entry of the same name does not shadow it, as it does in
+    /// the launcher.
+    #[test]
+    fn a_declared_web_app_opens_from_the_systems_entry() {
+        let root = std::env::temp_dir().join(format!(
+            "ronoctua-software-web-anywhere-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let roots = Roots::under(&root);
+        let entry = |url: &str| {
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Mail\nX-Ronoctua-Web-Url={url}\nX-Ronoctua-Web-Profile=Default\nX-Ronoctua-Declared=web:mail\n"
+            )
+        };
+        let system = roots.data_dirs[0].join("applications");
+        std::fs::create_dir_all(&system).unwrap();
+        std::fs::write(
+            system.join(desktop_id("mail")),
+            entry("https://declared.example.org/"),
+        )
+        .unwrap();
+        assert!(
+            read(&roots, "mail").is_none(),
+            "the person has no entry of their own"
+        );
+        assert_eq!(
+            read_anywhere(&roots, "mail").map(|w| w.url),
+            Some("https://declared.example.org/".to_owned())
+        );
+        std::fs::create_dir_all(roots.applications()).unwrap();
+        std::fs::write(
+            roots.applications().join(desktop_id("mail")),
+            entry("https://mine.example.org/"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_anywhere(&roots, "mail").map(|w| w.url),
+            Some("https://mine.example.org/".to_owned())
+        );
+        assert!(read_anywhere(&roots, "../mail").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     const FAKE_CHROME: &str = "/run/current-system/sw/bin/google-chrome-stable";
 
@@ -1510,6 +1624,35 @@ mod tests {
                 && !has_scheme("x.example:8443/y")
                 && !has_scheme("x.example/a:b")
         );
+    }
+
+    /// THE TABLE THE NIX SIDE READS TOO (`web-app-ids-agree`): a launcher
+    /// entry a person DECLARES is written by Nix (`nix/declared-apps/web.nix`),
+    /// which repeats this arithmetic without a URL parser. Every `agree` row
+    /// is this function's answer; every `refused` row is an address the Nix
+    /// side refuses because a browser rewrites it (or rejects it) first —
+    /// which this proves, so the refusals are exactly where the two would
+    /// part.
+    #[test]
+    fn the_declared_web_app_ids_are_this_arithmetic() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/web-app-ids.json")).unwrap();
+        let text = |row: &serde_json::Value, key: &str| row[key].as_str().unwrap().to_owned();
+        let agree = table["agree"].as_array().unwrap();
+        let refused = table["refused"].as_array().unwrap();
+        assert!(agree.len() >= 10 && refused.len() >= 10);
+        for row in agree {
+            let (url, profile) = (text(row, "url"), text(row, "profile"));
+            assert_eq!(app_id(&url, &profile), text(row, "id"), "{url} {profile}");
+        }
+        for row in refused {
+            let url = text(row, "url");
+            let rewritten = Url::parse(&url).map_or(true, |u| u.as_str() != url);
+            assert!(
+                rewritten,
+                "{url} is kept as written: the Nix side need not refuse it"
+            );
+        }
     }
 
     #[cfg(feature = "draw")]

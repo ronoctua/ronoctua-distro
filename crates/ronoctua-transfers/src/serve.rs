@@ -133,6 +133,9 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                     Engine::Scan => crate::scan::run(&mine, id, &switch, work),
                     Engine::Container => crate::container::run(&mine, id, &switch, work),
                     Engine::Belongings => crate::belongings::run(&mine, id, &switch, work),
+                    Engine::Seal => crate::seal::run(&mine, id, &switch, work),
+                    Engine::Incus => crate::incus::run(&mine, id, &switch, work),
+                    Engine::Stick => crate::stick::run(&mine, id, &switch, work),
                 })
             {
                 tracing::error!(error = %e, "could not start the job's thread");

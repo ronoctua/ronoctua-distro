@@ -46,7 +46,18 @@ const AGAIN: Duration = Duration::from_millis(20);
 /// The lock, held until it is dropped.
 #[derive(Debug)]
 pub struct Held {
-    _file: File,
+    file: File,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // LET GO EXPLICITLY, not by closing: a `flock` belongs to the open
+        // file, and a child another thread forks inherits a copy of every
+        // descriptor until its `exec` closes it — closing ours alone would
+        // leave the lock held for that instant (MEASURED: the door's `busy`
+        // saw a run that had ended, under the tests' parallel git children).
+        let _ = self.file.unlock();
+    }
 }
 
 /// Takes this machine's lock, waiting at most [`PATIENCE`].
@@ -80,16 +91,31 @@ pub fn hold(places: &Places) -> Result<Held, Refusal> {
     // SAID TO WHOEVER WATCHES THE FOLDER: a new time is an `ATTRIB`, which a
     // door's watch hears — and redraws "a sync is running".
     let _ = file.set_modified(SystemTime::now());
-    Ok(Held { _file: file })
+    Ok(Held { file })
 }
 
 /// Whether a run holds the lock now. Never waits, and never makes the file.
 #[must_use]
 pub fn busy(places: &Places) -> bool {
-    let Ok(file) = File::open(places.lock()) else {
+    busy_at(&places.lock())
+}
+
+/// [`busy`], for whoever knows the lock's path and not the rest of the
+/// places — the brain's reminder, from the roots it was born with.
+#[must_use]
+pub fn busy_at(lock: &std::path::Path) -> bool {
+    let Ok(file) = File::open(lock) else {
         return false;
     };
-    matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock))
+    match file.try_lock_shared() {
+        // THE LOOK LETS GO AT ONCE, explicitly — the same reason as `Held`.
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(TryLockError::WouldBlock) => true,
+        Err(TryLockError::Error(_)) => false,
+    }
 }
 
 #[cfg(test)]

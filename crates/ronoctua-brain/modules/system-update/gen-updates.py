@@ -59,7 +59,43 @@ DOES = {
     "upgrade-software",
     "refresh-cache",
     "reclaim-space",
+    # THE 2026-10-05 WAVE's classes (gather, migrate, verify,
+    # reconcile-declared, publish), after its anchor.
+    # ── anchor: L19 ──
+    #
+    # `gather` brings in, as the person and BEFORE the root half, what the
+    # person declared elsewhere: the plain part of the belongings, the pins
+    # moved forward, the declarations staged for root's applier. `migrate`
+    # turns an old machine directory (a copy of the distro) into the
+    # machine's own flake, before anything moves its inputs. `verify` tries
+    # every declared entry on its own, after the inputs moved and before the
+    # rebuild, so one broken entry is held instead of breaking the build.
+    # `reconcile-declared` is the person's half bringing what is DECLARED and
+    # nothing else (the Android apps, the imperative copies a declared one
+    # replaces). `publish` is the last thing: the machine's record and the
+    # plain part pushed, so the person's other machines learn what this one
+    # did.
+    "gather",
+    "migrate",
+    "verify",
+    "reconcile-declared",
+    "publish",
 }
+
+# THE ORDER THE CLASSES ARE DECLARED IN, for the Rust enum: the sequence's own
+# order, so the table reads the way a run goes.
+DOES_ORDER = [
+    "gather",
+    "migrate",
+    "move-inputs",
+    "verify",
+    "apply-configuration",
+    "upgrade-software",
+    "refresh-cache",
+    "reclaim-space",
+    "reconcile-declared",
+    "publish",
+]
 
 # There are exactly two failure policies and no third one. "Ask" is not among
 # them: this runs from a unit, and there is no polkit agent and no terminal to
@@ -69,6 +105,28 @@ ON_FAILURE = {"stop", "carry-on"}
 # The preconditions. `always` is honest and not a hole: some steps genuinely
 # cannot be inapplicable, and inventing a directory to test would be worse.
 NEEDS = {"always", "binary", "directory", "writable-file", "network"}
+# THE 2026-10-05 WAVE's preconditions (file, power, free-space), after its
+# anchor.
+# ── anchor: L19 ──
+#
+#   file        this file exists (`writable-file` asks more of it: that it can
+#               be written; an old layout is recognised by a file it has)
+#   power       on mains, or the battery at this many per cent or more — or
+#               the person said yes to this run on battery (`--on-battery`,
+#               the doors' question). ONE number for the whole table: the
+#               doors ask below it, and two numbers would be two questions.
+#   free-space  `{ at; percent; cap-gib; }`: the filesystem holding `at` has
+#               that share of itself free, never asking for more than the
+#               cap. Below it the store's garbage is collected FIRST, and only
+#               then is the step refused. ROOT ONLY: only root may collect
+#               the store's garbage, and a person's step short of room is not
+#               something the store can give it.
+#   not-held    the machine's record names no hold (`ronoctua-machine hold`):
+#               the step that moves the distro forward leaves it alone.
+NEEDS |= {"file", "power", "free-space", "not-held"}
+
+# The fields of a `free-space` term, and nothing else.
+FREE_SPACE_FIELDS = {"at", "percent", "cap-gib"}
 
 # WHERE THE BRAIN LOOKS, and it is spelled in exactly two places for this
 # sequence: here, and `ronoctua_brain::runner::REPORTS_LEAF`. This module's
@@ -106,6 +164,16 @@ FIELDS = {
     "needs",
     "on-failure",
     "enable",
+    # THE REHEARSAL OF A PROGRAM: the same program, with these arguments,
+    # changing nothing — what a rehearsal RUNS in the step's place, as
+    # `rehearsal` is for a unit. Without it a rehearsal prints the command.
+    "rehearse",
+    # THE REFUSALS THAT ARE NEWS AND NOT FAILURES: the program's last line on
+    # standard output is `refused <word>`, and a word listed here is recorded
+    # `declined-<word>` and the sequence goes on. The machine's apply refuses
+    # the system whose boot trial failed until the distro moves on: nothing
+    # new to apply is not an update that broke.
+    "declines",
 }
 
 # The wiring the module owns: paths and unit names live THERE, once, and arrive
@@ -120,7 +188,32 @@ WIRING = {
     "config",
     "system-unit",
     "system-unit-rehearsal",
+    # THE 2026-10-05 WAVE's preconditions, by store path and by place:
+    # `systemd-ac-power`, the kernel's power supplies, `df`, the store's
+    # garbage collector, `jq` and the machine's record (the hold), and how the
+    # root half finds the person's yes to a run on battery (`id` and the
+    # person's name, under the runtime directories' root).
+    "ac-power",
+    "power-supplies",
+    "df",
+    "collect-garbage",
+    "jq",
+    "machine-state",
+    "id",
+    "person",
+    "runtime-root",
 }
+
+# WHERE THE PERSON'S YES TO A RUN ON BATTERY IS, under the person's runtime
+# directory: the doors write it after the question, `--on-battery` writes it
+# from a terminal, and only an executing run reads and removes it. The
+# window's `ON_BATTERY` spells the same leaf, and the module's
+# `…-names-agree` holds the two together.
+ON_BATTERY = "ronoctua-update/on-battery"
+
+# HOW LONG THE ROOT HALF WAITS FOR ITS OWN LOCK, in seconds — see where the
+# runner takes it (`emit_runner`).
+ROOT_LOCK_WAIT_S = 30
 
 # English kebab, as invariant 18 asks of every id.
 ID = re.compile(r"^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$")
@@ -198,6 +291,34 @@ def rust_variant(name: str) -> str:
     return "".join(p.capitalize() for p in name.split("-"))
 
 
+def read_free_space(at: str, raw: object) -> tuple[str, int, int] | None:
+    """A `free-space` term's `{ at; percent; cap-gib; }`, or `None` refused.
+
+    A SHARE OF THE DISK AND A CAP, the shape `assets/cache.nix` gives every
+    size it declares: a number of gigabytes measured on one laptop is wrong on
+    the next, and a share alone asks a big disk for hundreds of gigabytes.
+    The path is ABSOLUTE: only a root step may carry this, and root's
+    variables are not the person's.
+    """
+    if not isinstance(raw, dict) or set(raw) != FREE_SPACE_FIELDS:
+        complain(
+            at,
+            f"`free-space` is {{ {'; '.join(sorted(FREE_SPACE_FIELDS))}; }}, got {raw!r}",
+        )
+        return None
+    place, percent, cap = raw["at"], raw["percent"], raw["cap-gib"]
+    if not isinstance(place, str) or not place.startswith("/") or not PATH.match(place):
+        complain(at, f"`free-space.at` is an absolute path, got {place!r}")
+        return None
+    if isinstance(percent, bool) or not isinstance(percent, int) or not 1 <= percent <= 50:
+        complain(at, f"`free-space.percent` is a share from 1 to 50 per cent, got {percent!r}")
+        return None
+    if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 4096:
+        complain(at, f"`free-space.cap-gib` is a whole number of GiB from 1 to 4096, got {cap!r}")
+        return None
+    return (place, percent, cap)
+
+
 def read_needs(where: str, raw: object) -> list[tuple[str, object]]:
     """The precondition list, one `(kind, value)` per term.
 
@@ -224,7 +345,7 @@ def read_needs(where: str, raw: object) -> list[tuple[str, object]]:
         if kind not in NEEDS:
             complain(at, f"`{kind}` does not exist (there are: {', '.join(sorted(NEEDS))})")
             continue
-        if kind in ("always", "network"):
+        if kind in ("always", "network", "not-held"):
             if value is not True:
                 complain(at, f"`{kind}` only takes `true`, got {value!r}")
                 continue
@@ -232,7 +353,18 @@ def read_needs(where: str, raw: object) -> list[tuple[str, object]]:
             if not isinstance(value, str) or not ID.match(value):
                 complain(at, f"`binary` is a program name, got {value!r}")
                 continue
-        else:  # directory, writable-file
+        elif kind == "power":
+            # A WHOLE PER CENT, and a share a battery can have: zero would be
+            # a precondition nothing fails, and a hundred one a battery
+            # rarely reports.
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 99:
+                complain(at, f"`power` is a battery share from 1 to 99 per cent, got {value!r}")
+                continue
+        elif kind == "free-space":
+            value = read_free_space(at, value)
+            if value is None:
+                continue
+        else:  # directory, writable-file, file
             if not isinstance(value, str) or not PATH.match(value):
                 complain(
                     at,
@@ -252,14 +384,18 @@ def read_needs(where: str, raw: object) -> list[tuple[str, object]]:
     return out
 
 
-def read_run(where: str, raw: object, program: str) -> list[str]:
-    """The arguments, and every reason one of them cannot be there."""
+def read_run(where: str, raw: object, program: str, field: str = "run") -> list[str]:
+    """The arguments, and every reason one of them cannot be there.
+
+    `field` names the list in the refusal: `run`, or `rehearse` — whose
+    arguments go through every refusal `run`'s do, with no exception.
+    """
     if not isinstance(raw, list):
-        complain(where, f"`run` is a list of arguments, got {raw!r}")
+        complain(where, f"`{field}` is a list of arguments, got {raw!r}")
         return []
     out: list[str] = []
     for i, token in enumerate(raw):
-        at = f"{where}.run[{i}]"
+        at = f"{where}.{field}[{i}]"
         if not isinstance(token, str) or not token:
             complain(at, f"an argument has to be text, got {token!r}")
             continue
@@ -364,6 +500,15 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
                     "PERSON, and root does not have them. Use an absolute path, or drop the "
                     "`root = true`.",
                 )
+    elif root is False and any(kind == "free-space" for kind, _ in needs):
+        # ONLY ROOT COLLECTS THE STORE'S GARBAGE, which is what this
+        # precondition does before it refuses — and a person's step short of
+        # room is not something a collection made on its behalf can promise.
+        complain(
+            where,
+            "`free-space` in a step of the person's: it collects the store's garbage "
+            "before refusing, and only root may. It belongs to a root step.",
+        )
 
     # ---- WHAT IT RUNS: exactly one of three shapes ------------------------
     shapes = [k for k in ("package", "unit", "binary") if k in raw]
@@ -378,11 +523,21 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
 
     package = program = unit = binary = rehearsal = None
     run: list[str] = []
+    rehearse: list[str] | None = None
+    declines: list[str] = []
 
     if "rehearsal" in raw and kind != "unit":
         # A REHEARSAL UNIT FOR A PROGRAM would be a second command for the
         # same step, and nothing would keep the two meaning the same thing.
         complain(where, "`rehearsal` goes with `unit` only: it is the unit a rehearsal starts in its place")
+    if ("rehearse" in raw or "declines" in raw) and kind == "unit":
+        # A UNIT'S REHEARSAL IS A UNIT (`rehearsal`), and what a unit said
+        # is its status, not a line a runner can read back.
+        complain(
+            where,
+            "`rehearse` and `declines` go with a program (`package` or `binary`), "
+            "not with `unit`: a unit rehearses through `rehearsal`",
+        )
 
     if kind == "package":
         package, program = raw.get("package"), raw.get("program")
@@ -452,6 +607,35 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
                 "fails, and the right answer is a skipped step saying why.",
             )
 
+    # ---- WHAT A REHEARSAL RUNS, AND WHAT A REFUSAL MEANS ------------------
+    if kind in ("package", "binary"):
+        name = (program if kind == "package" else binary) or ""
+        if "rehearse" in raw:
+            given = raw.get("rehearse")
+            rehearse = read_run(where, given, name, "rehearse")
+            if isinstance(given, list) and not given:
+                # AN EMPTY ONE is the program with no argument at all — which
+                # for most of these is the act itself.
+                complain(where, "`rehearse` is empty: a rehearsal has to say how it changes nothing")
+            elif rehearse == run:
+                # THE SAME ARGUMENTS would run the step for real inside a
+                # rehearsal, which is the one thing a rehearsal promises not to.
+                complain(where, "`rehearse` is `run` itself: a rehearsal would run the step for real")
+        if "declines" in raw:
+            words = raw.get("declines")
+            if (
+                not isinstance(words, list)
+                or not words
+                or any(not isinstance(w, str) or not ID.match(w) for w in words)
+                or len(set(words)) != len(words)
+            ):
+                complain(
+                    where,
+                    f"`declines` is a list of distinct kebab-case refusal words, got {words!r}",
+                )
+            else:
+                declines = list(words)
+
     if None in (does, root, enable, on_failure) or kind is None:
         return None
 
@@ -469,7 +653,95 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
         "rehearsal": rehearsal,
         "binary": binary,
         "run": run,
+        "rehearse": rehearse,
+        "declines": declines,
     }
+
+
+def check_wave_laws(steps: list[dict], moves: list[int], applies: list[int]) -> None:
+    """The order laws of the 2026-10-05 wave: gather → the root half → the
+    person's half, publish last, and one battery floor.
+
+    Each refusal names the law in words a reader can grep for; the module's
+    `…-laws-refuse` check builds a table that breaks each one and demands its
+    sentence.
+    """
+    roots = [i for i, s in enumerate(steps) if s["root"]]
+    first_root = roots[0] if roots else len(steps)
+
+    def at(i: int) -> str:
+        return f"steps[{i}] ({steps[i]['id']})"
+
+    for i, s in enumerate(steps):
+        does = s["does"]
+        # GATHER: the person's, and before the root half — what root is about
+        # to read has to be there when it starts.
+        if does == "gather":
+            if s["root"]:
+                complain(at(i), "`gather` runs as the person: it brings in what the person declared, and root has no session to fetch it with")
+            elif i > first_root:
+                complain(at(i), "`gather` after the root half: what it brings would reach the machine one update late")
+        elif i < first_root and not s["root"]:
+            # NOTHING BUT THE GATHERING before the root half: a person's step
+            # there would run against the system the root half is about to
+            # replace.
+            complain(at(i), f"`{does}` before the root half: only `gather` comes before it")
+        # MIGRATE: root's, and before anything moves the inputs — the old
+        # layout's lock is not the machine flake's.
+        if does == "migrate":
+            if not s["root"]:
+                complain(at(i), "`migrate` is root's: it rewrites the machine directory")
+            if moves and i > moves[0]:
+                complain(at(i), "`migrate` after `move-inputs`: the inputs would move in a layout about to be replaced")
+        # VERIFY: root's, between the inputs moving and the rebuild — it tries
+        # each declared entry against the inputs the rebuild will use.
+        if does == "verify":
+            if not s["root"]:
+                complain(at(i), "`verify` is root's: it writes what the rebuild holds back")
+            if moves and i < moves[0]:
+                complain(at(i), "`verify` before `move-inputs`: it would try the entries against inputs the rebuild no longer uses")
+            if applies and i > applies[0]:
+                complain(at(i), "`verify` after `apply-configuration`: what it holds back would reach no rebuild")
+        # RECONCILE-DECLARED: the person's, after the rebuild — it brings what
+        # the new system declares, and nothing it does not.
+        if does == "reconcile-declared":
+            if s["root"]:
+                complain(at(i), "`reconcile-declared` is the person's: it touches only the person's own ledger")
+            if applies and i < applies[0]:
+                complain(at(i), "`reconcile-declared` before `apply-configuration`: it would bring what the old system declared")
+
+    # PUBLISH LAST: the person's, and nothing after it — what is pushed is
+    # what this run ended with.
+    publishes = [i for i, s in enumerate(steps) if s["does"] == "publish"]
+    for i in publishes:
+        if steps[i]["root"]:
+            complain(at(i), "`publish` is the person's: it pushes their repository")
+    if publishes:
+        for i in range(publishes[0], len(steps)):
+            if steps[i]["does"] != "publish":
+                complain(at(i), "a step after `publish`: publish is last, so what is pushed is what the run ended with")
+
+    # ONE BATTERY FLOOR: the doors ask below it, and two would be two questions.
+    floors = sorted({v for s in steps for k, v in s["needs"] if k == "power"})
+    if len(floors) > 1:
+        complain("steps", f"`power` names {floors}: one battery floor for the whole sequence, or the doors cannot say which they ask about")
+
+    # THE LOCK MOVES ONLY WHEN THE REBUILD CAN BE TRIED: every battery floor
+    # and every room on the disk the rebuild asks for, the step that moves the
+    # inputs asks for too. Otherwise a run on a low battery, or on a disk the
+    # collection could not clear, moves the lock and then skips the rebuild —
+    # and the machine directory names a distro the running system was never
+    # built from, which the next apply builds whole.
+    if moves and applies:
+        mover, applier = steps[moves[0]], steps[applies[0]]
+        for kind, value in applier["needs"]:
+            if kind in ("power", "free-space") and (kind, value) not in mover["needs"]:
+                complain(
+                    at(moves[0]),
+                    f"`move-inputs` without the rebuild's `{kind}`: on a run whose rebuild that "
+                    "skips, the lock would move and the machine directory would stop describing "
+                    "the running system",
+                )
 
 
 def check_sequence(steps: list[dict]) -> None:
@@ -510,16 +782,26 @@ def check_sequence(steps: list[dict]) -> None:
                     "resolve against the system the rebuild is about to replace.",
                 )
 
-    # ---- ROOT FIRST, AND NEVER INTERLEAVED -------------------------------
+    # THE 2026-10-05 WAVE's laws (gather → root half → person half, publish
+    # last), after its anchor.
+    # ── anchor: L19 ──
+    check_wave_laws(steps, moves, applies)
+
+    # ---- ROOT AFTER THE GATHERING, AND NEVER INTERLEAVED ------------------
     #
     # Two managers run this sequence. Interleaving costs a round trip through
     # polkit at every switch, and a sequence whose order changes when somebody
-    # flips a `root =` is a sequence nobody can predict.
+    # flips a `root =` is a sequence nobody can predict. The person's
+    # GATHERING comes before the root half and is not a person's step in
+    # this sense: it is what the root half is about to read
+    # (`check_wave_laws`).
     saw_person = None
     for i, s in enumerate(steps):
-        if not s["root"]:
+        if not s["root"] and s["does"] != "gather":
             saw_person = s["id"]
-        elif saw_person is not None:
+        # A GATHERING AFTER THE PERSON'S STEPS is not a root step, and
+        # `check_wave_laws` names what is wrong with it.
+        elif s["root"] and saw_person is not None:
             complain(
                 f"steps[{i}] ({s['id']})",
                 f"a root step after `{saw_person}`, which is not. The privileged "
@@ -537,11 +819,30 @@ def check_sequence(steps: list[dict]) -> None:
 def rust_needs(needs: list[tuple[str, object]]) -> str:
     parts = []
     for kind, value in needs:
-        if kind in ("always", "network"):
+        if kind in ("always", "network", "not-held"):
             parts.append(f"Needs::{rust_variant(kind)}")
+        elif kind == "power":
+            parts.append(f"Needs::Power({value})")
+        elif kind == "free-space":
+            place, percent, cap = value  # type: ignore[misc]
+            parts.append(
+                f"Needs::FreeSpace {{ at: {rust_str(place)}, percent: {percent}, cap_gib: {cap} }}"
+            )
         else:
             parts.append(f"Needs::{rust_variant(kind)}({rust_str(str(value))})")
     return "&[" + ", ".join(parts) + "]"
+
+
+def battery_floor(steps: list[dict]) -> int | None:
+    """The one battery floor the table declares (`check_wave_laws` keeps it
+    one), or `None` when no step needs power."""
+    floors = sorted({v for s in steps for k, v in s["needs"] if k == "power"})
+    return floors[0] if floors else None
+
+
+def declined_words(steps: list[dict]) -> list[str]:
+    """Every refusal some step reads as news, once each, sorted."""
+    return sorted({w for s in steps for w in s["declines"]})
 
 
 def step_keys(task: str, ident: str) -> tuple[str, str]:
@@ -558,6 +859,10 @@ def emit_rust(steps: list[dict], task: str) -> str:
     the Rust is a reference whoever COMPILES pays for, and the person reading
     the row wants to see `nix flake update`, not 52 characters of hash first.
     """
+    # THE ENUM'S ORDER IS A LIST AND THE VOCABULARY A SET: the two have to be
+    # the same words, or a class would be accepted and never declared.
+    if set(DOES_ORDER) != DOES or len(DOES_ORDER) != len(DOES):
+        raise SystemExit(f"ERROR: DOES_ORDER {DOES_ORDER} is not the vocabulary {sorted(DOES)}")
     rows = []
     for order, s in enumerate(steps):
         if s["kind"] == "unit":
@@ -617,13 +922,7 @@ def emit_rust(steps: list[dict], task: str) -> str:
     ]
     out += enum(
         "Does",
-        [
-            "move-inputs",
-            "apply-configuration",
-            "upgrade-software",
-            "refresh-cache",
-            "reclaim-space",
-        ],
+        DOES_ORDER,
         "What class of thing a step is. It decides the order laws, not the view.",
     )
     out += enum(
@@ -645,6 +944,23 @@ def emit_rust(steps: list[dict], task: str) -> str:
         "    WritableFile(&'static str),",
         "    /// NetworkManager says the machine is connected.",
         "    Network,",
+        "    /// This file exists.",
+        "    File(&'static str),",
+        "    /// On mains, or the battery at this many per cent or more, or the",
+        "    /// person said yes to this run on battery.",
+        "    Power(u8),",
+        "    /// The filesystem holding `at` has this share of itself free, never",
+        "    /// asking more than `cap_gib` — after the store's garbage is collected.",
+        "    FreeSpace {",
+        "        /// A path on the filesystem measured.",
+        "        at: &'static str,",
+        "        /// The share of the filesystem, in per cent.",
+        "        percent: u8,",
+        "        /// The most it asks for, in GiB.",
+        "        cap_gib: u16,",
+        "    },",
+        "    /// The machine's record names no hold.",
+        "    NotHeld,",
         "}",
         "",
         "impl Needs {",
@@ -657,6 +973,10 @@ def emit_rust(steps: list[dict], task: str) -> str:
         f'            Self::Directory(_) => "{task}-needs-directory",',
         f'            Self::WritableFile(_) => "{task}-needs-writable-file",',
         f'            Self::Network => "{task}-needs-network",',
+        f'            Self::File(_) => "{task}-needs-file",',
+        f'            Self::Power(_) => "{task}-needs-power",',
+        f'            Self::FreeSpace {{ .. }} => "{task}-needs-free-space",',
+        f'            Self::NotHeld => "{task}-needs-not-held",',
         "        }",
         "    }",
         "",
@@ -676,10 +996,43 @@ def emit_rust(steps: list[dict], task: str) -> str:
         "    #[must_use]",
         "    pub fn about(self) -> Option<&'static str> {",
         "        match self {",
-        "            Self::Binary(s) | Self::Directory(s) | Self::WritableFile(s) => Some(s),",
-        "            Self::Always | Self::Network => None,",
+        "            Self::Binary(s) | Self::Directory(s) | Self::WritableFile(s) | Self::File(s) => {",
+        "                Some(s)",
+        "            }",
+        "            Self::FreeSpace { at, .. } => Some(at),",
+        "            Self::Always | Self::Network | Self::Power(_) | Self::NotHeld => None,",
         "        }",
         "    }",
+        "}",
+        "",
+        "/// THE ONE BATTERY FLOOR the sequence declares, in per cent: below it, on",
+        "/// battery, the steps that compile are skipped unless the person said yes",
+        "/// to this run — and a door asks before starting one by hand. `None` when",
+        "/// no step needs power.",
+        "pub const BATTERY_FLOOR_PERCENT: Option<u8> = "
+        + (f"Some({battery_floor(steps)})" if battery_floor(steps) is not None else "None")
+        + ";",
+        "",
+        "/// The text key of a refusal a step reads as news and not as a failure",
+        "/// (`declined-<word>` in its report), or `None` for a word no step",
+        "/// declares: a silent fallback would draw a reason the program never gave.",
+        "#[must_use]",
+        "pub fn declined_key(word: &str) -> Option<&'static str> {",
+        *(
+            [
+                "    match word {",
+                *[
+                    f'        {rust_str(w)} => Some({rust_str(task + "-declined-" + w)}),'
+                    for w in declined_words(steps)
+                ],
+                "        _ => None,",
+                "    }",
+            ]
+            # NO WORD AT ALL is a table no step declines in: a `match` with
+            # only its fallback is what clippy refuses, and this says the same.
+            if declined_words(steps)
+            else ["    let _ = word;", "    None"]
+        ),
         "}",
         "",
         "/// One step of the sequence.",
@@ -740,6 +1093,8 @@ def emit_keys(steps: list[dict], task: str) -> str:
         keys.add(f"{task}-on-failure-{policy}")
     for does in DOES:
         keys.add(f"{task}-kind-{does}")
+    for word in declined_words(steps):
+        keys.add(f"{task}-declined-{word}")
     return "\n".join(sorted(keys)) + "\n"
 
 
@@ -808,13 +1163,45 @@ def emit_step(s: dict, wiring: dict[str, str], programs: dict[str, str]) -> list
                 "    return 0",
                 "  fi",
             ]
+        elif kind == "file":
+            out += [
+                f"  if [ ! -f {shell_path(str(value))} ]; then",
+                f'    skip "$id" file {shell_path(str(value))}',
+                "    return 0",
+                "  fi",
+            ]
+        elif kind == "power":
+            out += [
+                f"  if ! powered {int(value)}; then",  # type: ignore[arg-type]
+                f'    skip "$id" power "{int(value)}%"',  # type: ignore[arg-type]
+                "    return 0",
+                "  fi",
+            ]
+        elif kind == "free-space":
+            place, percent, cap = value  # type: ignore[misc]
+            out += [
+                f"  if ! roomy {shlex.quote(place)} {percent} {cap}; then",
+                f'    skip "$id" free-space {shlex.quote(place)}',
+                "    return 0",
+                "  fi",
+            ]
+        elif kind == "not-held":
+            out += [
+                "  if ! unheld; then",
+                '    skip "$id" not-held ""',
+                "    return 0",
+                "  fi",
+            ]
+
+    def program_argv(arguments: list[str]) -> list[str]:
+        if s["kind"] == "package":
+            return [f"{programs[s['package']]}/bin/{s['program']}"] + arguments
+        return [s["binary"] or ""] + arguments
 
     if s["kind"] == "unit":
         argv = [wiring["systemctl"], "start", s["unit"] or ""]
-    elif s["kind"] == "package":
-        argv = [f"{programs[s['package']]}/bin/{s['program']}"] + s["run"]
     else:
-        argv = [s["binary"] or ""] + s["run"]
+        argv = program_argv(s["run"])
     quoted = " ".join(shlex.quote(a) for a in argv)
 
     out += [f'  say ">> $id: {quoted}"']
@@ -867,6 +1254,22 @@ def emit_step(s: dict, wiring: dict[str, str], programs: dict[str, str]) -> list
             "    return 1",
             "  fi",
         ]
+    elif s.get("rehearse") is not None:
+        # A PROGRAM WITH A REHEARSAL OF ITS OWN IS REHEARSED FOR REAL, the
+        # way a unit with one is: the same program, with the arguments that
+        # change nothing (`apply --rehearse` measures on a copy, `verify
+        # --rehearse` tries and writes nothing), its output in the sequence's
+        # own, its exit the rehearsal's.
+        rehearsed = " ".join(shlex.quote(a) for a in program_argv(s["rehearse"]))
+        out += [
+            '  if [ "$execute" != true ]; then',
+            f'    say ">> $id, rehearsed: {rehearsed}"',
+            *[
+                "  " + line
+                for line in run_and_record(rehearsed, "rehearsed", "its rehearsal failed", s["declines"])
+            ],
+            "  fi",
+        ]
     else:
         out += [
             '  if [ "$execute" != true ]; then',
@@ -875,17 +1278,198 @@ def emit_step(s: dict, wiring: dict[str, str], programs: dict[str, str]) -> list
             "  fi",
         ]
     out += [
-        "  local began=$SECONDS",
-        f"  if {quoted}; then",
-        '    record "$id" ran $(( SECONDS - began ))',
-        "    return 0",
-        "  fi",
-        '  record "$id" failed $(( SECONDS - began ))',
-        '  say "!! $id: failed"',
-        "  return 1",
+        *run_and_record(quoted, "ran", "failed", s["declines"]),
         "}",
         "",
     ]
+    return out
+
+
+def run_and_record(quoted: str, worked: str, said_failed: str, declines: list[str]) -> list[str]:
+    """Runs one command line and records how it ended — `worked`, `failed`,
+    or, for a refusal the step reads as news, `declined-<word>`.
+
+    WITH NO REFUSAL TO READ the command runs as it always did, its output
+    straight to the journal. WITH ONE, its standard output is read back so
+    its LAST LINE can be asked — `refused <word>` is how the machine's and
+    the person's programs end a refusal — and printed whole afterwards: the
+    progress they write goes to standard error, which still streams.
+
+    AND A REFUSAL THAT IS NOT NEWS KEEPS ITS WORD: `failed-<word>`, so the
+    view says WHY the program refused (the machine's own sentence for it)
+    instead of only that it failed. A last line that is not a refusal, or a
+    word that is not kebab, is plain `failed` — never a word made up.
+    """
+    if not declines:
+        return [
+            "  local began=$SECONDS",
+            f"  if {quoted}; then",
+            f'    record "$id" {worked} $(( SECONDS - began ))',
+            "    return 0",
+            "  fi",
+            '  record "$id" failed $(( SECONDS - began ))',
+            f'  say "!! $id: {said_failed}"',
+            "  return 1",
+        ]
+    arms = []
+    for word in declines:
+        arms += [
+            f"    {shlex.quote('refused ' + word)})",
+            f'      record "$id" declined-{word} $(( SECONDS - began ))',
+            f'      say "-- $id: declined ({word})"',
+            "      return 0",
+            "      ;;",
+        ]
+    return [
+        "  local began=$SECONDS said code=0 last why=",
+        f"  said=$({quoted}) || code=$?",
+        '  if [ -n "$said" ]; then',
+        "    printf '%s\\n' \"$said\"",
+        "  fi",
+        '  if [ "$code" = 0 ]; then',
+        f'    record "$id" {worked} $(( SECONDS - began ))',
+        "    return 0",
+        "  fi",
+        "  last=${said##*$'\\n'}",
+        '  case "$last" in',
+        *arms,
+        "    'refused '*) why=${last#refused } ;;",
+        "  esac",
+        '  case "$why" in',
+        "    '' | *[!a-z0-9-]* | -*) why=failed ;;",
+        "    *) why=failed-$why ;;",
+        "  esac",
+        '  record "$id" "$why" $(( SECONDS - began ))',
+        f'  say "!! $id: {said_failed}"',
+        "  return 1",
+    ]
+
+
+def emit_helpers(kinds: set[str], *, root_half: bool, wiring: dict[str, str]) -> list[str]:
+    """The shell functions the 2026-10-05 preconditions call — only those a
+    step of THIS half needs: a function nothing calls is code shellcheck
+    rightly reads as a mistake.
+    """
+    q = shlex.quote
+    out: list[str] = []
+    if "power" in kinds:
+        if root_half:
+            # ROOT HAS NO SESSION, AND STILL KNOWS WHOSE YES COUNTS: the one
+            # person the polkit rule lets start this half (`person` in the
+            # wiring). Their yes is in their own runtime directory, which only
+            # they and root can write; it is TESTED, never read — it can only
+            # make a declared step run on battery, never change what runs.
+            yes = [
+                "  local uid",
+                f"  if [ \"$execute\" = true ] && uid=$({q(wiring['id'])} -u {q(wiring['person'])} 2>/dev/null) \\",
+                f"    && [ -e {q(wiring['runtime-root'])}/\"$uid\"/{q(ON_BATTERY)} ]; then",
+            ]
+        else:
+            yes = ['  if [ "$execute" = true ] && [ -e "$consent" ]; then']
+        out += [
+            "# MAINS, OR ENOUGH BATTERY, OR THE PERSON'S YES.",
+            "#",
+            "# `systemd-ac-power` answers yes on mains AND on a machine with no",
+            "# battery at all. Otherwise the batteries that feed the machine (not a",
+            "# mouse's: `scope=Device`) are averaged against the floor. The yes is",
+            "# the person's, for this run only — the doors ask with the no first.",
+            "powered() {",
+            f"  if {q(wiring['ac-power'])}; then",
+            "    return 0",
+            "  fi",
+            '  if battery_at_least "$1"; then',
+            "    return 0",
+            "  fi",
+            *yes,
+            '    say "   on battery below $1%, and the person said yes to this run"',
+            "    return 0",
+            "  fi",
+            "  return 1",
+            "}",
+            "",
+            "battery_at_least() {",
+            "  local supply share sum=0 count=0",
+            f"  for supply in {q(wiring['power-supplies'])}/*; do",
+            '    [ -r "$supply/type" ] || continue',
+            '    [ "$(< "$supply/type")" = Battery ] || continue',
+            '    if [ -r "$supply/scope" ] && [ "$(< "$supply/scope")" = Device ]; then',
+            "      continue",
+            "    fi",
+            '    [ -r "$supply/capacity" ] || continue',
+            '    share=$(< "$supply/capacity")',
+            '    case "$share" in',
+            "      '' | *[!0-9]*) continue ;;",
+            "    esac",
+            "    sum=$(( sum + share ))",
+            "    count=$(( count + 1 ))",
+            "  done",
+            '  [ "$count" -gt 0 ] && [ $(( sum / count )) -ge "$1" ]',
+            "}",
+            "",
+        ]
+    if "free-space" in kinds:
+        out += [
+            "# ROOM ON THE FILESYSTEM HOLDING $1: $2 per cent of it free, never more",
+            "# than $3 GiB. 0 there is, 1 there is not, 2 it could not be measured.",
+            "room() {",
+            "  local size avail wanted",
+            f"  read -r size avail < <({q(wiring['df'])} -P -m \"$1\" 2>/dev/null | {{",
+            "    read -r _",
+            "    read -r _ size _ avail _ && printf '%s %s\\n' \"$size\" \"$avail\"",
+            "  }) || return 2",
+            '  case "$size$avail" in',
+            "    '' | *[!0-9]*) return 2 ;;",
+            "  esac",
+            '  wanted=$(( size * $2 / 100 ))',
+            '  if [ "$wanted" -gt $(( $3 * 1024 )) ]; then',
+            '    wanted=$(( $3 * 1024 ))',
+            "  fi",
+            '  [ "$avail" -ge "$wanted" ]',
+            "}",
+            "",
+            "# AND WHEN THERE IS NOT, THE STORE'S GARBAGE FIRST — garbage only, never a",
+            "# generation — and only then the refusal. A rehearsal says it would.",
+            "roomy() {",
+            "  local why=0",
+            '  room "$@" || why=$?',
+            '  if [ "$why" = 0 ]; then',
+            "    return 0",
+            "  fi",
+            '  if [ "$why" = 2 ]; then',
+            '    say "   the free space under $1 could not be measured"',
+            "    return 1",
+            "  fi",
+            '  if [ "$execute" != true ]; then',
+            '    say "   short of room under $1: a run would collect the store\'s garbage first"',
+            "    return 1",
+            "  fi",
+            '  say "   short of room under $1: collecting the store\'s garbage first"',
+            f"  {q(wiring['collect-garbage'])} || true",
+            '  room "$@"',
+            "}",
+            "",
+        ]
+    if "not-held" in kinds:
+        state = q(wiring["machine-state"])
+        out += [
+            "# THE MACHINE IS NOT HELD AT A REVISION (`ronoctua-machine hold`). No",
+            "# record is a machine never held; a record that does not read keeps the",
+            "# inputs where they are, and says so.",
+            "unheld() {",
+            "  local said=0",
+            f"  if [ ! -e {state} ]; then",
+            "    return 0",
+            "  fi",
+            f"  {q(wiring['jq'])} -e '.hold == null' {state} >/dev/null 2>&1 || said=$?",
+            '  case "$said" in',
+            "    0) return 0 ;;",
+            "    1) return 1 ;;",
+            "  esac",
+            '  say "   the machine\'s record does not read: the inputs stay where they are"',
+            "  return 1",
+            "}",
+            "",
+        ]
     return out
 
 
@@ -899,6 +1483,11 @@ def emit_runner(
 ) -> str:
     mine = [s for s in steps if s["root"] == root_half]
     defaults_on = [s["id"] for s in steps if s["enable"]]
+    floor = battery_floor(steps)
+    # THE PERSON'S YES TO A RUN ON BATTERY is taken by the person's half —
+    # the one a person starts — whenever some step of either half needs power.
+    asks_yes = floor is not None and not root_half
+    kinds = {k for s in mine for k, _ in s["needs"]}
 
     if root_half:
         report = f"{wiring['state-dir']}/system.report"
@@ -925,20 +1514,34 @@ def emit_runner(
         "# installer lost three defects to exactly that gap, and they are written",
         "# down in docs/PENDING.md.",
         "execute=false",
+        *(["on_battery=false"] if asks_yes else []),
         # A COMMAND ON `PATH` THAT CANNOT EXPLAIN ITSELF IS A COMMAND ONE READS
         # THE SOURCE OF. There are exactly two things to say — it rehearses by
         # default, and `--execute` is what makes it act — and saying them costs
         # eight lines.
         "usage() {",
-        "  printf 'usage: %s [--execute]\\n\\n' \"$(basename \"$0\")\"",
+        (
+            "  printf 'usage: %s [--execute [--on-battery]]\\n\\n' \"$(basename \"$0\")\""
+            if asks_yes
+            else "  printf 'usage: %s [--execute]\\n\\n' \"$(basename \"$0\")\""
+        ),
         "  printf 'With no --execute it REHEARSES: it evaluates every precondition for real and\\n'",
         "  printf 'prints what would run, without running anything. With --execute, it runs.\\n\\n'",
+        *(
+            [
+                f"  printf 'On battery below {floor}%% the steps that compile are skipped; --on-battery\\n'",
+                "  printf 'is your yes to running them anyway, for this run only.\\n\\n'",
+            ]
+            if asks_yes
+            else []
+        ),
         "  printf 'The rehearsal does not see what only shows up when a command runs — the\\n'",
         "  printf 'installer has already paid three defects for that; see docs/PENDING.md.\\n'",
         "}",
         'for a in "$@"; do',
         '  case "$a" in',
         "    --execute) execute=true ;;",
+        *(["    --on-battery) on_battery=true ;;"] if asks_yes else []),
         "    -h|--help) usage; exit 0 ;;",
         "    *)",
         "      printf 'unknown argument: %s\\n\\n' \"$a\" >&2",
@@ -988,7 +1591,15 @@ def emit_runner(
         "  printf 'does the directory exist? what runs this is the unit, as root.\\n' >&2",
         "  exit 1",
         "fi",
-        f"if ! {shlex.quote(wiring['flock'])} -n 9; then",
+        # THE ROOT HALF WAITS A MOMENT FOR ITS OWN LOCK, and the person's half
+        # does not wait at all. The root half starts once root's lock of the
+        # person's data is its (`ronoctua-person hold --patient`), and an
+        # apply that held both lets that one go when its program ends and this
+        # one when its `flock` wrapper does, a moment later: not waiting would
+        # call that moment "already running".
+        f"if ! {shlex.quote(wiring['flock'])} "
+        + (f"-w {ROOT_LOCK_WAIT_S}" if root_half else "-n")
+        + " 9; then",
         f"  printf '{who} is already running\\n' >&2",
         "  exit 1",
         "fi",
@@ -1023,7 +1634,8 @@ def emit_runner(
             "# The brain re-reads it only when the mtime moves, and a read that",
             "# lands mid-write parses as nothing and is simply tried again.",
             "#",
-            "# `ok` is false for `failed` and `stopped` and true for everything",
+            "# `ok` is false for `failed` (and `failed-<word>`, a refusal that kept",
+            "# its word) and `stopped`, and true for everything",
             "# else: a step that is off or skipped did not fail, and marking it",
             "# so would report the whole update as broken because a machine has",
             "# no `rustup`. The words are closed and the ids are kebab-case, so",
@@ -1049,7 +1661,7 @@ def emit_runner(
             '  { printf \'{"began":%s,"ended":%s,"trouble":"","steps":[\' \\',
             '      "$began" "$sheet_ended"',
             '    while read -r id verdict seconds; do',
-            '      case "$verdict" in failed|stopped) ok=false ;; *) ok=true ;; esac',
+            '      case "$verdict" in failed|failed-*|stopped) ok=false ;; *) ok=true ;; esac',
             '      if [ "$first" = true ]; then first=false; else printf \',\'; fi',
             '      printf \'{"id":"%s","ok":%s,"seconds":%s,"trouble":""}\' \\',
             '        "$id" "$ok" "${seconds:-0}"',
@@ -1069,6 +1681,23 @@ def emit_runner(
             "",
         ]
 
+    if asks_yes:
+        out += [
+            "# THE PERSON'S YES TO THIS RUN ON BATTERY, which the doors write after",
+            "# asking with the no first, and `--on-battery` writes from a terminal.",
+            "# Only a run that ACTS honours it and takes it away, whichever way it",
+            "# ends: a yes is for the run it was given to, never for the next one,",
+            "# and a scheduled run never has one — it waits for the charger instead.",
+            f'consent="$XDG_RUNTIME_DIR/{ON_BATTERY}"',
+            'if [ "$execute" = true ]; then',
+            '  if [ "$on_battery" = true ]; then',
+            '    : > "$consent"',
+            "  fi",
+            "  trap 'rm -f \"$consent\"' EXIT",
+            "fi",
+            "",
+        ]
+    out += emit_helpers(kinds, root_half=root_half, wiring=wiring)
     out += [
         "skip() {",
         '  if [ -n "$3" ]; then',
@@ -1166,11 +1795,53 @@ def emit_runner(
     for s in mine:
         out += emit_step(s, wiring, programs)
 
+    # WHAT THIS MACHINE DID IS PUBLISHED ON EVERY WAY OUT of the person's
+    # half, and not only at the end of a run that went well. A rebuild that
+    # failed is something this machine did: its record says so (`last-apply`),
+    # and the person's other machines learn it from the plain part only if it
+    # is pushed. So a run that stops — the root half refused, a step of the
+    # person's that stops — still runs the `publish` steps before it ends.
+    publishing = [] if root_half else [s for s in mine if s["does"] == "publish"]
+    if publishing:
+        out += [
+            "# THE PUBLISHING, on a way out before the end: the same steps the",
+            "# sequence ends with, each `carry-on`.",
+            "publish_anyway() {",
+            *[f"  step_{s['id'].replace('-', '_')} || true" for s in publishing],
+            "}",
+            "",
+        ]
+
     out += ["# ---- the sequence " + "-" * 52, ""]
+
+    def call(s: dict) -> list[str]:
+        name = "step_" + s["id"].replace("-", "_")
+        if s["on-failure"] == "stop":
+            return [
+                f"if ! {name}; then",
+                f"  say \"== sequence stopped at {s['id']}\"",
+                "  record sequence stopped 0",
+                *(["  publish_anyway"] if publishing and s["does"] != "publish" else []),
+                *([] if root_half else ["  finish"]),
+                "  exit 1",
+                "fi",
+            ]
+        return [f"{name} || true"]
+
+    # THE GATHERING FIRST, as the person: what the root half is about to
+    # read — the declarations of the person's other machines, the pins moved
+    # forward, the staged copy root's applier takes — has to be there when it
+    # starts.
+    gathering = [s for s in mine if s["does"] == "gather"]
+    mine = [s for s in mine if s["does"] != "gather"]
+    for s in gathering:
+        out += call(s)
+    if gathering:
+        out += [""]
 
     if not root_half:
         out += [
-            "# THE ROOT HALF FIRST, through the one unit polkit names. `systemctl",
+            "# THE ROOT HALF NEXT, through the one unit polkit names. `systemctl",
             "# start` on a `Type=oneshot` returns when the work is done, which is",
             "# what makes this a sequence and not two things happening at once.",
             'if [ "$execute" = true ]; then',
@@ -1182,27 +1853,17 @@ def emit_runner(
             f"if ! {shlex.quote(wiring['systemctl'])} start \"$privileged\"; then",
             '  say "!! the privileged half stopped; see: journalctl -u $privileged"',
             "  record system-half failed 0",
+            *(["  publish_anyway"] if publishing else []),
             "  finish",
             "  exit 1",
             "fi",
             "",
         ]
 
-    if not mine:
+    if not mine and not gathering:
         out += ['say "no step in this half"', ""]
     for s in mine:
-        name = "step_" + s["id"].replace("-", "_")
-        if s["on-failure"] == "stop":
-            out += [
-                f"if ! {name}; then",
-                f"  say \"== sequence stopped at {s['id']}\"",
-                "  record sequence stopped 0",
-                *([] if root_half else ["  finish"]),
-                "  exit 1",
-                "fi",
-            ]
-        else:
-            out += [f"{name} || true"]
+        out += call(s)
     out += [
         "",
         'say "== end"',

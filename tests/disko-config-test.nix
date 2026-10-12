@@ -10,7 +10,7 @@
 #
 # This wrapper changes ONE thing — the swap's size — and nothing else. The
 # layout under test is still the production one, byte for byte: same
-# partitions, same LUKS2, same 7 subvolumes, same mount options. If one day
+# partitions, same LUKS2, same subvolumes, same mount options. If one day
 # this diverges from the real file, the test stops being worth anything.
 { ... }@args:
 

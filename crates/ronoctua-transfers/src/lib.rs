@@ -44,18 +44,45 @@ pub mod browser;
 pub mod client;
 pub mod container;
 pub mod engine;
+pub mod incus;
 pub mod job;
 pub mod ledger;
 pub mod local;
 pub mod media;
 pub mod scan;
+pub mod seal;
 pub mod secrets;
 pub mod serve;
 pub mod software;
+pub mod stick;
 pub mod torrent;
 pub mod where_to;
 pub mod wire;
+// ── anchor: L13 ──
+// ── anchor: L17 ──
+// ── anchor: L22 ──
 
 pub use job::{Engine, Identity, Job, Measure, Stage, Want, Work};
 pub use ledger::Shared;
 pub use wire::{Ask, Say};
+
+/// An executable file written by a child `/bin/sh` and never by this
+/// process, for the tests' stand-in programs. The tests run in parallel: a
+/// file this process holds open for writing while another test's thread
+/// forks is inherited by that fork until it execs, and running the file in
+/// that window fails with `ETXTBSY` ("Text file busy"). It made the incus and
+/// seal engines' tests fail at random in a whole-workspace run.
+#[cfg(test)]
+pub(crate) fn write_executable(path: &std::path::Path, body: &str) {
+    let status = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            "printf '%s' \"$2\" > \"$1\" && chmod 700 \"$1\"",
+            "sh",
+        ])
+        .arg(path)
+        .arg(body)
+        .status()
+        .expect("a shell writes the stand-in");
+    assert!(status.success(), "{}", path.display());
+}

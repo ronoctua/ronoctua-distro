@@ -112,7 +112,7 @@ pub struct Socket<S: Read + Write> {
 /// Sixteen random bytes, base64 — the client's half of the handshake.
 fn nonce() -> Result<String> {
     let mut raw = [0u8; 16];
-    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw)
+    aws_lc_rs::rand::SecureRandom::fill(&aws_lc_rs::rand::SystemRandom::new(), &mut raw)
         .map_err(|_| anyhow::anyhow!("the system refused to give random bytes"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(raw))
 }
@@ -124,8 +124,8 @@ fn nonce() -> Result<String> {
 /// wrong answer here and a server that is not a WebSocket look identical.
 #[must_use]
 pub fn accept_for(key: &str) -> String {
-    let digest = ring::digest::digest(
-        &ring::digest::SHA1_FOR_LEGACY_USE_ONLY,
+    let digest = aws_lc_rs::digest::digest(
+        &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY,
         format!("{key}{GUID}").as_bytes(),
     );
     base64::engine::general_purpose::STANDARD.encode(digest.as_ref())
@@ -262,7 +262,7 @@ impl<S: Read + Write> Socket<S> {
             out.extend_from_slice(&(len as u64).to_be_bytes());
         }
         let mut mask = [0u8; 4];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut mask)
+        aws_lc_rs::rand::SecureRandom::fill(&aws_lc_rs::rand::SystemRandom::new(), &mut mask)
             .map_err(|_| anyhow::anyhow!("the system refused to give random bytes"))?;
         out.extend_from_slice(&mask);
         out.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));

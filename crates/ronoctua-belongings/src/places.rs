@@ -133,6 +133,34 @@ pub const DEPLOY_KEY: &str = "deploy";
 pub const KNOWN_HOSTS: &str = "known_hosts";
 /// The HTTPS token, inside [`KEYS`].
 pub const TOKEN_FILE: &str = "token";
+/// The merge bases kept sealed, under the belongings' own folder
+/// (`state/belongings/base/<sha256>.age`).
+pub const BASE_DIR: &str = "base";
+/// What a door asks of the next sync, under the belongings' own folder.
+pub const REQUESTS_FILE: &str = "requests.json";
+/// What the index says of the person's machines (which runs the newest
+/// distro), under the belongings' own folder.
+pub const FLEET_FILE: &str = "fleet.json";
+/// The marker a door reads while the identity is kept for the session,
+/// under the runtime folder.
+pub const UNLOCKED_FILE: &str = "unlocked";
+/// The lenient stores' repair ledger, under the state root
+/// (`state/repairs/<escaped logical path>.json`) — the store's own name for
+/// it, so the two can never disagree.
+pub const REPAIRS_DIR: &str = ronoctua_store::repair::DIR;
+// ── anchor: L07 ──
+// ── anchor: L08 ──
+/// The person's post-quantum recipient (`age1pq1…`, public) the last sync
+/// left, under the belongings' own folder (`crate::fleet::recipient`).
+pub const RECIPIENT_FILE: &str = "recipient";
+// ── anchor: L09 ──
+/// Under the runtime folder: where a merge's three sides are written for
+/// `git merge-file` (`0700`, emptied after each merge).
+pub const MERGE_DIR: &str = "merge";
+/// Under the runtime folder: the scratch repository a probe of an address
+/// pushes nothing from (`push --dry-run`).
+pub const PROBE_DIR: &str = "probe";
+// ── anchor: L10 ──
 
 /// Where everything is, on this machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +353,112 @@ impl Places {
     pub fn theirs(&self, name: &str) -> PathBuf {
         self.session().join(THEIRS_DIR).join(name)
     }
+
+    /// The sealed merge bases.
+    #[must_use]
+    pub fn base_cache(&self) -> PathBuf {
+        self.own().join(BASE_DIR)
+    }
+
+    /// What a door asks of the next sync.
+    #[must_use]
+    pub fn requests(&self) -> PathBuf {
+        self.own().join(REQUESTS_FILE)
+    }
+
+    /// What the index says of the person's machines.
+    #[must_use]
+    pub fn fleet(&self) -> PathBuf {
+        self.own().join(FLEET_FILE)
+    }
+
+    /// The marker of an identity kept for the session.
+    #[must_use]
+    pub fn unlocked(&self) -> PathBuf {
+        self.runtime.join(UNLOCKED_FILE)
+    }
+
+    /// The lenient stores' repair ledger.
+    #[must_use]
+    pub fn repairs(&self) -> PathBuf {
+        self.state.join(REPAIRS_DIR)
+    }
+
+    // ── anchor: L07 ──
+    /// The person's files the repair ledger lists and nobody answered yet,
+    /// by logical path — those whose file is still the one the ledger
+    /// judged (a file that moved since is read again before it is listed).
+    #[must_use]
+    pub fn repaired(&self) -> Vec<String> {
+        ronoctua_store::repair::pending(&self.repairs())
+            .into_iter()
+            .filter(|l| {
+                self.resolve(&l.path)
+                    .and_then(|p| std::fs::read(p).ok())
+                    .is_some_and(|b| ronoctua_store::repair::sha256_hex(&b) == l.file_sha256)
+            })
+            .map(|l| l.path)
+            .collect()
+    }
+
+    // ── anchor: L08 ──
+    /// The person's post-quantum recipient, public.
+    #[must_use]
+    pub fn recipient(&self) -> PathBuf {
+        self.own().join(RECIPIENT_FILE)
+    }
+
+    // ── anchor: L09 ──
+    /// The manifest the person signed of this machine's plain part and its
+    /// signature (`state/person-signed/`, beside the mirror and never in
+    /// it): what a staging carries to root, and what a push carries when it
+    /// covers what goes ([`crate::plain::SIGNED_DIR`]).
+    #[must_use]
+    pub fn signed(&self) -> PathBuf {
+        self.state.join(ronoctua_person::names::SIGNED)
+    }
+
+    /// The identity and the signing key, encrypted to the passphrase, in
+    /// the repository (`engine::KEY_FILE`).
+    pub const KEY_AGE: &'static str = "key.age";
+
+    /// The clone's `key.age` ([`Self::KEY_AGE`]): there once this machine
+    /// synced with its repository — what a gesture that signs asks before it
+    /// asks for the passphrase, since with no clone there is nothing to open.
+    #[must_use]
+    pub fn key_age(&self) -> PathBuf {
+        self.repo().join(Self::KEY_AGE)
+    }
+
+    /// The places of a home that is not this process's — the installer's
+    /// restore into `/mnt/home/<user>` before anybody logged in there: its
+    /// roots as a session of this instance would name them, and `runtime`
+    /// (a `0700` folder the installer made) for the passphrase and the
+    /// session.
+    #[must_use]
+    pub fn for_home(home: &Path, runtime: &Path) -> Self {
+        let name = ronoctua_xdg::name();
+        Self {
+            home: home.to_path_buf(),
+            config: home.join(".config").join(&name),
+            state: home.join(".local").join("state").join(&name),
+            runtime: runtime.to_path_buf(),
+        }
+    }
+
+    /// Where a merge's three sides are written.
+    #[must_use]
+    pub fn merging(&self) -> PathBuf {
+        self.runtime.join(MERGE_DIR)
+    }
+
+    /// The scratch repository of a probe.
+    #[must_use]
+    pub fn probing(&self) -> PathBuf {
+        self.runtime.join(PROBE_DIR)
+    }
+
+    // ── anchor: L10 ──
 }
 
 #[cfg(test)]
@@ -378,5 +512,75 @@ mod tests {
             assert_eq!(p.logical_of(&there).as_deref(), Some(logical));
         }
         assert_eq!(p.resolve("home/../../etc/shadow"), None);
+    }
+
+    /// FAILS IF: the installer's restore writes another home's files where a
+    /// session of the new home would not look for them.
+    #[test]
+    fn a_home_that_is_not_ours_has_the_roots_a_session_there_reads() {
+        let p = Places::for_home(Path::new("/mnt/home/someone"), Path::new("/run/x"));
+        let name = ronoctua_xdg::name();
+        assert_eq!(p.config, Path::new("/mnt/home/someone/.config").join(&name));
+        assert_eq!(
+            p.state,
+            Path::new("/mnt/home/someone/.local/state").join(&name)
+        );
+        assert_eq!(p.passphrase(), Path::new("/run/x/passphrase"));
+        assert_eq!(
+            p.resolve("state/person/options.json").unwrap(),
+            p.state.join("person/options.json")
+        );
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    enum Mode {
+        #[default]
+        Calm,
+        Busy,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Prefs {
+        mode: Mode,
+    }
+
+    /// FAILS IF: the files a sync says are waiting for "write the fix" or
+    /// "leave it" include one the person already answered ("leave it"), one
+    /// whose file changed since its ledger was written (stale: a read makes
+    /// a fresh one), or one whose file is gone — or leave out one still
+    /// waiting, or name it by anything but its logical path.
+    #[test]
+    fn only_the_ledgers_still_waiting_and_still_true_are_repaired() {
+        let root = std::env::temp_dir().join(format!(
+            "ronoctua-belongings-places-repaired-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let p = Places::under(&root);
+        std::fs::create_dir_all(&p.config).unwrap();
+        let store = |file: &'static str| {
+            ronoctua_store::Store::<Prefs>::at(Some(p.config.clone()), file)
+                .with_roots(Some(p.config.clone()), Some(p.state.clone()))
+        };
+        for file in ["waiting.json", "left.json", "moved.json", "gone.json"] {
+            std::fs::write(p.config.join(file), br#"{"mode": "frantic"}"#).unwrap();
+            let _ = store(file).read();
+        }
+        assert_eq!(
+            ronoctua_store::repair::all(&p.repairs()).len(),
+            4,
+            "the stores wrote no ledgers where the places look"
+        );
+        // "LEAVE IT", about these bytes.
+        let left = store("left.json").ledger().unwrap();
+        ronoctua_store::repair::dismiss(&p.repairs(), &p.config.join("left.json"), &left).unwrap();
+        // CHANGED BY HAND since its ledger, and not read again.
+        std::fs::write(p.config.join("moved.json"), br#"{"mode": "later"}"#).unwrap();
+        // GONE.
+        std::fs::remove_file(p.config.join("gone.json")).unwrap();
+        assert_eq!(p.repaired(), ["config/waiting.json"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -14,8 +14,11 @@ and the tables its `tables.nix` generated. What comes out, under `--out`:
                        `all(birth)`: the registry the daemon, the footer and
                        the leader read without naming any module, with its own
                        test
-    ids.txt            `<id> <snake>` per line: what `build.rs` compares with
-                       the folders and writes one shim for
+    ids.txt            `<id> <snake> <origin>` per line, the origin `distro`
+                       or `person`: what `build.rs` compares with the folders
+                       (the distro's under the crate, the person's under
+                       `RONOCTUA_BRAIN_PERSON_MODULES_DIR`) and writes one shim
+                       for
 
 WHY A GENERATOR AND NOT A MACRO: invariant 5. The manifest is Nix, and the
 Rust side reading it back would be a second parser of the same data; here it
@@ -180,11 +183,31 @@ def manifest_rs(m: dict, texts: dict[str, str], language: str, tables: list[str]
     items = []
     for k, spec in sorted(m["marks"].items()):
         token = f"{ident}-{spec['glyph']}"
-        items.append(f"    /// `brain:{ident}/{k}`, drawn with the glyph token `{token}`.")
-        items.append(
-            f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::of("
-            f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]});"
-        )
+        # A MARK WITH INSTANCES, OR ONE THAT MAY REST, says so in its
+        # declaration (`MarkId::declared`); every other stays `MarkId::of`,
+        # which is what the golden sample was written with.
+        instances = spec.get("instances", 0)
+        resting = spec.get("resting", False)
+        if not isinstance(instances, int) or isinstance(instances, bool) or not 0 <= instances <= 9:
+            fail(ident, f"the mark `{k}` declares {instances!r} instances; a mark has from 1 to 9")
+        if instances:
+            doc = f"`brain:{ident}/{k}.<1..={instances}>`, drawn with the glyph token `{token}` and its instance"
+        else:
+            doc = f"`brain:{ident}/{k}`, drawn with the glyph token `{token}`"
+        if resting:
+            doc += ", and drawn at rest too"
+        items.append(f"    /// {doc}.")
+        if instances or resting:
+            items.append(
+                f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::declared("
+                f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]}, "
+                f"{instances}, {'true' if resting else 'false'});"
+            )
+        else:
+            items.append(
+                f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::of("
+                f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]});"
+            )
     block("The marks it may put on the modeline", "mark", items)
 
     items = []
@@ -404,6 +427,12 @@ def main() -> int:
 
     keys = load_parser(args.parser)
     modules = sorted(json.loads(args.modules.read_text(encoding="utf-8")), key=lambda m: m["id"])
+    # WHOSE EACH MODULE IS, before a byte is written: the loader says it of
+    # every record, and a record that does not — or says something else — is
+    # refused, never taken for the distro's.
+    for m in modules:
+        if m.get("origin") not in ("distro", "person"):
+            fail(m["id"], f"its origin is {m.get('origin')!r}; a module is the distro's or the person's")
     args.out.mkdir(parents=True, exist_ok=True)
 
     seen: set[str] = set()
@@ -431,7 +460,11 @@ def main() -> int:
         (here / "manifest.rs").write_text(manifest_rs(m, texts, args.language, tables), encoding="utf-8")
 
     (args.out / "all.rs").write_text(all_rs(modules), encoding="utf-8")
-    (args.out / "ids.txt").write_text("".join(f"{m['id']} {m['snake']}\n" for m in modules), encoding="utf-8")
+    # WHOSE EACH MODULE IS rides beside its names: `build.rs` loads a
+    # person's `module.rs` from the person's folder, never from the crate's.
+    (args.out / "ids.txt").write_text(
+        "".join(f"{m['id']} {m['snake']} {m['origin']}\n" for m in modules), encoding="utf-8"
+    )
     print(f"OK: {len(modules)} brain modules -> {args.out}" + (f" ({', '.join(m['id'] for m in modules)})" if modules else ""))
     return 0
 

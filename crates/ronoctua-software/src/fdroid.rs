@@ -13,7 +13,7 @@
 //! `SHA-256-Digest-Manifest` (base64 of the manifest's SHA-256), and the
 //! manifest's `entry.json` section holds that file's. Each link is checked
 //! here in Rust ([`verify_parts`]): a DER walker of a hundred lines and
-//! `ring` for the RSA, and no new crate. Signed attributes are understood
+//! `aws-lc-rs` for the RSA, and no new crate. Signed attributes are understood
 //! too (the signature then covers their DER `SET`, and their
 //! `messageDigest` must be the `.SF`'s hash), because `apksigner` and
 //! `jarsigner` write them and a repository can change tools.
@@ -220,7 +220,7 @@ fn signed_data_of(block: &[u8]) -> Option<Signed> {
     })
 }
 
-/// The RSA public key (`RSAPublicKey` DER, what `ring` takes) of a
+/// The RSA public key (`RSAPublicKey` DER, what `aws-lc-rs` takes) of a
 /// certificate.
 fn rsa_key_of(certificate: &[u8]) -> Option<Vec<u8>> {
     let (cert, _) = read_der(certificate)?;
@@ -255,7 +255,7 @@ pub fn verify_signature(sf: &[u8], block: &[u8], pin: &str) -> Result<(), Refusa
     let key = rsa_key_of(certificate).ok_or(Refusal::Integrity)?;
     let message: &[u8] = match &signed.signed_attributes {
         Some(set) => {
-            let want = ring::digest::digest(&ring::digest::SHA256, sf);
+            let want = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, sf);
             if signed.message_digest.as_deref() != Some(want.as_ref()) {
                 return Err(Refusal::Integrity);
             }
@@ -263,9 +263,12 @@ pub fn verify_signature(sf: &[u8], block: &[u8], pin: &str) -> Result<(), Refusa
         }
         None => sf,
     };
-    ring::signature::UnparsedPublicKey::new(&ring::signature::RSA_PKCS1_2048_8192_SHA256, key)
-        .verify(message, &signed.signature)
-        .map_err(|_| Refusal::Integrity)
+    aws_lc_rs::signature::UnparsedPublicKey::new(
+        &aws_lc_rs::signature::RSA_PKCS1_2048_8192_SHA256,
+        key,
+    )
+    .verify(message, &signed.signature)
+    .map_err(|_| Refusal::Integrity)
 }
 
 // ─── The JAR's manifests ────────────────────────────────────────────────────
@@ -325,7 +328,7 @@ pub fn base64(bytes: &[u8]) -> String {
 }
 
 fn sha256_base64(bytes: &[u8]) -> String {
-    base64(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
+    base64(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes).as_ref())
 }
 
 /// Check the four parts of `entry.jar` against each other and the pin: the

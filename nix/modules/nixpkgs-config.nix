@@ -91,7 +91,13 @@ in
         "skiaparser"
         "sdk-tools"
         "tools_r"
-      ];
+      ]
+      # ── anchor: L03 ──
+      # AND WHAT THE PERSON SAID YES TO when declaring it — by the same name
+      # this predicate compares (`lib.getName`), from the consumer of their
+      # declarations (`nix/modules/person.nix`). An unfree package declared
+      # without that consent is skipped there and never reaches this line.
+      || builtins.elem name config.ronoctua.person.unfreeNames;
   };
 
 }

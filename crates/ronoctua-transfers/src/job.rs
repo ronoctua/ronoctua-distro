@@ -55,13 +55,26 @@ pub enum Engine {
     /// engine's reason and a sharper one: it links `age`, which this daemon
     /// must never carry.
     Belongings,
+    /// Encrypt anything: `ronoctua-seal`, as a child — the belongings'
+    /// reason: it links `age`, this daemon never does (the
+    /// encrypt-and-quantum package).
+    Seal,
+    /// Long Incus work: `ronoctua-incus-job`, as a child (the incus-core
+    /// package).
+    Incus,
+    /// The installer image: downloaded, verified, assembled — and, when
+    /// armed, handed to the root writer (the stick package).
+    Stick,
+    // ── anchor: L13 ──
+    // ── anchor: L17 ──
+    // ── anchor: L22 ──
 }
 
 impl Engine {
     /// Every one of them, for the check that demands a text and an icon per
     /// engine. A `match` would compile with one missing; a list is what can be
     /// compared against the `.ftl`.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::Local,
         Self::Fetch,
         Self::Media,
@@ -71,6 +84,9 @@ impl Engine {
         Self::Scan,
         Self::Container,
         Self::Belongings,
+        Self::Seal,
+        Self::Incus,
+        Self::Stick,
     ];
 
     /// The stem of its text key and of its icon token.
@@ -90,6 +106,9 @@ impl Engine {
             Self::Scan => "scan",
             Self::Container => "container",
             Self::Belongings => "belongings",
+            Self::Seal => "seal",
+            Self::Incus => "incus",
+            Self::Stick => "stick",
         }
     }
 
@@ -120,9 +139,17 @@ impl Engine {
         // engine's, for a different reason — and a container's job is podman's
         // own child, which a pause would leave half done, as the belongings'
         // CLI is.
+        // A SEAL, AN INCUS JOB AND A STICK: a child mid-stream, a daemon's
+        // operation, a root writer — none can be held honestly.
         !matches!(
             self,
-            Self::Software | Self::Scan | Self::Container | Self::Belongings
+            Self::Software
+                | Self::Scan
+                | Self::Container
+                | Self::Belongings
+                | Self::Seal
+                | Self::Incus
+                | Self::Stick
         )
     }
 }
@@ -470,6 +497,34 @@ pub enum Work {
         /// What to do.
         op: ronoctua_belongings::order::Op,
     },
+    /// Seal or open a file — encrypt anything (`ronoctua_pq::Job`, carried
+    /// whole; its secrets are `0600` runtime files, never on this socket).
+    Seal {
+        /// What to do. Boxed for the reason `Software` boxes its order.
+        job: Box<ronoctua_pq::Job>,
+        /// The name to show — the file's. Data.
+        label: String,
+    },
+    /// Long Incus work (`ronoctua_incus::Job`, carried whole).
+    Incus {
+        /// What to do.
+        job: Box<ronoctua_incus::Job>,
+        /// The name to show — the instance, the image. Data.
+        label: String,
+    },
+    /// The installer image for a stick.
+    Stick {
+        /// Which release.
+        release: Box<ronoctua_stick::Release>,
+        /// Where the image is assembled.
+        #[serde(with = "crate::wire::path")]
+        into: PathBuf,
+        /// The drive it is then written to, when the person armed the write.
+        write: Option<Box<ronoctua_stick::Target>>,
+    },
+    // ── anchor: L13 ──
+    // ── anchor: L17 ──
+    // ── anchor: L22 ──
 }
 
 /// Whose session a download is made with.
@@ -548,11 +603,16 @@ impl Work {
                 ronoctua_containers::Job::ComposePull { .. } => "container-compose-pull",
             },
             Self::Belongings { .. } => "belongings",
+            Self::Seal { job, .. } if job.seals() => "seal",
+            Self::Seal { .. } => "unseal",
+            Self::Incus { job, .. } => job.word(),
+            Self::Stick { write: None, .. } => "stick-fetch",
+            Self::Stick { write: Some(_), .. } => "stick-write",
         }
     }
 
     /// Every stem, for the check that demands a text per kind of work.
-    pub const WORDS: [&'static str; 27] = [
+    pub const WORDS: [&'static str; 38] = [
         "copy",
         "move",
         "delete",
@@ -580,6 +640,17 @@ impl Work {
         "container-compose-down",
         "container-compose-pull",
         "belongings",
+        "seal",
+        "unseal",
+        "incus-launch",
+        "incus-image-copy",
+        "incus-export",
+        "incus-import",
+        "incus-publish",
+        "incus-push",
+        "incus-pull",
+        "stick-fetch",
+        "stick-write",
     ];
 
     /// Who does it.
@@ -599,6 +670,9 @@ impl Work {
             Self::Scan { .. } => Engine::Scan,
             Self::Container { .. } => Engine::Container,
             Self::Belongings { .. } => Engine::Belongings,
+            Self::Seal { .. } => Engine::Seal,
+            Self::Incus { .. } => Engine::Incus,
+            Self::Stick { .. } => Engine::Stick,
             Self::Paste { .. }
             | Self::Delete { .. }
             | Self::Shred { .. }
@@ -631,6 +705,7 @@ impl Work {
                 .chain(secret.iter())
                 .map(PathBuf::as_path)
                 .collect(),
+            Self::Seal { job, .. } => job.secrets(),
             _ => Vec::new(),
         }
     }
@@ -671,6 +746,10 @@ impl Work {
             Self::Container { .. } => Measure::Items,
             // The CLI counts files: read, encrypted, written.
             Self::Belongings { .. } => Measure::Items,
+            // `ronoctua-seal` counts bytes; the image is bytes.
+            Self::Seal { .. } | Self::Stick { .. } => Measure::Bytes,
+            // The daemon's operations report as they please: things.
+            Self::Incus { .. } => Measure::Items,
         }
     }
 
@@ -694,6 +773,14 @@ impl Work {
             | Self::Torrent { into, .. }
             | Self::Atlas { into, .. } => Some(into),
             Self::Trash { root, .. } | Self::Restore { root, .. } => Some(root),
+            Self::Seal { job, .. } => Some(&job.into),
+            Self::Stick { into, .. } => Some(into),
+            Self::Incus { job, .. } => match &**job {
+                ronoctua_incus::Job::Export { to, .. } | ronoctua_incus::Job::Pull { to, .. } => {
+                    Some(to)
+                }
+                _ => None,
+            },
             Self::Compress { archive, .. } | Self::ArchiveEdit { archive, .. } => Some(archive),
             Self::ArchiveConvert { to, .. } => Some(to),
             // A program lands in the person's profile, in Flatpak's tree, in
@@ -741,6 +828,9 @@ impl Work {
             // THE ORDER'S WORD: what is synced is the person's configuration,
             // and the row names what it is doing to it.
             Self::Belongings { op } => Paths::Text(op.word()),
+            Self::Seal { job, .. } => Paths::One(&job.from),
+            Self::Incus { label, .. } => Paths::Text(label),
+            Self::Stick { release, .. } => Paths::Text(&release.label),
         }
     }
 
@@ -817,6 +907,12 @@ pub struct Job {
     /// as it is.
     #[serde(default)]
     pub archive: Option<ronoctua_archive::Why>,
+    /// Why a seal or an open was not done (`ronoctua-seal`'s verdict), as the
+    /// closed set the screen has a sentence for (`seal-refused-<id>`) — and
+    /// the one that decides whether a door asks the passphrase again.
+    /// [`Job::trouble`] stays empty beside it, as beside [`Job::archive`].
+    #[serde(default)]
+    pub seal: Option<ronoctua_pq::Why>,
 }
 
 impl Job {
@@ -838,6 +934,7 @@ impl Job {
             outcome: None,
             refusal: None,
             archive: None,
+            seal: None,
         }
     }
 
@@ -995,7 +1092,13 @@ mod tests {
                 engine.pauses(),
                 !matches!(
                     engine,
-                    Engine::Software | Engine::Scan | Engine::Container | Engine::Belongings
+                    Engine::Software
+                        | Engine::Scan
+                        | Engine::Container
+                        | Engine::Belongings
+                        | Engine::Seal
+                        | Engine::Incus
+                        | Engine::Stick
                 ),
                 "{engine:?}"
             );

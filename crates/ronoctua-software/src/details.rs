@@ -1,37 +1,21 @@
 //! What a program's sheet shows beyond its search row, from its own source.
 //!
-//! | source | from | `declaration` |
-//! |---|---|---|
-//! | Nix | the index's row (one line of description, licence, site, command) | `environment.systemPackages = [ pkgs.<attr> ];` |
-//! | Flatpak | Flathub's appstream and summary answers (sizes with a missing runtime, permissions); the local catalogue offline; `flatpak info` for an installed app's permissions | `ronoctua.software.declaredFlatpaks = [ "<id>" ];` |
-//! | AppImage | AppImageHub's kept feed, our sidecar of an installed one, and the GitHub release an install would take | — |
-//! | Android | the verified F-Droid catalogue (summary in the person's language, anti-features, ARM only) | — |
-//! | Web | the web app's own `.desktop` | — |
+//! | source | from |
+//! |---|---|
+//! | Nix | the index's row (one line of description, licence, site, command) |
+//! | Flatpak | Flathub's appstream and summary answers (sizes with a missing runtime, permissions); the local catalogue offline; `flatpak info` for an installed app's permissions |
+//! | AppImage | AppImageHub's kept feed, our sidecar of an installed one, and the GitHub release an install would take |
+//! | Android | the verified F-Droid catalogue (summary in the person's language, anti-features, ARM only) |
+//! | Web | the web app's own `.desktop` |
 //!
-//! # The declaration
-//!
-//! "Make it permanent" copies ONE line into the machine's `host.nix`. For a
-//! Flatpak it is the distro's own option (`nix/modules/software.nix`), which
-//! nix-flatpak's Home Manager module turns into the person's `--user`
-//! installation. For a Nix package the distro has no option of its own, so the
-//! line is NixOS's `environment.systemPackages`; an UNFREE package also needs
-//! the flake's `allowUnfreePredicate` (`nix/modules/nixpkgs-config.nix`),
-//! which is not a line of `host.nix` — the [`Badge::Unfree`] beside it is
-//! what says so.
-//! AppImages, Android apps and web apps have no declarative form in the flake.
+//! Keeping a program across machines is not a line any more: it is the
+//! person's declaration, one click away ([`crate::declare`]).
 
 use serde::{Deserialize, Serialize};
 
 use crate::found::{Badge, Picture};
 use crate::search::Reach;
 use crate::{AppKey, Context, Refusal};
-
-/// The option a Flatpak's declaration sets (`nix/modules/software.nix`).
-pub const FLATPAK_OPTION: &str = "ronoctua.software.declaredFlatpaks";
-
-/// The option a Nix package's declaration sets: NixOS's own, because the
-/// distro declares no option for extra packages.
-pub const NIX_OPTION: &str = "environment.systemPackages";
 
 /// One program's details.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,8 +39,6 @@ pub struct Details {
     /// The Nix attribute or the app id, as a person would type it — a web
     /// app's address.
     pub reference: String,
-    /// The line that would declare it in the flake ("make it permanent").
-    pub declaration: Option<String>,
     /// Its name, as its source gives it (data).
     pub name: String,
     /// One line on what it does (data).
@@ -140,8 +122,7 @@ fn nix(ctx: &Context, attr: &str) -> Result<Details, Refusal> {
     let found = row.found(false);
     Ok(Details {
         description: paragraphs([row.description.clone()]),
-        reference: row.attr.clone(),
-        declaration: Some(nix_declaration(&row.attr)),
+        reference: row.attr,
         name: found.name,
         summary: found.summary,
         version: found.version,
@@ -153,45 +134,7 @@ fn nix(ctx: &Context, attr: &str) -> Result<Details, Refusal> {
     })
 }
 
-/// The line that keeps a Nix package: `environment.systemPackages = [
-/// pkgs.<attr> ];`, each segment of the attribute QUOTED when it is not a Nix
-/// identifier (`pkgs."7zz"`, `pkgs."libsigc++"`) or is a keyword. Pure.
-#[must_use]
-pub fn nix_declaration(attr: &str) -> String {
-    let path: Vec<String> = attr
-        .split('.')
-        .map(|segment| {
-            if is_identifier(segment) {
-                segment.to_owned()
-            } else {
-                format!("\"{segment}\"")
-            }
-        })
-        .collect();
-    format!("{NIX_OPTION} = [ pkgs.{} ];", path.join("."))
-}
-
-/// A bare Nix identifier: a letter or `_`, then letters, digits, `_`, `'` and
-/// `-` — and not one of the words the grammar reserves.
-fn is_identifier(s: &str) -> bool {
-    const KEYWORDS: [&str; 10] = [
-        "if", "then", "else", "assert", "with", "let", "in", "rec", "inherit", "or",
-    ];
-    let mut chars = s.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '\'' | '-'))
-        && !KEYWORDS.contains(&s)
-}
-
 // ─── Flatpak ────────────────────────────────────────────────────────────────
-
-/// The line that keeps a Flatpak. Pure.
-#[must_use]
-pub fn flatpak_declaration(id: &str) -> String {
-    format!("{FLATPAK_OPTION} = [ \"{id}\" ];")
-}
 
 /// Flathub's answers when the person allows the network and Flathub; the local
 /// catalogue otherwise, or when they fail. An INSTALLED app's permissions are
@@ -239,7 +182,6 @@ fn flatpak(ctx: &Context, id: &str, language: &str, reach: &Reach<'_>) -> Result
         (None, Some(permissions)) => Ok(Details {
             permissions,
             reference: id.to_owned(),
-            declaration: Some(flatpak_declaration(id)),
             name: id.to_owned(),
             badges: vec![Badge::Sandboxed],
             ..Details::default()
@@ -277,7 +219,6 @@ fn of_flathub(id: &str, d: crate::flathub::Details, installed: Option<Vec<String
         permissions: installed.unwrap_or(d.permissions),
         anti_features: Vec::new(),
         reference: id.to_owned(),
-        declaration: Some(flatpak_declaration(id)),
         name: d.name,
         summary: d.summary,
         version: d.version,
@@ -299,7 +240,6 @@ fn of_entry(e: &crate::appstream::Entry, permissions: Vec<String>) -> Details {
         needs: e.runtime.clone(),
         permissions,
         reference: e.id.clone(),
-        declaration: Some(flatpak_declaration(&e.id)),
         name: found.name,
         summary: found.summary,
         version: found.version,
@@ -461,34 +401,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_declaration_quotes_what_nix_would_not_read_bare() {
-        assert_eq!(
-            nix_declaration("ripgrep"),
-            "environment.systemPackages = [ pkgs.ripgrep ];"
-        );
-        assert_eq!(
-            nix_declaration("python3Packages.requests"),
-            "environment.systemPackages = [ pkgs.python3Packages.requests ];"
-        );
-        assert_eq!(
-            nix_declaration("7zz"),
-            "environment.systemPackages = [ pkgs.\"7zz\" ];"
-        );
-        assert_eq!(
-            nix_declaration("libsigcxx.gtk+3"),
-            "environment.systemPackages = [ pkgs.libsigcxx.\"gtk+3\" ];"
-        );
-        assert_eq!(
-            nix_declaration("in"),
-            "environment.systemPackages = [ pkgs.\"in\" ];"
-        );
-        assert_eq!(
-            flatpak_declaration("org.gnome.Calculator"),
-            "ronoctua.software.declaredFlatpaks = [ \"org.gnome.Calculator\" ];"
-        );
-    }
-
     #[cfg(feature = "net")]
     mod online {
         use super::*;
@@ -525,10 +437,6 @@ mod tests {
             );
             assert_eq!(rg.version, "15.1.0");
             assert_eq!(rg.description.len(), 1);
-            assert_eq!(
-                rg.declaration.as_deref(),
-                Some("environment.systemPackages = [ pkgs.ripgrep ];")
-            );
             assert!(
                 nix("google-chrome")
                     .unwrap()
@@ -590,10 +498,6 @@ mod tests {
             let d = of_key(&ctx, key.clone(), "pt_BR", &net, &system).unwrap();
             assert_eq!(d.name, "Calculator");
             assert_eq!(d.reference, "org.gnome.Calculator");
-            assert_eq!(
-                d.declaration.as_deref(),
-                Some("ronoctua.software.declaredFlatpaks = [ \"org.gnome.Calculator\" ];")
-            );
             // The app and GNOME 51, which neither installation has.
             assert_eq!(d.download_bytes, Some(1_921_122 + 432_185_831));
             assert_eq!(d.installed_bytes, Some(4_975_616 + 1_125_792_768));
@@ -680,7 +584,6 @@ mod tests {
             let d = of_key(&off, key("net.launchpad.Gnuclad"), "en", &net, &system).unwrap();
             assert_eq!(d.name, "Gnuclad");
             assert_eq!(d.description, std::slice::from_ref(&d.summary));
-            assert!(d.declaration.is_some());
             assert_eq!(
                 of_key(&off, key("org.example.Nothing"), "en", &net, &system),
                 Err(Refusal::UnknownItem)
@@ -735,7 +638,6 @@ mod tests {
                 d.homepage.as_deref(),
                 Some("https://github.com/audacity/audacity")
             );
-            assert_eq!(d.declaration, None);
             // Turned off: the kept answer, and nobody asked.
             let mut off = context(&root);
             off.prefs.sources.appimagehub = false;
@@ -819,7 +721,6 @@ mod tests {
             assert_eq!(d.description, std::slice::from_ref(&d.summary));
             assert_eq!(d.version, "1.23.2");
             assert!(d.download_bytes.is_some());
-            assert_eq!(d.declaration, None);
             let pipe = android("InfinityLoop1309.NewPipeEnhanced", "en").unwrap();
             assert_eq!(pipe.anti_features, ["NonFreeNet"]);
             assert!(pipe.badges.contains(&Badge::AntiFeatures));
@@ -863,7 +764,6 @@ mod tests {
                 (d.name.as_str(), d.reference.as_str()),
                 ("Mail", "https://mail.example.org/")
             );
-            assert_eq!(d.declaration, None);
             assert_eq!(
                 of_key(
                     &ctx,

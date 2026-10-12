@@ -1,0 +1,151 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "source": "nix",
+      "id": "nix:cowsay",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:01Z",
+      "edited-on": "noctua-reference",
+      "attr": "cowsay",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:vscode",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:02Z",
+      "edited-on": "noctua-reference",
+      "attr": "vscode",
+      "unfree": true
+    },
+    {
+      "source": "nix",
+      "id": "nix:gone-from-nixpkgs-fixture",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:03Z",
+      "edited-on": "noctua-reference",
+      "attr": "gone-from-nixpkgs-fixture",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:autoReconfHook",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:04Z",
+      "edited-on": "noctua-reference",
+      "attr": "autoReconfHook",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:lib",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:05Z",
+      "edited-on": "noctua-reference",
+      "attr": "lib",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:discord",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:06Z",
+      "edited-on": "noctua-reference",
+      "attr": "discord",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:hello",
+      "machines": [
+        "another-machine"
+      ],
+      "edited-at": "2026-10-05T12:00:07Z",
+      "edited-on": "noctua-reference",
+      "attr": "hello",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:sl",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:08Z",
+      "edited-on": "noctua-reference",
+      "attr": "sl",
+      "unfree": false
+    },
+    {
+      "source": "nix",
+      "id": "nix:figlet",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:09Z",
+      "edited-on": "noctua-reference",
+      "attr": "figlet"
+    },
+    {
+      "source": "flatpak",
+      "id": "flatpak:org.example.Fixture",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:10Z",
+      "edited-on": "noctua-reference",
+      "app-id": "org.example.Fixture",
+      "origin": "flathub"
+    },
+    {
+      "source": "appimage",
+      "id": "appimage:fixture-tool",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:11Z",
+      "edited-on": "noctua-reference",
+      "key": "fixture-tool",
+      "name": "Fixture Tool",
+      "pin": {
+        "url": "https://example.org/releases/fixture-tool-1.0.0.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "1.0.0",
+        "pinned-at": "2026-10-05T12:00:11Z"
+      },
+      "follows": null,
+      "icon": null
+    },
+    {
+      "source": "web",
+      "id": "web:fixture-web",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:12Z",
+      "edited-on": "noctua-reference",
+      "slug": "fixture-web",
+      "name": "Fixture Web",
+      "url": "https://web.example.org/inbox",
+      "profile": "Profile 1",
+      "icon": "41d22a86d96ce260a025397fa3a3bcc47e446a06796536114759803e03b08e06",
+      "category": "Office"
+    },
+    {
+      "source": "android",
+      "id": "android:org.example.fixture",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:13Z",
+      "edited-on": "noctua-reference",
+      "package": "org.example.fixture",
+      "pin": {
+        "url": "https://example.org/fixture_7.apk",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "1.0",
+        "version-code": 7
+      },
+      "from": "direct",
+      "image": "vanilla"
+    },
+    {
+      "source": "flatpak",
+      "id": "flatpak:org.example.Elsewhere",
+      "machines": null,
+      "edited-at": "2026-10-05T12:00:14Z",
+      "edited-on": "noctua-reference",
+      "app-id": "org.example.Elsewhere",
+      "origin": "not-a-remote"
+    }
+  ]
+}

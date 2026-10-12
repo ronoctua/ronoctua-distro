@@ -132,6 +132,51 @@ pub enum Order {
         /// `true` for one window per app.
         multi: bool,
     },
+    /// Install for this person AND declare it: installed now by today's path,
+    /// pinned, merged into the person's `declared.json`, applied, and pushed
+    /// with the plain part (the software package).
+    Declare {
+        /// Which.
+        key: AppKey,
+        /// What the person already said yes to.
+        #[serde(default)]
+        consent: Consent,
+        /// `None` for every machine of the person, or the hostnames.
+        #[serde(default)]
+        machines: Option<Vec<String>>,
+    },
+    /// Remove for good: here and from the declaration, so the person's other
+    /// machines remove it at their next update.
+    Forget {
+        /// Which.
+        key: AppKey,
+        /// Keep what the program saved (the default, as `Remove`'s).
+        #[serde(default = "yes")]
+        keep_data: bool,
+    },
+    /// Keep one of the distro's programs uninstalled, here or everywhere.
+    Decline {
+        /// The distro registry's id.
+        id: String,
+        /// `None` for every machine of the person, or the hostnames.
+        #[serde(default)]
+        machines: Option<Vec<String>>,
+    },
+    /// Bring a declined program of the distro back.
+    Undecline {
+        /// The distro registry's id.
+        id: String,
+    },
+    /// Make this machine match the declaration — only within its own ledger
+    /// (`declared-applied.json`).
+    Reconcile {
+        /// One source, or all of them.
+        #[serde(default)]
+        source: Option<Source>,
+    },
+    /// Look for newer pins of the declared downloads (AppImages, apks).
+    RefreshPins,
+    // ── anchor: L18 ──
 }
 
 /// One thing a Flatpak app may reach, in the reduced form a person decides
@@ -263,7 +308,7 @@ fn yes() -> bool {
 
 impl Order {
     /// Every word, for `software-words-are-total`.
-    pub const WORDS: [&'static str; 17] = [
+    pub const WORDS: [&'static str; 23] = [
         "install",
         "install-file",
         "remove",
@@ -281,6 +326,12 @@ impl Order {
         "android-erase",
         "permission",
         "android-windows",
+        "declare",
+        "forget",
+        "decline",
+        "undecline",
+        "reconcile",
+        "refresh-pins",
     ];
 
     /// The stem of its text key (`software-order-<word>`).
@@ -304,6 +355,12 @@ impl Order {
             Self::Permission { .. } => "permission",
             Self::AndroidWindows { .. } => "android-windows",
             Self::AndroidErase => "android-erase",
+            Self::Declare { .. } => "declare",
+            Self::Forget { .. } => "forget",
+            Self::Decline { .. } => "decline",
+            Self::Undecline { .. } => "undecline",
+            Self::Reconcile { .. } => "reconcile",
+            Self::RefreshPins => "refresh-pins",
         }
     }
 
@@ -333,6 +390,12 @@ impl Order {
                 Some(Source::Android)
             }
             Self::Permission { .. } => Some(Source::Flatpak),
+            Self::Declare { key, .. } | Self::Forget { key, .. } => key.source(),
+            Self::Reconcile { source } => *source,
+            // THE DISTRO'S PROGRAMS AND THE PINS are no source's lane: they
+            // change the person's declaration, and the apply that follows
+            // takes the lanes it needs.
+            Self::Decline { .. } | Self::Undecline { .. } | Self::RefreshPins => None,
         }
     }
 
@@ -623,6 +686,27 @@ mod tests {
                 },
             },
             Order::AndroidWindows { multi: false },
+            Order::Declare {
+                key: AppKey::Flatpak {
+                    id: "org.gnome.Calculator".into(),
+                },
+                consent: Consent::default(),
+                machines: Some(vec!["noctua".into()]),
+            },
+            Order::Forget {
+                key: AppKey::Nix {
+                    attr: "hello".into(),
+                },
+                keep_data: true,
+            },
+            Order::Decline {
+                id: "gimp".into(),
+                machines: None,
+            },
+            Order::Undecline { id: "gimp".into() },
+            Order::Reconcile { source: None },
+            Order::RefreshPins,
+            // ── anchor: L18 ──
         ]
     }
 

@@ -159,9 +159,12 @@ fn git_hands_the_token_through_the_helper() {
     let repo = ronoctua_git::Repo::discover(&work)
         .unwrap()
         .with_tools(tools);
+    // NOT NARROWED: this remote is plain HTTP, where no TLS group is agreed
+    // (`belongings-https-is-pq-only` runs a narrowed token against TLS).
     let credentials = ronoctua_git::Credentials::Token {
         file: token,
         user: Some("someone".to_owned()),
+        pq_only: false,
     };
     let refused = repo.fetch(Some(&credentials)).unwrap_err();
     stop.store(true, std::sync::atomic::Ordering::SeqCst);

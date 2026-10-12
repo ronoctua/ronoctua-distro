@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Mail
+Exec=/run/current-system/sw/bin/ronoctua-software web-open mail
+TryExec=/run/current-system/sw/bin/google-chrome-stable
+Terminal=false
+Categories=Network;
+X-Ronoctua-Web-Url=https://mail.example.org/
+X-Ronoctua-Web-Profile=Default

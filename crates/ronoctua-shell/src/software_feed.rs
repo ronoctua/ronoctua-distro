@@ -150,6 +150,9 @@ pub struct Feed {
     again: Arc<AtomicBool>,
     /// The network half of the searches, debounced.
     online: Option<std::sync::mpsc::Sender<Pending>>,
+    /// The watches on what the declaration's reading depends on: alive as
+    /// long as the feed, which is as long as the view is open.
+    _watches: Vec<ronoctua_files::notice::Notice>,
 }
 
 impl std::fmt::Debug for Feed {
@@ -183,8 +186,10 @@ impl Feed {
             reading: Arc::new(AtomicBool::new(false)),
             again: Arc::new(AtomicBool::new(false)),
             online: None,
+            _watches: Vec::new(),
         };
         me.online = me.dispatcher();
+        me._watches = watch_the_declaration(&me.ctx.roots, &me.reader());
         me
     }
 
@@ -224,35 +229,18 @@ impl Feed {
     /// ONE READ AT A TIME: a second ask while one runs marks it to run once
     /// more when it ends, so a burst of finished jobs is two reads, never ten.
     pub fn reread(&self) {
-        if self.reading.swap(true, Ordering::SeqCst) {
-            self.again.store(true, Ordering::SeqCst);
-            return;
+        self.reader().go();
+    }
+
+    /// What a reread needs, for whoever asks one: the door, or a watch whose
+    /// file moved.
+    fn reader(&self) -> Reader {
+        Reader {
+            ctx: self.ctx.clone(),
+            post: Arc::new(self.poster()),
+            reading: Arc::clone(&self.reading),
+            again: Arc::clone(&self.again),
         }
-        let ctx = self.ctx.clone();
-        let post = self.poster();
-        let reading = Arc::clone(&self.reading);
-        let again = Arc::clone(&self.again);
-        spawn("ronoctua-software-read", move || {
-            loop {
-                again.store(false, Ordering::SeqCst);
-                post(Arrival::Snapshot(Box::new(ronoctua_software::state::read(
-                    &ctx,
-                ))));
-                post(Arrival::History(journal::read(&ctx.roots.ours_state())));
-                post(Arrival::Profiles(ronoctua_software::web::chrome_profiles(
-                    &ctx.roots,
-                )));
-                if !again.load(Ordering::SeqCst) {
-                    reading.store(false, Ordering::SeqCst);
-                    // A late ask between the check and the store is not lost:
-                    // it saw `reading` still true and set `again`.
-                    if !again.swap(false, Ordering::SeqCst) {
-                        return;
-                    }
-                    reading.store(true, Ordering::SeqCst);
-                }
-            }
-        });
     }
 
     /// Search. Answers the search's number, which the door keeps.
@@ -398,7 +386,18 @@ impl Feed {
         let slug = slug.to_owned();
         let post = self.poster();
         spawn("ronoctua-software-web-app", move || {
-            let app = ronoctua_software::web::read(&roots, &slug);
+            // A DECLARED ONE's entry is the system's once the reconciler took
+            // the person's away, and it names its picture only as a file:
+            // that file is where the editor starts.
+            let app = ronoctua_software::web::read_anywhere(&roots, &slug).map(|mut a| {
+                if a.icon.is_none() {
+                    a.icon = a
+                        .icon_file
+                        .clone()
+                        .map(|path| ronoctua_software::order::IconChoice::File { path });
+                }
+                a
+            });
             post(Arrival::WebApp { slug, app });
         });
     }
@@ -489,6 +488,112 @@ impl Feed {
 
 /// A named, detached thread; a failure to start one is logged, and the
 /// answer simply never comes — which the screen shows as still asking.
+/// A reread of the machine, which a door and a watch's thread both start:
+/// one at a time, and one more when asked meanwhile.
+#[derive(Clone)]
+struct Reader {
+    ctx: Context,
+    post: Arc<dyn Fn(Arrival) + Send + Sync>,
+    reading: Arc<AtomicBool>,
+    again: Arc<AtomicBool>,
+}
+
+impl Reader {
+    /// Read the machine again, on a thread.
+    fn go(&self) {
+        if self.reading.swap(true, Ordering::SeqCst) {
+            self.again.store(true, Ordering::SeqCst);
+            return;
+        }
+        let ctx = self.ctx.clone();
+        let post = Arc::clone(&self.post);
+        let reading = Arc::clone(&self.reading);
+        let again = Arc::clone(&self.again);
+        spawn("ronoctua-software-read", move || {
+            loop {
+                again.store(false, Ordering::SeqCst);
+                post(Arrival::Snapshot(Box::new(ronoctua_software::state::read(
+                    &ctx,
+                ))));
+                post(Arrival::History(journal::read(&ctx.roots.ours_state())));
+                post(Arrival::Profiles(ronoctua_software::web::chrome_profiles(
+                    &ctx.roots,
+                )));
+                if !again.load(Ordering::SeqCst) {
+                    reading.store(false, Ordering::SeqCst);
+                    // A late ask between the check and the store is not lost:
+                    // it saw `reading` still true and set `again`.
+                    if !again.swap(false, Ordering::SeqCst) {
+                        return;
+                    }
+                    reading.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+    }
+}
+
+/// The watches on what the declaration's reading depends on
+/// (`declaration::watched`): the mirror (an order, a belongings sync), the
+/// system's reports and the link a switch replaces (the update's apply), and
+/// the reconciler's ledger. A file that moves reads the machine again — in
+/// the window and in the footer alike, because both hold a feed while the
+/// view is open, and only then: an event, never a clock (the file is the
+/// broadcast).
+///
+/// One watch per folder, narrowed to its one file where the folder is busy
+/// with others (`/run`, the crate's state); the mirror's folder is made
+/// when it is missing, so a first sync is heard.
+fn watch_the_declaration(
+    roots: &ronoctua_software::Roots,
+    reader: &Reader,
+) -> Vec<ronoctua_files::notice::Notice> {
+    use ronoctua_files::notice::{Notice, Pace};
+    let mut by_folder: Vec<(PathBuf, Vec<String>)> = Vec::new();
+    for file in ronoctua_software::declaration::watched(roots) {
+        let (Some(folder), Some(name)) = (file.parent(), file.file_name()) else {
+            continue;
+        };
+        let name = name.to_string_lossy().into_owned();
+        match by_folder.iter_mut().find(|(f, _)| f == folder) {
+            Some((_, names)) => names.push(name),
+            None => by_folder.push((folder.to_path_buf(), vec![name])),
+        }
+    }
+    let mirror = ronoctua_software::declaration::mirror(roots);
+    let mut out = Vec::new();
+    for (folder, names) in by_folder {
+        if folder.starts_with(&mirror)
+            && let Err(e) = std::fs::create_dir_all(&folder)
+        {
+            tracing::warn!(error = %e, folder = %folder.display(), "the declaration's folder could not be made; it is not watched");
+            continue;
+        }
+        if !folder.is_dir() {
+            continue;
+        }
+        let stirred = {
+            let reader = reader.clone();
+            move || {
+                reader.go();
+                true
+            }
+        };
+        let watch = if let [name] = names.as_slice() {
+            Notice::on_file(&folder, name, Pace::Coalesced, stirred)
+        } else {
+            Notice::on_dirs(std::slice::from_ref(&folder), &[], Pace::Coalesced, stirred)
+        };
+        match watch {
+            Ok(w) => out.push(w),
+            Err(e) => {
+                tracing::warn!(error = %e, folder = %folder.display(), "a file of the declaration is not watched");
+            }
+        }
+    }
+    out
+}
+
 fn spawn(name: &str, work: impl FnOnce() + Send + 'static) {
     if let Err(e) = std::thread::Builder::new()
         .name(name.to_owned())
@@ -802,6 +907,11 @@ pub struct Readings {
     /// opening, after a consent row was pressed, and when the preferences
     /// change: a catalogue that is on and not let draws its consent row.
     pub consents: ronoctua_consent::Consents,
+    /// The person's belongings, where a door has them: a change of the
+    /// declaration asks their passphrase first when the session keeps no
+    /// identity (`belongings::signing_asks`), so the change goes signed.
+    /// `None` (a test, a photograph with no belongings) never asks.
+    pub belongings: Option<ronoctua_belongings::places::Places>,
 }
 
 impl Readings {
@@ -1132,6 +1242,51 @@ mod tests {
     use ronoctua_software::found::Prefer;
     use ronoctua_software::state::Installed;
 
+    /// FAILS IF: a file of the declaration that moves while the view is
+    /// open — a belongings sync writing the mirror, the update's apply —
+    /// does not read the machine again: the open view would keep saying
+    /// what was true before. Or the mirror's folder is not made, so the
+    /// first sync on a new machine would not be heard.
+    #[test]
+    fn a_moved_declaration_reads_the_machine_again() {
+        use std::time::{Duration, Instant};
+        let at =
+            std::env::temp_dir().join(format!("ronoctua-shell-feed-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&at);
+        let roots = ronoctua_software::Roots::under(&at);
+        let ctx = Context {
+            tools: ronoctua_software::Tools::default(),
+            roots: roots.clone(),
+            prefs: Preferences::default(),
+            rehearse: false,
+        };
+        let (woke, wakes) = std::sync::mpsc::channel::<()>();
+        let woke = Mutex::new(woke);
+        let feed = Feed::with(ctx, "en-GB".into(), move || {
+            if let Ok(w) = woke.lock() {
+                let _ = w.send(());
+            }
+        });
+        let folder = ronoctua_software::declaration::mirror(&roots).join("software");
+        assert!(folder.is_dir(), "the mirror's folder was not made");
+        assert!(feed.take().is_empty(), "nothing read before anything moved");
+        // WRITTEN AGAIN until it is heard: the watch comes alive on its own
+        // thread, and a write before that is no event of anybody's.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut read = false;
+        while !read && Instant::now() < deadline {
+            std::fs::write(folder.join("declared.json"), "{\"format\":1,\"apps\":[]}\n").unwrap();
+            let _ = wakes.recv_timeout(Duration::from_millis(250));
+            read = feed
+                .take()
+                .iter()
+                .any(|a| matches!(a, Arrival::Snapshot(_)));
+        }
+        assert!(read, "the machine was not read again");
+        drop(feed);
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
     fn found(key: AppKey, name: &str, badges: &[Badge]) -> Found {
         Found {
             key,
@@ -1409,6 +1564,8 @@ mod tests {
             state: at.join("state"),
             cache: at.join("cache"),
             runtime: None,
+            data_dirs: Vec::new(),
+            system: ronoctua_software::System::of_machine(Some(&at.join("sys"))),
         };
         let a = keep_pasted(&roots, b"\x89PNG one").expect("written");
         let b = keep_pasted(&roots, b"\x89PNG one").expect("written");

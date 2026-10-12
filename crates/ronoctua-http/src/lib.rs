@@ -63,7 +63,12 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(feature = "tls")]
+pub mod groups;
 pub mod multipart;
+// THE STREAMED BODIES, for a daemon on this machine that moves files the size
+// of a disk (Incus's backups and instance files): see the module.
+pub mod streamed;
 #[cfg(feature = "tls")]
 pub mod tls;
 #[cfg(feature = "tls")]
@@ -221,25 +226,110 @@ pub fn request_of(call: &Call<'_>) -> String {
     out
 }
 
+/// [`request_of`], in memory that is zeroed when it is dropped — what the
+/// transports to another machine write ([`tls`]).
+///
+/// A header can carry a secret (a bearer token, an API key), and a secret
+/// copied into memory nobody wipes outlives the request in the heap of a
+/// long-lived process. So the request is MEASURED first ([`head_len`]) and
+/// written into a buffer of exactly that size, piece by piece
+/// ([`frame_head`]): a `format!` would leave a temporary holding the header,
+/// and a `String` that grows leaves its smaller copy behind.
+#[cfg(feature = "tls")]
+#[must_use]
+pub(crate) fn request_wiped(call: &Call<'_>) -> zeroize::Zeroizing<String> {
+    let content = call.body.unwrap_or_default();
+    framed_wiped(call, content.len() as u64, content)
+}
+
+/// [`head_of`], in memory that is zeroed when it is dropped — the head of a
+/// streamed body ([`multipart`]) sent to another machine.
+#[cfg(feature = "tls")]
+#[must_use]
+pub(crate) fn head_wiped(call: &Call<'_>, length: u64) -> zeroize::Zeroizing<String> {
+    framed_wiped(call, length, "")
+}
+
+/// The head for a body of `length` bytes and then `content`, in a wiped
+/// buffer sized for both before either is written.
+#[cfg(feature = "tls")]
+fn framed_wiped(call: &Call<'_>, length: u64, content: &str) -> zeroize::Zeroizing<String> {
+    let mut out = zeroize::Zeroizing::new(String::with_capacity(
+        head_len(call, length) + content.len(),
+    ));
+    frame_head(call, length, &mut out);
+    out.push_str(content);
+    out
+}
+
 /// The request's head, up to and with the blank line, for a body of
 /// `length` bytes that the caller writes after it — [`request_of`]'s own
 /// head, and a streamed body's ([`multipart`]).
 #[must_use]
 pub fn head_of(call: &Call<'_>, length: u64) -> String {
-    let mut out = format!("{} {} HTTP/1.1\r\n", call.method, call.path);
-    out.push_str(&format!("Host: {}\r\n", call.host));
-    out.push_str("Connection: close\r\n");
+    let mut out = String::with_capacity(head_len(call, length));
+    frame_head(call, length, &mut out);
+    out
+}
+
+/// How many bytes [`frame_head`] writes, counted before it writes them.
+fn head_len(call: &Call<'_>, length: u64) -> usize {
+    let digits = length.checked_ilog10().map_or(1, |d| d as usize + 1);
+    let headers: usize = call
+        .headers
+        .iter()
+        .map(|(name, value)| name.len() + ": ".len() + value.len() + "\r\n".len())
+        .sum();
+    call.method.len()
+        + " ".len()
+        + call.path.len()
+        + " HTTP/1.1\r\n".len()
+        + "Host: ".len()
+        + call.host.len()
+        + "\r\n".len()
+        + "Connection: close\r\n".len()
+        + headers
+        + "Content-Type: ".len()
+        + call.content_type.len()
+        + "\r\n".len()
+        + "Content-Length: ".len()
+        + digits
+        + "\r\n\r\n".len()
+}
+
+/// Writes the request's head into `out`, ONE piece at a time: nothing is
+/// formatted into a temporary, so a header's value is copied only into
+/// `out` — which the caller sized ([`head_len`]) and, for a request that
+/// leaves the machine, wipes ([`request_wiped`]).
+fn frame_head(call: &Call<'_>, length: u64, out: &mut String) {
+    use std::fmt::Write as _;
+    for piece in [call.method, " ", call.path, " HTTP/1.1\r\n"] {
+        out.push_str(piece);
+    }
+    for piece in ["Host: ", call.host, "\r\n", "Connection: close\r\n"] {
+        out.push_str(piece);
+    }
     for (name, value) in call.headers {
-        out.push_str(&format!("{name}: {value}\r\n"));
+        for piece in [*name, ": ", *value, "\r\n"] {
+            out.push_str(piece);
+        }
     }
     // CONTENT-TYPE AND CONTENT-LENGTH ALWAYS, EVEN EMPTY.
     //
     // A `POST` with no `Content-Length` makes some servers wait for a body
     // that never comes, and the call then dies on the deadline instead of on
     // an answer — a bug that reads as "the daemon is down".
-    out.push_str(&format!("Content-Type: {}\r\n", call.content_type));
-    out.push_str(&format!("Content-Length: {length}\r\n\r\n"));
-    out
+    for piece in [
+        "Content-Type: ",
+        call.content_type,
+        "\r\n",
+        "Content-Length: ",
+    ] {
+        out.push_str(piece);
+    }
+    // An integer is formatted on the stack and written straight into `out`.
+    let _ = write!(out, "{length}");
+    out.push_str("\r\n\r\n");
 }
 
 /// The head of a response this program SERVES, up to the blank line: the
@@ -492,6 +582,53 @@ mod tests {
         // THE LENGTH IS THE BODY'S, IN BYTES.
         assert!(text.contains("Content-Length: 20\r\n\r\n"), "{text}");
         assert!(text.ends_with(r#"{"natEnabled":false}"#), "{text}");
+    }
+
+    /// FAILS IF: the head is measured differently from how it is written —
+    /// then a request with a secret in a header grows its buffer, and the
+    /// smaller copy is left in the heap unwiped.
+    #[test]
+    fn the_head_is_measured_before_it_is_written() {
+        let bearer = format!("Bearer {}", "t".repeat(300));
+        let headers = [("Authorization", bearer.as_str()), ("anthropic-beta", "x")];
+        for length in [0, 1, 9, 10, 99, 100, 65_535, u64::MAX] {
+            for call in [
+                Call::new("GET", "/api/oauth/usage", "api.anthropic.com"),
+                Call::new("POST", "/rest/é", "h:1").with_headers(&headers),
+            ] {
+                let head = head_of(&call, length);
+                assert_eq!(head.len(), head_len(&call, length), "{head}");
+                assert_eq!(head.capacity(), head.len(), "it never grew: {head}");
+                assert!(head.ends_with(&format!("Content-Length: {length}\r\n\r\n")));
+            }
+        }
+    }
+
+    /// FAILS IF: what a transport to another machine writes is not the
+    /// request, or its buffer grew while it was written (leaving an unwiped
+    /// copy of a header behind).
+    #[cfg(feature = "tls")]
+    #[test]
+    fn a_request_with_a_secret_is_written_where_it_is_wiped() {
+        let bearer = format!("Bearer sk-ant-oat01-{}", "x".repeat(200));
+        let headers = [("Authorization", bearer.as_str())];
+        // A body much shorter than the head as well as a longer one: a
+        // `String` that grows by less than its size DOUBLES, so a buffer
+        // that grew while it was written cannot end exactly full.
+        let (short, long) = ("b".repeat(10), "b".repeat(1234));
+        for call in [
+            Call::new("GET", "/api/oauth/usage", "api.anthropic.com").with_headers(&headers),
+            Call::new("POST", "/v2/translate", "api.deepl.com")
+                .with_headers(&headers)
+                .with_body(&short),
+            Call::new("POST", "/v2/translate", "api.deepl.com")
+                .with_headers(&headers)
+                .with_body(&long),
+        ] {
+            let wiped = request_wiped(&call);
+            assert_eq!(wiped.as_str(), request_of(&call));
+            assert_eq!(wiped.capacity(), wiped.len(), "sized before it was filled");
+        }
     }
 
     #[test]

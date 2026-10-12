@@ -80,9 +80,24 @@ let
   '';
 in
 {
+  # The registry this module writes Chrome's entry into, imported here as
+  # well as in `distroModules`: a test machine that imports this module
+  # alone gets it too (an import is counted once).
+  imports = [ ./distro-apps.nix ];
+
   options.ronoctua.browser = {
     enable = lib.mkEnableOption "Google Chrome (0.42 GiB)" // {
       default = true;
+      # A DECLINE TURNS THE BROWSER OFF, and not only its package: the
+      # kiosk, the native-messaging host, the extension and the state
+      # directory all read this switch, and each would be left pointing at a
+      # Chrome that is not there. An `apply`, and not a definition: the
+      # decline wins over any line, `mkForce` included (a switch on with the
+      # program gone is the broken state this prevents), and the registry
+      # still reads the switch as the profile and the host set it — the
+      # group that says whether this machine carries Chrome
+      # (`nix/modules/distro-apps.nix`, `carried`).
+      apply = carried: carried && !(lib.elem "chrome" config.ronoctua.distroApps.honoured);
     };
     # THE CHROME THIS MACHINE RUNS. The wrapped one above; `tests/kiosk-vm.nix`
     # hands in the real Chrome with its own test flags, because a test node's
@@ -97,10 +112,20 @@ in
   };
 
   config = {
-    environment.systemPackages = lib.mkIf cfg.enable [
-      cfg.package
-      kioskEntry
-    ];
+    # CHROME IS A PROGRAM OF THE REGISTRY (`nix/modules/distro-apps.nix`), and
+    # the kiosk's launcher entry goes and comes with it: a door to the kiosk
+    # on a machine without Chrome would open nothing. `when` is this group's
+    # switch, `ronoctua.browser.enable`, which a decline turns off (above).
+    ronoctua.apps.chrome = {
+      package = cfg.package;
+      extraPackages = [ kioskEntry ];
+      group = "browser";
+      desktopIds = [
+        "google-chrome.desktop"
+        "com.google.Chrome.desktop"
+        "br.ronoctua.kiosk.desktop"
+      ];
+    };
 
     # WHERE THE FOOTER READS OUR EXTENSION'S ID: the unit's environment, and
     # not the login shell's — a user unit inherits the manager's, which is

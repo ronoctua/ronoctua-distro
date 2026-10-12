@@ -149,7 +149,11 @@ pub const fn measure_of(phase: Phase) -> Measure {
         | Phase::Removing
         | Phase::Starting
         | Phase::Indexing
-        | Phase::Preparing => Measure::Items,
+        | Phase::Preparing
+        | Phase::Declaring
+        | Phase::Applying
+        | Phase::Reconciling
+        | Phase::Publishing => Measure::Items,
     }
 }
 

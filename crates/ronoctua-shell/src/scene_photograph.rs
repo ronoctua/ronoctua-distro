@@ -40,6 +40,9 @@ usage: ronoctua-shell photograph --door display|clipboard|curtain|lifeline [opti
   --screens <scene>     for display: two (side by side), stacked, dark (the
                         second off, with what is filed for it), one
                                                        (default: two)
+  --settings <read>     for display: how `display.json` read — read (whole),
+                        failed (not JSON: nothing of it), repaired (a value
+                        of it repaired, the rest read) (default: read)
   --entry <text>        for clipboard: an entry of the history, newest first
                         — repeatable
   --image <png>         for clipboard: an image entry — repeatable
@@ -117,6 +120,7 @@ enum Measure {
 struct Asked {
     which: Which,
     screens: String,
+    settings: String,
     entries: Vec<ronoctua_clipboard::Entry>,
     pinned: Vec<usize>,
     screen: (u32, u32),
@@ -192,6 +196,7 @@ fn parse(words: &[String]) -> Result<Asked> {
     let mut me = Asked {
         which: Which::Display,
         screens: "two".to_owned(),
+        settings: "read".to_owned(),
         entries: Vec::new(),
         pinned: Vec::new(),
         screen: (1920, 1080),
@@ -231,6 +236,14 @@ fn parse(words: &[String]) -> Result<Asked> {
                 );
             }
             "--screens" => me.screens = value()?,
+            "--settings" => {
+                let said = value()?;
+                ensure!(
+                    ["read", "failed", "repaired"].contains(&said.as_str()),
+                    "`--settings {said}` is not a reading; the readings are read, failed and repaired"
+                );
+                me.settings = said;
+            }
             "--entry" => me
                 .entries
                 .push(ronoctua_clipboard::Entry::of_text(value()?)),
@@ -320,6 +333,10 @@ fn parse(words: &[String]) -> Result<Asked> {
     ensure!(
         me.which != Which::Lifeline || me.steps.is_empty(),
         "the lifeline takes no steps: it is drawn as it rises"
+    );
+    ensure!(
+        me.which == Which::Display || me.settings == "read",
+        "`--settings` is the screens' window's: it says how `display.json` read"
     );
     Ok(me)
 }
@@ -418,6 +435,7 @@ pub(crate) fn scene(name: &str) -> Result<ronoctua_display::Snapshot> {
         screens,
         compositor: true,
         settings_failed: false,
+        settings_repaired: false,
     })
 }
 
@@ -438,7 +456,9 @@ pub fn run(words: &[String]) -> Result<()> {
     let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
     match asked.which {
         Which::Display => {
-            let snapshot = scene(&asked.screens)?;
+            let mut snapshot = scene(&asked.screens)?;
+            snapshot.settings_failed = asked.settings == "failed";
+            snapshot.settings_repaired = asked.settings == "repaired";
             let window = crate::display_window::photographed(snapshot);
             walked(Detached::new(ui, window), &asked)
         }
@@ -828,6 +848,11 @@ mod tests {
         assert!(scene("dark").is_ok() && scene("nowhere").is_err());
         assert!(parse(&words(&["--door", "files"])).is_err());
         assert!(parse(&words(&["--door", "lifeline", "--key", "a"])).is_err());
+        // HOW `display.json` READ is the screens' window's, and one of three.
+        let repaired = parse(&words(&["--door", "display", "--settings", "repaired"]));
+        assert_eq!(repaired.expect("the words").settings, "repaired");
+        assert!(parse(&words(&["--door", "display", "--settings", "half"])).is_err());
+        assert!(parse(&words(&["--door", "clipboard", "--settings", "failed"])).is_err());
         let clip = parse(&words(&[
             "--door",
             "clipboard",

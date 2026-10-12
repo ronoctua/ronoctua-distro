@@ -130,12 +130,18 @@ in
         default = true;
       };
       androidNdk = lib.mkEnableOption "the NDK (a few GB more; only for native code)";
-      toolchains = lib.mkEnableOption "the toolchains: rust, go, python, node, gcc" // {
-        default = true;
-      };
-      # The two coding agents, Claude Code and Codex — programs one installs to
-      # USE, so `profile.nix` puts them in the full profile only. Claude Code
-      # is unfree: its name is in `nixpkgs-config.nix`'s predicate.
+      # Rust is not among them any more: it is the devshell's own compiler,
+      # on the PATH in both profiles whatever this says (`nix/modules/dev.nix`,
+      # `nix/toolchain.nix`); a person removes it by declining it.
+      toolchains =
+        lib.mkEnableOption "the toolchains: go, python, node, gcc (rust stays: it is the devshell's)"
+        // {
+          default = true;
+        };
+      # The two coding agents, Claude Code and Codex — in both profiles
+      # (`profile.nix`): working on the distro from the distro is the reduced
+      # profile's work too. Claude Code is unfree: its name is in
+      # `nixpkgs-config.nix`'s predicate.
       agents = lib.mkEnableOption "the coding agents: Claude Code and Codex" // {
         default = true;
       };
@@ -146,9 +152,10 @@ in
     # Declared here for the same reason written just above: what reads the
     # profile is `nix/modules/profile.nix`, which does not import this file.
     #
-    # It is an OPTION, and not a second `nixosConfiguration`. The installer
-    # still aims at `#noctua` in both cases, `host.nix` gains one line, and
-    # changing one's mind later is a `nixos-rebuild` — not a reinstall.
+    # It is an OPTION, and not a second `nixosConfiguration`. A machine's flake
+    # builds one attribute in both cases (`ronoctua.machine.attr`), `host.nix`
+    # gains one line, and changing one's mind later is a `nixos-rebuild` — not
+    # a reinstall.
     profile = lib.mkOption {
       type = lib.types.enum [
         "full"
@@ -156,12 +163,15 @@ in
       ];
       default = "full";
       description = ''
-        `full` brings everything (23.2 GiB of closure, measured) and is the recommended one.
+        `full` brings everything (~29 GiB of closure, estimated on 2026-10-05 from the 2026-08-14
+        measurement; see `profile.nix`) and is the recommended one.
 
-        `minimal` leaves out Android, the compilers, the browser, the
-        editor, the media, the font's 27 variants and the icon superpack —
-        about 17 GiB. It leaves out nothing of what MAKES the distro: the compositor,
-        the footer, the primary font, the keyboard, the network, impermanence and the terminal stay.
+        `minimal` leaves out Android, the other compilers (go, python, node, gcc),
+        the browser, the editor, the media, the font's 27 variants and the icon
+        superpack — ~11,8 GiB, estimated the same way. It leaves out nothing of what MAKES the distro: the compositor,
+        the footer, the primary font, the keyboard, the network, impermanence and the terminal stay —
+        and neither does it leave out working ON the distro: the devshell's toolchain, rust and
+        the coding agents are in both.
 
         Switching a group back on is one line in `host.nix`: for example
         `ronoctua.browser.enable = true;` to install just the browser.
@@ -498,6 +508,11 @@ in
     environment.sessionVariables.RONOCTUA_PLAYERCTL = "${pkgs.playerctl}/bin/playerctl";
     systemd.user.services.ronoctua-footer.environment.RONOCTUA_PLAYERCTL =
       "${pkgs.playerctl}/bin/playerctl";
+
+    # THE 2026-10-05 WAVE: one region per package, after its anchor.
+    # ── anchor: L05 ──
+    # ── anchor: L15 ──
+    # ── anchor: L16 ──
 
     system.stateVersion = lib.mkDefault "26.05";
   };

@@ -112,6 +112,41 @@
   # and their generated Rust (`nix/brain-modules-rs.nix`).
   brainModules,
   brainModulesRs,
+  # THE 2026-10-05 WAVE: one region per package, after its anchor.
+  # ── anchor: L01 ──
+  # ── anchor: L02 ──
+  # ── anchor: L03 ──
+  # THE MACHINE'S FLAKE LIBRARY (`nix/machine.nix`), with what a check needs
+  # beyond `self.lib`: the pin guard and the same functions over tampered
+  # inputs.
+  machineLib,
+  # ── anchor: L04 ──
+  # ── anchor: L05 ──
+  # ── anchor: L06 ──
+  # ── anchor: L07 ──
+  # ── anchor: L08 ──
+  # ── anchor: L09 ──
+  # ── anchor: L10 ──
+  # ── anchor: L11 ──
+  # The chain built again with a folder of the person's brain modules
+  # (`nix/person-brain.nix`), for the check that loads a fixture's.
+  withPersonModules,
+  # ── anchor: L12 ──
+  # ── anchor: L13 ──
+  # ── anchor: L14 ──
+  # ── anchor: L15 ──
+  # ── anchor: L16 ──
+  # THE RELEASE AND ITS COMPANIONS (`nix/release.nix`): `releaseWith` builds
+  # the release again around stand-ins, and `fetchIso` is run as it ships.
+  releaseApps,
+  # ── anchor: L17 ──
+  # ── anchor: L18 ──
+  # ── anchor: L19 ──
+  # ── anchor: L20 ──
+  # ── anchor: L21 ──
+  # ── anchor: L22 ──
+  # ── anchor: L23 ──
+  # ── anchor: L24 ──
 }:
 
 let
@@ -8054,6 +8089,7 @@ let
     mkCheck "files-actions-have-text"
       [
         pkgs.gnugrep
+        pkgs.gnused
         pkgs.coreutils
       ]
       ''
@@ -8068,7 +8104,11 @@ let
         # Deriving the key from the id is also the discipline itself: the
         # registry refuses a row whose label is not `files-<id>`, and this is
         # the same rule reaching the `.ftl`.
-        ids=$(grep -oE '^ *id: "[a-z0-9-]+"' "$src"/menu.rs | grep -oE '"[^"]+"' | tr -d '"')
+        # THE TABLE, NOT ITS TESTS: a test row (the /private vault's is
+        # `id: "private"`) is a fixture for the menu, not a row of it, and asking
+        # it for keys would demand text no screen draws.
+        ids=$(sed '/^#\[cfg(test)\]/,$d' "$src"/menu.rs | grep -oE '^ *id: "[a-z0-9-]+"' \
+          | grep -oE '"[^"]+"' | tr -d '"')
         [ -n "$ids" ] || {
           echo "ERROR: no row in the action table — what does the grep match?" >&2
           exit 1
@@ -8096,8 +8136,8 @@ let
         # one of its `Applies` asks a question only an entry can answer. The
         # rule is the same one — `sidebar-<id>` derived from the id — and so is
         # the reason it is derived and not grepped: the label is a constant.
-        side=$(grep -oE '^ *id: "[a-z0-9-]+"' "$src"/sidebar_menu.rs \
-          | grep -oE '"[^"]+"' | tr -d '"')
+        side=$(sed '/^#\[cfg(test)\]/,$d' "$src"/sidebar_menu.rs \
+          | grep -oE '^ *id: "[a-z0-9-]+"' | grep -oE '"[^"]+"' | tr -d '"')
         [ -n "$side" ] || {
           echo "ERROR: no row in the sidebar's menu." >&2
           exit 1
@@ -9187,10 +9227,12 @@ let
       if unit in got["rules"] or "files-root" in got["rules"]:
           wrong.append(f"a polkit rule names {unit!r} again: a second door, which nothing in this session can answer")
 
-      # THE SHELL REACHES IT THROUGH THE DOOR.
+      # THE SHELL REACHES IT THROUGH THE DOOR — asked in the sudo bar, by the
+      # root gesture the door that pressed hands `as_root` (`crate::sudo_bar`;
+      # that the bar is the door's one caller is `sudo-door-is-one`'s).
       door = must(body_of(shell, "as_root"), "files.rs `as_root`")
-      if "RootVerb::FilesRoot" not in door or "authority::run" not in door:
-          wrong.append("files.rs `as_root` does not go through `authority::run(RootVerb::FilesRoot, …)`")
+      if "RootVerb::FilesRoot" not in door or not re.search(r"\bgesture\.run\(", door):
+          wrong.append("files.rs `as_root` does not go through the sudo bar (`gesture.run(RootVerb::FilesRoot…)`)")
       if re.search(r"act::UNIT\b", shell):
           wrong.append("files.rs names `act::UNIT`: the shell starts the unit itself again")
 
@@ -10833,6 +10875,11 @@ let
         # goes through `player_door`, which opens without the registry.
         ("camera_settings_press", "run_with"),
         ("pointers_press", "run_with"),
+        # The file manager's `m` and `l` on the `/private` vault's row run the
+        # vault's two leader commands (`Doing::Vault`), whose arms go to the
+        # security centre and never back to a files step: it turns once, the
+        # clipboard's shape.
+        ("apply_files_step", "do_about_files", "run_command", "run_with"),
     }
 
     WHITE, GREY, BLACK = 0, 1, 2
@@ -10857,13 +10904,35 @@ let
         if colour[n] == WHITE:
             walk(n)
 
+    # A DECLARED RING EXISTS when its members still call round among
+    # THEMSELVES — asked of the graph, not of the walk: which back edge the
+    # walk meets first depends on the order it visits, and a new ring through
+    # `run_with` once hid the clipboard's from it while the clipboard's was
+    # still there.
+    def still_a_ring(ring):
+        members = set(ring)
+        if not members <= set(edges):
+            return False
+        def reached(forward):
+            start = min(members)
+            seen, todo = {start}, [start]
+            while todo:
+                n = todo.pop()
+                for m in members:
+                    if m not in seen and (m in edges[n] if forward else n in edges[m]):
+                        seen.add(m)
+                        todo.append(m)
+            return seen
+        return reached(True) == members and reached(False) == members
+
     for ring in sorted(found - KNOWN):
         bad.append("a cycle nobody declared: " + " <-> ".join(ring))
-    for ring in sorted(KNOWN - found):
-        bad.append(
-            "the declared cycle " + " <-> ".join(ring) + " no longer exists; a line "
-            "excluding nothing excludes nothing"
-        )
+    for ring in sorted(KNOWN):
+        if not still_a_ring(ring):
+            bad.append(
+                "the declared cycle " + " <-> ".join(ring) + " no longer exists; a line "
+                "excluding nothing excludes nothing"
+            )
 
     if bad:
         print("ERROR: the footer can ask itself a question it is the answer to.", file=sys.stderr)
@@ -13387,7 +13456,7 @@ let
           # polkit agent, so its unit is started through the sudo door
           # (`files-root-is-narrow`).
           "org.freedesktop.systemd1.manage-units":
-              "ours: rescue, keyboard, keys, memory, update, tor, syncthing, android, security",
+              "ours: rescue, keyboard, keys, memory, update, tor, syncthing, android, security, person, machine",
           # nix/modules/base.nix — the machine's own clock. THREE actions and
           # not four: `set-local-rtc` decides whether the hardware clock runs
           # in local time, nothing in this tree asks for it, and a fourth
@@ -13415,6 +13484,20 @@ let
           # (its timer is forced off), and the rule names no person.
           "org.freedesktop.fwupd.get-remotes": "upstream: fwupd",
           "org.freedesktop.fwupd.refresh-remote": "upstream: fwupd",
+          # THE 2026-10-05 WAVE: a package that adds a rule names it here.
+          # ── anchor: L05 ──
+          # `machine` (`nix/modules/machine.nix`) signs `manage-units` above for
+          # ONE unit, `ronoctua-update-apply.service`, verb `start`, the one
+          # user, `YES` — the software centre applies a declaration with
+          # nothing to ask (`update-apply-rule-is-narrow`). The boot's bless
+          # has NO rule: only systemd starts it.
+          # ── anchor: L06 ──
+          # `person` (`nix/modules/person-apply.nix`) signs `manage-units` above
+          # for ONE unit, `ronoctua-person-apply.service`, verb `start`, the one
+          # user, `YES` — the software centre and the update's person half
+          # start it with nothing to ask (`person-apply-rule-is-narrow`). The
+          # approval's unit has NO rule: only the sudo door starts it.
+          # ── anchor: L13 ──
       }
 
       found = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', text))
@@ -13563,10 +13646,11 @@ let
     # That it really is one is not taken on trust: the crate's own `lib.rs` has
     # to declare it under `cfg(test)`.
     for f in sorted(crates.rglob("tests.rs")):
-        # WHOEVER DECLARES IT is `lib.rs` beside it, or the `<name>.rs` one
-        # level up that owns the directory — both are how Rust 2018 spells a
-        # module with a directory under it.
-        owners = [f.with_name("lib.rs"), f.parent.with_suffix(".rs")]
+        # WHOEVER DECLARES IT is `lib.rs` beside it, the `<name>.rs` one
+        # level up that owns the directory, or the `mod.rs` beside it — the
+        # first two are how Rust 2018 spells a module with a directory under
+        # it, the third the older spelling (`engine/mod.rs`).
+        owners = [f.with_name("lib.rs"), f.parent.with_suffix(".rs"), f.with_name("mod.rs")]
         if not any(
             o.exists() and "#[cfg(test)]\nmod tests;" in o.read_text() for o in owners
         ):
@@ -15050,6 +15134,19 @@ let
             reclaim = reclaim plain;
           };
           persisted = noctua.config.ronoctua.persist.directories;
+          # INCUS'S STATE, the one other subvolume a module makes: on btrfs
+          # `/persist/var/lib/incus` is made a subvolume of its own, so a
+          # snapshot of `/persist` never descends into it, and a target AT it
+          # is refused.
+          incus = {
+            on = noctua.config.ronoctua.incus.enable or false;
+            unit = noctua.config.systemd.services ? ronoctua-incus-subvolume;
+            plainOn = plain.ronoctua.incus.enable or false;
+            plainUnit = plain.systemd.services ? ronoctua-incus-subvolume;
+            refused = failed (
+              extended noctua { services.snapper.configs.incus.SUBVOLUME = "/persist/var/lib/incus"; }
+            );
+          };
         }
       );
     in
@@ -15107,6 +15204,17 @@ let
       if plain["btrfs"] or plain["scrub"] or plain["units"] or plain["reclaim"]:
           wrong.append(f"a machine without btrfs still gets btrfs steps: {plain}")
 
+      # 3b. INCUS'S STATE: its subvolume where Incus is on and the disk is
+      # btrfs, none on a machine without btrfs, and a target at it refused.
+      inc = facts["incus"]
+      if inc["on"]:
+          if not inc["unit"]:
+              wrong.append("Incus is on and its persisted state is not made a subvolume of its own")
+          if len(inc["refused"]) != 1 or "instances' storage" not in inc["refused"][0]:
+              wrong.append(f"a snapshot target at Incus's persisted state is not refused: {inc['refused']}")
+      if inc["plainOn"] and inc["plainUnit"]:
+          wrong.append("a machine without btrfs still gets Incus's subvolume step")
+
       # 4. NOBODY ELSE UNDOES IT.
       for d in facts["persisted"]:
           if ".cache" in d.split("/") or "/.local/share/containers" in d + "/":
@@ -15118,7 +15226,8 @@ let
       # to. `hashless` takes the comments off.
       root = pathlib.Path("${self}")
       swept = 0
-      MAKERS = ("nix/modules/filesystem.nix", "nix/modules/persist.nix")
+      MAKERS = ("nix/modules/filesystem.nix", "nix/modules/persist.nix", "nix/modules/private.nix",
+                "nix/modules/incus.nix")
       for f in sorted(root.rglob("*")):
           rel = str(f.relative_to(root))
           if not f.is_file() or f.suffix not in (".nix", ".sh", ".py") or not rel.startswith(("nix/", "assets/", "flake.nix")):
@@ -15126,7 +15235,7 @@ let
           text = hashless(f.read_text(errors="replace"))
           swept += 1
           if "subvolume create" in text and rel not in MAKERS:
-              wrong.append(f"{rel} makes a btrfs subvolume; the cache's is filesystem.nix's and the root's persist.nix's")
+              wrong.append(f"{rel} makes a btrfs subvolume; the cache's is filesystem.nix's, the root's persist.nix's, the vault's private.nix's and Incus's state incus.nix's")
           for m in re.finditer(r"[\"'][vqQ][+!]?\s+(\S+)", text):
               if ".cache" in m.group(1) or "%C" in m.group(1) or "XDG_CACHE_HOME" in m.group(1) or ".local/share/containers" in m.group(1):
                   wrong.append(f"{rel} plants a tmpfiles subvolume at {m.group(1)}")
@@ -16394,8 +16503,10 @@ let
     # they have nothing to point at.
     doors = [f for f, body in files.items() if "files::View::at(" in body]
     floor(len(doors), 2, "doors that build a files::View")
+    # `for_listing` IS `watching` for a door that lists a folder: the same
+    # watch, and the `/private` vault's status folder heard beside it.
     for f in doors:
-        if "Notice::watching" not in files[f]:
+        if not re.search(r"\bNotice::(?:watching|for_listing)\(", files[f]):
             bad.append(
                 f"{f.relative_to(crates)}: builds a files::View and never a "
                 "notice::Notice — this door cannot see a directory change"
@@ -18836,13 +18947,21 @@ let
     # And the profile, `minimal` and not the default, for the same reason: an
     # answer equal to the default passes even when it is being dropped.
     export RONOCTUA_INST_PROFILE=minimal
+    # THE PERSON'S REPOSITORY, mandatory since 2026-10-05: its address, the
+    # FILE that holds its access, and its passphrase — which joins the
+    # secrets the grep below looks for.
+    belongings_passphrase=test-belongings-passphrase
+    export RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git
+    export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
+    export RONOCTUA_INST_BELONGINGS_PASSPHRASE="$belongings_passphrase"
 
     out_text=$(${rust.workspace}/bin/ronoctua-install)
     echo "$out_text"
 
-    # The `host.nix` must NOT carry a secret (section 9): it goes to backup.
-    if echo "$out_text" | grep -qF -e "$password" -e "$passphrase"; then
-      echo "ERROR: the generated host.nix contains a secret" >&2
+    # Neither the `host.nix` nor any step may carry a secret (section 9): the
+    # first goes to backup, and a command line is in every process list.
+    if echo "$out_text" | grep -qF -e "$password" -e "$passphrase" -e "$belongings_passphrase"; then
+      echo "ERROR: the dry run prints a secret" >&2
       exit 1
     fi
 
@@ -19005,6 +19124,8 @@ let
       inherit cursors;
       inherit scroll;
       shell = rust.shell;
+      # `ronoctua-machine`, extracted: the rescue's rebuild and rollback run it.
+      machine = rust.machine;
     };
   };
 
@@ -19435,9 +19556,13 @@ let
     # 22 332 KiB with the software centre (2026-09-27), against a comment that
     # still said 1.3 MB from the first commit; 31 684 KiB with the first wave of
     # the 2026-09-30 batch (the brain's modules, the catalogue, the security
-    # centre and a dozen boundary crates — source, every file of it tracked).
-    # Measure again before moving it.
-    cap=40960
+    # centre and a dozen boundary crates — source, every file of it tracked);
+    # 44 080 KiB with the 2026-10-05 wave (the machine's own flake, the
+    # belongings' format 2, the post-quantum crates, /private, Incus, the LLM
+    # accounts — 33 176 KiB of it is `crates/`, and no build directory: `du`
+    # of the tracked files alone gives the same number). The ceiling keeps the
+    # same ~30% above the source as before. Measure again before moving it.
+    cap=57344
     tree_size=$(du -s --exclude=.git ${self} | cut -f1)
     echo "flake source: $tree_size KiB (ceiling $cap KiB)"
     if [ "$tree_size" -gt "$cap" ]; then
@@ -25102,6 +25227,11 @@ let
   # The names are grepped in the seed's CLOSURE and not in the list, because
   # most of them arrive through `ronoctua-shell`'s baked store paths rather than
   # by being written out — and it is the closure that goes on the ISO.
+  #
+  # ALWAYS: the distro has no binary cache of its own (a person's own cache
+  # is theirs, and this ISO knows no person), so the seed never leaves the
+  # medium. `binary-cache-declared-once` holds the list to it at evaluation;
+  # this reads what the ISO's closure holds.
   iso-carries-the-seed =
     let
       seed = pkgs.closureInfo {
@@ -25181,13 +25311,13 @@ let
       # one unconditionally, the reduced profile would carry it through the
       # update runner, and nothing else would say so.
       #
-      # THE AGENTS AND THE WORKSHOP (`dev.agents`, `workshop.enable`): Claude
-      # Code and Codex, Blender and OrcaSlicer, ~3,9 GiB measured.
+      # THE WORKSHOP (`workshop.enable`): Blender and OrcaSlicer, ~3,3 GiB
+      # measured. The agents and rust LEFT this list (2026-10-05): working on
+      # the distro is in both profiles, and they are on the other one.
       for app in -android-studio- -google-chrome- -emacs-30 -vlc- \
-                 -flutter- -dart- -rustc-1 -go-1 -noctua-iosevka-ttf-3 \
+                 -flutter- -dart- -go-1 -noctua-iosevka-ttf-3 \
                  -noctua-icon-theme- -waydroid- -appimage-run \
-                 -blender-5 -orca-slicer- \
-                 -claude-code- -codex-; do
+                 -blender-5 -orca-slicer-; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERROR: $app is not in the full profile — did the name change?" >&2
           failed=1
@@ -25224,8 +25354,13 @@ let
       # FLATPAK TOO: it is support and not an application, on in both
       # profiles — without it the reduced machine has no way to a graphical
       # program the flake does not carry.
+      #
+      # AND WORKING ON THE DISTRO (2026-10-05): the devshell's rust, QEMU and
+      # OVMF kept for `nix develop`, and the two coding agents.
       for kept in -scroll- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
                   -networkmanager- -systemd- -ffmpeg-full- -exiftool- -flatpak- \
+                  -rustc-1 -rust-std-1.*-wasm32-wasip2 -qemu-1 -OVMF- \
+                  -claude-code- -codex- \
                   -ronoctua-iconset \
                   -ronoctua-buffer-memory- -ronoctua-buffer-keyboard- \
                   -ronoctua-buffer-transfers- \
@@ -26381,6 +26516,13 @@ let
           ("android.rs", "/var/lib/waydroid"): "system",
           ("appstream.rs", "/var/lib/flatpak"): None,
           ("trial.rs", "/etc"): "sandbox_args",
+          # THE MACHINE'S REPORTS about the person's declaration (`REPORTS`:
+          # what applied, what was skipped and why), which the inv. 6
+          # amendment has the software centre show; and the XDG
+          # specification's default data folders, where a program's system
+          # entry is found. Both READ only — proven below.
+          ("lib.rs", "/etc/ronoctua"): None,
+          ("lib.rs", "/usr/local/share:/usr/share"): "data_dirs_of",
       }
       seen, swept = set(), 0
       for f in sorted(src.rglob("*.rs")):
@@ -26425,6 +26567,75 @@ let
       under = must(body_of(appstream, "source_under"), "`appstream::source_under`")
       if re.search(r"\b(write|create|remove|rename|OpenOptions)\w*\(", under):
           wrong.append("`source_under` writes; it may only name the system catalogue")
+
+      # THE MACHINE'S REPORTS AND THE SYSTEM'S DATA FOLDERS, ONLY READ: every
+      # `.reports` and `.data_dirs` of the product, the statement it is in,
+      # the uses of a name a `let` binds it to (in that name's scope), and
+      # the body of a function of the crate it is handed to — none writes.
+      WRITES = re.compile(r"\b(?:write\w*|create_dir\w*|remove_\w+|rename|set_permissions|copy|hard_link|symlink)\s*\(|\bOpenOptions\b|\bFile::create\b")
+      def bounds(text, at):
+          d, i = 0, at
+          while i > 0:
+              c = text[i - 1]
+              if c in ")]}":
+                  d += 1
+              elif c in "([{":
+                  if d == 0 and c == "{":
+                      break
+                  d = max(d - 1, 0)
+              elif c == ";" and d == 0:
+                  break
+              i -= 1
+          d, j = 0, at
+          while j < len(text):
+              c = text[j]
+              if c in "([{":
+                  d += 1
+              elif c in ")]}":
+                  if d == 0:
+                      break
+                  d -= 1
+              elif c == ";" and d == 0:
+                  break
+              j += 1
+          return i, j
+      def rest_of_block(text, at):
+          d, j = 0, at
+          while j < len(text):
+              if text[j] == "{":
+                  d += 1
+              elif text[j] == "}":
+                  if d == 0:
+                      break
+                  d -= 1
+              j += 1
+          return text[at:j]
+      product_texts = {g.name: uncommented(product(g.read_text())) for g in sorted(src.rglob("*.rs"))}
+      def fn_anywhere(name):
+          for t in product_texts.values():
+              b = body_of(t, name)
+              if b:
+                  return b
+          return ""
+      machine_reads = 0
+      for name, text in product_texts.items():
+          for field in ("reports", "data_dirs"):
+              for m in re.finditer(r"\." + field + r"\b", text):
+                  machine_reads += 1
+                  a, b = bounds(text, m.start())
+                  st = text[a:b]
+                  looked = [st]
+                  bound = re.match(r"\s*let\s+(?:mut\s+)?(\w+)\s*=", st)
+                  if bound:
+                      after = rest_of_block(text, b)
+                      for u in re.finditer(r"\b" + bound.group(1) + r"\b", after):
+                          ua, ub = bounds(after, u.start())
+                          looked.append(after[ua:ub])
+                  for called in re.findall(r"\b([a-z_]\w*)\(\s*&?[\w.]*\." + field + r"\b", st):
+                      looked.append(fn_anywhere(called))
+                  if any(WRITES.search(x) for x in looked):
+                      wrong.append(f"{name}: the machine's `{field}` is written in `{whose(text, m.start())}`")
+      floor(machine_reads, 4, "readings of the machine's reports and data folders")
 
       # THE SANDBOX: every system path bound READ-ONLY, and the one writable
       # bind is the trial's own home.
@@ -26537,6 +26748,11 @@ let
     VARIABLES = ("RONOCTUA_FLATPAK", "RONOCTUA_WAYDROID", "RONOCTUA_APPIMAGE_RUN",
                  "RONOCTUA_UNSQUASHFS", "RONOCTUA_BWRAP")
     PROFILE = ("add", "install", "remove", "upgrade", "rollback", "wipe-history", "list", "history")
+    # THE DECLARATION'S SCHEMA NAMES EACH SOURCE BY ITS WORD — `flatpak` is the
+    # first half of `flatpak:<app-id>` (`ronoctua_person::declared::Source::word`,
+    # the software package): data, which runs nothing. That one table, by its
+    # body, is let through; the same word anywhere else in the crate is not.
+    schema = crates / "ronoctua-person" / "src" / "declared.rs"
     swept = 0
     for f in sorted(crates.rglob("*.rs")):
         if home in f.parents:
@@ -26544,9 +26760,13 @@ let
         text = product(f.read_text())
         lits = strings_of(text)
         swept += 1
+        words = range(0)
+        if f == schema:
+            table = must(body_of(text, "word"), "`declared::Source::word`")
+            words = range(text.find(table), text.find(table) + len(table))
         for k, (at, end, s) in enumerate(lits):
             where = f"{f.relative_to(crates)}: `{s}` in `{whose(text, at)}`"
-            if s.rsplit("/", 1)[-1] in PROGRAMS:
+            if s.rsplit("/", 1)[-1] in PROGRAMS and at not in words:
                 wrong.append(where + " names a program only ronoctua-software runs")
             if s in VARIABLES:
                 wrong.append(where + " reads a tool only ronoctua-software runs")
@@ -26944,16 +27164,20 @@ let
       END
     '';
 
-  # THE UPDATE MOVES WHAT THE PERSON HAS, AND ADDS NOTHING.
+  # THE UPDATE MOVES WHAT THE PERSON HAS, AND ADDS ONLY WHAT IS DECLARED.
   #
   # Invariant 6's exception lets the update keep the person's programs
-  # current; it does not let it install. Two halves:
+  # current, and its 2026-10-05 amendment lets it bring in what is DECLARED
+  # (through the rebuild and the reconciler); it does not let it install
+  # anything a step names. Two halves:
   #
-  # * the TABLE: every `upgrade-software` step is `ronoctua-software upgrade
-  #   <source>` for a source the CLI upgrades, or the sanctioned root
-  #   `flatpak update --system`; every `tidy` is a `reclaim-space` step for a
-  #   source the CLI tidies. The CLI's own tables are read, so a source added
-  #   to one side and not the other fails here.
+  # * the TABLE: every `ronoctua-software` step, read through the CLI's own
+  #   grammar, carries only words the grammar matches by itself (never a
+  #   key, slug, path or query), and its verb builds only an order that
+  #   moves what is installed or reconciles what is declared; every other
+  #   `upgrade-software` step is the sanctioned root `flatpak update
+  #   --system`. The CLI's own tables are read, so a source added to one
+  #   side and not the other fails here.
   # * the CRATE: each source's dispatch sends `Order::Upgrade` to its
   #   `upgrade` or to a refusal, and each `upgrade` works on what is installed
   #   — the Nix manifest's elements, the Flatpak installation (`flatpak update`
@@ -26997,26 +27221,99 @@ let
       floor(len(upgradable), 4, "sources the CLI upgrades")
       floor(len(tidied), 2, "sources the CLI tidies")
 
-      # PARSED: 1. THE TABLE — the update's, as Nix evaluated it.
+      # PARSED: 1. THE TABLE — the update's, as Nix evaluated it, read through
+      # the CLI's own grammar (`cli::parse`) and dispatch (`cli::main`).
+      #
+      # THE AMENDED RULE (inv. 6, 2026-10-05): the update installs what is
+      # DECLARED, and nothing else. So (a) no word of a step names a program:
+      # every word is one the grammar matches BY ITSELF — a command, a fixed
+      # word or flag compared with `==`, a source — and never one it BINDS (a
+      # key, a slug, a path, a query: the words that would say what to
+      # install); and (b) every order a step's verb builds either moves what is
+      # installed (`Upgrade`, `Tidy`) or brings in what is declared
+      # (`Reconcile`, which touches only its own ledger — run against fixtures
+      # by `reconcile-touches-only-the-ledger`); a verb that builds no order
+      # calls no installer. `run`, whose order comes on standard input, is the
+      # verb that could carry anything, and (b) refuses it: it builds no order
+      # of its own and hands one to `perform`.
       steps = json.load(open("steps.json"))
       moving = [s for s in steps if s["does"] == "upgrade-software"]
       floor(len(moving), 6, "upgrade-software steps")
+      INSTALLERS = r"\b(install|install_file|install_argv|install_file_argv|add_argv|installable|remote_add_argv)\("
+      SANCTIONED = {"Upgrade": "upgrade-software", "Tidy": "reclaim-space", "Reconcile": "reconcile-declared"}
+
+      parsing = must(body_of(cli, "parse"), "`cli::parse`")
+      heads = list(re.finditer(r'\n\s*((?:"[a-z-]+"\s*\|\s*)*"[a-z-]+")\s*=>', parsing))
+      floor(len(heads), 8, "commands in the CLI's grammar")
+      arm_of = {}
+      for i, h in enumerate(heads):
+          end = heads[i + 1].start() if i + 1 < len(heads) else len(parsing)
+          for word in re.findall(r'"([a-z-]+)"', h.group(1)):
+              arm_of[word] = parsing[h.end():end]
+
+      dispatch = must(body_of(cli, "main"), "`cli::main`")
+      dispatch = dispatch[dispatch.index("match verb"):]
+      starts = list(re.finditer(r"\n\s*Verb::(\w+)\b[^=;]*=>", dispatch))
+      floor(len(starts), 8, "arms of the CLI's dispatch")
+      does_of = {}
+      for i, a in enumerate(starts):
+          end = starts[i + 1].start() if i + 1 < len(starts) else len(dispatch)
+          does_of[a.group(1)] = does_of.get(a.group(1), "") + dispatch[a.end():end]
+
+      def judged(sid, argv, does):
+          # What is wrong with one argument vector of a `ronoctua-software` step.
+          if not argv or argv[0] not in arm_of:
+              return [f"`{sid}` runs ronoctua-software {argv}, which is no command of its grammar"]
+          arm = arm_of[argv[0]]
+          closed = set(re.findall(r'==\s*"([^"]+)"', arm))
+          # A SOURCE is matched by itself too, and only one of the table the
+          # arm names (`UPGRADABLE`, `TIDIED`, or every source).
+          for t in re.findall(r"\bone_of\(\s*\w+\s*,\s*&([\w:]+)", arm):
+              closed |= set(words.values()) if t == "Source::ALL" else set(table(t))
+          out = [f"`{sid}`: `{w}` is a word ronoctua-software {argv[0]} binds — it names something"
+                 for w in argv[1:] if w not in closed]
+          verbs = sorted(set(re.findall(r"Verb::(\w+)", arm)))
+          if len(verbs) != 1:
+              return out + [f"`{sid}`: ronoctua-software {argv[0]} builds {verbs or 'no verb this can read'}"]
+          verb = verbs[0]
+          body = does_of.get(verb)
+          if body is None:
+              return out + [f"`{sid}`: the dispatch has no arm for `Verb::{verb}`"]
+          orders = sorted(set(re.findall(r"\bOrder::(\w+)", body)))
+          for o in orders:
+              if o not in SANCTIONED:
+                  out.append(f"`{sid}`: ronoctua-software {argv[0]} builds `Order::{o}`, which neither moves "
+                             "what is installed nor brings in what is declared")
+              elif SANCTIONED[o] != does:
+                  out.append(f"`{sid}` runs `Order::{o}` as {does}, not {SANCTIONED[o]}")
+          if not orders:
+              if "perform(" in body:
+                  out.append(f"`{sid}`: ronoctua-software {argv[0]} hands `perform` an order that is not "
+                             "in the table — whatever arrives on standard input")
+              for called in re.findall(r"\b([a-z_]\w*)\(&ctx", body):
+                  if called in ("answer",):
+                      continue
+                  inner = body_of(cli, called) or ""
+                  if re.search(INSTALLERS, inner) or re.search(r"\bOrder::", inner):
+                      out.append(f"`{sid}`: ronoctua-software {argv[0]} reaches an installer through `{called}`")
+              if does == "upgrade-software" and verb != "Upgrade":
+                  out.append(f"`{sid}` says it upgrades and runs ronoctua-software {argv[0]}")
+          return out
+
+      software_steps = 0
       for s in steps:
           run = s.get("run", [])
           if s.get("program") == "ronoctua-software":
-              if run[:1] == ["upgrade"]:
-                  if len(run) != 2 or run[1] not in upgradable or s["does"] != "upgrade-software":
-                      wrong.append(f"`{s['id']}` runs ronoctua-software {run} as {s['does']}")
-              elif run[:1] == ["tidy"]:
-                  if len(run) != 2 or run[1] not in tidied or s["does"] != "reclaim-space":
-                      wrong.append(f"`{s['id']}` runs ronoctua-software {run} as {s['does']}")
-              else:
-                  wrong.append(f"`{s['id']}` runs ronoctua-software {run}; the update may only upgrade or tidy")
+              software_steps += 1
+              wrong += judged(s["id"], run, s["does"])
+              if s.get("rehearse"):
+                  wrong += judged(s["id"] + " (rehearsed)", s["rehearse"], s["does"])
           elif s["does"] == "upgrade-software" and not (
               s.get("program") == "flatpak" and s.get("root") is True
               and run == ["update", "--system", "--noninteractive", "-y"]
           ):
               wrong.append(f"`{s['id']}` upgrades the person's programs with {s.get('program')} {run}")
+      floor(software_steps, 9, "ronoctua-software steps in the update")
 
       # 2. THE CLI's verbs build the orders they say.
       for verb, order in (("Upgrade(Target::Source(source))", "Order::Upgrade"), ("Tidy(source)", "Order::Tidy")):
@@ -27103,10 +27400,12 @@ let
           for w in wrong:
               print("       " + w, file=sys.stderr)
           print("", file=sys.stderr)
-          print("       Invariant 6's exception keeps the person's programs current. Putting in", file=sys.stderr)
-          print("       one they did not choose is the imperative install it refuses.", file=sys.stderr)
+          print("       Invariant 6's exception keeps the person's programs current, and its", file=sys.stderr)
+          print("       amendment brings in what is DECLARED. Putting in one a step names", file=sys.stderr)
+          print("       is the imperative install it refuses.", file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: {len(moving)} steps move what is there, {arms} dispatch arms, four upgrades that install nothing new")
+      print(f"OK: {software_steps} ronoctua-software steps name nothing, {len(moving)} move what is there, "
+            f"{arms} dispatch arms, four upgrades that install nothing new")
       END
     '';
 
@@ -27382,8 +27681,8 @@ let
           import difflib
           wrong.append("the generated manifest.rs is not the golden one:\n"
                        + "".join(difflib.unified_diff(golden, made, "golden", "generated")))
-      if pathlib.Path("${generated}/ids.txt").read_text() != "pilot-sample pilot_sample\n":
-          wrong.append("ids.txt is not `pilot-sample pilot_sample`")
+      if pathlib.Path("${generated}/ids.txt").read_text() != "pilot-sample pilot_sample distro\n":
+          wrong.append("ids.txt is not `pilot-sample pilot_sample distro`")
       registry = uncommented(pathlib.Path("${generated}/all.rs").read_text())
       floor(len(registry), 500, "characters of the generated all.rs")
       # THE TWO ITEMS `src/compiled.rs` PROMISES, with its signatures, and
@@ -27515,6 +27814,11 @@ let
   #      tasks have moved into folders (brain.md §7, S5), and proved below;
   #   8. the core's own tests use made-up ids, never a module's.
   #
+  # A PERSON'S MODULE (`origin = "person"`, `my-…`) IS SKIPPED: its folder is
+  # in the person's home and reaches a machine as a store copy, so none of
+  # the eight is the tree's to ask of it — proved by a plant beside the
+  # sample, with a distro twin of it refused.
+  #
   # WITH NO MODULE YET the real sweep has nothing to ask, and a check that
   # passes on nothing proves nothing — so every step also runs on the sample
   # module, copied into a tree made here: clean it passes, and each plant
@@ -27595,6 +27899,10 @@ let
 
       def sealed(root, modules, compiled, tasks_gone, floors):
           problems = []
+          # A PERSON'S MODULE IS NOT THE TREE'S: its folder lives in the
+          # person's home and reaches a machine as a store copy, so nothing
+          # here can be asked of it — and a distro file never names it.
+          modules = [m for m in modules if m.get("origin", "distro") == "distro"]
           home = root / "crates" / "ronoctua-brain"
           folders = {m["id"]: home / "modules" / m["id"] for m in modules}
           texts = {}
@@ -27752,6 +28060,16 @@ let
       control = sealed(clean, sample, ["pilot-sample"], True, SAMPLE)
       if control:
           problems.append((0, f"the sample, clean, was refused: {control}"))
+      # A PERSON'S MODULE BESIDE IT, whose folder is nowhere in the tree:
+      # skipped, never asked for its files, its texts or its namedBy.
+      person = [dict(m, id="my-" + m["id"], snake="my_" + m["snake"], origin="person") for m in sample]
+      skipped = sealed(clean, sample + person, ["pilot-sample"], True, SAMPLE)
+      if skipped:
+          problems.append((0, f"a person's module was asked what only a folder of the tree owes: {skipped}"))
+      # …and only a person's: the same record as the distro's is refused.
+      distro_twin = [dict(m, origin="distro") for m in person]
+      if not any(s == 1 for s, _ in sealed(clean, sample + distro_twin, ["pilot-sample"], True, SAMPLE)):
+          problems.append((0, "a distro module with no folder was skipped as if it were a person's"))
       planted = 0
       def plant(step, what, change, compiled=("pilot-sample",), manifest=None):
           global planted
@@ -27817,7 +28135,8 @@ let
   # The crate loads each `module.rs` by a `#[path]` inside an `include!` of a
   # generated file, and `rustfmt` does not expand macros — so `rust-fmt`
   # (`cargo fmt` over the workspace) walks past every module, and past the
-  # sample under `tests/modules/`, which is loaded the same way. `nix fmt`
+  # sample under `tests/modules/`, which is loaded the same way — as are the
+  # person's fixtures under `tests/person*/`. `nix fmt`
   # formats them with `rustfmt` on the file itself; this checks the same files
   # the same way, with the edition the manifest would have told it.
   brain-modules-fmt =
@@ -27828,7 +28147,11 @@ let
         fileset = lib.fileset.unions (
           map (lib.fileset.fileFilter (f: f.hasExt "rs")) (
             lib.optional (builtins.pathExists (brainCrate + "/modules")) (brainCrate + "/modules")
-            ++ [ (brainCrate + "/tests/modules") ]
+            ++ [
+              (brainCrate + "/tests/modules")
+              (brainCrate + "/tests/person")
+              (brainCrate + "/tests/person-refused")
+            ]
           )
         );
       };
@@ -29839,8 +30162,23 @@ let
     if "ext" in protocols or len(protocols) > 5:
         wrong.append(f"PROTOCOLS allows {protocols}; ext:: and remote helpers run commands")
     runs = re.findall(r"\brun\(", repo)
-    if len(runs) != 2:
-        wrong.append(f"`impl Repo` runs git in {len(runs)} places; the two are `command` (the drivers) and `ran`")
+    # THE CLONE IS THE THIRD, and the only call with no repository yet: no
+    # config of its own can name a filter driver, so it is built from `base`
+    # and `subcommand` (`clone_command`), never from `Repo::command`.
+    clone = body_of(repo, "clone_with")
+    allowed = 2
+    if clone is not None:
+        allowed = 3
+        if not re.search(r"let command = clone_command\(", clone) or not re.search(r"\brun\(command,", clone):
+            wrong.append("`Repo::clone_with` runs git without `clone_command`")
+        cc = must(body_of(lib, "clone_command"), "fn clone_command")
+        for needle in ("base(", "subcommand(", '"--template="', '"--no-recurse-submodules"',
+                       '"--upload-pack=git-upload-pack"'):
+            if needle not in cc:
+                wrong.append(f"`fn clone_command` no longer has {needle}")
+    if len(runs) != allowed:
+        wrong.append(f"`impl Repo` runs git in {len(runs)} places; they are `command` (the drivers), "
+                     "`ran` and the clone (`clone_with`)")
     ran = must(body_of(repo, "ran"), "Repo::ran")
     if "self.command(" not in ran or "subcommand(" not in ran:
         wrong.append("`Repo::ran` no longer builds its call from `Repo::command` and `subcommand`")
@@ -30159,6 +30497,10 @@ let
         ("player_kinds.rs", "walk"),
         # A photograph's planted machine, copied whole before a key changes it.
         ("belongings_photograph.rs", "copy_tree"),
+        # The same for the LLM accounts' photograph: their planted folders.
+        ("agents_photograph.rs", "copy_tree"),
+        # Whether the folder a clone lands in is empty — asked, never shown.
+        ("dev_clone.rs", "occupied"),
         # The git browser's old versions copied out, the oldest taken away
         # past their bound (`gitVersionsMost`).
         ("git_browser.rs", "trim_versions"),
@@ -31329,15 +31671,20 @@ let
 
   # THE SUDO DOOR IS ONE.
   #
-  # A person's gesture that needs root types the password into our own
-  # question, and ONE function pipes it to sudo. A second door is how a
-  # password ends up in an argv, a log or a process that runs on its own —
-  # so: only `authority.rs` names sudo (a literal that is `sudo` or ends in
-  # `/sudo`, or its constant); the only flags it gives sudo are `-n` and
-  # `-S -k -p ""`; the password is written to stdin and appears in no
-  # `.arg`, `.args` or `.env`; the environment is emptied first; and the one
-  # manifest that may turn the `authority` feature on is the shell's — the
-  # brain and the daemons never link the door.
+  # A person's gesture that needs root is asked in ONE place — the footer's
+  # sudo bar (`crate::sudo_bar`, owner 2026-10-11) — and ONE file talks to
+  # sudo. A second door is how a password ends up in an argv, a log or a
+  # process that runs on its own, and a second place that asks is a screen
+  # that types root's password on a line of its own — so: only
+  # `authority.rs` names sudo (a literal that is `sudo` or ends in `/sudo`,
+  # or its constant); the only flags it gives sudo are `-n` and `-S -k -p ""`
+  # (and the conversation's `-k -p <sentinel>`); the password is written to
+  # stdin or to the door's terminal and appears in no `.arg`, `.args` or
+  # `.env`; the environment is emptied first; the one file that calls the
+  # door (`run`, `run_with`, `converse`) is the sudo bar's — every view and
+  # every window reaches root through it — and the one manifest that may turn
+  # the `authority` feature on is the shell's: the brain and the daemons
+  # never link the door.
   sudo-door-is-one = mkCheck "sudo-door-is-one" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys, tomllib
@@ -31345,7 +31692,9 @@ let
 
     root = pathlib.Path("${self}")
     door = "crates/ronoctua-security/src/authority.rs"
+    bar = "crates/ronoctua-shell/src/sudo_bar.rs"
     wrong = []
+    callers = []
 
     # FILE-WIDE: a second door can be anywhere in the tree, so every Rust
     # file of the workspace and the buffers is read — without its tests, which
@@ -31364,6 +31713,9 @@ let
         # shape is let through, so a `Command::new("sudo")` beside it is
         # still a second door.
         heard = re.sub(r'"SYSLOG_IDENTIFIER",\s*&\[\s*"sudo"\s*\]', "", text)
+        # NOR IS READING ITS PAM STACK: `/etc/pam.d/sudo` is a file read as the
+        # person (whether a key may answer, `u2f::answers_sudo`), never run.
+        heard = heard.replace('"/etc/pam.d/sudo"', "")
         literals = re.findall(r'"((?:[^"\\]|\\.)*)"', heard)
         names = [l for l in literals if l == "sudo" or l.endswith("/sudo")]
         if rel == door:
@@ -31372,23 +31724,39 @@ let
             continue
         if names:
             wrong.append(f"{rel} names sudo ({names}): a second door")
-        if re.search(r"\bauthority::(?:SUDO|run|run_with)\b", code_of(text)) and not rel.startswith("crates/ronoctua-shell/"):
-            wrong.append(f"{rel} reaches the door, and only the shell may")
+        # THE BAR IS THE ONE CALLER: a view, a window, the vault, the stick,
+        # the file manager and the belongings hand their root gesture to it.
+        if re.search(r"\bauthority::(?:SUDO|run|run_with|converse)\b", code_of(text)):
+            callers.append(rel)
+            if rel != bar:
+                wrong.append(f"{rel} reaches the door, and only the sudo bar ({bar}) may")
     floor(swept, 300, "Rust files read")
+    if callers != [bar]:
+        wrong.append(f"the door is called from {callers}; it is called from the sudo bar alone")
 
-    # THE DOOR ITSELF.
+    # THE DOOR ITSELF. Every attempt with no terminal is given its flags as a
+    # literal list: `-n` (the plain door's and the conversation's first try),
+    # then `-S -k -p ""` (the password-only run). The conversation's one
+    # attempt on the door's terminal is `-k -p <PASSWORD_PROMPT>`, in `talk`.
     text = without_tests(uncommented((root / door).read_text()))
-    through = must(body_of(text, "through"), "authority.rs: `through`")
     flags = []
-    for m in re.finditer(r"\battempt\(", through):
-        call = shut_at(through, m.end())
+    for m in re.finditer(r"\battempt\(", text):
+        if text[max(0, m.start() - 3) : m.start()] == "fn ":
+            continue
+        call = shut_at(text, m.end())
         found = re.search(r"&\[([^\]]*)\]", call)
         if not found:
             wrong.append("authority.rs: an `attempt` whose flags are not a literal list")
             continue
         flags.append(re.findall(r'"([^"]*)"', found.group(1)))
-    if sorted(flags) != sorted([["-n"], ["-S", "-k", "-p", ""]]):
+    if sorted(flags) != sorted([["-n"], ["-n"], ["-S", "-k", "-p", ""]]):
         wrong.append(f"authority.rs: sudo is given {flags}, and may be given -n, then -S -k -p \"\"")
+    commands = [(whose(text, m.start()), " ".join(shut_at(text, m.end()).split())) for m in re.finditer(r"\.command\(", text)]
+    if commands != [("attempt", "flags, verb, false"), ("talk", '&["-k", "-p", PASSWORD_PROMPT], verb, true')]:
+        wrong.append(f"authority.rs: the door's commands are {commands}, and may be the attempts' and the terminal's")
+    prompt = re.search(r'pub const PASSWORD_PROMPT: &str = "([^"]*)";', text)
+    if not prompt or not prompt.group(1).strip() or "%" in prompt.group(1) or "\\" in prompt.group(1):
+        wrong.append("authority.rs: PASSWORD_PROMPT is missing, empty, or has a `%` sudo would expand")
 
     # NO SECRET IN AN ARGUMENT OR THE ENVIRONMENT: every `.arg(`, `.args(` and
     # `.env(` of the file, and none of them touches the password.
@@ -31399,28 +31767,41 @@ let
         if re.search(r"expose|password|secret|Secret|Proof", inside):
             wrong.append(f"authority.rs: `{m.group(0)}{inside.strip()[:60]})` carries the password")
     floor(calls, 4, "argument and environment calls in authority.rs")
+    # THE PASSWORD IS READ IN ONE PLACE (`typed`) AND WRITTEN IN TWO: sudo's
+    # stdin, in `attempt`; the door's terminal, in `converse_with`, and there
+    # only in the arm of the password sentinel.
     exposed = [whose(text, m.start()) for m in re.finditer(r"\.expose\(\)", text)]
-    if not exposed or set(exposed) != {"attempt"}:
-        wrong.append(f"authority.rs: the password is read in {sorted(set(exposed))}, and may be read in `attempt` only")
-    attempt = must(body_of(text, "attempt"), "authority.rs: `attempt`")
-    if not re.search(r"\.expose\(\)[^;]*;\s*line\.push\(b'\\n'\);\s*let _ = stdin\.write_all\(&line\);", attempt, re.S):
-        wrong.append("authority.rs: the password is not what is written to sudo's stdin")
+    if not exposed or set(exposed) != {"typed"}:
+        wrong.append(f"authority.rs: the password is read in {sorted(set(exposed))}, and may be read in `typed` only")
+    written = []
+    for m in re.finditer(r"\btyped\(", text):
+        if text[max(0, m.start() - 3) : m.start()] == "fn ":
+            continue
+        fn = whose(text, m.start())
+        receiver = re.search(r"([\w.]+)\.write_all\(&$", text[: m.start()])
+        arm_at = text.rfind("=>", 0, m.start())
+        arm = text[text.rfind("\n", 0, arm_at) + 1 : arm_at].strip()
+        written.append((fn, receiver.group(1) if receiver else None, arm if fn == "converse_with" else ""))
+    if sorted(written) != [("attempt", "stdin", ""), ("converse_with", "talk.master", "State::AtPassword")]:
+        wrong.append(f"authority.rs: the password is written as {written}; only to sudo's stdin and to the terminal right after the password sentinel")
     command = must(body_of(text, "command"), "authority.rs: `Door::command`")
     if ".env_clear()" not in command or not re.search(r'\.env\("LC_ALL",\s*"C"\)', command):
         wrong.append("authority.rs: the door does not empty the environment and set LC_ALL=C")
 
     # AND WHAT IS AROUND THE FLAGS. The flags above are only sudo's flags if
     # nothing else reaches its argument list: the program is `setsid --wait`
-    # in front of sudo, or sudo itself; after the flags come `--`, the helper
-    # and the verb, and nothing more. Every argument of the file is added in
-    # `Door::command`, in exactly this order — a `.arg("-E")` there, or a
-    # second `Command` anywhere, is a door that changed.
+    # (and `--ctty`, on the door's terminal) in front of sudo, or sudo itself;
+    # after the flags come `--`, the helper and the verb, and nothing more.
+    # Every argument of the file is added in `Door::command`, in exactly this
+    # order — a `.arg("-E")` there, or a second `Command` anywhere, is a door
+    # that changed.
     news = [(whose(text, m.start()), shut_at(text, m.end()).strip()) for m in re.finditer(r"\bCommand::new\(", text)]
     if sorted(news) != [("command", "&self.sudo"), ("command", "setsid")]:
         wrong.append(f"authority.rs: the programs started are {news}, and may be setsid or sudo, in `Door::command`")
     added = [(whose(text, m.start()), m.group(1), shut_at(text, m.end()).strip()) for m in re.finditer(r"\.(args?)\(", text)]
     around = [
         ("command", "arg", '"--wait"'),
+        ("command", "arg", '"--ctty"'),
         ("command", "arg", "&self.sudo"),
         ("command", "args", "flags"),
         ("command", "arg", '"--"'),
@@ -31458,11 +31839,12 @@ let
         for w in wrong:
             print("       " + w, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       A person's password goes to sudo on stdin, from one function the", file=sys.stderr)
-        print("       shell alone links. A second door is where it ends up in an argv,", file=sys.stderr)
-        print("       a log, or a process nobody's gesture started.", file=sys.stderr)
+        print("       A person's password goes to sudo's stdin, or to the door's own terminal", file=sys.stderr)
+        print("       right after the password sentinel, from one file the shell alone links.", file=sys.stderr)
+        print("       A second door is where it ends up in an argv, a log, or a process", file=sys.stderr)
+        print("       nobody's gesture started.", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {swept} files read, one door, flags {flags}, the feature in {turned_on or 'no manifest yet'}")
+    print(f"OK: {swept} files read, one door called from {callers}, flags {flags}, the feature in {turned_on or 'no manifest yet'}")
     END
   '';
 
@@ -31543,11 +31925,14 @@ let
   #
   # nixpkgs puts `pam_fprintd` in every PAM service the moment fprintd is on.
   # Here only `sudo` has it, `sufficient`, and directly before it the two
-  # gates, in order: the list `FingerSudo` writes (not listed, or no list: jump
-  # over both) and the terminal (none — the door's `sudo -S` — jump over the
-  # finger). A gate one line too far jumps into the wrong module, so the
-  # order is part of what is checked. Read from the generated `/etc/pam.d`
-  # text of every service of the evaluated system.
+  # gates and the cue, in order: the list `FingerSudo` writes (not listed, or
+  # no list: jump over all three), the terminal (none — the door's
+  # password-only `sudo -S` — jump over the cue and the finger), and one
+  # `pam_echo` line that tells the sudo door a finger is about to be asked
+  # (its words are `sudo-door-reads-its-own-sentinels`'). A gate one line too
+  # far jumps into the wrong module, so the order is part of what is checked.
+  # Read from the generated `/etc/pam.d` text of every service of the
+  # evaluated system.
   pam-fingerprint-is-gated =
     let
       vm = self.nixosConfigurations.vm.config;
@@ -31591,24 +31976,27 @@ let
           finger = auth[i]
           if finger[1] != "sufficient":
               wrong.append(f"pam_fprintd is {finger[1]!r}, and must be sufficient")
-          if i < 2:
-              wrong.append("pam_fprintd has no two lines before it")
+          if i < 3:
+              wrong.append("pam_fprintd has no three lines before it")
           else:
-              first, second = auth[i - 2], auth[i - 1]
+              first, second, cue = auth[i - 3], auth[i - 2], auth[i - 1]
               first_ok = (
-                  " ".join(first[1:3]) == "[success=ignore default=2]"
+                  " ".join(first[1:3]) == "[success=ignore default=3]"
                   and first[3].endswith("/pam_listfile.so")
                   and first[4:] == ["item=user", "sense=allow", "file=" + listed, "onerr=fail"]
               )
               second_ok = (
-                  " ".join(second[1:3]) == "[success=ignore default=1]"
+                  " ".join(second[1:3]) == "[success=ignore default=2]"
                   and second[3].endswith("/pam_succeed_if.so")
                   and second[4:] == ["quiet", "tty", "=~", "/dev/*"]
               )
+              cue_ok = len(cue) > 2 and cue[1] == "optional" and cue[2].endswith("/pam_echo.so")
               if not first_ok:
-                  wrong.append(f"two lines before pam_fprintd is {' '.join(first)!r}, and must be the list's gate")
+                  wrong.append(f"three lines before pam_fprintd is {' '.join(first)!r}, and must be the list's gate")
               if not second_ok:
-                  wrong.append(f"one line before pam_fprintd is {' '.join(second)!r}, and must be the terminal's gate")
+                  wrong.append(f"two lines before pam_fprintd is {' '.join(second)!r}, and must be the terminal's gate")
+              if not cue_ok:
+                  wrong.append(f"one line before pam_fprintd is {' '.join(cue)!r}, and must be the finger's cue (pam_echo, optional)")
           # And after the finger, the password is still asked.
           if not any(any(w.endswith("/pam_unix.so") for w in l) for l in auth[i + 1 :]):
               wrong.append("nothing asks for the password after the finger")
@@ -31622,7 +32010,7 @@ let
           print("       A finger answers sudo in a terminal for a listed user, and nothing", file=sys.stderr)
           print("       else — never the login, never polkit, never the door's sudo -S.", file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: {len(services)} services, pam_fprintd in sudo only, behind the list and the terminal")
+      print(f"OK: {len(services)} services, pam_fprintd in sudo only, behind the list, the terminal and its cue")
       END
     '';
 
@@ -31716,8 +32104,9 @@ let
   # the rename — at run time. This puts the formatter's REAL output (the
   # helper's `print relax-line`, which touches nothing) through the same
   # `visudo` at build time, for four instants from the epoch to the last year
-  # sudo reads; and it proves the judge refuses: a line with the tag's colon
-  # missing is refused, and so is a name that is not plain, by the helper.
+  # sudo reads, and for the window with no limit (no `NOTAFTER` at all); and
+  # it proves the judge refuses: a line with the tag's colon missing is
+  # refused, and so is a name that is not plain, by the helper.
   relax-line-parses = mkCheck "relax-line-parses" [ pkgs.sudo ] ''
     helper=${rust.securityRoot}/bin/ronoctua-security-root
     for until in 0 1790000000 4102444799 253402300799; do
@@ -31726,6 +32115,13 @@ let
       grep -q 'NOTAFTER=' line || { echo "ERROR: the line has no NOTAFTER" >&2; exit 1; }
       visudo -c -f line
     done
+    "$helper" print relax-line ${user} no-limit > line
+    echo "the line with no limit: $(cat line)"
+    if grep -q 'NOTAFTER' line; then
+      echo "ERROR: the window with no limit has an end" >&2
+      exit 1
+    fi
+    visudo -c -f line
     echo '${user} ALL=(ALL:ALL) NOTAFTER=20260921141320Z NOPASSWD ALL' > broken
     if visudo -c -f broken; then
       echo "ERROR: visudo passed a broken line, so it proves nothing here" >&2
@@ -31735,7 +32131,7 @@ let
       echo "ERROR: the helper wrote a line for a name that is not plain" >&2
       exit 1
     fi
-    echo "OK: the helper's line parses at four instants, and a broken one does not"
+    echo "OK: the helper's line parses at four instants and with no limit, and a broken one does not"
   '';
 
   # THE BELONGINGS' CHECKS. What the belongings keep, generated from
@@ -31757,6 +32153,14 @@ let
   # store it does not list, and a census entry no store writes any more. The
   # crate's own test (`every_store_is_where_the_census_says`) holds that each
   # verdict is what the rules make of the path.
+  #
+  # AND EVERY `write_atomically(` WHOSE FOLDER IS ONE OF THE TWO ROOTS (the
+  # store-resilience package, 2026-10-05): a file written by hand under
+  # `config/` or `state/` is a store as far as the belongings are concerned,
+  # whether or not it went through `Store` — the compositor's fragments, the
+  # player's queue. A folder that is a parameter at the call cannot be told
+  # here; the stores that used to be written that way became `Store`s, which
+  # the sweep above reads by their file.
   belongings-manifest-covers-the-stores =
     mkCheck "belongings-manifest-covers-the-stores" [ pkgs.python3 ]
       ''
@@ -31780,6 +32184,14 @@ let
         # (`Shelf::at`), and these are the constants and roots they hand it.
         HANDED = {
             "crates/ronoctua-broadcast/src/picks.rs": (("FAVOURITES_FILE", "config"), ("RECENT_FILE", "state")),
+        }
+
+        # STORES OUTSIDE THE PERSON'S ROOTS, which the belongings never walk —
+        # each with where it is. Exact both ways: one that moved under a root
+        # would otherwise leave the census without anybody deciding.
+        ELSEWHERE = {
+            ("crates/ronoctua-keys/src/config.rs", "keys.json"):
+                "/var/lib/ronoctua/keys, rendered for the root keys daemon",
         }
 
         CALL = re.compile(r"\bStore(?:::<[^>]*>)?::at\(")
@@ -31862,8 +32274,37 @@ let
                 return None
             if len(segments) == 1:
                 return const_value(f, segments[0])
+            # AN ASSOCIATED CONSTANT (`Self::FILE`): the file's own `const FILE`,
+            # and only when it has ONE — two impls that each name a FILE are two
+            # answers, and guessing between them is the silent fallback.
+            if len(segments) == 2 and segments[0] == "Self":
+                text = uncommented(f.read_text())
+                if len(re.findall(r"\bconst\s+" + re.escape(segments[1]) + r"\s*:", text)) != 1:
+                    return None
+                return const_value(f, segments[1])
             there = resolve_path(f, segments[:-1])
             return const_value(there, segments[-1]) if there else None
+
+        def test_only(f):
+            # A FILE THAT IS A TEST MODULE WHOLE (`engine/tests.rs`, and what it
+            # declares under `engine/tests/`): `without_tests` cuts a module
+            # written inside a file, and this is the same cut for one written
+            # beside it — a `tests` the declaring file opens with
+            # `#[cfg(test)] mod tests;`. What a test opens is a fixture.
+            src = crate_of(f) / "src"
+            try:
+                parts = f.relative_to(src).parts
+            except ValueError:
+                return False
+            for i, part in enumerate(parts):
+                if part.removesuffix(".rs") != "tests":
+                    continue
+                folder = src.joinpath(*parts[:i])
+                declarers = [folder / "mod.rs", folder.with_suffix(".rs")] if i else [src / "lib.rs", src / "main.rs"]
+                for d in declarers:
+                    if d.is_file() and re.search(r"#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+tests\s*;", uncommented(d.read_text())):
+                        return True
+            return False
 
         def root_of(f, expr, depth=0):
             # "config", "state" or "given", and a folder inside it.
@@ -31882,12 +32323,56 @@ let
                     return where, (sub + joined.group(1) + "/") if joined else sub
             return "given", ""
 
+        # A HAND-WRITTEN FILE: `write_atomically(folder, file, bytes)`, and the
+        # folder followed to the `let` that binds it in the same function.
+        ATOMIC = re.compile(r"(?<![\w:])(?:ronoctua_(?:xdg|store)::)?write_atomically\(")
+
+        def bound_before(code, at, name):
+            # The value the last `let NAME = …;` (or `let Some(NAME) = … else`)
+            # before `at`, inside the function `at` is in, gives `name`.
+            start = code.rfind("fn ", 0, at)
+            window = code[max(start, 0):at]
+            hits = re.findall(r"\blet\s+(?:Some\(\s*)?" + re.escape(name) + r"\s*\)?\s*(?::[^=]+)?=\s*([^;]+?)\s*(?:;|\belse\b)", window)
+            return hits[-1] if hits else None
+
+        def folder_of(f, code, at, expr):
+            expr = expr.strip().lstrip("&").strip()
+            if re.fullmatch(r"[a-z_]\w*", expr):
+                rhs = bound_before(code, at, expr)
+                if rhs is None:
+                    return "given", ""
+                expr = rhs.strip()
+            where, sub = root_of(f, re.sub(r"\.(?:ok_or_else|ok_or|context|with_context)\(.*$", "", expr, flags=re.S).rstrip("?"))
+            return where, sub
+
         found, wrong, handed_seen = [], [], set()
+        elsewhere_seen = set()
+        atomic_found, atomic_given = [], 0
+        tests_skipped = 0
         for crate in sorted(crates.iterdir()):
-            if not (crate / "Cargo.toml").exists() or crate.name == "ronoctua-store":
+            if not (crate / "Cargo.toml").exists() or crate.name in ("ronoctua-store", "ronoctua-xdg"):
                 continue
             for f in rust_sources(crate):
+                if test_only(f):
+                    tests_skipped += 1
+                    continue
                 code = without_tests(uncommented(f.read_text()))
+                rel = "crates/" + str(f.relative_to(crates))
+                for m in ATOMIC.finditer(code):
+                    if re.search(r"\bfn\s*$", code[max(0, m.start() - 4):m.start()]):
+                        continue
+                    args = args_of(code, m.end())
+                    if len(args) < 3:
+                        continue
+                    where, sub = folder_of(f, code, m.start(), args[0])
+                    if where == "given":
+                        atomic_given += 1
+                        continue
+                    name = file_name(f, args[1].strip().lstrip("&").strip())
+                    if name is None:
+                        wrong.append(f"{rel}: a file written under `{where}/` (`{args[1]}`) could not be read to a name")
+                        continue
+                    atomic_found.append((rel, where, sub, name))
                 for m in CALL.finditer(code):
                     args = args_of(code, m.end())
                     if len(args) < 2:
@@ -31910,10 +32395,15 @@ let
                     found.append((rel, where, sub, name))
 
         floor(len(found), 25, "stores found in the crates")
+        floor(tests_skipped, 1, "whole test files recognised (engine/tests.rs is one)")
+        floor(len(atomic_found), 4, "hand-written files found under a root")
         names = {p.rsplit("/", 1)[-1] for p in declared}
         covered = set()
-        for rel, where, sub, name in found:
+        for rel, where, sub, name in found + atomic_found:
             if where == "given":
+                if (rel, name) in ELSEWHERE:
+                    elsewhere_seen.add((rel, name))
+                    continue
                 hits = [p for p in declared if p.rsplit("/", 1)[-1] == name]
                 if not hits:
                     wrong.append(f"{rel}: `{name}` (its root handed in) is in no entry of the census")
@@ -31928,6 +32418,8 @@ let
             wrong.append(f"assets/belongings.nix: `{stale}` is in the census, and no store writes it")
         for rel in sorted(set(HANDED) - handed_seen):
             wrong.append(f"{rel}: listed as handing its file in, and it no longer does")
+        for rel, name in sorted(set(ELSEWHERE) - elsewhere_seen):
+            wrong.append(f"{rel}: `{name}` is listed as a store outside the roots, and no such store is there")
 
         if wrong:
             print("ERROR: a preference file the belongings do not decide about.", file=sys.stderr)
@@ -31937,7 +32429,7 @@ let
             print("       Every file a `Store` writes is kept or not kept ON PURPOSE: add it to", file=sys.stderr)
             print("       `stores` in assets/belongings.nix, with the verdict and its reason.", file=sys.stderr)
             raise SystemExit(1)
-        print(f"OK: {len(found)} stores in the crates, every one decided by the census ({len(declared)} entries)")
+        print(f"OK: {len(found)} stores and {len(atomic_found)} hand-written files under a root, every one decided by the census ({len(declared)} entries; {atomic_given} hand-written into a folder handed in)")
         END
       '';
 
@@ -31946,14 +32438,18 @@ let
   # not an id — and says which (`nix/belongings.nix`, its negative fixture).
   belongings-table-refuses = belongingsTable.refuses;
 
-  # THE FIFTEENTH ANSWER GOES INTO THE PERSON'S HOME, AND NOWHERE ELSE.
+  # THE REPOSITORY GOES INTO THE PERSON'S HOME, AND NOWHERE ELSE.
   #
-  # The belongings' repository is the person's, not the machine's: written into
-  # `~/.config/ronoctua/belongings.json` AFTER `nixos-install` made the user
-  # (the file is given to them), never into `host.nix` — which goes to backup
-  # and describes the machine — and never onto a command line. With no answer
-  # there is no step at all, and an address carrying a password is refused
-  # before anything runs. The dry run shows the plan; `installer-vm` writes it.
+  # The belongings' repository is the person's, not the machine's, and it is
+  # mandatory (2026-10-05): with no address the installer refuses before
+  # anything runs. Its settings are written into `~/.config/ronoctua/
+  # belongings.json` AFTER `nixos-install` made the user (the file is given
+  # to them) and before the restore that reads them — never into `host.nix`,
+  # which goes to backup and describes the machine. The address reaches one
+  # command line, the copy of the plain part (`--repository`, the CLI's
+  # contract: an address is no secret); the restore reads it from the
+  # settings, and an address carrying a password is refused before anything
+  # runs. The dry run shows the plan; `installer-vm` writes it.
   installer-writes-belongings-into-the-home =
     mkCheck "installer-writes-belongings-into-the-home"
       [
@@ -31966,14 +32462,21 @@ let
         export RONOCTUA_INST_HOSTNAME=noctua-teste
         export RONOCTUA_INST_PASSWORD=test-password
         export RONOCTUA_INST_PASSPHRASE=test-passphrase
+        export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
+        export RONOCTUA_INST_BELONGINGS_PASSPHRASE=test-belongings-passphrase
         address='git@example.org:someone/belongings.git'
         target=/mnt/home/noctua/.config/ronoctua/belongings.json
 
-        none=$(${rust.workspace}/bin/ronoctua-install)
-        if echo "$none" | grep -qF "$target"; then
-          echo "ERROR: with no repository, the plan still writes $target" >&2
+        # NO REPOSITORY IS NO INSTALLATION: refused, naming the variable.
+        if ${rust.workspace}/bin/ronoctua-install > none.txt 2>&1; then
+          echo "ERROR: with no repository the installer went on" >&2
+          cat none.txt >&2
           exit 1
         fi
+        grep -q RONOCTUA_INST_BELONGINGS none.txt || {
+          echo "ERROR: the refusal does not say which answer is missing" >&2
+          exit 1
+        }
 
         # `said` and not `out`: `$out` is the derivation's, and `mkCheck` touches it.
         said=$(RONOCTUA_INST_BELONGINGS="$address" ${rust.workspace}/bin/ronoctua-install)
@@ -31984,18 +32487,20 @@ let
           echo "ERROR: the belongings' address reached host.nix" >&2
           exit 1
         fi
-        # THE PLAN NAMES THE FILE, never its content: an address on a command
-        # line is in the process list of the machine being installed.
-        if echo "$said" | sed '/^--- host.nix ---$/,/^--- /d' | grep -qF "$address"; then
-          echo "ERROR: the address was printed as part of a command" >&2
+        steps=$(echo "$said" | sed '/^--- host.nix ---$/,/^--- /d')
+        named=$(echo "$steps" | grep -cF "$address" || true)
+        [ "$named" = 1 ] && echo "$steps" | grep -F "$address" | grep -q 'ronoctua-belongings plain ' || {
+          echo "ERROR: the address is on $named command lines, and only the plain part's copy takes it" >&2
           exit 1
-        fi
+        }
         written=$(echo "$said" | grep -n "write $target" | cut -d: -f1 | head -1)
         installed=$(echo "$said" | grep -n ' nixos-install ' | cut -d: -f1 | head -1)
+        restored=$(echo "$said" | grep -n 'ronoctua-belongings restore ' | cut -d: -f1 | head -1)
         [ -n "$written" ] || { echo "ERROR: no step writes $target" >&2; exit 1; }
         [ -n "$installed" ] || { echo "ERROR: no step runs nixos-install" >&2; exit 1; }
-        [ "$written" -gt "$installed" ] || {
-          echo "ERROR: the belongings are written before nixos-install made the user" >&2
+        [ -n "$restored" ] || { echo "ERROR: no step restores the belongings" >&2; exit 1; }
+        [ "$written" -gt "$installed" ] && [ "$written" -lt "$restored" ] || {
+          echo "ERROR: the settings are written before nixos-install made the user, or after the restore that reads them" >&2
           exit 1
         }
 
@@ -32006,7 +32511,7 @@ let
           cat refused.txt >&2
           exit 1
         fi
-        echo "OK: the repository is written into the person's home after the install, and nowhere else"
+        echo "OK: the repository is mandatory, and written into the person's home after the install"
       '';
 
   # `ronoctua-install --execute` against a real disk is `tests/installer-vm.nix`,
@@ -32581,6 +33086,7 @@ let
         ("video_metrics", "video_metrics_window.rs", "apply", "video_metrics_errand"),
         ("security", "security_window.rs", "errand", "security_errand"),
         ("containers", "containers_window.rs", "apply", "containers_errand"),
+        ("incus", "incus_window.rs", "apply", "incus_errand"),
         ("belongings", "belongings_window.rs", "apply", "belongings_errand"),
         ("software", "software_window.rs", "carry_out", "software_do"),
         ("player", "player_window.rs", "apply", "player_errand"),
@@ -33387,6 +33893,8 @@ let
         "ronoctua-websearch/src/internet.rs": "the web search's engines, under the person's pass",
         "ronoctua-words/src/internet.rs": "the dictionaries",
         "ronoctua-world/src/http.rs": "the world's baked regions",
+        "ronoctua-llm/src/usage.rs": "Anthropic's usage endpoint, under the person's pass",
+        "ronoctua-stick/src/net.rs": "the distro's releases on GitHub (the installer stick)",
     }
 
 
@@ -36211,6 +36719,10090 @@ let
       echo "OK: the ${toString (builtins.length quick)} of the short loop exist"
     '';
 
+  # ===================================================================
+  # THE 2026-10-05 WAVE'S CHECKS — each package defines its own here, after
+  # its anchor, and names them in `core` after the same anchor there.
+  # ===================================================================
+  # ── anchor: L01 ──
+  # THE POST-QUANTUM STANZA AGAINST THE TEXTS THAT DEFINE IT.
+  #
+  # `ronoctua-pq` assembles X-Wing itself (the `age` crate in the lock has no
+  # `mlkem768x25519`), and a wrong constant there is a file nobody else can
+  # open — which we would open ourselves without a word. The answers are copied
+  # verbatim out of three documents: X-Wing's own (draft-connolly-cfrg-xwing-
+  # kem-11, Appendix C), HPKE's for exactly age's suite (hpkewg/hpke-pq: KEM
+  # 0x647a, HKDF-SHA256, ChaCha20Poly1305 — RFC 9180's key schedule through ten
+  # messages and five exports, both ways), and the C2SP age spec's own identity,
+  # recipient and stanza. Sabotaged once each, the X-Wing label, the HPKE info,
+  # the KEM id and ML-KEM's d/z order each broke their own family.
+  pq-xwing-vectors = mkCheck "pq-xwing-vectors" [ pkgs.gnugrep pkgs.coreutils ] ''
+    if ! ${rust.workspace}/bin/ronoctua-test-pq vectors > answers.txt; then
+      cat answers.txt >&2
+      echo "ERROR: a known answer of the PQ stanza is wrong (above)" >&2
+      exit 1
+    fi
+    # EVERY FAMILY ASKED, so a runner that stopped asking cannot pass.
+    for due in "xwing-11 9" "hpke-pq 33" "age-spec 5"; do
+      set -- $due
+      got=$(grep -c "^ok  *$1 " answers.txt || true)
+      if [ "$got" != "$2" ]; then
+        echo "ERROR: $got known answers of $1 were given, $2 are due" >&2
+        exit 1
+      fi
+    done
+    tail -n 1 answers.txt
+  '';
+
+  # THE GO `age` DECIDES, both ways.
+  #
+  # The vectors prove the pieces; this proves the FILE: what we seal opens in
+  # the one other implementation of `mlkem768x25519`, and what it seals opens
+  # here — the promise `RECOVER.md` makes, that a person's belongings open with
+  # the Go `age` and no distro. Through the extracted `ronoctua-seal`, the
+  # program the queue runs. Five things:
+  #
+  #   1. Go's identity: we seal (3 MB across many chunks, and an empty file),
+  #      Go opens.
+  #   2. Our identity: Go reads the same recipient out of it, Go seals and we
+  #      open, we seal and Go opens; a stranger's key opens neither.
+  #   3. Mixing PQ with X25519 is refused at SEALING by both, and no file is
+  #      left behind. And a job of classical recipients ALONE is refused by us
+  #      (`corrupt`): new encryption is post-quantum, and the sealer reads a
+  #      classical key only to name a mix — never to seal without the stanza.
+  #   4. A mixed file (forged, since no honest sealer writes one) is refused at
+  #      OPENING by us (`Why::Mixed`). Go opens it, and the spec allows that —
+  #      it asks the sealer not to mix, and lets an identity ignore the stanzas
+  #      it does not know — so this half is ours alone.
+  #   5. A header of many: Go seals to 45 PQ recipients, ours last — some
+  #      70 KB of header, past the 64 KiB our reader once called damaged — and
+  #      we open it.
+  #
+  # 1.3 is the first Go `age` that speaks the stanza. While nixpkgs carries one
+  # that new, it is the judge; an older nixpkgs gets 1.3.1 pinned for THIS
+  # check only (nothing installs it). The pin is an attribute of the check, so
+  # it is built and proved before the day it is needed:
+  #   nix build .#checks.x86_64-linux.pq-age-interop.pinnedGoAge
+  pq-age-interop =
+    let
+      pinnedGoAge = pkgs.buildGoModule (finalAttrs: {
+        pname = "age";
+        version = "1.3.1";
+        src = pkgs.fetchFromGitHub {
+          owner = "FiloSottile";
+          repo = "age";
+          tag = "v${finalAttrs.version}";
+          hash = "sha256-Qs/q3zQYV0PukABBPf/aU5V1oOhw95NG6K301VYJk8A=";
+        };
+        vendorHash = "sha256-iVDkYXXR2pXlUVywPgVRNMORxOOEhAmzpSM0xqSQMSQ=";
+        subPackages = [
+          "cmd/age"
+          "cmd/age-keygen"
+        ];
+        # `v1.3.1` is what `age --version` says, and what the script reads.
+        ldflags = [
+          "-s"
+          "-w"
+          "-X main.Version=v${finalAttrs.version}"
+        ];
+        # As nixpkgs: the plugin test is flaky (FiloSottile/age#517).
+        checkFlags = [
+          "-skip"
+          "TestScript/plugin"
+        ];
+      });
+      goAge = if lib.versionAtLeast pkgs.age.version "1.3" then pkgs.age else pinnedGoAge;
+    in
+    mkCheck "pq-age-interop" [ goAge pkgs.coreutils pkgs.gnugrep pkgs.diffutils ] ''
+      seal=${rust.seal}/bin/ronoctua-seal
+      pq=${rust.workspace}/bin/ronoctua-test-pq
+      w=$PWD
+      fail() {
+        echo "ERROR: $*" >&2
+        exit 1
+      }
+      # One job on the sealer's stdin; its LAST line is the verdict.
+      verdict() {
+        printf '{"action":%s,"from":"%s","into":"%s"}\n' "$1" "$w/$2" "$w/$3" \
+          | "$seal" 2> /dev/null | tail -n 1 || true
+      }
+      to() { printf '{"do":"seal-to","recipients":[%s]}' "$1"; }
+      with() { printf '{"do":"open","identities-file":"%s"}' "$w/$1"; }
+
+      version=$(age --version)
+      case "$version" in
+        v1.[3-9]* | v1.[1-9][0-9]* | v[2-9]*) ;;
+        *) fail "the Go age here is $version, older than v1.3" ;;
+      esac
+
+      head -c 3000123 /dev/urandom > big
+      : > empty
+
+      # 1. GO'S IDENTITY: we seal, Go opens.
+      age-keygen -pq -o go.key 2> /dev/null
+      go=$(age-keygen -y go.key)
+      case "$go" in age1pq1*) ;; *) fail "Go's -pq recipient is not age1pq1…" ;; esac
+      for f in big empty; do
+        said=$(verdict "$(to "\"$go\"")" $f $f.ours.age)
+        [ "$said" = "done $(stat -c %s $f)" ] || fail "sealing $f to Go's recipient said: $said"
+        age -d -i go.key -o $f.back $f.ours.age || fail "Go did not open what we sealed ($f)"
+        cmp $f $f.back || fail "Go opened another $f than we sealed"
+      done
+      grep -a -q '^-> mlkem768x25519 ' big.ours.age || fail "our file has no mlkem768x25519 stanza"
+
+      # 2. OUR IDENTITY: the same recipient for Go, and both ways round.
+      ours=$("$pq" identity "$w/our.key")
+      [ "$(age-keygen -y our.key)" = "$ours" ] || fail "Go reads another recipient out of our identity"
+      age -r "$ours" -o go.age big || fail "Go refused to seal to our recipient"
+      grep -a -q '^-> mlkem768x25519 ' go.age || fail "Go's file has no mlkem768x25519 stanza"
+      said=$(verdict "$(with our.key)" go.age go.back)
+      [ "$said" = "done 3000123" ] || fail "we did not open what Go sealed to us: $said"
+      cmp big go.back || fail "we opened another file than Go sealed"
+      said=$(verdict "$(to "\"$ours\"")" big mine.age)
+      [ "$said" = "done 3000123" ] || fail "sealing to our own recipient said: $said"
+      age -d -i our.key -o mine.back mine.age || fail "Go did not open, with our identity, what we sealed"
+      cmp big mine.back || fail "Go opened another file than we sealed"
+      age-keygen -pq -o stranger.key 2> /dev/null
+      if age -d -i stranger.key -o stranger.back mine.age 2> /dev/null; then
+        fail "Go opened our file with a stranger's key"
+      fi
+      said=$(verdict "$(with stranger.key)" go.age stranger.ours)
+      [ "$said" = "refused wrong-key" ] || fail "a stranger's key on Go's file said: $said"
+      [ ! -e stranger.ours ] || fail "a refused open left a file behind"
+
+      # 3. MIXING, refused at sealing by both.
+      age-keygen -o x25519.key 2> /dev/null
+      classical=$(age-keygen -y x25519.key)
+      if age -r "$ours" -r "$classical" -o go.mixed.age big 2> go.refused; then
+        fail "Go sealed to a PQ and a classical recipient together"
+      fi
+      grep -q 'incompatible recipients' go.refused || fail "Go refused the mix for another reason: $(cat go.refused)"
+      [ ! -e go.mixed.age ] || fail "Go left a file behind"
+      said=$(verdict "$(to "\"$ours\",\"$classical\"")" big ours.mixed.age)
+      [ "$said" = "refused mixed" ] || fail "sealing to a PQ and a classical recipient said: $said"
+      [ ! -e ours.mixed.age ] || fail "a refused seal left a file behind"
+      said=$(verdict "$(to "\"$classical\"")" big ours.classical.age)
+      [ "$said" = "refused corrupt" ] || fail "sealing to a classical recipient alone said: $said"
+      [ ! -e ours.classical.age ] || fail "a refused classical seal left a file behind"
+
+      # 4. A MIXED FILE, refused at opening by us.
+      "$pq" mixed "$ours" "$classical" "$w/mixed.age"
+      grep -a -q '^-> X25519 ' mixed.age || fail "the forged file has no X25519 stanza"
+      said=$(verdict "$(with our.key)" mixed.age mixed.back)
+      [ "$said" = "refused mixed" ] || fail "opening a mixed file said: $said"
+      [ ! -e mixed.back ] || fail "a refused open left a file behind"
+
+      # 5. A HEADER OF MANY, ours last.
+      : > many.txt
+      for i in $(seq 44); do
+        age-keygen -pq -o many.$i.key 2> /dev/null
+        age-keygen -y many.$i.key >> many.txt
+      done
+      printf '%s\n' "$ours" >> many.txt
+      age -R many.txt -o many.age big || fail "Go refused to seal to 45 recipients"
+      [ "$(grep -a -c '^-> mlkem768x25519 ' many.age)" = 45 ] || fail "Go's file has no 45 stanzas"
+      at=$(grep -a -b -m 1 '^--- ' many.age | cut -d: -f1)
+      [ "$at" -gt 65536 ] || fail "the header of 45 recipients is only $at bytes"
+      said=$(verdict "$(with our.key)" many.age many.back)
+      [ "$said" = "done 3000123" ] || fail "we did not open Go's file of 45 recipients ($at bytes of header): $said"
+      cmp big many.back || fail "we opened another file than Go sealed to 45"
+      echo "OK: $version and ronoctua-seal open each other's mlkem768x25519 files, 45 recipients too; the mix and a classical seal are refused"
+    ''
+    // {
+      inherit pinnedGoAge;
+    };
+
+  # THE IDENTITY NEVER PRINTS.
+  #
+  # `AGE-SECRET-KEY-PQ-1…` opens everything the person sealed, the belongings
+  # first; a log line or an error message that carries it is a key handed to
+  # whoever reads the journal. So: an identity's `Debug` and its secret's are
+  # the public half and `[REDACTED]`, and EVERY answer `ronoctua-seal` gives
+  # with an identity in hand — the open, a wrong key, a damaged file, a damaged
+  # identity, a loose or linked identity file, a job that carries the identity
+  # inline (it has no field for it: the identity reaches it only as the path
+  # of a `0600` file), an identity pasted where a recipient goes — says its
+  # verdict and nothing of the key. Each verdict is asserted first, so a path
+  # that silently stopped running cannot pass for a quiet one.
+  #
+  # THE SIGNING KEY TOO (the plain-signature package): the person's ML-DSA-65
+  # key, which vouches for everything the machines take in clear, travels in
+  # `key.age` beside the identity. Its `Debug`, its public key's and a
+  # refusal met with it in hand say the fingerprint and the verdict, and
+  # nothing of the seed.
+  pq-identity-never-prints = mkCheck "pq-identity-never-prints" [ pkgs.coreutils pkgs.gnugrep ] ''
+    seal=${rust.seal}/bin/ronoctua-seal
+    pq=${rust.workspace}/bin/ronoctua-test-pq
+    w=$PWD
+    fail() {
+      echo "ERROR: $*" >&2
+      exit 1
+    }
+    me=$("$pq" identity "$w/me.key")
+    secret=$(grep '^AGE-SECRET-KEY-PQ-1' me.key)
+    [ ''${#secret} = 77 ] || fail "the identity is ''${#secret} characters, not 77"
+    data=''${secret#AGE-SECRET-KEY-PQ-1}
+    # Two halves of the key, so a print of either is caught, in any case.
+    first=''${data:0:20}
+    last=''${data: -20}
+    leaks() { grep -q -i -F -e "$first" -e "$last" -e "AGE-SECRET-KEY" "$1"; }
+
+    # 1. THE DEBUGS: the public half is there, the secret is not.
+    "$pq" debug "$w/me.key" > debug.txt
+    grep -q -F "$me" debug.txt || fail "the Debug does not show the recipient — an empty answer would pass"
+    grep -q -F '[REDACTED]' debug.txt || fail "the secret's Debug is not [REDACTED]"
+    if leaks debug.txt; then
+      cat debug.txt >&2
+      fail "an identity's Debug prints the identity"
+    fi
+
+    # 2. EVERY ANSWER OF THE SEALER, with the identity in hand.
+    printf 'note' > plain
+    "$pq" identity "$w/other.key" > other.recipient
+    printf 'not age' > junk
+    job() { printf '{"action":%s,"from":"%s","into":"%s"}' "$1" "$w/$2" "$w/$3"; }
+    to() { printf '{"do":"seal-to","recipients":["%s"]}' "$1"; }
+    with() { printf '{"do":"open","identities-file":"%s"}' "$w/$1"; }
+    ask() {
+      printf '%s\n' "$2" | "$seal" > "said.$1" 2>&1 || true
+    }
+    ask sealed "$(job "$(to "$me")" plain mine.age)"
+    ask theirs "$(job "$(to "$(cat other.recipient)")" plain theirs.age)"
+    # One character of the key changed: the checksum refuses it.
+    at=''${secret:40:1}
+    if [ "$at" = q ]; then other=p; else other=q; fi
+    (umask 077 && printf '%s\n' "''${secret:0:40}$other''${secret:41}" > damaged.key)
+    cp me.key loose.key
+    chmod 644 loose.key
+    ln -s me.key linked.key
+    ask open "$(job "$(with me.key)" mine.age o1)"
+    ask wrong "$(job "$(with me.key)" theirs.age o2)"
+    ask corrupt "$(job "$(with me.key)" junk o3)"
+    ask damaged "$(job "$(with damaged.key)" mine.age o4)"
+    ask loose "$(job "$(with loose.key)" mine.age o5)"
+    ask linked "$(job "$(with linked.key)" mine.age o6)"
+    # Complete but for one field too many: refused for that field alone.
+    ask inline "{\"action\":{\"do\":\"open\",\"identities-file\":\"$w/me.key\",\"identity\":\"$secret\"},\"from\":\"$w/mine.age\",\"into\":\"$w/o7\"}"
+    ask pasted "$(job "$(to "$secret")" plain o8)"
+    for case in "sealed done 4" "theirs done 4" "open done 4" "wrong refused wrong-key" \
+      "corrupt refused corrupt" "damaged refused corrupt" "loose refused failed" \
+      "linked refused failed" "inline refused failed" "pasted refused corrupt"; do
+      name=''${case%% *}
+      due=''${case#* }
+      said=$(tail -n 1 "said.$name")
+      [ "$said" = "$due" ] || fail "$name: the sealer said '$said', '$due' was due"
+      if leaks "said.$name"; then
+        cat "said.$name" >&2
+        fail "$name: the sealer's answer carries the identity"
+      fi
+    done
+
+    # 3. THE SIGNING KEY: its Debug, its public key's, a refusal with it in
+    # hand — the fingerprint and the verdict, never the seed.
+    "$pq" signing-key "$w/sign.key" > sign.pub
+    seed=$(grep '^RONOCTUA-SIGNING-KEY-MLDSA65-1' sign.key)
+    [ ''${#seed} = 94 ] || fail "the signing key is ''${#seed} characters, not 94"
+    hex=''${seed#RONOCTUA-SIGNING-KEY-MLDSA65-1}
+    seed_first=''${hex:0:20}
+    seed_last=''${hex: -20}
+    "$pq" debug-signing "$w/sign.key" > signing.txt
+    [ "$(grep -c -E 'fingerprint: "[0-9a-f]{64}"' signing.txt)" = 2 ] \
+      || fail "the signing key's and its public key's Debug do not both show the fingerprint — an empty answer would pass"
+    grep -q -F 'Err(Refusal { why: WrongKey })' signing.txt \
+      || fail "a manifest changed after its signature was not refused with the key in hand"
+    if grep -q -i -F -e "$seed_first" -e "$seed_last" -e "SIGNING-KEY" signing.txt; then
+      cat signing.txt >&2
+      fail "the signing key's Debug, or a refusal with it in hand, prints the seed"
+    fi
+    echo "OK: the Debugs and ten answers of ronoctua-seal say nothing of the identity, nor the signing key's of its seed"
+  '';
+  # ── anchor: L02 ──
+  # THE KEY IS AGREED POST-QUANTUM FIRST — and a host without it is still
+  # reached. `ronoctua-http`'s own test, run on its own: the client as every
+  # connection has it (`tls::config`, the `aws-lc-rs` provider with
+  # `prefer-post-quantum`) shakes hands, in process, with three servers — one
+  # that knows `X25519MLKEM768` (agreed), one that knows only X25519 (agreed,
+  # classically), one that knows only P-384 (a retry, then agreed). What the
+  # hello offers first is asserted too. Over the loop's dependency layer, like
+  # `subtitles-stack-in-libass`; exactly one test, or nothing was proved.
+  tls-is-post-quantum-first = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-tls-is-post-quantum-first";
+    checkPhase = ''
+      runHook preCheck
+      cargoWithProfile test --locked -p ronoctua-http --features tls,ws --lib -- \
+        tls::tests::the_hello_offers_the_hybrid_first_and_a_classical_host_is_still_reached \
+        --exact 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the post-quantum handshake test did not run exactly once" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # ONE PROVIDER OF THE CRYPTOGRAPHY OUR CODE AND OUR TLS CALL: `aws-lc-rs`.
+  #
+  # `ring` is still LISTED in `Cargo.lock` — `rustls-webpki` names it behind a
+  # weak feature (`ring?/alloc`), and cargo writes such an optional
+  # dependency into the lock even when nothing turns it on. So the lock's
+  # list of names is not the question; what is BUILT is. `cargo tree`, over
+  # the vendored sources and offline, resolves the whole workspace with every
+  # feature of every member and every target — and `ring` must not be in that
+  # graph at all, while rustls must stand on `aws-lc-rs` with
+  # `prefer-post-quantum` on. And no second TLS library may arrive under
+  # another name.
+  one-crypto-implementation =
+    let
+      vendored = rust.craneLib.vendorCargoDeps { cargoLock = ../Cargo.lock; };
+    in
+    mkCheck "one-crypto-implementation"
+      [
+        rustToolchain
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        export CARGO_HOME="$TMPDIR/cargo-home"
+        tree() {
+          cargo tree --config ${vendored}/config.toml --locked --offline \
+            --manifest-path ${self}/Cargo.toml --workspace --all-features --target all "$@"
+        }
+        tree -e normal,build,dev -i aws-lc-rs > provider.txt
+        tree -e normal,build,dev -i ring > ring.txt 2>&1
+        tree -e features -i rustls --depth 1 > rustls.txt
+        cat provider.txt rustls.txt
+        failed=0
+        if grep -q '^ring v' ring.txt; then
+          echo "ERROR: ring is built again, beside aws-lc-rs:" >&2
+          cat ring.txt >&2
+          failed=1
+        fi
+        # THE FLOOR: the provider is there, under rustls and under ours.
+        grep -q '^aws-lc-rs v' provider.txt || { echo "ERROR: aws-lc-rs is not built at all" >&2; failed=1; }
+        grep -q 'rustls v' provider.txt || { echo "ERROR: rustls does not stand on aws-lc-rs" >&2; failed=1; }
+        grep -q 'ronoctua-http v' provider.txt || { echo "ERROR: ronoctua-http does not use aws-lc-rs" >&2; failed=1; }
+        grep -q 'rustls feature "prefer-post-quantum"' rustls.txt || {
+          echo "ERROR: rustls is built without prefer-post-quantum: the hybrid is offered last" >&2
+          failed=1
+        }
+        if grep -q 'rustls feature "ring"' rustls.txt; then
+          echo "ERROR: rustls is built with its ring provider" >&2
+          failed=1
+        fi
+        # AND NO OTHER TLS LIBRARY UNDER ANOTHER NAME.
+        for other in openssl-sys boring-sys native-tls mbedtls-sys aws-lc-fips-sys; do
+          if grep -qx "name = \"$other\"" ${../Cargo.lock}; then
+            echo "ERROR: $other is in Cargo.lock: a second implementation of the cryptography" >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: ring is built nowhere; rustls and our own code stand on aws-lc-rs, post-quantum first"
+      '';
+
+  # SSH AGREES ITS KEYS POST-QUANTUM FIRST, on both profiles and on the ISO —
+  # and a SERVER of ours accepts nothing NixOS's recommended list refuses: the
+  # hybrids first, then X25519 and the SHA-256 group exchange, and no NIST
+  # curve, no fixed 2048-to-8192-bit group, nothing with SHA-1 (the ISO's sshd
+  # takes a root login). The client keeps OpenSSH's own classical list.
+  #
+  # Read as SSH ITSELF reads the configuration, not as the module wrote it:
+  # `ssh -G` on each system's generated `/etc/ssh/ssh_config`, and `sshd -G -T`
+  # on the ISO's `sshd_config` — the effective list, with whatever an include
+  # or another module added. Every name must also be one the pinned ssh knows
+  # (`ssh -Q kex`): a misspelt algorithm makes ssh refuse the WHOLE file, and
+  # every ssh on the machine would stop.
+  #
+  # TWO THINGS OF THE SANDBOX, both measured. A store file reads as uid 65534
+  # in here, and ssh refuses an INCLUDED file that is neither root's nor the
+  # user's — so the configuration and what it includes are copied, byte for
+  # byte, into files this build owns, the `Include` pointed at the copies.
+  # And `sshd -T` names its keywords in mixed case where `ssh -G` writes them
+  # in lower case, so the keyword is compared folded. The generated file ends
+  # WITHOUT a newline, and its last line is the `KexAlgorithms`: a copy read
+  # with a bare `read` dropped it, ssh fell back to its own default — which is
+  # this same list — and the check passed with the setting gone. So the copy
+  # keeps a last line with no newline, and must carry the directive.
+  ssh-kex-is-pq-first =
+    let
+      table = import ../assets/ssh.nix;
+      wanted = lib.concatStringsSep "," (table.postQuantum ++ table.classical);
+      served = lib.concatStringsSep "," (table.postQuantum ++ table.serverClassical);
+      config = name: self.nixosConfigurations.${name}.config;
+      client = name: (config name).environment.etc."ssh/ssh_config".source;
+      server = name: lib.concatStringsSep "," (config name).services.openssh.settings.KexAlgorithms;
+    in
+    mkCheck "ssh-kex-is-pq-first"
+      [
+        pkgs.openssh
+        pkgs.gnugrep
+        pkgs.gawk
+        pkgs.coreutils
+      ]
+      ''
+        own() {
+          n=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [[ $line =~ ^[[:space:]]*Include[[:space:]]+(.+)$ ]]; then
+              n=$((n + 1))
+              install -m 644 "''${BASH_REMATCH[1]}" "$2.include-$n"
+              printf 'Include %s\n' "$PWD/$2.include-$n"
+            else
+              printf '%s\n' "$line"
+            fi
+          done < "$1" > "$2"
+        }
+        said_by() { awk -v key="$1" 'tolower($1) == key { print $2 }'; }
+        failed=0
+        known=$(ssh -Q kex)
+        for name in ${
+          lib.concatStringsSep " " (table.postQuantum ++ table.classical ++ table.serverClassical)
+        }; do
+          grep -qxF "$name" <<<"$known" || {
+            echo "ERROR: the pinned ssh does not know '$name'; it would refuse the whole file" >&2
+            failed=1
+          }
+        done
+        for name in ${lib.concatStringsSep " " table.postQuantum}; do
+          case "$name" in
+            mlkem*|sntrup*) ;;
+            *) echo "ERROR: '$name' is listed as post-quantum and is not" >&2; failed=1 ;;
+          esac
+        done
+        for list in "${wanted}" "${served}"; do
+          case "$list" in
+            mlkem768x25519-sha256,*) ;;
+            *) echo "ERROR: a list does not open with mlkem768x25519-sha256: $list" >&2; failed=1 ;;
+          esac
+        done
+        # WHAT A SERVER OF OURS NEVER ACCEPTS, whatever the client may offer
+        # (each server below is held to exactly this list).
+        for name in ${lib.concatStringsSep " " (table.postQuantum ++ table.serverClassical)}; do
+          case "$name" in
+            ecdh-sha2-*|diffie-hellman-group1-*|diffie-hellman-group14-*|diffie-hellman-group16-*|diffie-hellman-group18-*|*sha1*)
+              echo "ERROR: a server of ours accepts $name, which NixOS's recommended list refuses" >&2
+              failed=1 ;;
+          esac
+        done
+        for pair in noctua=${client "noctua"} minimal=${client "minimal"} installer=${client "installer"}; do
+          own "''${pair#*=}" "''${pair%%=*}.conf"
+          grep -qi '^[[:space:]]*KexAlgorithms ' "''${pair%%=*}.conf" || {
+            echo "ERROR: the ssh_config of ''${pair%%=*} says no KexAlgorithms at all" >&2
+            failed=1
+          }
+          said=$(ssh -G -F "''${pair%%=*}.conf" example.org | said_by kexalgorithms)
+          [ "$said" = "${wanted}" ] || {
+            echo "ERROR: ssh on ''${pair%%=*} agrees keys in this order: $said" >&2
+            failed=1
+          }
+        done
+        said=$(sshd -G -T -C lport=22 -f ${(config "installer").environment.etc."ssh/sshd_config".source} \
+          | said_by kexalgorithms)
+        [ "$said" = "${served}" ] || {
+          echo "ERROR: the ISO's sshd agrees keys in this order: $said" >&2
+          failed=1
+        }
+        # OFF on the installed systems, and set: a person who turns sshd on
+        # gets the same list as the ISO's.
+        for said in "${server "noctua"}" "${server "minimal"}"; do
+          [ "$said" = "${served}" ] || {
+            echo "ERROR: an installed system's sshd would agree keys in this order: $said" >&2
+            failed=1
+          }
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: ssh agrees keys post-quantum first: ${wanted}"
+        echo "OK: and every sshd of ours accepts only: ${served}"
+      '';
+
+  # THE BELONGINGS' SSH IS POST-QUANTUM ONLY, against a real `sshd`.
+  #
+  # `ronoctua-git`'s test, ignored in a plain `cargo test` (no sshd there), is
+  # run here with the pinned one: a git fetch of the belongings' credentials
+  # (`pq_only`) from an sshd that offers only X25519 is refused as
+  # `NotPostQuantum`, the SAME server is reached by a session that is not
+  # narrowed (so the refusal is the narrowing's), and servers offering only
+  # ML-KEM or only sntrup761 (GitHub's, until 2026-10-14) get past the key
+  # exchange. The Rust list is held to `assets/ssh.nix`. Then the belongings'
+  # own test: the deploy key's credentials are `pq_only`, and git's refusal
+  # becomes the belongings' sentence.
+  belongings-ssh-is-pq-only = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-ssh-is-pq-only";
+    RONOCTUA_SSHD = "${pkgs.openssh}/bin/sshd";
+    RONOCTUA_SSH_KEYGEN = "${pkgs.openssh}/bin/ssh-keygen";
+    RONOCTUA_SSH_PQ_KEX = lib.concatStringsSep "," (import ../assets/ssh.nix).postQuantum;
+    checkPhase = ''
+      runHook preCheck
+      test -x "$RONOCTUA_SSHD" && test -x "$RONOCTUA_SSH" || {
+        echo "ERROR: the test would not run: no sshd or no ssh" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-git --lib -- \
+        tests::a_post_quantum_only_session_refuses_a_classical_server --exact --ignored \
+        2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the sshd test did not run exactly once" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-belongings --lib -- \
+        engine::tests::the_belongings_ssh_is_post_quantum_only --exact 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the belongings' credentials test did not run exactly once" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # THE BELONGINGS' HTTPS IS POST-QUANTUM ONLY, against a real TLS server.
+  #
+  # git has no setting for TLS groups; the narrowing is an OpenSSL
+  # configuration (`nix/pq-tls.nix`, `OPENSSL_CONF`), and OpenSSL ignores one
+  # it cannot use WITHOUT A WORD — so only this shows it is there. The pinned
+  # git, under the file the build ships, fetches with the belongings' token
+  # (`pq_only`) from `openssl s_server`s: one with X25519 alone, one with the
+  # NIST curves alone, one with TLS 1.2 alone — each refused as
+  # `NotPostQuantum`, and each REACHED by a token that is not narrowed (so the
+  # refusal is the narrowing's) — and ones with `X25519MLKEM768` and
+  # `SecP384r1MLKEM1024` alone, reached. Then the belongings' own test: the
+  # token's credentials are `pq_only`.
+  belongings-https-is-pq-only = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-https-is-pq-only";
+    RONOCTUA_OPENSSL = "${pkgs.openssl.bin}/bin/openssl";
+    checkPhase = ''
+      runHook preCheck
+      test -x "$RONOCTUA_OPENSSL" && test -f "$RONOCTUA_GIT_PQ_TLS" || {
+        echo "ERROR: the test would not run: no openssl or no narrowing" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-git --lib -- \
+        tests::a_post_quantum_only_token_refuses_a_classical_tls_server --exact --ignored \
+        2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the TLS server test did not run exactly once" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-belongings --lib -- \
+        engine::tests::the_belongings_https_is_post_quantum_only --exact 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the belongings' token test did not run exactly once" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # NO RSA HOST KEY, anywhere an sshd of ours could start.
+  #
+  # The ISO's sshd as it would load its keys (`sshd -G -T`: with no `HostKey`
+  # line it falls back to RSA, ECDSA and ed25519, so this is the line that
+  # matters), the installed systems' `hostKeys` (sshd is off there, and would
+  # make an RSA key at its first start without this), what `/persist` keeps,
+  # and the rule that removes the pair a machine kept before.
+  no-rsa-host-key =
+    let
+      config = name: self.nixosConfigurations.${name}.config;
+      types =
+        name: lib.concatMapStringsSep " " (k: k.type or "?") (config name).services.openssh.hostKeys;
+      kept = name: lib.concatStringsSep " " (config name).ronoctua.persist.files;
+      removes = name: lib.concatStringsSep "\n" (config name).systemd.tmpfiles.rules;
+    in
+    mkCheck "no-rsa-host-key"
+      [
+        pkgs.openssh
+        pkgs.gnugrep
+        pkgs.gawk
+        pkgs.coreutils
+      ]
+      ''
+        failed=0
+        # `sshd -T` names its keywords in mixed case: compared folded.
+        loads=$(sshd -G -T -C lport=22 -f ${(config "installer").environment.etc."ssh/sshd_config".source} \
+          | awk 'tolower($1) == "hostkey" { print $2 }')
+        [ "$loads" = /etc/ssh/ssh_host_ed25519_key ] || {
+          echo "ERROR: the ISO's sshd would load these host keys: $loads" >&2
+          failed=1
+        }
+        for pair in "noctua=${types "noctua"}" "minimal=${types "minimal"}"; do
+          [ "''${pair#*=}" = ed25519 ] || {
+            echo "ERROR: an sshd on ''${pair%%=*} would make these host keys: ''${pair#*=}" >&2
+            failed=1
+          }
+        done
+        for pair in "noctua=${kept "noctua"}" "minimal=${kept "minimal"}"; do
+          case "''${pair#*=}" in
+            *rsa*) echo "ERROR: /persist on ''${pair%%=*} still keeps an RSA host key" >&2; failed=1 ;;
+          esac
+        done
+        cat > rules.txt <<'END'
+        ${removes "noctua"}
+        END
+        for gone in /persist/etc/ssh/ssh_host_rsa_key /persist/etc/ssh/ssh_host_rsa_key.pub; do
+          grep -qE "^ *r $gone " rules.txt || {
+            echo "ERROR: nothing removes $gone, which a machine kept before" >&2
+            failed=1
+          }
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: every sshd of ours has one host key, ed25519, and /persist keeps no RSA one"
+      '';
+
+  # ── anchor: L03 ──
+  # A MACHINE'S FLAKE, AS THE TEMPLATE WRITES IT, IS THE REFERENCE MACHINE.
+  #
+  # `tests/fixtures/machine/` is a machine directory exactly as the installer
+  # makes one: the template's `flake.nix` (byte for byte — the check refuses a
+  # copy that drifted), the installer's `host.nix` (`host-nix-golden-evaluates`)
+  # and a hardware report. Its `outputs`, called with THIS distro as the
+  # `ronoctua` input, must give one `nixosConfigurations` attribute named after
+  # the person, the two outputs the update's verification reads, and a system
+  # whose `toplevel` is the reference `noctua`'s own — the same derivation, so
+  # the reference IS what a machine builds and not a lookalike. A flake.nix
+  # that claims another contract is refused.
+  #
+  # It evaluates two whole systems (the template's and the reference), which
+  # is the price of the equality, and builds neither.
+  machine-template-evaluates =
+    let
+      fixture = ./fixtures/machine;
+      written = import (fixture + "/flake.nix");
+      outputs = written.outputs {
+        ronoctua = self;
+        self = written;
+      };
+      names = builtins.attrNames outputs.nixosConfigurations;
+      built = outputs.nixosConfigurations.${builtins.head names};
+      otherContract = builtins.tryEval (
+        builtins.attrNames (
+          self.lib.machineFlake {
+            dir = fixture;
+            contract = 2;
+          }
+        )
+      );
+      facts = pkgs.writeText "machine-template-facts.json" (
+        builtins.toJSON {
+          template = builtins.readFile ../templates/machine/flake.nix;
+          copy = builtins.readFile (fixture + "/flake.nix");
+          url = written.inputs.ronoctua.url;
+          inherit names user;
+          outputs = builtins.attrNames outputs;
+          host = built.config.networking.hostName;
+          toplevel = builtins.unsafeDiscardStringContext built.config.system.build.toplevel.drvPath;
+          reference = builtins.unsafeDiscardStringContext self.nixosConfigurations.noctua.config.system.build.toplevel.drvPath;
+          refusesOtherContract = !otherContract.success;
+        }
+      );
+    in
+    mkCheck "machine-template-evaluates" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+      if f["template"] != f["copy"]:
+          wrong.append("tests/fixtures/machine/flake.nix is not templates/machine/flake.nix byte for byte")
+      if f["url"] != "github:ronoctua/ronoctua-distro/release":
+          wrong.append(f"the template follows {f['url']!r}, not the release branch")
+      if f["names"] != [f["user"]]:
+          wrong.append(f"nixosConfigurations is {f['names']}, not [{f['user']!r}]")
+      for name in ("nixosConfigurations", "personEntries", "personFingerprints"):
+          if name not in f["outputs"]:
+              wrong.append(f"the machine flake has no `{name}`")
+      if f["host"] != "noctua-reference":
+          wrong.append(f"the fixture's host.nix was not read (hostName {f['host']!r})")
+      if not f["toplevel"].endswith(".drv") or f["toplevel"] != f["reference"]:
+          wrong.append("the template's system is not the reference `noctua`:\n"
+                       f"         {f['toplevel']}\n         {f['reference']}")
+      if not f["refusesOtherContract"]:
+          wrong.append("a flake.nix written for contract 2 was accepted")
+      if wrong:
+          print("ERROR: a machine's flake, as the template writes it, is not the reference machine.",
+                file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: the template builds `{f['user']}`, the reference machine itself ({f['toplevel']})")
+      END
+    '';
+
+  # THE MACHINE USES EXACTLY THE PINS THE GATE TESTED.
+  #
+  # `lib.machine` compares every input the distro received — all the way down
+  # the lock graph — with the `narHash` the distro's own `flake.lock` names.
+  # This builds the reference machine over FOUR sets of inputs: the real ones
+  # (it must build), and three a machine flake could hand the distro — its
+  # nixpkgs replaced (`ronoctua.inputs.nixpkgs.follows`), an input of an input
+  # replaced (`ronoctua/lanzaboote/crane`), and a `follows` of the distro's own
+  # lock rewired (`ronoctua/lanzaboote/nixpkgs`). Each of the three must stop
+  # evaluation. Everything but the hash is the real input, so nothing else
+  # could be what refused.
+  machine-uses-the-distro-pins =
+    let
+      tamper = input: input // { narHash = "sha256-${lib.fixedWidthString 43 "A" ""}="; };
+      replaced = inputs // {
+        nixpkgs = tamper inputs.nixpkgs;
+      };
+      deeper = inputs // {
+        lanzaboote = inputs.lanzaboote // {
+          inputs = inputs.lanzaboote.inputs // {
+            crane = tamper inputs.lanzaboote.inputs.crane;
+          };
+        };
+      };
+      followed = inputs // {
+        lanzaboote = inputs.lanzaboote // {
+          inputs = inputs.lanzaboote.inputs // {
+            nixpkgs = tamper inputs.lanzaboote.inputs.nixpkgs;
+          };
+        };
+      };
+      builds =
+        given:
+        builtins.tryEval
+          ((machineLib.withInputs given).machine { dir = ./fixtures/machine; }).config.networking.hostName;
+      facts = pkgs.writeText "machine-pins-facts.json" (
+        builtins.toJSON {
+          real = builds inputs;
+          replaced = (builds replaced).success;
+          deeper = (builds deeper).success;
+          followed = (builds followed).success;
+        }
+      );
+    in
+    mkCheck "machine-uses-the-distro-pins" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+      if f["real"] != {"success": True, "value": "noctua-reference"}:
+          wrong.append(f"the distro's own pins do not build the reference machine: {f['real']}")
+      for case, what in (("replaced", "the distro's nixpkgs replaced"),
+                         ("deeper", "an input of an input replaced (lanzaboote/crane)"),
+                         ("followed", "a follows of the lock rewired (lanzaboote/nixpkgs)")):
+          if f[case]:
+              wrong.append(f"a machine built with {what}")
+      if wrong:
+          print("ERROR: a machine does not stop at pins the gate never tested.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: the distro's pins build; a replaced input, a deeper one and a rewired follows refuse")
+      END
+    '';
+
+  # THE ATTRIBUTE A MACHINE FLAKE BUILDS IS THE ONE EVERYTHING ASKS FOR.
+  #
+  # It used to be a sentence in two comments (`rescue-flake-target-exists`) and
+  # no check. Four places name it, and they must be one name: the attribute
+  # the template's flake gives (`nixosConfigurations.<attr>`), the option
+  # (`ronoctua.machine.attr`), the person (`ronoctua.user`), and every unit of
+  # ours that rebuilds the machine — by `--flake <dir>#<attr>` in what it runs,
+  # or by `RONOCTUA_MACHINE_DIR`/`RONOCTUA_MACHINE_ATTR` handed to a program
+  # that does. The rescue's rebuild must be one of them.
+  machine-flake-target-exists =
+    let
+      written = import ./fixtures/machine/flake.nix;
+      outputs = written.outputs {
+        ronoctua = self;
+        self = written;
+      };
+      reference = self.nixosConfigurations.noctua.config;
+      ours = lib.filterAttrs (name: _: lib.hasPrefix "ronoctua-" name) reference.systemd.services;
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      facts = pkgs.writeText "machine-target-facts.json" (
+        builtins.toJSON {
+          names = builtins.attrNames outputs.nixosConfigurations;
+          inherit (reference.ronoctua.machine) attr dir;
+          person = reference.ronoctua.user;
+          units = lib.mapAttrs (_: s: {
+            run = plain (s.serviceConfig.ExecStart or "") + "\n" + plain (s.script or "");
+            dir =
+              if s.environment ? RONOCTUA_MACHINE_DIR then plain s.environment.RONOCTUA_MACHINE_DIR else null;
+            attr =
+              if s.environment ? RONOCTUA_MACHINE_ATTR then plain s.environment.RONOCTUA_MACHINE_ATTR else null;
+          }) ours;
+        }
+      );
+    in
+    mkCheck "machine-flake-target-exists" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, re, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+      if f["names"] != [f["attr"]]:
+          wrong.append(f"the template's flake builds {f['names']}, the option says {f['attr']!r}")
+      if f["attr"] != f["person"]:
+          wrong.append(f"ronoctua.machine.attr is {f['attr']!r} and the person is {f['person']!r}")
+      target = f"{f['dir']}#{f['attr']}"
+      naming = []
+      for unit, u in sorted(f["units"].items()):
+          for said in re.findall(r"--flake\s+(\S+)", u["run"]):
+              said = said.strip("'\"")
+              if said != target:
+                  wrong.append(f"{unit} rebuilds `{said}`, not `{target}`")
+              else:
+                  naming.append(unit)
+          if u["dir"] is not None or u["attr"] is not None:
+              if (u["dir"], u["attr"]) != (f["dir"], f["attr"]):
+                  wrong.append(f"{unit} is handed {u['dir']}#{u['attr']}, not `{target}`")
+              else:
+                  naming.append(unit)
+      if "ronoctua-rescue-rebuild" not in naming:
+          wrong.append("the rescue's rebuild (`ronoctua-rescue-rebuild`) names no target at all")
+      if wrong:
+          print("ERROR: the machine flake's attribute and what asks for it disagree.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: `{target}` — the template, the option, the person and {len(set(naming))} unit(s)")
+      END
+    '';
+
+  # THE MACHINE DIRECTORY HAS ONE NAME.
+  #
+  # It is spelled once, in `nix/machine.nix`; a module reads
+  # `ronoctua.machine.dir`, the update's `steps.nix` and `nix/rust.nix` import
+  # it, and a program gets `RONOCTUA_MACHINE_DIR`. Written again anywhere, the
+  # day it moves the copy keeps pointing at the old place — and the place it
+  # points at is the one a rebuild reads. The flake attribute rides with it:
+  # `#noctua` written by hand is the person's name spelled again.
+  #
+  # What it reads is every Nix file of the distro, the brain's modules and
+  # every crate — comments, documentation and test modules left out, strings
+  # kept, because a string is exactly where the path would be. The installer
+  # too: it MAKES the machine directory, under the target's `/mnt`, and a
+  # directory it spelled again would be one nothing reads. It asks the
+  # machine's flake for the attribute (`nixosConfigurations`), so no file is
+  # excused from `#noctua` any more; the set stays, empty, for the day one
+  # has to be named — with the reason beside it.
+  machine-dir-has-one-name = mkCheck "machine-dir-has-one-name" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: the question is whether the literal is ANYWHERE in the code
+    # of the installed system; there is no function to narrow to.
+    root = pathlib.Path("${self}")
+    LITERAL = "/etc/nixos"
+    # The attribute, and not a longer one that begins with it
+    # (`.#noctua-icon-theme` is a package).
+    TARGET = re.compile(r"#noctua(?![\w-])")
+    ATTRIBUTE_BY_HAND = set()
+
+    def nix_code(text):
+        # Nix with its comments taken off and its strings KEPT — `#` begins a
+        # comment only outside a string, and the path would be in a string.
+        out, i, n = [], 0, len(text)
+        while i < n:
+            if text[i] == '"':
+                j = i + 1
+                while j < n and text[j] != '"':
+                    j += 2 if text[j] == "\\" else 1
+                out.append(text[i:j + 1])
+                i = j + 1
+                continue
+            if text.startswith("'" + "'", i):
+                j = i + 2
+                while j < n:
+                    if text.startswith("'" * 3, j) or text.startswith("'" + "'$", j) or text.startswith("'" + "'\\", j):
+                        j += 3
+                        continue
+                    if text.startswith("'" + "'", j):
+                        break
+                    j += 1
+                out.append(text[i:j + 2])
+                i = j + 2
+                continue
+            if text[i] == "#":
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                i = n if end < 0 else end + 2
+                continue
+            out.append(text[i])
+            i += 1
+        return "".join(out)
+
+    def rel(f):
+        return f.relative_to(root).as_posix()
+
+    wrong, seen = [], 0
+    def judge(f, code):
+        global seen
+        seen += 1
+        if LITERAL in code:
+            wrong.append(f"{rel(f)} spells {LITERAL}")
+        if TARGET.search(code) and rel(f) not in ATTRIBUTE_BY_HAND:
+            wrong.append(f"{rel(f)} spells #noctua")
+
+    one = root / "nix" / "machine.nix"
+    if nix_code(one.read_text()).count('"' + LITERAL + '"') != 1:
+        wrong.append("nix/machine.nix does not spell the machine directory exactly once")
+
+    nix = [root / "flake.nix"] + sorted((root / "nix").rglob("*.nix")) + sorted((root / "crates").rglob("*.nix"))
+    for f in nix:
+        r = rel(f)
+        if r == "nix/machine.nix":
+            continue
+        judge(f, nix_code(f.read_text()))
+    for f in sorted((root / "nix").rglob("*.py")) + sorted((root / "crates").rglob("*.py")):
+        judge(f, hashless(f.read_text()))
+    for f in workspace_sources(root / "crates"):
+        # A FILE THAT IS A TEST MODULE is a test whole: its `#[cfg(test)]` is
+        # on the parent's `mod` line, and `without_tests` cuts nothing here.
+        if f.name == "tests.rs" or "tests" in f.relative_to(root / "crates").parts:
+            continue
+        judge(f, uncommented(without_tests(f.read_text())))
+    for f in ATTRIBUTE_BY_HAND:
+        if not (root / f).exists():
+            wrong.append(f"{f} is gone: drop it from ATTRIBUTE_BY_HAND")
+    floor(seen, 1000, "files of the installed system's code")
+
+    if wrong:
+        print("ERROR: the machine directory is spelled outside its one name.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("       Read it from `ronoctua.machine.dir` (a module), `nix/machine.nix`", file=sys.stderr)
+        print("       (`machineDir`) or `RONOCTUA_MACHINE_DIR` (a program).", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {seen} files, and the machine directory is spelled once, in nix/machine.nix")
+    END
+  '';
+
+  # THE INSTALLER'S host.nix EVALUATES UNDER lib.machine.
+  #
+  # Two halves. The build half runs the real installer in its dry run with the
+  # reference machine's answers and compares the `host.nix` it prints, byte
+  # for byte, with `tests/fixtures/machine/host.nix` — so the fixture IS what
+  # the installer writes, and an installer that starts writing a new line
+  # makes this fail until the fixture is that line too. The evaluation half
+  # instantiates the reference machine built from that file through
+  # `lib.machine` — the whole `toplevel`, not one option — and reads back
+  # what the file said.
+  #
+  # When it fails because the installer changed: run the same dry run
+  # (`RONOCTUA_INST_*` below) and write its `host.nix` into the fixture.
+  host-nix-golden-evaluates =
+    let
+      reference = self.nixosConfigurations.noctua.config;
+      facts = pkgs.writeText "host-nix-golden-facts.json" (
+        builtins.toJSON {
+          toplevel = builtins.unsafeDiscardStringContext reference.system.build.toplevel.drvPath;
+          host = reference.networking.hostName;
+          disk = reference.ronoctua.disk;
+          profile = reference.ronoctua.profile;
+          facter = reference.ronoctua.facterReport != null;
+        }
+      );
+    in
+    mkCheck "host-nix-golden-evaluates" [ pkgs.python3 ] ''
+      export RONOCTUA_INST_DISK=/dev/disk/by-id/reference-machine-not-a-disk
+      export RONOCTUA_INST_HOSTNAME=noctua-reference
+      export RONOCTUA_INST_PASSWORD=fixture-password
+      export RONOCTUA_INST_PASSPHRASE=fixture-passphrase
+      # The person's repository, mandatory; none of it reaches `host.nix`.
+      export RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git
+      export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
+      export RONOCTUA_INST_BELONGINGS_PASSPHRASE=fixture-belongings-passphrase
+      ${rust.workspace}/bin/ronoctua-install > said.txt
+      python3 - said.txt ${./fixtures/machine/host.nix} ${facts} <<'END'
+      import json, sys
+      said, golden, facts = sys.argv[1:]
+      text = open(said).read()
+      if "--- host.nix ---\n" not in text:
+          print("ERROR: the installer's dry run no longer prints a host.nix", file=sys.stderr)
+          raise SystemExit(1)
+      written = text.split("--- host.nix ---\n", 1)[1].split("\n--- ", 1)[0].rstrip("\n") + "\n"
+      if written != open(golden).read():
+          print("ERROR: tests/fixtures/machine/host.nix is not what the installer writes.", file=sys.stderr)
+          print("       The installer writes:", file=sys.stderr)
+          print(written, file=sys.stderr)
+          raise SystemExit(1)
+      f = json.load(open(facts))
+      wrong = []
+      if not f["toplevel"].endswith(".drv"):
+          wrong.append("the reference machine did not instantiate")
+      if f["host"] != "noctua-reference":
+          wrong.append(f"hostName is {f['host']!r}")
+      if f["disk"] != "/dev/disk/by-id/reference-machine-not-a-disk":
+          wrong.append(f"the disk is {f['disk']!r}")
+      if f["profile"] != "full" or not f["facter"]:
+          wrong.append(f"the profile ({f['profile']!r}) or the hardware report did not come from host.nix")
+      if wrong:
+          print("ERROR: the reference machine is not the one its host.nix describes.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: the installer's host.nix is the fixture, and it evaluates ({f['toplevel']})")
+      END
+    '';
+
+  # A BAD ENTRY DOES NOT BREAK THE MACHINE.
+  #
+  # `tests/fixtures/machine-person/` declares, beside one entry of each source
+  # that works, every way an entry can go wrong: a name nixpkgs never had, an
+  # alias that throws when read (`autoReconfHook`, kept by nixpkgs as a typo
+  # trap), an attribute that is not a package, an unfree package declared
+  # without consent, an entry for another machine, one with a field missing and
+  # a Flatpak from a remote this machine does not have. Then three variations
+  # of the same machine: the update held one entry back (by the fingerprint it
+  # has NOW — and by an older one, which holds nothing), the file says a format
+  # from the future, and the registry knows two of the declines.
+  #
+  # Each must evaluate, and the report must say exactly why each entry is
+  # where it is. "Evaluate" is everything the entries reach: `/etc` (where the
+  # report is) and the person's Home Manager generation (where the programs
+  # are). The person's half never touches the system profile
+  # (`person-packages-are-per-user`).
+  #
+  # And the MINIMAL machine, where `allowUnfree` is off and the one predicate
+  # is what lets a consented package in (on `full` the Android SDK turns
+  # `allowUnfree` on, and the predicate is never asked). Its host turned the
+  # system's Flatpak on by hand while the distro's switch is off, so
+  # nix-flatpak's per-person list does not exist. It declares, from fixture
+  # packages an overlay plants: vscode with consent (applied — by the
+  # predicate, its name in `unfreeNames`), discord without (refused), a
+  # consented package whose reading `abort`s — which `tryEval` cannot catch —
+  # held by its current fingerprint, a consented unfree package that needs
+  # another unfree one (applied: the consent covers what it needs), a free one
+  # that needs an unfree one (refused, said as that), and a Flatpak (no
+  # source here). The machine must evaluate with the aborting entry held, and
+  # the update's verification (`personEntries`, one entry at a time) must
+  # evaluate the two consented entries even while the aborting one is NOT
+  # held yet.
+  person-bad-entry-does-not-break-eval =
+    let
+      built = machineLib.machine { dir = ./fixtures/machine-person; };
+      config = built.config;
+      variant = module: (built.extendModules { modules = [ module ]; }).config.ronoctua.person.report;
+      heldBy =
+        id: fingerprint:
+        builtins.toFile "held.json" (
+          builtins.toJSON {
+            format = 1;
+            held = [
+              {
+                inherit id fingerprint;
+                reason = "build-failed";
+                since = "2026-10-05T12:00:00Z";
+              }
+            ];
+          }
+        );
+      nixEntry = attr: unfree: {
+        source = "nix";
+        id = "nix:${attr}";
+        machines = null;
+        edited-at = "2026-10-05T12:00:00Z";
+        edited-on = "noctua-reference";
+        inherit attr unfree;
+      };
+      minimalData = built.extendModules {
+        modules = [
+          {
+            ronoctua.profile = lib.mkForce "minimal";
+            ronoctua.software.flatpak = lib.mkForce false;
+            services.flatpak.enable = lib.mkForce true;
+            nixpkgs.overlays = [
+              (final: prev: {
+                fixtureAborts = abort "fixture: reading this package aborts";
+                fixtureUnfreeInner = prev.runCommand "fixture-unfree-inner" {
+                  meta.license = lib.licenses.unfree;
+                } "touch $out";
+                fixtureUnfreeOuter = prev.runCommand "fixture-unfree-outer" {
+                  meta.license = lib.licenses.unfree;
+                  inner = final.fixtureUnfreeInner;
+                } "touch $out";
+                fixtureFreeOuter = prev.runCommand "fixture-free-outer" {
+                  inner = final.fixtureUnfreeInner;
+                } "touch $out";
+              })
+            ];
+            ronoctua.person.data = lib.mkForce (
+              builtins.toFile "declared.json" (
+                builtins.toJSON {
+                  format = 1;
+                  apps = [
+                    (nixEntry "vscode" true)
+                    (nixEntry "discord" false)
+                    (nixEntry "fixtureAborts" true)
+                    (nixEntry "fixtureUnfreeOuter" true)
+                    (nixEntry "fixtureFreeOuter" false)
+                    {
+                      source = "flatpak";
+                      id = "flatpak:org.example.Fixture";
+                      machines = null;
+                      edited-at = "2026-10-05T12:00:00Z";
+                      edited-on = "noctua-reference";
+                      app-id = "org.example.Fixture";
+                      origin = "flathub";
+                    }
+                  ];
+                }
+              )
+            );
+          }
+        ];
+      };
+      minimal =
+        (minimalData.extendModules {
+          modules = [
+            {
+              ronoctua.person.held = lib.mkForce (
+                heldBy "nix:fixtureAborts" minimalData.config.ronoctua.person.fingerprints."nix:fixtureAborts"
+              );
+            }
+          ];
+        }).config;
+      # The verification's view, BEFORE anything is held: only the two
+      # consented entries are read (reading the aborting one is its own
+      # failure, and stops evaluation as it should).
+      verify = machineLib.entriesOf minimalData;
+      evaluates = drv: (builtins.tryEval (builtins.unsafeDiscardStringContext drv.drvPath)).success;
+      facts = pkgs.writeText "person-bad-entry-facts.json" (
+        builtins.toJSON {
+          report = config.ronoctua.person.report;
+          held = variant {
+            ronoctua.person.held = lib.mkForce (heldBy "nix:sl" config.ronoctua.person.fingerprints."nix:sl");
+          };
+          stale = variant { ronoctua.person.held = lib.mkForce (heldBy "nix:sl" "an-older-fingerprint"); };
+          minimal = {
+            inherit (minimal.ronoctua.person) report unfreeNames;
+            allowUnfree = minimal.nixpkgs.config.allowUnfree;
+            flatpakSwitch = minimal.ronoctua.software.flatpak;
+            systemFlatpak = minimal.services.flatpak.enable;
+            etc = builtins.unsafeDiscardStringContext minimal.system.build.etc.drvPath;
+            home =
+              builtins.unsafeDiscardStringContext
+                minimal.home-manager.users.${user}.home.activationPackage.drvPath;
+            verified = {
+              vscode = evaluates verify."nix:vscode";
+              fixtureUnfreeOuter = evaluates verify."nix:fixtureUnfreeOuter";
+            };
+            verifiable = builtins.attrNames verify;
+          };
+          newer = variant {
+            ronoctua.person.data = lib.mkForce (
+              builtins.toFile "declared.json" (
+                builtins.toJSON {
+                  format = 2;
+                  apps = [
+                    {
+                      source = "nix";
+                      id = "nix:cowsay";
+                    }
+                  ];
+                }
+              )
+            );
+          };
+          declined =
+            (variant {
+              ronoctua.apps = {
+                fixture-renamed.formerly = [ "fixture-old-name" ];
+                fixture-essential.essential = "the-login-shell";
+              };
+            }).declined;
+          etc = builtins.unsafeDiscardStringContext config.system.build.etc.drvPath;
+          home =
+            builtins.unsafeDiscardStringContext
+              config.home-manager.users.${user}.home.activationPackage.drvPath;
+        }
+      );
+    in
+    mkCheck "person-bad-entry-does-not-break-eval" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+
+      def why(report):
+          return {s["id"]: (s["reason"], s["detail"]) for s in report["skipped"]}
+
+      r = f["report"]
+      expected_applied = ["nix:cowsay", "nix:vscode", "nix:sl", "flatpak:org.example.Fixture",
+                          "appimage:fixture-tool", "web:fixture-web", "android:org.example.fixture"]
+      if r["applied"] != expected_applied:
+          wrong.append(f"applied: {r['applied']}")
+      expected = {
+          "nix:gone-from-nixpkgs-fixture": "attr-missing",
+          "nix:autoReconfHook": "attr-missing",
+          "nix:lib": "not-a-package",
+          "nix:discord": "refused-by-meta",
+          "nix:hello": "other-machine",
+          "nix:figlet": "format-unknown",
+          "flatpak:org.example.Elsewhere": "source-off",
+      }
+      got = {k: v[0] for k, v in why(r).items()}
+      if got != expected:
+          wrong.append(f"skipped: {got}")
+      if any(not detail for _, detail in why(r).values()):
+          wrong.append("a skipped entry does not say why")
+      if r["machine"] != "noctua-reference" or not r["distro-rev"]:
+          wrong.append(f"the report names machine {r['machine']!r}, revision {r['distro-rev']!r}")
+
+      if why(f["held"]).get("nix:sl") != ("held", "build-failed") or "nix:sl" in f["held"]["applied"]:
+          wrong.append("an entry held by its current fingerprint was not held")
+      if "nix:sl" not in f["stale"]["applied"]:
+          wrong.append("an entry held by an OLDER fingerprint stayed held")
+
+      n = f["newer"]
+      if n["applied"] != [] or why(n) != {"nix:cowsay": why(n).get("nix:cowsay")} \
+              or why(n)["nix:cowsay"][0] != "format-unknown":
+          wrong.append(f"a file in a future format: {n}")
+
+      d = f["declined"]
+      if d["honoured"] != ["fixture-old-name"] or d["unknown"] != ["fixture-unknown"] \
+              or d["refused"] != [{"id": "fixture-essential", "reason": "the-login-shell"}]:
+          wrong.append(f"the declines: {d}")
+
+      if not f["etc"].endswith(".drv") or not f["home"].endswith(".drv"):
+          wrong.append("the machine's /etc or the person's generation did not instantiate")
+
+      m = f["minimal"]
+      if m["allowUnfree"] is not False or m["flatpakSwitch"] is not False or m["systemFlatpak"] is not True:
+          wrong.append("the minimal variant is not a machine where the predicate decides and Flatpak "
+                       f"is on by hand only (allowUnfree {m['allowUnfree']}, ronoctua.software.flatpak "
+                       f"{m['flatpakSwitch']}, services.flatpak.enable {m['systemFlatpak']}): "
+                       "it proves nothing")
+      mr = m["report"]
+      if mr["applied"] != ["nix:vscode", "nix:fixtureUnfreeOuter"]:
+          wrong.append(f"minimal, applied: {mr['applied']} (a consented unfree package must go in "
+                       "through the predicate, and one that needs another unfree one by its consent)")
+      mw = why(mr)
+      want = {
+          "nix:discord": ("refused-by-meta", "consent"),
+          "nix:fixtureAborts": ("held", "build-failed"),
+          "nix:fixtureFreeOuter": ("refused-by-meta", "needs unfree packages"),
+          "flatpak:org.example.Fixture": ("source-off", "flatpak"),
+      }
+      if set(mw) != set(want) or any(mw[k][0] != r or s not in mw[k][1] for k, (r, s) in want.items()):
+          wrong.append(f"minimal, skipped: {mw}")
+      if m["unfreeNames"] != ["vscode", "fixture-unfree-outer"]:
+          wrong.append(f"minimal, the consented names: {m['unfreeNames']} (a held entry is never read "
+                       "for its name, and a consent widens no name)")
+      if not m["etc"].endswith(".drv") or not m["home"].endswith(".drv"):
+          wrong.append("the minimal machine's /etc or the person's generation did not instantiate")
+      if sorted(m["verifiable"]) != sorted(["nix:vscode", "nix:discord", "nix:fixtureAborts",
+                                            "nix:fixtureUnfreeOuter", "nix:fixtureFreeOuter"]):
+          wrong.append(f"minimal, the entries the update verifies: {m['verifiable']}")
+      if m["verified"] != {"vscode": True, "fixtureUnfreeOuter": True}:
+          wrong.append("the update's verification of a consented entry fails while a sibling that "
+                       f"aborts is not held yet: {m['verified']}")
+      if wrong:
+          print("ERROR: a bad declaration is not skipped and said, or it broke the machine.",
+                file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(r['applied'])} applied, {len(r['skipped'])} skipped with their reasons; "
+            "held, future format and declines said; the machine evaluates; on minimal the "
+            "predicate takes the consent, a held entry that aborts is never read, and each "
+            "consented entry verifies alone")
+      END
+    '';
+
+  # THE PERSON'S PROGRAMS GO TO THE PERSON.
+  #
+  # Every declared program lands in the person's Home Manager profile (a
+  # package, an AppImage's wrapper, a web app's launcher entry), the person's
+  # own Flatpak installation, or the list the reconciler installs Android apps
+  # from — and NOT in `environment.systemPackages` nor the system's Flatpak
+  # installation. And it is there BECAUSE of the declaration: the reference
+  # machine, which declares nothing, has none of them.
+  person-packages-are-per-user =
+    let
+      person = (machineLib.machine { dir = ./fixtures/machine-person; }).config;
+      reference = self.nixosConfigurations.noctua.config;
+      names =
+        ps:
+        map (
+          p:
+          let
+            r = builtins.tryEval (lib.getName p);
+          in
+          if r.success then r.value else ""
+        ) ps;
+      facts = pkgs.writeText "person-per-user-facts.json" (
+        builtins.toJSON {
+          home = names person.home-manager.users.${user}.home.packages;
+          system = names person.environment.systemPackages;
+          referenceHome = names reference.home-manager.users.${user}.home.packages;
+          referenceSystem = names reference.environment.systemPackages;
+          flatpakPerson = map (p: p.appId) person.home-manager.users.${user}.services.flatpak.packages;
+          flatpakSystem = map (p: p.appId or p) person.services.flatpak.packages;
+          desktop = builtins.attrNames person.home-manager.users.${user}.xdg.desktopEntries;
+          android = map (a: "${a.id} ${a.from}") person.ronoctua.declaredAndroid;
+        }
+      );
+    in
+    mkCheck "person-packages-are-per-user" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+      for name in ("cowsay", "vscode", "sl", "ronoctua-appimage-fixture-tool",
+                   "ronoctua-web-fixture-web.desktop"):
+          if name not in f["home"]:
+              wrong.append(f"{name} is not in the person's profile")
+          if name in f["system"]:
+              wrong.append(f"{name} is in environment.systemPackages")
+          if name in f["referenceHome"] or name in f["referenceSystem"]:
+              wrong.append(f"{name} is on the reference machine too: the check proves nothing")
+      if "org.example.Fixture" not in f["flatpakPerson"]:
+          wrong.append("the declared Flatpak is not on the person's installation's list")
+      if "org.example.Fixture" in f["flatpakSystem"]:
+          wrong.append("the declared Flatpak is on the system installation's list")
+      if "ronoctua-web-fixture-web" not in f["desktop"]:
+          wrong.append("the web app is not one of the person's launcher entries")
+      if f["android"] != ["android:org.example.fixture person"]:
+          wrong.append(f"the apks for the reconciler: {f['android']}")
+      if wrong:
+          print("ERROR: the person's declared programs are not the person's.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: packages, AppImage, web app, Flatpak and apk go to the person, and only by declaring")
+      END
+    '';
+
+  # A MODULE THAT REACHES ROOT NEEDS AN APPROVAL OF WHAT IT IS NOW.
+  #
+  # `tests/fixtures/machine-brain/` carries six of the person's brain
+  # modules: two with no NixOS half (they run as the person: included), one
+  # with a NixOS half that an approval names by its current hash (imported),
+  # one no approval names (not imported), one whose approval names the hash
+  # it had BEFORE an edit (not imported), and one, approved, that imports a
+  # SIBLING by `../` when it can — `my-common`, which needs no approval
+  # because it has no NixOS half of its own. The approved module must be
+  # imported and the sibling must not: what runs as root is what the
+  # approval's hash covers. The NixOS halves each write a file in `/etc`, so
+  # "imported" is asked of the built configuration and not of a list; the
+  # report must name the two that wait, with the hash an approval would have
+  # to name — the one `nix/person-hash.nix` computes now.
+  person-root-module-needs-approval =
+    let
+      fixture = ./fixtures/machine-brain;
+      built = (machineLib.machine { dir = fixture; }).config;
+      hashOf = id: import ../nix/person-hash.nix (fixture + "/person/brain/${id}");
+      approved = (builtins.fromJSON (builtins.readFile (fixture + "/local/approved.json"))).modules;
+      facts = pkgs.writeText "person-approval-facts.json" (
+        builtins.toJSON {
+          etc = builtins.filter (lib.hasPrefix "ronoctua-fixture-") (
+            builtins.attrNames built.environment.etc
+          );
+          inherit (built.ronoctua.person.report) brain;
+          included = map baseNameOf built.ronoctua.person.brainModules;
+          hashes = lib.genAttrs [
+            "my-approved"
+            "my-edited"
+            "my-unapproved"
+            "my-reaching"
+          ] hashOf;
+          sibling = builtins.pathExists (fixture + "/person/brain/my-common/helper.nix");
+          approved = lib.mapAttrs (_: a: a.hash) approved;
+        }
+      );
+    in
+    mkCheck "person-root-module-needs-approval" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+      if f["approved"].get("my-approved") != f["hashes"]["my-approved"]:
+          wrong.append("the fixture's approval does not name my-approved as it is: the check proves nothing")
+      if f["approved"].get("my-edited") in (None, f["hashes"]["my-edited"]):
+          wrong.append("the fixture's my-edited is not edited after its approval: the check proves nothing")
+      if f["approved"].get("my-reaching") != f["hashes"]["my-reaching"] or not f["sibling"]:
+          wrong.append("the fixture's my-reaching is not approved as it is, or my-common has no helper.nix "
+                       "for it to reach: the check proves nothing")
+      if "ronoctua-fixture-my-common" in f["etc"]:
+          wrong.append("an approved module reached a sibling by `../`: root ran code no approval covers")
+      if f["etc"] != ["ronoctua-fixture-my-approved", "ronoctua-fixture-my-reaching"]:
+          wrong.append(f"the NixOS halves imported: {f['etc']}")
+      expected = ["my-approved", "my-common", "my-plain", "my-reaching"]
+      if sorted(f["included"]) != expected or sorted(f["brain"]["included"]) != expected:
+          wrong.append(f"the modules included: {f['included']}")
+      waiting = {a["id"]: a["hash"] for a in f["brain"]["awaiting-approval"]}
+      if waiting != {"my-edited": f["hashes"]["my-edited"], "my-unapproved": f["hashes"]["my-unapproved"]}:
+          wrong.append(f"the modules awaiting approval: {waiting}")
+      if wrong:
+          print("ERROR: a module that reaches root is imported without an approval of what it is.",
+                file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: approved → imported, from its own folder alone; unapproved and edited after "
+            "approval → waiting, by their hashes")
+      END
+    '';
+
+  # A DECLARED WEB APP'S WINDOW ID IS THE RUST'S.
+  #
+  # The launcher entry of a web app the person DECLARES is written by Nix
+  # (`nix/declared-apps/web.nix`), and its `StartupWMClass` repeats the
+  # arithmetic of `web::app_id` — how the modeline names the window, and what
+  # the imperative copy carries. Nix has no URL parser, so it refuses every
+  # address a browser would rewrite before naming the window. This reads the
+  # one table the Rust test (`the_declared_web_app_ids_are_this_arithmetic`)
+  # holds `web::app_id` to: every `agree` address must pass the Nix shape and
+  # give the Rust's id; every `refused` one — which the Rust test proves a
+  # browser rewrites — must be refused with a sentence.
+  web-app-ids-agree =
+    let
+      web = import ../nix/declared-apps/web.nix { inherit lib pkgs; };
+      table = builtins.fromJSON (builtins.readFile ../crates/ronoctua-software/fixtures/web-app-ids.json);
+      entry = row: {
+        slug = "fixture";
+        name = "Fixture";
+        inherit (row) url profile;
+      };
+      facts = pkgs.writeText "web-app-ids-facts.json" (
+        builtins.toJSON {
+          agree = map (
+            row:
+            row
+            // {
+              shape = web.shape (entry row);
+              got = web.appId row.url row.profile;
+            }
+          ) table.agree;
+          refused = map (row: row // { shape = web.shape (entry row); }) table.refused;
+        }
+      );
+    in
+    mkCheck "web-app-ids-agree" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      f = json.load(open("${facts}"))
+      wrong = []
+      if len(f["agree"]) < 10 or len(f["refused"]) < 10:
+          wrong.append("the table lost its rows: the check proves nothing")
+      for row in f["agree"]:
+          if row["shape"] is not None:
+              wrong.append(f"{row['url']!r} is refused: {row['shape']}")
+          elif row["got"] != row["id"]:
+              wrong.append(f"{row['url']!r} {row['profile']!r}: Nix gives {row['got']!r}, the Rust {row['id']!r}")
+      for row in f["refused"]:
+          if not row["shape"]:
+              wrong.append(f"{row['url']!r} is taken, and a browser rewrites it before naming the window")
+      if wrong:
+          print("ERROR: a declared web app would carry another window id than the Rust gives it.",
+                file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(f['agree'])} addresses give the Rust's id, {len(f['refused'])} a browser "
+            "rewrites are refused")
+      END
+    '';
+  # ── anchor: L04 ──
+  # THE PROGRAM REGISTRY (`nix/modules/distro-apps.nix`) — five checks.
+  #
+  # The registry is what puts the distro's programs on a machine, and a
+  # person's decline (`software/declined.json`) is what takes one off. Each
+  # check below asks one half of that promise of the EVALUATED systems and
+  # never of the modules' text: what a machine gets is the configuration, not
+  # the expression that made it.
+  distroAppsTable = import ../assets/distro-apps.nix;
+
+  # A MACHINE WITH DECLINES, and the same machine without them. The full
+  # profile, extended twice by evaluation only: a declined file in the shape
+  # the person's data has (`crates/ronoctua-person`), one program of the
+  # registry renamed (`check-renamed`, once `check-before`), so the rename's
+  # promise is asked of the same machinery as everything else, and one this
+  # machine does not carry (`check-absent`, `when = false`). One more way in
+  # for `htop` (a second `systemPackages` line) is what `still-present` must
+  # notice. And the MINIMAL profile with the same declines, where Chrome and
+  # VLC are not carried at all: a decline there must not read as one here.
+  #
+  # Every store path leaves WITHOUT its context: these are facts about what
+  # a machine would hold, and building any of it is not the question.
+  distroAppsDeclines =
+    let
+      discard = builtins.unsafeDiscardStringContext;
+      base = self.nixosConfigurations.noctua;
+      host = base.config.networking.hostName;
+      decline = id: machines: {
+        inherit id machines;
+        edited-at = "2026-10-05T12:00:00Z";
+        edited-on = host;
+      };
+      declined = builtins.toFile "declined.json" (
+        builtins.toJSON {
+          format = 1;
+          apps = [
+            (decline "vlc" null)
+            (decline "chrome" [ host ])
+            (decline "zsh" null)
+            (decline "no-such-app" null)
+            (decline "emacs" [ "elsewhere" ])
+            (decline "orca-slicer" null)
+            (decline "claude-code" null)
+            (decline "htop" null)
+            (decline "check-before" null)
+            (decline "check-absent" null)
+            (decline "android-sdk" null)
+            (decline "flutter" null)
+            (decline "tealdeer" null)
+            # A LINE OF NO KNOWN SHAPE (`machines` is a list or null): the
+            # root applier refuses such a file, and if one arrives anyway it
+            # is left out — never a reason for the machine not to evaluate.
+            (decline "mpv" host)
+          ];
+        }
+      );
+      renamed =
+        { pkgs, ... }:
+        {
+          ronoctua.apps.check-renamed = {
+            package = pkgs.hello;
+            formerly = [ "check-before" ];
+          };
+          ronoctua.apps.check-absent = {
+            package = pkgs.cowsay;
+            when = false;
+          };
+        };
+      # FORCED: the machine's own flake may name a declined file of its own,
+      # and the fixture's is the one asked about.
+      declines = {
+        ronoctua.person.declined = lib.mkForce declined;
+      };
+      before = base.extendModules { modules = [ renamed ]; };
+      after = base.extendModules {
+        modules = [
+          renamed
+          declines
+          ({ pkgs, ... }: { environment.systemPackages = [ pkgs.htop ]; })
+        ];
+      };
+      minimal = self.nixosConfigurations.minimal.extendModules {
+        modules = [
+          renamed
+          declines
+        ];
+      };
+      # Every value a session variable or the lifeline's unit carries: a
+      # declined program's store path in one of them keeps it in the closure.
+      valuesOf = lib.mapAttrsToList (_: v: discard (toString v));
+      factsOf =
+        system:
+        let
+          c = system.config;
+        in
+        {
+          installed = map (p: discard (p.outPath or "")) c.environment.systemPackages;
+          programs = lib.mapAttrs (_: e: discard e.package.outPath) (
+            lib.filterAttrs (_: e: e.package != null) c.ronoctua.apps
+          );
+          report = c.ronoctua.distroApps.declinedReport;
+          registry = builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text;
+          browser = c.ronoctua.browser.enable;
+          editor = c.ronoctua.editor.emacs;
+          models = c.xdg.mime.defaultApplications."model/stl" or null;
+          lifeline = c.systemd.user.services.ronoctua-lifeline.environment ? RONOCTUA_CLAUDE;
+          carried =
+            valuesOf c.environment.sessionVariables
+            ++ valuesOf c.systemd.user.services.ronoctua-lifeline.environment;
+          tldr = {
+            service = c.systemd.services ? tealdeer-update;
+            step = c.ronoctua.update.steps.tldr-cache or null;
+          };
+        };
+    in
+    pkgs.writeText "distro-apps-declines.json" (
+      builtins.toJSON {
+        before = factsOf before;
+        after = factsOf after;
+        minimal = builtins.fromJSON minimal.config.environment.etc."ronoctua/distro-apps.json".text;
+      }
+    );
+
+  # A DECLINE TAKES THE PROGRAM OFF THE MACHINE — and only where it applies.
+  #
+  # Every program the fixture declines is first shown INSTALLED without the
+  # decline: a comparison whose "before" never had the program would pass
+  # over a registry that installs nothing. Then: a decline for every machine
+  # and one for this machine remove theirs; one for another machine does
+  # nothing here; an essential program stays and the report says why; an id
+  # the registry never had is reported unknown; a program with a second way
+  # in is honoured AND reported still present; the switches that hang off a
+  # program (the browser, the model types, the lifeline's AI) follow it; and
+  # `/etc/ronoctua/distro-apps.json` says all of it in its frozen shape.
+  declining-an-app-removes-it = mkCheck "declining-an-app-removes-it" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, sys
+
+    # PARSED: the two machines arrive as their evaluated configuration, JSON.
+    facts = json.load(open("${distroAppsDeclines}"))
+    before, after = facts["before"], facts["after"]
+    wrong = []
+
+    def has(side, app):
+        return side["programs"][app] in side["installed"]
+
+    declined = ["vlc", "chrome", "orca-slicer", "claude-code", "check-renamed",
+                "android-sdk", "flutter", "tealdeer"]
+    kept = ["zsh", "emacs", "htop", "mpv"]
+    for app in declined + kept:
+        if not has(before, app):
+            wrong.append(f"without a decline `{app}` is not installed, so its decline proves nothing")
+    for app in declined:
+        if has(after, app):
+            wrong.append(f"`{app}` was declined and is still in `systemPackages`")
+    if not has(after, "zsh"):
+        wrong.append("`zsh` is essential and a decline took it away")
+    if not has(after, "emacs") or not after["editor"]:
+        wrong.append("`emacs` was declined for ANOTHER machine and left this one")
+    if not has(after, "htop"):
+        wrong.append("`htop` came in a second way and the fixture lost it: the still-present case is not reached")
+    if has(before, "check-absent") or has(after, "check-absent"):
+        wrong.append("`check-absent` is not carried by this machine and was installed")
+
+    # A DECLINED PROGRAM LEAVES THE CLOSURE TOO: no session variable and no
+    # variable of the lifeline names its store path. Asked first of the
+    # machine without declines, where the SDK's path IS in `ANDROID_HOME` —
+    # a probe that finds nothing there finds nothing anywhere.
+    def named(side, app):
+        return [v for v in side["carried"] if side["programs"][app] in v]
+    for app in ("android-sdk", "flutter", "claude-code"):
+        if not named(before, app):
+            wrong.append(f"without a decline no variable names `{app}`, so its absence later proves nothing")
+    for app in declined:
+        for value in named(after, app):
+            wrong.append(f"`{app}` was declined and a variable still names it: {value}")
+    if before["tldr"] != {"service": True, "step": True} or after["tldr"] != {"service": False, "step": False}:
+        wrong.append(f"the tldr cache did not follow `tealdeer`: {before['tldr']} before, {after['tldr']} after")
+
+    report = after["report"]
+    if sorted(report["honoured"]) != sorted(["vlc", "chrome", "orca-slicer", "claude-code", "htop", "check-before",
+                                             "check-absent", "android-sdk", "flutter", "tealdeer"]):
+        wrong.append(f"the report's `honoured` is {report['honoured']}")
+    if report["refused"] != [{"id": "zsh", "reason": "the-login-shell"}]:
+        wrong.append(f"the report's `refused` is {report['refused']}, not zsh with its reason")
+    if any("mpv" in report[k] for k in ("honoured", "unknown", "still-present")):
+        wrong.append(f"a decline whose `machines` is not a list was read: {report}")
+    if report["unknown"] != ["no-such-app"]:
+        wrong.append(f"the report's `unknown` is {report['unknown']}")
+    if report["still-present"] != ["htop"]:
+        wrong.append(f"the report's `still-present` is {report['still-present']}, not htop")
+    if before["report"] != {"honoured": [], "refused": [], "unknown": [], "still-present": []}:
+        wrong.append(f"a machine with no declines reports {before['report']}")
+
+    # THE SWITCHES THAT HANG OFF A PROGRAM follow it.
+    if before["browser"] is not True or after["browser"] is not False:
+        wrong.append("declining Chrome did not turn `ronoctua.browser.enable` off")
+    if not before["models"] or after["models"] is not None:
+        wrong.append("declining OrcaSlicer left the model types opening in it")
+    if before["lifeline"] is not True or after["lifeline"] is not False:
+        wrong.append("declining Claude Code left the lifeline offering it")
+
+    # AND THE REGISTRY'S FILE SAYS SO, in the shape `ronoctua-person` reads
+    # (`reports::DistroApps`, unknown fields refused).
+    keys = {"id", "source", "desktop-ids", "essential", "group", "on-this-machine", "declined-here"}
+    for side, name in ((before, "before"), (after, "after")):
+        registry = side["registry"]
+        if set(registry) != {"format", "apps"} or registry["format"] != 1:
+            wrong.append(f"{name}: distro-apps.json is not `format` 1 with `apps`")
+        for app in registry["apps"]:
+            if set(app) != keys:
+                wrong.append(f"{name}: {app.get('id')} has the fields {sorted(app)}")
+    # `on-this-machine` is whether the machine CARRIES it, `declined-here`
+    # whether the person declined it: two facts, as `reports::DistroApp`
+    # froze them. Chrome is the sharp case — its decline turns its own group
+    # switch off — and so is the minimal profile, which carries neither
+    # Chrome nor VLC.
+    expect = {
+        "after": {
+            "vlc": (True, True),
+            "chrome": (True, True),
+            "check-renamed": (True, True),
+            "check-absent": (True, False),
+            "zsh": (True, True),
+            "emacs": (False, True),
+            "ghostty": (False, True),
+        },
+        "before": {"chrome": (False, True), "check-absent": (False, False)},
+        "minimal": {"chrome": (True, False), "vlc": (True, False), "check-absent": (True, False), "zsh": (True, True)},
+    }
+    registries = {"after": after["registry"], "before": before["registry"], "minimal": facts["minimal"]}
+    for name, apps in expect.items():
+        said = {app["id"]: app for app in registries[name]["apps"]}
+        for app, (declined_here, on) in apps.items():
+            got = said.get(app)
+            if got is None or (got["declined-here"], got["on-this-machine"]) != (declined_here, on):
+                wrong.append(f"{name}: distro-apps.json says {got} for `{app}`")
+    carried = lambda r: {a["id"]: a["on-this-machine"] for a in r["apps"]}
+    if carried(before["registry"]) != carried(after["registry"]):
+        wrong.append("a decline changed what `on-this-machine` says the machine carries")
+
+    # AND A DECLINED ORCASLICER NAMES NO LAUNCHER ENTRY: reading the name is
+    # import-from-derivation, which a machine without it must never pay.
+    orca = lambda r: next(a["desktop-ids"] for a in r["apps"] if a["id"] == "orca-slicer")
+    if len(orca(before["registry"])) != 1 or orca(after["registry"]) != []:
+        wrong.append(f"OrcaSlicer's launcher entry is read where it is not installed: {orca(after['registry'])}")
+
+    if wrong:
+        print("ERROR: a decline does not do what the registry promises:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {len(declined)} declined programs left the machine and its variables, zsh stayed and "
+          "said why, another machine's decline and an unknown id did nothing, the switches followed")
+    END
+  '';
+
+  # AN ESSENTIAL PROGRAM SAYS WHY, in every language.
+  #
+  # The reasons are a closed set (`assets/distro-apps.nix`, the option's
+  # enum), each the id of a sentence the software view draws when it refuses
+  # a decline. A reason without its sentence would be a refusal with nothing
+  # to say; a sentence without a reason, a key nobody reads; a reason no
+  # program gives, a set that stopped saying what the registry does.
+  distroAppsEssential = pkgs.writeText "distro-apps-essential.json" (
+    builtins.toJSON {
+      reasons = distroAppsTable.essential;
+      registries =
+        map
+          (
+            n:
+            builtins.fromJSON
+              self.nixosConfigurations.${n}.config.environment.etc."ronoctua/distro-apps.json".text
+          )
+          [
+            "noctua"
+            "minimal"
+          ];
+    }
+  );
+  essential-apps-say-why = mkCheck "essential-apps-say-why" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the reasons and the two profiles' registries, JSON.
+    facts = json.load(open("${distroAppsEssential}"))
+    reasons = facts["reasons"]
+    floor(len(reasons), 1, "essential reasons declared")
+    wrong = []
+    owed = {f"software-essential-why-{r}" for r in reasons}
+    for language in ${builtins.toJSON languages}:
+        # FILE-WIDE: a key is a module-level line of the merged `.ftl`, and
+        # the question is about every key with this prefix in it.
+        text = hashless((pathlib.Path("${texts}") / f"{language}.ftl").read_text())
+        have = set(re.findall(r"^(software-essential-why-[a-z0-9-]+)\s*=\s*\S", text, re.M))
+        for key in sorted(owed - have):
+            wrong.append(f"{language} has no sentence for `{key}`")
+        for key in sorted(have - owed):
+            wrong.append(f"{language} has `{key}`, and no essential reason is called that")
+
+    used = set()
+    essentials = 0
+    for registry in facts["registries"]:
+        for app in registry["apps"]:
+            reason = app["essential"]
+            if reason is None:
+                continue
+            essentials += 1
+            used.add(reason)
+            if reason not in reasons:
+                wrong.append(f"`{app['id']}` is essential for `{reason}`, which is not a reason")
+    floor(essentials, 1, "essential programs in the two profiles")
+    for reason in sorted(set(reasons) - used):
+        wrong.append(f"no program of either profile is essential for `{reason}`")
+
+    if wrong:
+        print("ERROR: an essential program cannot say why:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {len(reasons)} reasons, each with its sentence in every language and given by a program")
+    END
+  '';
+
+  # A PROGRAM'S ID OUTLIVES ITS NAME.
+  #
+  # A person's decline names a registry id, and travels in their repository
+  # to machines that update months apart. An id that vanished — renamed
+  # without `formerly`, dropped without `retired` — would turn their "keep
+  # this off" into an unknown id and the program would come back. So the
+  # ledger in `assets/distro-apps.nix` holds every id ever published, and an
+  # id leaves it only into an entry's `formerly` or into `retired`. And the
+  # rename itself is asked of a machine: the fixture of
+  # `declining-an-app-removes-it` declines `check-before`, which only the
+  # renamed `check-renamed` remembers.
+  distroAppsIds = pkgs.writeText "distro-app-ids.json" (
+    builtins.toJSON (
+      let
+        appsOf = n: self.nixosConfigurations.${n}.config.ronoctua.apps;
+        systems = [
+          "noctua"
+          "minimal"
+          "vm"
+        ];
+      in
+      {
+        ledger = distroAppsTable.ids;
+        retired = builtins.attrNames distroAppsTable.retired;
+        current = lib.unique (lib.concatMap (n: builtins.attrNames (appsOf n)) systems);
+        formerly = lib.unique (
+          lib.concatMap (n: lib.concatMap (e: e.formerly) (builtins.attrValues (appsOf n))) systems
+        );
+      }
+    )
+  );
+  distro-app-ids-are-stable = mkCheck "distro-app-ids-are-stable" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, sys
+
+    # PARSED: the ledger and the three systems' registries, JSON.
+    ids = json.load(open("${distroAppsIds}"))
+    declines = json.load(open("${distroAppsDeclines}"))
+    ledger, current = ids["ledger"], set(ids["current"])
+    wrong = []
+    if len(current) < 20:
+        print(f"ERROR: only {len(current)} programs in the registry; this check stopped reaching them", file=sys.stderr)
+        sys.exit(1)
+    if ledger != sorted(ledger) or len(set(ledger)) != len(ledger):
+        wrong.append("the ledger is not sorted, or names an id twice")
+    for app in sorted(current - set(ledger)):
+        wrong.append(f"`{app}` is in the registry and not in the ledger — add it the day it is published")
+    gone = set(ledger) - current - set(ids["formerly"]) - set(ids["retired"])
+    for app in sorted(gone):
+        wrong.append(f"`{app}` left the registry without `formerly` or `retired`: a decline of it would be lost")
+    for app in sorted(set(ids["retired"]) & current):
+        wrong.append(f"`{app}` is retired and still in the registry")
+    for app in sorted(set(ids["retired"]) - set(ledger)):
+        wrong.append(f"`{app}` is retired and was never in the ledger")
+
+    # THE RENAME, ON A MACHINE.
+    after = declines["after"]
+    if after["programs"]["check-renamed"] in after["installed"]:
+        wrong.append("a decline of `check-before` did not reach `check-renamed`, which was once called that")
+    if "check-before" not in after["report"]["honoured"]:
+        wrong.append("the report does not count the decline of `check-before` as honoured")
+
+    if wrong:
+        print("ERROR: a program's id would not outlive its name:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {len(ledger)} ids in the ledger, every one still answering, and a rename keeps its decline")
+    END
+  '';
+
+  # EVERY LAUNCHER ENTRY HAS AN OWNER.
+  #
+  # The two profiles' `system.path`, BUILT: a launcher entry is what a
+  # package ships, and only the built tree says which. Every entry the
+  # locator would list belongs to a program of the registry or is listed as
+  # infrastructure with its reason; otherwise the person sees a program in
+  # the launcher that the software view cannot account for and no decline
+  # can reach. And the other way: every entry the registry claims for a
+  # program installed on the machine is there — an upstream rename would
+  # otherwise leave the registry vouching for a file that no longer exists.
+  #
+  # "Would list" is the locator's own walk and filter (`ronoctua-apps`):
+  # `collect_from` reads `applications` and the folders below it down to
+  # `DEPTH` levels — read from the crate, so the two cannot drift — and
+  # `read` keeps `Type=Application` that is neither `NoDisplay` nor
+  # `Hidden`. A deeper file is no launcher entry (a nixpkgs package ships
+  # `<hash>-lyrebird.desktop/share/applications/lyrebird.desktop`, three
+  # folders down).
+  #
+  # The scan is first run on a PLANTED tree, the failing cases included: a
+  # sweep that reads nothing is green.
+  distroAppsRegistered = pkgs.writeText "distro-apps-registered.json" (
+    builtins.toJSON {
+      infrastructure = distroAppsTable.infrastructure;
+      profiles =
+        map
+          (
+            n:
+            let
+              c = self.nixosConfigurations.${n}.config;
+            in
+            {
+              name = n;
+              path = "${c.system.path}";
+              registry = builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text;
+            }
+          )
+          [
+            "noctua"
+            "minimal"
+          ];
+    }
+  );
+  distro-apps-are-registered = mkCheck "distro-apps-are-registered" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, os, pathlib, re, sys, tempfile
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: the question is about every launcher entry of a whole
+    # profile, and each file is read whole — there is no function to narrow
+    # to.
+
+    # THE LOCATOR'S DEPTH, out of its crate: the constant `collect_from`
+    # walks to, with the comments off.
+    locator = uncommented(pathlib.Path("${../crates/ronoctua-apps/src/lib.rs}").read_text())
+    must(body_of(locator, "collect_from"), "`ronoctua_apps::collect_from`")
+    if "DEPTH" not in body_of(locator, "collect_from"):
+        print("ERROR: `collect_from` no longer walks to `DEPTH`; this check copies the wrong walk", file=sys.stderr)
+        sys.exit(1)
+    depth = re.search(r"pub const DEPTH: usize = (\d+);", locator)
+    DEPTH = floor(int(depth.group(1)) if depth else 0, 1, "levels in the locator's `DEPTH`")
+
+    def visible(text):
+        # The locator's filter, on the `[Desktop Entry]` group only.
+        inside, fields = False, {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("["):
+                inside = line == "[Desktop Entry]"
+                continue
+            if inside and "=" in line:
+                key, value = line.split("=", 1)
+                fields.setdefault(key.strip(), value.strip())
+        if fields.get("Type") != "Application":
+            return False
+        return not any(fields.get(k, "").lower() == "true" for k in ("NoDisplay", "Hidden"))
+
+    def scan(root):
+        # Every desktop file the locator reads under `share/applications`, by
+        # its id (a folder becomes a `-`, as the specification names them),
+        # and whether it would list it. FOLLOWING LINKS, as the locator does:
+        # a profile links a folder one package alone brings. A DIRECTORY named
+        # `*.desktop` is not an entry, and is walked like any folder. The
+        # walk stops where `collect_from` stops: a folder `DEPTH - 1` levels
+        # down is read, and the folders inside it are not.
+        found = {}
+        apps = pathlib.Path(root) / "share/applications"
+        if not apps.is_dir():
+            return found
+        for folder, folders, files in os.walk(apps, followlinks=True):
+            if len(pathlib.Path(folder).relative_to(apps).parts) + 1 >= DEPTH:
+                folders[:] = []
+            for name in sorted(files):
+                path = pathlib.Path(folder) / name
+                if not name.endswith(".desktop") or not path.is_file():
+                    continue
+                ident = str(path.relative_to(apps)).replace("/", "-")
+                # PARSED: a desktop entry is read as its groups and keys, and
+                # a comment line is skipped by the reader above.
+                found[ident] = visible(path.read_text(errors="replace"))
+        return found
+
+    def verdict(name, found, registry, infrastructure):
+        wrong = []
+        owned = {d for app in registry["apps"] for d in app["desktop-ids"]}
+        for ident, shown in sorted(found.items()):
+            if shown and ident not in owned and ident not in infrastructure:
+                wrong.append(f"{name}: the launcher lists `{ident}`, and no program of the registry owns it")
+        for app in registry["apps"]:
+            # INSTALLED: carried, and not a decline the registry honoured.
+            installed = app["on-this-machine"] and not (app["declined-here"] and app["essential"] is None)
+            if not installed or app["source"] not in ("nix", "appimage", "web"):
+                continue
+            for ident in app["desktop-ids"]:
+                if ident not in found:
+                    wrong.append(f"{name}: `{app['id']}` claims `{ident}`, and the system has no such entry")
+        return wrong
+
+    # THE PLANTED TREE, every case once.
+    with tempfile.TemporaryDirectory() as planted:
+        apps = pathlib.Path(planted) / "share/applications"
+        (apps / "kde").mkdir(parents=True)
+        entry = "[Desktop Entry]\nType=Application\nName=X\nExec=x\n"
+        (apps / "owned.desktop").write_text(entry)
+        (apps / "stray.desktop").write_text(entry)
+        (apps / "kde" / "deep.desktop").write_text(entry)
+        (apps / "hidden.desktop").write_text(entry + "NoDisplay=true\n")
+        (apps / "gone.desktop").write_text(entry + "Hidden=True\n")
+        (apps / "link.desktop").write_text("[Desktop Entry]\nType=Link\nURL=x\n")
+        (apps / "action.desktop").write_text(entry + "[Desktop Action a]\nNoDisplay=true\n")
+        (apps / "folder.desktop").mkdir()
+        (apps / "service.desktop").write_text(entry)
+        # THE DEPTH, both sides of it: two folders down is read, three is
+        # not — the second is lyrebird's shape, a folder named `.desktop`.
+        (apps / "kde" / "four").mkdir()
+        (apps / "kde" / "four" / "deeper.desktop").write_text(entry)
+        (apps / "x.desktop" / "share" / "applications").mkdir(parents=True)
+        (apps / "x.desktop" / "share" / "applications" / "y.desktop").write_text(entry)
+        found = scan(planted)
+        registry = {"apps": [
+            {"id": "a", "source": "nix", "on-this-machine": True, "declined-here": False, "essential": None,
+             "desktop-ids": ["owned.desktop", "action.desktop", "missing.desktop"]},
+            {"id": "b", "source": "flatpak", "on-this-machine": True, "declined-here": False, "essential": None,
+             "desktop-ids": ["org.x.Y.desktop"]},
+            {"id": "c", "source": "nix", "on-this-machine": False, "declined-here": False, "essential": None,
+             "desktop-ids": ["absent.desktop"]},
+            {"id": "d", "source": "nix", "on-this-machine": True, "declined-here": True, "essential": None,
+             "desktop-ids": ["declined.desktop"]},
+            {"id": "e", "source": "nix", "on-this-machine": True, "declined-here": True, "essential": "why",
+             "desktop-ids": ["essential.desktop"]},
+        ]}
+        got = sorted(verdict("planted", found, registry, {"service.desktop": "why"}))
+        expected = sorted([
+            "planted: the launcher lists `stray.desktop`, and no program of the registry owns it",
+            "planted: the launcher lists `kde-deep.desktop`, and no program of the registry owns it",
+            "planted: the launcher lists `kde-four-deeper.desktop`, and no program of the registry owns it",
+            "planted: `a` claims `missing.desktop`, and the system has no such entry",
+            "planted: `e` claims `essential.desktop`, and the system has no such entry",
+        ])
+        if "folder.desktop" in found or "x.desktop-share-applications-y.desktop" in found or got != expected:
+            print("ERROR: the scan does not see the planted tree as planted:", file=sys.stderr)
+            for g in got:
+                print("  got:      " + g, file=sys.stderr)
+            for e in expected:
+                print("  expected: " + e, file=sys.stderr)
+            sys.exit(1)
+
+    # THE TWO PROFILES.
+    facts = json.load(open("${distroAppsRegistered}"))
+    infrastructure = facts["infrastructure"]
+    wrong, seen, used = [], 0, set()
+    for profile in facts["profiles"]:
+        found = scan(profile["path"])
+        shown = sorted(i for i, v in found.items() if v)
+        seen += len(shown)
+        used |= set(shown) & set(infrastructure)
+        wrong += verdict(profile["name"], found, profile["registry"], infrastructure)
+    floor(seen, 10, "launcher entries in the two profiles")
+    for ident in sorted(set(infrastructure) - used):
+        wrong.append(f"`{ident}` is listed as infrastructure and neither profile has it any more")
+
+    if wrong:
+        print("ERROR: a launcher entry and the program registry disagree:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        print("  A program a person sees and cannot decline is a program the software", file=sys.stderr)
+        print("  view cannot explain: give it an entry (`ronoctua.apps.<id>`) where its", file=sys.stderr)
+        print("  module installs it, or list it in `assets/distro-apps.nix` with the reason.", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {seen} launcher entries in the two profiles, every one a program's or the system's")
+    END
+  '';
+
+  # THE DISTRO'S PINS MOVE ONLY WHERE A SOURCE IS FOLLOWED.
+  #
+  # `nix run .#distro-pins` is the one writer of `assets/distro-pins.json`,
+  # and it asks the network; its planning is a pure function, asked here
+  # with the network answered by fixtures. A followed AppImage gets the
+  # latest release's one matching asset, and an unchanged release is never
+  # downloaded again; a pattern matching two assets is refused, and so is a
+  # release whose tag moves (`continuous`); an entry that
+  # follows nothing keeps its hand-written pin, and is refused without one;
+  # F-Droid's suggested version becomes the apk's address; a pin whose entry
+  # left is dropped. And what can be asked WITHOUT the network
+  # (`offline_problems`, which `--check` asks first) is asked of planted
+  # files and then of the tree's own: the file is in the tool's form, every
+  # pin belongs to an entry of its kind and has a pin's fields, and every
+  # entry has its pin. Never the planner on the tree's file: the day the
+  # table follows its first source, that would need the network, and this
+  # check would fail for having no network rather than for a wrong pin.
+  distroPinsTable = pkgs.writeText "distro-apps-table.json" (builtins.toJSON distroAppsTable.apps);
+  distro-pins-move-only-what-follows =
+    mkCheck "distro-pins-move-only-what-follows" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import datetime, importlib.util, json, sys
+
+        spec = importlib.util.spec_from_file_location("pins", "${../nix/scripts/distro-pins.py}")
+        pins = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pins)
+
+        class Fake:
+            def __init__(self, releases=None, fdroid=None):
+                self.releases, self.fdroid_info, self.hashed = releases or {}, fdroid or {}, []
+            def github_latest(self, repo):
+                return self.releases[repo]
+            def fdroid(self, package):
+                return self.fdroid_info[package]
+            def hash(self, url):
+                self.hashed.append(url)
+                return "sha256-" + "A" * 43 + "="
+            def now(self):
+                return datetime.datetime(2026, 10, 5, 12, 0, tzinfo=datetime.timezone.utc)
+            def offline(self, *_):
+                raise AssertionError("the network was asked")
+
+        wrong = []
+        def expect(what, ok):
+            if not ok:
+                wrong.append(what)
+
+        empty = {"format": 1, "appimage": {}, "android": {}}
+        follows = {"source": "appimage", "key": "demo", "name": "Demo",
+                   "follows": {"github": {"repo": "o/demo", "assetPattern": "Demo-*-x86_64.AppImage"}}}
+        release = lambda tag: {"tag_name": tag, "assets": [
+            {"name": f"Demo-{tag}-x86_64.AppImage", "browser_download_url": f"https://example.org/{tag}/Demo.AppImage"},
+            {"name": f"Demo-{tag}-aarch64.AppImage", "browser_download_url": "https://example.org/arm"},
+        ]}
+
+        # A FOLLOWED APPIMAGE, pinned the first time.
+        ask = Fake({"o/demo": release("v1.2.3")})
+        new, _ = pins.plan({"demo": follows}, empty, ask)
+        pin = new["appimage"].get("demo", {})
+        expect("a followed AppImage is pinned to the matching asset",
+               pin.get("url") == "https://example.org/v1.2.3/Demo.AppImage")
+        expect("the tag `v1.2.3` is version `1.2.3`", pin.get("version") == "1.2.3")
+        expect("the pin carries its moment", pin.get("pinned-at") == "2026-10-05T12:00:00Z")
+        expect("the asset was hashed once", ask.hashed == ["https://example.org/v1.2.3/Demo.AppImage"])
+
+        # THE SAME RELEASE AGAIN: unchanged, and nothing downloaded.
+        again = Fake({"o/demo": release("v1.2.3")})
+        newer, _ = pins.plan({"demo": follows}, new, again)
+        expect("an unchanged release keeps its pin", newer == new)
+        expect("an unchanged release is not downloaded again", again.hashed == [])
+
+        # A NEW RELEASE moves it.
+        moved, notes = pins.plan({"demo": follows}, new, Fake({"o/demo": release("v1.3.0")}))
+        expect("a new release moves the pin", moved["appimage"]["demo"]["version"] == "1.3.0")
+        expect("the move is said", any("1.2.3 -> 1.3.0" in n for n in notes))
+
+        # TWO ASSETS MATCHING is a refusal, naming the entry.
+        loose = dict(follows, follows={"github": {"repo": "o/demo", "assetPattern": "Demo-*"}})
+        try:
+            pins.plan({"demo": loose}, empty, Fake({"o/demo": release("v1.2.3")}))
+            expect("a pattern matching two assets is refused", False)
+        except pins.Refusal as why:
+            expect("the refusal names the entry", "demo" in str(why))
+
+        # A TAG THAT MOVES is refused: its address names no version.
+        try:
+            pins.plan({"demo": follows}, empty, Fake({"o/demo": release("continuous")}))
+            expect("a release tagged `continuous` is refused", False)
+        except pins.Refusal as why:
+            expect("the refusal says the tag moves", "moves" in str(why))
+
+        # FOLLOWING NOTHING: kept as written, refused without a pin.
+        still = {"source": "appimage", "key": "fixed", "name": "Fixed", "follows": None}
+        written = {"url": "https://example.org/f", "hash": "sha256-B=", "version": "1", "pinned-at": "2026-01-01T00:00:00Z"}
+        kept, _ = pins.plan({"fixed": still}, dict(empty, appimage={"fixed": written}), Fake())
+        expect("a pin that follows nothing is kept as written", kept["appimage"]["fixed"] == written)
+        try:
+            pins.plan({"fixed": still}, empty, Fake())
+            expect("an entry that follows nothing and has no pin is refused", False)
+        except pins.Refusal:
+            pass
+
+        # F-DROID'S SUGGESTION is the apk's address.
+        droid = {"source": "android", "package": "org.fdroid.fdroid", "from": "f-droid", "image": "vanilla"}
+        info = {"suggestedVersionCode": 1021050, "packages": [
+            {"versionName": "1.21.1", "versionCode": 1021050}, {"versionName": "1.22-alpha", "versionCode": 1022000}]}
+        ask = Fake(fdroid={"org.fdroid.fdroid": info})
+        apk, _ = pins.plan({"fdroid": droid}, empty, ask)
+        got = apk["android"].get("fdroid", {})
+        expect("F-Droid's suggested version is pinned",
+               got.get("url") == "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk"
+               and got.get("version") == "1.21.1" and got.get("version-code") == 1021050)
+        again = Fake(fdroid={"org.fdroid.fdroid": info})
+        pins.plan({"fdroid": droid}, apk, again)
+        expect("an unchanged F-Droid version is not downloaded again", again.hashed == [])
+
+        # A PIN WHOSE ENTRY LEFT is dropped.
+        dropped, notes = pins.plan({}, dict(empty, appimage={"old": written}), Fake())
+        expect("a pin without its entry is dropped", dropped == empty and any("old: dropped" in n for n in notes))
+
+        # THE FILE'S FORM: format first, a newline at the end, read back the same.
+        text = pins.text_of(new)
+        expect("the file opens with its format", text.startswith('{\n  "format": 1,'))
+        expect("the file ends with a newline", text.endswith("}\n") and json.loads(text) == new)
+
+        # WHAT NEEDS NO NETWORK, on planted files: a table with one entry of
+        # each kind that follows a source and one that does not.
+        planted = {"demo": follows, "fixed": still, "fdroid": droid,
+                   "direct": dict(droid, package="org.example.direct", **{"from": "direct"})}
+        apk = {"url": "https://example.org/a.apk", "hash": "sha256-C=", "version": "1", "version-code": 3}
+        full = {"format": 1,
+                "appimage": {"demo": new["appimage"]["demo"], "fixed": written},
+                "android": {"direct": apk, "fdroid": dict(apk, url="https://f-droid.org/repo/x_3.apk")}}
+        offline_wrong = lambda pinned, text=None: pins.offline_problems(planted, text if text is not None else pins.text_of(pinned))
+        expect("a whole file in the tool's form has no problem", offline_wrong(full) == [])
+        said = lambda problems, needle: any(needle in p for p in problems)
+        expect("a file out of the tool's form is said",
+               said(offline_wrong(full, json.dumps(full)), "not in this tool's form"))
+        expect("a file that is not JSON is said", said(offline_wrong(full, "{"), "not JSON"))
+        expect("another format is said", said(offline_wrong(dict(full, format=2)), "format 2"))
+        expect("a pin without its entry is said",
+               said(offline_wrong(dict(full, appimage=dict(full["appimage"], gone=written))), "`gone` is pinned as appimage"))
+        expect("a pin of the wrong kind is said",
+               said(offline_wrong(dict(full, android=dict(full["android"], demo=apk))), "`demo` is pinned as android"))
+        expect("a pin without its fields is said",
+               said(offline_wrong(dict(full, appimage=dict(full["appimage"], fixed={"url": "x"}))), "the pin of `fixed`"))
+        no_fixed = dict(full, appimage={"demo": full["appimage"]["demo"]})
+        expect("an entry that follows nothing and has no pin is said, to be written by hand",
+               said(offline_wrong(no_fixed), "`fixed` has no pin") and said(offline_wrong(no_fixed), "by hand"))
+        no_demo = dict(full, appimage={"fixed": written})
+        expect("a followed entry without its pin is said, to be moved by the tool",
+               said(offline_wrong(no_demo), "`demo` has no pin") and said(offline_wrong(no_demo), "nix run .#distro-pins"))
+
+        # AND THE TREE'S OWN TABLE AND PINS.
+        table = json.load(open("${distroPinsTable}"))
+        current = open("${../assets/distro-pins.json}").read()
+        for problem in pins.offline_problems(table, current):
+            wrong.append(f"the tree's pins: {problem}")
+
+        if wrong:
+            print("ERROR: `nix run .#distro-pins` would not move the pins as promised:", file=sys.stderr)
+            for w in wrong:
+                print("  " + w, file=sys.stderr)
+            sys.exit(1)
+        print("OK: pins follow what follows, keep what does not, and the tree's file is the tool's")
+        END
+      '';
+  # THE TABLE'S SOURCES, BUILT AND REFUSED.
+  #
+  # The distro's own table (`assets/distro-apps.nix`) is empty, so nothing in
+  # the tree reaches the code that reads it: a regression there would stay
+  # green until the owner adds the first Flatpak, AppImage, web app or
+  # Android app. So the full profile is extended by evaluation with a PLANTED
+  # table and pins (the module's `table` and `pins`, which exist for this):
+  #
+  # - one good entry of each source, which must reach the registry's file,
+  #   `systemPackages`, the person's nix-flatpak list and the Android records
+  #   — and leave all four again when the person declines them;
+  # - every malformed shape at once — of the table, of the pins and of an
+  #   entry a module writes — each of which must be said, by name, in
+  #   `problems`, while the system's packages and `distro-apps.json` refuse
+  #   to evaluate (a refusal that stopped firing is half of what this asks);
+  # - a declined file in a format this distro does not read: the warning,
+  #   and nothing honoured.
+  #
+  # And the two builders, BUILT on fixtures: three tiny AppImages made here
+  # (an ELF header saying `AI 2` and a squashfs behind it, which is all
+  # `appimageTools.extract` reads) — an icon inside the image as PNG and as
+  # SVG, and one whose `.DirIcon` points out of the image — and a web app.
+  # The AppImage's wrapper (an FHS environment of hundreds of packages) is
+  # only evaluated; its launcher entry, where the logic is, is built.
+  distroAppsFixtureScript = pkgs.writeText "distro-apps-fixture.py" ''
+    """A tiny type-2 AppImage: its tree, then an ELF header in front of it."""
+    import os, pathlib, struct, sys, zlib
+
+    if sys.argv[1] == "--seal":
+        # An ELF64 header whose padding says `AI` and type 2, and one null
+        # section header after it: where the section headers end is where
+        # the squashfs begins (`appimage-exec.sh` reads exactly these fields).
+        ident = b"\x7fELF" + bytes([2, 1, 1, 0]) + b"AI\x02" + bytes(5)
+        header = ident + struct.pack("<HHIQQQIHHHHHH", 2, 0x3E, 1, 0, 0, 64, 0, 64, 56, 0, 64, 1, 0)
+        assert len(header) == 64
+        pathlib.Path(sys.argv[3]).write_bytes(header + bytes(64) + pathlib.Path(sys.argv[2]).read_bytes())
+        sys.exit(0)
+
+    key, icon, link = sys.argv[1:4]
+    image = pathlib.Path("image")
+    image.mkdir()
+    (image / "AppRun").write_text("#!/bin/sh\necho planted\n")
+    os.chmod(image / "AppRun", 0o755)
+    (image / f"{key}.desktop").write_text(
+        "# a comment before the group\n"
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Upstream Name\n"
+        "Name[pt_BR]=Nome de Cima\n"
+        "Comment=A planted program\n"
+        "Exec=AppRun --flag %U\n"
+        "TryExec=AppRun\n"
+        f"Icon={key}\n"
+        "Categories=Utility;\n"
+        "DBusActivatable=true\n"
+        "Terminal=maybe\n"
+        "Path=/somewhere\n"
+        "Actions=new;\n"
+        "\n"
+        "[Desktop Action new]\n"
+        "Name=New Window\n"
+        "Exec=AppRun --new\n"
+    )
+    if icon == "png":
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        pixel = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+        (image / f"{key}.png").write_bytes(
+            b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", pixel) + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + chunk(b"IEND", b"")
+        )
+    elif icon == "svg":
+        (image / f"{key}.svg").write_text('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>\n')
+    os.symlink(link, image / ".DirIcon")
+  '';
+  # An SVG OUTSIDE every image: a `.DirIcon` pointing here must not become
+  # the icon, though it is a picture and reachable in the build.
+  distroAppsOutsideSvg = pkgs.writeText "outside.svg" ''
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>
+  '';
+  distroAppsFixture =
+    {
+      key,
+      icon,
+      link,
+    }:
+    pkgs.runCommand "distro-apps-${key}.AppImage"
+      {
+        nativeBuildInputs = [
+          pkgs.python3
+          pkgs.squashfsTools
+        ];
+      }
+      ''
+        python3 ${distroAppsFixtureScript} ${key} ${icon} ${link}
+        # UNCOMPRESSED, so a link's target is in the bytes as written: the
+        # store path one fixture points at is then a reference of the image,
+        # and present wherever the image is unpacked.
+        mksquashfs image image.squashfs -quiet -noappend -all-root -no-xattrs -noI -noD -noF
+        python3 ${distroAppsFixtureScript} --seal image.squashfs "$out"
+      '';
+  distroAppsSources =
+    let
+      discard = builtins.unsafeDiscardStringContext;
+      base = self.nixosConfigurations.noctua;
+      host = base.config.networking.hostName;
+      user = base.config.ronoctua.user;
+      builders = base.config.ronoctua.distroApps.builders;
+      sri = "sha256-${lib.concatStrings (lib.replicate 43 "A")}=";
+      imagePin = {
+        url = "https://example.org/planted.AppImage";
+        hash = sri;
+        version = "1.0";
+        pinned-at = "2026-10-05T12:00:00Z";
+      };
+      apkPin = {
+        url = "https://example.org/planted.apk";
+        hash = sri;
+        version = "1.0";
+        version-code = 7;
+      };
+      declinedFile =
+        format: names:
+        builtins.toFile "declined.json" (
+          builtins.toJSON {
+            inherit format;
+            apps = map (id: {
+              inherit id;
+              machines = null;
+              edited-at = "2026-10-05T12:00:00Z";
+              edited-on = host;
+            }) names;
+          }
+        );
+      planted = [
+        "planted-flatpak"
+        "planted-appimage"
+        "planted-web"
+        "planted-android"
+      ];
+      good = {
+        ronoctua.distroApps.table = {
+          planted-flatpak = {
+            source = "flatpak";
+            appId = "org.example.Planted";
+          };
+          planted-appimage = {
+            source = "appimage";
+            key = "planted";
+            name = "Planted";
+            follows = null;
+          };
+          planted-web = {
+            source = "web";
+            slug = "planted";
+            name = "Planted Web";
+            url = "https://example.org/planted";
+          };
+          planted-android = {
+            source = "android";
+            package = "org.example.planted";
+            from = "direct";
+            image = "vanilla";
+          };
+        };
+        ronoctua.distroApps.pins = {
+          format = 1;
+          appimage.planted-appimage = imagePin;
+          android.planted-android = apkPin;
+        };
+      };
+      # FORCED: the machine's own flake may name a declined file of its own.
+      declining = file: { ronoctua.person.declined = lib.mkForce file; };
+      plantedWith =
+        file:
+        base.extendModules {
+          modules = [
+            good
+            (declining file)
+          ];
+        };
+      factsOf =
+        system:
+        let
+          c = system.config;
+        in
+        {
+          problems = c.ronoctua.distroApps.problems;
+          registry =
+            builtins.filter (a: builtins.elem a.id planted)
+              (builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text).apps;
+          packages = map (p: p.name or "") c.environment.systemPackages;
+          flatpaks = c.ronoctua.distroApps.flatpaks;
+          personFlatpaks = map (p: p.appId or "") c.home-manager.users.${user}.services.flatpak.packages;
+          android = map (a: a // { apk = discard a.apk; }) c.ronoctua.distroApps.android;
+          warnings = builtins.filter (lib.hasInfix "declined programs") c.warnings;
+          report = c.ronoctua.distroApps.declinedReport;
+          vlc = c.ronoctua.distroApps.installed.vlc;
+        };
+
+      # EVERY MALFORMED SHAPE, in one machine: `problems` is a list, so each
+      # is said on its own and none hides another.
+      bad = base.extendModules {
+        modules = [
+          (
+            { pkgs, ... }:
+            {
+              ronoctua.distroApps.table = {
+                t-snap.source = "snap";
+                t-extra = {
+                  source = "flatpak";
+                  appId = "org.example.TExtra";
+                  url = "https://example.org/";
+                };
+                t-lacks = {
+                  source = "web";
+                  slug = "tlacks";
+                };
+                t-nopin = {
+                  source = "appimage";
+                  key = "tnopin";
+                  name = "T";
+                  follows = null;
+                };
+                t-follows = {
+                  source = "appimage";
+                  key = "tfollows";
+                  name = "T";
+                  follows.github.repo = "nobody";
+                };
+                t-badpin = {
+                  source = "appimage";
+                  key = "tbadpin";
+                  name = "T";
+                  follows = null;
+                };
+                t-from = {
+                  source = "android";
+                  package = "org.example.tfrom";
+                  from = "play";
+                };
+                t-number = {
+                  source = "flatpak";
+                  appId = 7;
+                };
+              };
+              ronoctua.distroApps.pins = {
+                format = 2;
+                appimage = {
+                  t-follows = imagePin;
+                  t-badpin = removeAttrs imagePin [ "hash" ];
+                  gone-image = imagePin;
+                };
+                android = {
+                  t-from = apkPin // {
+                    version-code = "7";
+                  };
+                  gone-apk = apkPin;
+                };
+              };
+              ronoctua.apps = {
+                two-sources = {
+                  package = pkgs.hello;
+                  flatpak = {
+                    appId = "org.example.Two";
+                    origin = "flathub";
+                  };
+                };
+                no-source = { };
+                Bad_Id.package = pkgs.hello;
+                bad-formerly = {
+                  package = pkgs.hello;
+                  formerly = [ "Not A Slug" ];
+                };
+                steals-an-id = {
+                  package = pkgs.hello;
+                  formerly = [ "vlc" ];
+                };
+                twin-a = {
+                  package = pkgs.hello;
+                  formerly = [ "gone-twice" ];
+                };
+                twin-b = {
+                  package = pkgs.hello;
+                  formerly = [ "gone-twice" ];
+                };
+                owns-vlc = {
+                  package = pkgs.hello;
+                  desktopIds = [ "vlc.desktop" ];
+                };
+                bad-flatpak.flatpak = {
+                  appId = "org.x";
+                  origin = "flathub";
+                };
+                lacking-flatpak.flatpak.appId = "org.example.Lack";
+                extra-flatpak.flatpak = {
+                  appId = "org.example.Extra";
+                  origin = "flathub";
+                  url = "https://example.org/";
+                };
+                bad-appimage.appimage = {
+                  key = "Bad Key";
+                  name = "two\nlines";
+                  url = "http://example.org/x";
+                  hash = "md5-x";
+                  version = "1 0";
+                };
+                bad-web.web = {
+                  slug = "-x";
+                  name = "";
+                  url = "ftp://example.org/";
+                  profile = "a\nb";
+                  category = "Net work";
+                };
+                bad-android.android = {
+                  package = "nodots";
+                  url = "http://example.org/x";
+                  hash = "sha1-x";
+                  version = "1";
+                  versionCode = "v7";
+                  image = "full";
+                };
+              };
+            }
+          )
+        ];
+      };
+      refuses = value: !(builtins.tryEval (builtins.deepSeq value value)).success;
+
+      # THE FIXTURES, through the builders the table's entries go through.
+      escapeImage = distroAppsFixture {
+        key = "escape";
+        icon = "svg";
+        link = "${distroAppsOutsideSvg}";
+      };
+      appimage =
+        key: src:
+        builders.appimage {
+          inherit key src;
+          name = "Planted ${key}";
+          version = "1.0";
+        };
+      png = appimage "planted" (distroAppsFixture {
+        key = "planted";
+        icon = "png";
+        link = "planted.png";
+      });
+      svg = appimage "vector" (distroAppsFixture {
+        key = "vector";
+        icon = "svg";
+        link = "vector.svg";
+      });
+      escape = appimage "escape" escapeImage;
+    in
+    {
+      facts = pkgs.writeText "distro-app-sources.json" (
+        builtins.toJSON {
+          good = factsOf (plantedWith (declinedFile 2 [ "vlc" ]));
+          declined = factsOf (plantedWith (declinedFile 1 planted));
+          bad = {
+            problems = bad.config.ronoctua.distroApps.problems;
+            entered = builtins.filter (lib.hasPrefix "t-") (builtins.attrNames bad.config.ronoctua.apps);
+            refused = {
+              json = refuses bad.config.environment.etc."ronoctua/distro-apps.json".text;
+              packages = refuses (map (p: p.name or "") bad.config.environment.systemPackages);
+              flatpaks = refuses bad.config.ronoctua.distroApps.flatpaks;
+            };
+          };
+          wrapper = {
+            name = png.package.name;
+            evaluates = (builtins.tryEval png.wrapper.drvPath).success;
+          };
+        }
+      );
+      entries = {
+        inherit (png) entry;
+        vector = svg.entry;
+        escape = escape.entry;
+      };
+      inherit escapeImage;
+      web = builders.web {
+        slug = "planted";
+        name = "Planted Web";
+        url = "https://example.org/planted";
+        profile = "Default";
+        category = "Network";
+      };
+    };
+  distro-app-sources-are-checked = mkCheck "distro-app-sources-are-checked" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the planted machines arrive as their evaluated configuration,
+    # JSON, and the builders' outputs as the files they built.
+    # FILE-WIDE: a launcher entry a builder wrote is compared whole, line for
+    # line — no source is searched.
+    facts = json.load(open("${distroAppsSources.facts}"))
+    good, declined, bad = facts["good"], facts["declined"], facts["bad"]
+    wrong = []
+    def expect(what, ok):
+        if not ok:
+            wrong.append(what)
+
+    # ONE GOOD ENTRY OF EACH SOURCE reaches everything that reads the table.
+    expect(f"a good table has problems: {good['problems']}", good["problems"] == [])
+    shape = {
+        "planted-flatpak": ("flatpak", ["org.example.Planted.desktop"]),
+        "planted-appimage": ("appimage", ["ronoctua-appimage-planted.desktop"]),
+        "planted-web": ("web", ["ronoctua-web-planted.desktop"]),
+        "planted-android": ("android", ["waydroid.org.example.planted.desktop"]),
+    }
+    for side, name, declined_here in ((good, "good", False), (declined, "declined", True)):
+        said = {a["id"]: a for a in side["registry"]}
+        for id_, (source, desktop) in shape.items():
+            got = said.get(id_)
+            if got is None or (got["source"], got["desktop-ids"], got["on-this-machine"], got["declined-here"]) != (source, desktop, True, declined_here):
+                wrong.append(f"{name}: distro-apps.json says {got} for `{id_}`")
+    for package in ("ronoctua-appimage-planted-1.0", "ronoctua-web-planted.desktop"):
+        expect(f"`{package}` is not in the planted machine's packages", package in good["packages"])
+        expect(f"`{package}` stayed in the packages of a machine that declined it", package not in declined["packages"])
+    expect(f"the distro's Flatpaks are {good['flatpaks']}",
+           good["flatpaks"] == [{"appId": "org.example.Planted", "origin": "flathub"}])
+    expect("the planted Flatpak is not on the person's nix-flatpak list", "org.example.Planted" in good["personFlatpaks"])
+    expect("a declined Flatpak stayed on the person's nix-flatpak list (leaving it is what uninstalls)",
+           declined["flatpaks"] == [] and "org.example.Planted" not in declined["personFlatpaks"])
+    apk = good["android"]
+    expect(f"the distro's Android records are {apk}",
+           len(apk) == 1
+           and {k: v for k, v in apk[0].items() if k != "apk"}
+               == {"id": "android:org.example.planted", "package": "org.example.planted",
+                   "image": "vanilla", "version-code": 7, "from": "distro"}
+           and apk[0]["apk"].startswith("/nix/store/") and apk[0]["apk"].endswith("-org.example.planted_7.apk"))
+    expect("a declined Android app is still handed to the reconciler", declined["android"] == [])
+    expect(f"the declines of the four are reported {declined['report']}",
+           sorted(declined["report"]["honoured"]) == sorted(shape))
+
+    # A DECLINED FILE IN AN UNKNOWN FORMAT: said, and nothing honoured.
+    expect(f"an unknown format of the declines warns {good['warnings']}", len(good["warnings"]) == 1)
+    expect("a decline in an unknown format was honoured",
+           good["vlc"] is True and good["report"] == {"honoured": [], "refused": [], "unknown": [], "still-present": []})
+
+    # EVERY MALFORMED SHAPE IS SAID, by name.
+    owed = [
+        "ronoctua.apps.two-sources: an entry comes from exactly one source",
+        "ronoctua.apps.no-source: an entry comes from exactly one source",
+        "ronoctua.apps.Bad_Id: an id is a slug",
+        "ronoctua.apps.bad-formerly.formerly: `Not A Slug` is not a slug",
+        "ronoctua.apps: `vlc` is both an id and a former id",
+        "ronoctua.apps: `gone-twice` is the former id of two entries",
+        "ronoctua.apps: the launcher entry `vlc.desktop` is owned by two entries",
+        "ronoctua.apps.bad-flatpak.flatpak.appId `org.x` is not a Flatpak id",
+        "ronoctua.apps.lacking-flatpak.flatpak lacks origin",
+        "ronoctua.apps.extra-flatpak.flatpak has fields no flatpak entry takes: url",
+        "ronoctua.apps.bad-appimage.appimage.key `Bad Key` is not a slug",
+        "ronoctua.apps.bad-appimage.appimage.name is empty or spans lines",
+        "ronoctua.apps.bad-appimage.appimage.url is not an https address",
+        "ronoctua.apps.bad-appimage.appimage.hash is not an SRI hash",
+        "ronoctua.apps.bad-appimage.appimage.version `1 0` cannot name a store path",
+        "ronoctua.apps.bad-web.web.slug `-x` is not a slug",
+        "ronoctua.apps.bad-web.web.name is empty or spans lines",
+        "ronoctua.apps.bad-web.web.url is not an http(s) address",
+        "ronoctua.apps.bad-web.web.profile is empty or spans lines",
+        "ronoctua.apps.bad-web.web.category is not a category",
+        "ronoctua.apps.bad-android.android.package `nodots` is not an Android package",
+        "ronoctua.apps.bad-android.android.url is not an https address",
+        "ronoctua.apps.bad-android.android.hash is not an SRI hash",
+        "ronoctua.apps.bad-android.android.versionCode is not a number",
+        "ronoctua.apps.bad-android.android.image is `full`, not vanilla or gapps",
+        "assets/distro-apps.nix: `t-snap` has the source \"snap\"",
+        "assets/distro-apps.nix: `t-extra` has fields no flatpak entry takes: url",
+        "assets/distro-apps.nix: `t-lacks` lacks name url",
+        "assets/distro-apps.nix: `t-nopin` has no pin in assets/distro-pins.json",
+        "assets/distro-apps.nix: `t-follows`.follows.github takes `repo` and `assetPattern`",
+        "assets/distro-apps.nix: `t-follows`.follows.github.repo is not `owner/name`",
+        "assets/distro-pins.json: `t-badpin` lacks hash",
+        "assets/distro-apps.nix: `t-from`: `from` is \"play\", not f-droid or direct",
+        "assets/distro-pins.json: `t-from`: `version-code` is not a number",
+        "assets/distro-apps.nix: `t-number`: `appId` is not a line of text",
+        "assets/distro-pins.json: format 2, and this distro reads 1",
+        "assets/distro-pins.json: `gone-image` is pinned and the table has no AppImage",
+        "assets/distro-pins.json: `gone-apk` is pinned and the table has no Android app",
+    ]
+    floor(len(bad["problems"]), len(owed), "refusals of the planted malformed shapes")
+    for sentence in owed:
+        expect(f"the registry does not say: {sentence}", any(p.startswith(sentence) for p in bad["problems"]))
+    expect(f"a malformed table line reached the registry: {bad['entered']}", bad["entered"] == [])
+    for what, fired in bad["refused"].items():
+        expect(f"with problems, `{what}` still evaluates: the refusal stopped firing", fired)
+
+    # THE BUILDERS, built.
+    entries = {
+        "planted": ("${distroAppsSources.entries.entry}", "png"),
+        "vector": ("${distroAppsSources.entries.vector}", "svg"),
+        "escape": ("${distroAppsSources.entries.escape}", None),
+    }
+    for key, (out, icon) in entries.items():
+        out = pathlib.Path(out)
+        program = f"ronoctua-appimage-{key}"
+        text = (out / "share/applications" / f"{program}.desktop").read_text()
+        lines = [
+            "[Desktop Entry]",
+            "Type=Application",
+            f"Name=Planted {key}",
+            "Comment=A planted program",
+            "Categories=Utility;",
+            f"Exec=/run/current-system/sw/bin/{program} %U",
+        ] + ([f"Icon={program}"] if icon else [])
+        expect(f"{key}: the AppImage's launcher entry is\n{text}", text == "\n".join(lines) + "\n")
+        pictures = sorted(p.name for p in (out / "share/pixmaps").iterdir()) if (out / "share/pixmaps").is_dir() else []
+        expect(f"{key}: the icons are {pictures}", pictures == ([f"{program}.{icon}"] if icon else []))
+    # The escaping fixture's picture IS reachable where its entry is built
+    # (its path is a reference of the image): its absence from the entry is
+    # the builder's refusal, and not a file that was never there.
+    expect("the escaping fixture does not name the outside picture",
+           b"${distroAppsOutsideSvg}" in pathlib.Path("${distroAppsSources.escapeImage}").read_bytes())
+    picture = pathlib.Path("${distroAppsSources.entries.entry}/share/pixmaps/ronoctua-appimage-planted.png")
+    expect("the PNG icon is not the image's picture", picture.is_file() and picture.read_bytes().startswith(b"\x89PNG"))
+    expect(f"the AppImage's package is `{facts['wrapper']['name']}`", facts["wrapper"]["name"] == "ronoctua-appimage-planted-1.0")
+    expect("the AppImage's wrapper does not evaluate", facts["wrapper"]["evaluates"])
+    web = pathlib.Path("${distroAppsSources.web}/share/applications/ronoctua-web-planted.desktop").read_text()
+    expect(f"the web app's launcher entry is\n{web}", web == "\n".join([
+        "[Desktop Entry]",
+        "Type=Application",
+        "Version=1.5",
+        "Name=Planted Web",
+        "Exec=/run/current-system/sw/bin/ronoctua-software web-open planted",
+        "TryExec=/run/current-system/sw/bin/google-chrome-stable",
+        "Terminal=false",
+        "StartupNotify=true",
+        "Categories=Network;",
+        "X-Ronoctua-Web-Url=https://example.org/planted",
+        "X-Ronoctua-Web-Profile=Default",
+    ]) + "\n")
+
+    if wrong:
+        print("ERROR: the distro's table does not do what its sources promise:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: one entry of each source built, installed and declined; {len(owed)} malformed shapes said "
+          "by name and refused; three AppImage entries and a web app built as the launcher reads them")
+    END
+  '';
+  # ── anchor: L05 ──
+  # THE MACHINE'S LIFE (the machine-lifecycle package): the apply that puts
+  # the lock back, the one rule that lets the person apply without moving
+  # the inputs, the one driver of `bootctl`, the trim that keeps the boot
+  # trial's way back — and, in `tests/slow.nix`, the boot trial and the
+  # migration on machines of their own.
+
+  # A FAILED BUILD PUTS BACK THE LOCK THE RUNNING SYSTEM WAS BUILT FROM.
+  #
+  # The update moves the distro input BEFORE it applies, so the folder may
+  # already name a revision nothing was built from. This runs the EXTRACTED
+  # `ronoctua-machine` — the one the units run as root — on a system root of
+  # its own (`RONOCTUA_MACHINE_SYSROOT`): a store with two toplevels, a
+  # system profile on the first, and `nix`, `nix-env` and `bootctl` that are
+  # small programs keeping a log. A build that fails must leave the folder's
+  # lock as the running system's, the profile where it was, nothing switched
+  # and the record saying `build-failed`; and — so the check bites only on
+  # the failure — the same moved lock with a build that works is KEPT, the
+  # profile moves and the boot trial is armed against the system that
+  # booted.
+  #
+  # AND WITH NO SNAPSHOT YET — the first apply after an installation: the
+  # lock is the one the running system CARRIES. A system built from a machine
+  # flake carries its lock where the machine's table says
+  # (`RONOCTUA_MACHINE_SYSTEM_LOCK`): evaluated here on the VM with a machine
+  # flake's source of its own (`tests/fixtures/machine-lock`), and planted
+  # there in the running system for the program.
+  apply-reverts-the-lock-on-build-failure =
+    let
+      vm = self.nixosConfigurations.vm;
+      fixture = ./fixtures/machine-lock;
+      carried =
+        (vm.extendModules {
+          modules = [ { ronoctua.machine.source = lib.mkForce fixture; } ];
+        }).config.environment.etc;
+      facts = pkgs.writeText "apply-lock-facts.json" (
+        builtins.toJSON {
+          inside = vm.config.ronoctua.machine.environment.RONOCTUA_MACHINE_SYSTEM_LOCK;
+          etc = lib.mapAttrs (_: e: e.text or null) (
+            lib.filterAttrs (
+              name: _: "etc/${name}" == vm.config.ronoctua.machine.environment.RONOCTUA_MACHINE_SYSTEM_LOCK
+            ) carried
+          );
+          lock = builtins.readFile (fixture + "/flake.lock");
+          plain = vm.config.environment.etc ? "ronoctua/machine.lock";
+        }
+      );
+    in
+    mkCheck "apply-reverts-the-lock-on-build-failure" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, os, pathlib, subprocess, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: everything read here is what the program wrote — the lock,
+      # its record, the fakes' log — never a source file.
+      # FILE-WIDE: each file is read whole because the question is its
+      # whole content, byte for byte.
+      PY = "${pkgs.python3}/bin/python3"
+      MACHINE = "${rust.machine}/bin/ronoctua-machine"
+      LOCK_A = '{"nodes":{"root":{"inputs":{"ronoctua":"r"}},"r":{"locked":{"rev":"' + "a" * 40 + '"}}},"root":"root","version":7}\n'
+      LOCK_B = LOCK_A.replace("a" * 40, "b" * 40)
+      FACTS = json.load(open("${facts}"))
+      INSIDE = FACTS["inside"]
+
+      FAKE_NIX = """
+      import os, pathlib, sys
+      root = pathlib.Path(os.environ["FAKE_ROOT"])
+      a = sys.argv[1:]
+      with open(root / "calls", "a") as f:
+          f.write("nix " + " ".join(a) + "\\n")
+      if a[0] == "build":
+          if (root / "build-fails").exists():
+              print("error: builder for the system failed", file=sys.stderr)
+              sys.exit(1)
+          out = a[a.index("--out-link") + 1]
+          if os.path.lexists(out):
+              os.remove(out)
+          os.symlink((root / "build-result").read_text(), out)
+      """
+      FAKE_NIX_ENV = """
+      import os, pathlib, sys
+      root = pathlib.Path(os.environ["FAKE_ROOT"])
+      a = sys.argv[1:]
+      with open(root / "calls", "a") as f:
+          f.write("nix-env " + " ".join(a) + "\\n")
+      p = pathlib.Path(a[a.index("--profile") + 1])
+      target = str(root) + a[a.index("--set") + 1]
+      gens = sorted(int(x.name[7:-5]) for x in p.parent.glob("system-*-link"))
+      last = gens[-1] if gens else 0
+      if last and os.path.realpath(p.parent / f"system-{last}-link") == os.path.realpath(target):
+          sys.exit(0)
+      os.symlink(target, p.parent / f"system-{last + 1}-link")
+      os.symlink(f"system-{last + 1}-link", p.parent / "system.new")
+      os.replace(p.parent / "system.new", p)
+      """
+      FAKE_BOOTCTL = """
+      import json, os, pathlib, sys
+      root = pathlib.Path(os.environ["FAKE_ROOT"])
+      a = sys.argv[1:]
+      with open(root / "calls", "a") as f:
+          f.write("bootctl " + " ".join(repr(w) for w in a) + "\\n")
+      if a[:2] == ["--no-pager", "list"]:
+          entries = []
+          for l in sorted((root / "nix/var/nix/profiles").glob("system-*-link")):
+              top = os.path.realpath(l)[len(str(root)):]
+              entries.append({"id": f"nixos-generation-{l.name[7:-5]}.conf", "options": f"init={top}/init quiet"})
+          print(json.dumps(entries))
+      elif a[0] in ("set-default", "set-oneshot"):
+          (root / ("efi-" + a[0][4:])).write_text(a[1])
+      else:
+          sys.exit(2)
+      """
+
+      def program(path, text):
+          path.parent.mkdir(parents=True, exist_ok=True)
+          lines = text.strip("\n").splitlines()
+          indent = min(len(l) - len(l.lstrip()) for l in lines if l.strip())
+          path.write_text("#!" + PY + "\n" + "\n".join(l[indent:] for l in lines) + "\n")
+          path.chmod(0o755)
+
+      def world(name, snapshot=True):
+          root = pathlib.Path(os.environ["TMPDIR"]) / name
+          (root / "run").mkdir(parents=True)
+          (root / "nix/var/nix/profiles").mkdir(parents=True)
+          program(root / "bin/nix", FAKE_NIX)
+          program(root / "bin/nix-env", FAKE_NIX_ENV)
+          program(root / "bin/bootctl", FAKE_BOOTCTL)
+          store = root / "nix/store"
+          store.mkdir(parents=True)
+          (store / "kernel").write_text("kernel")
+          (store / "initrd").write_text("initrd")
+          tops = {}
+          for top, params in (("a", "quiet"), ("b", "quiet panic=10")):
+              d = store / f"{top * 32}-nixos-system-{top}"
+              (d / "bin").mkdir(parents=True)
+              (d / "kernel").symlink_to(store / "kernel")
+              (d / "initrd").symlink_to(store / "initrd")
+              (d / "kernel-params").write_text(params)
+              program(d / "bin/switch-to-configuration", f"""
+              import pathlib, sys
+              with open("{root}/switched", "a") as f:
+                  f.write("{top} " + sys.argv[1] + "\\n")
+              """)
+              tops[top] = d
+          (root / "nix/var/nix/profiles/system-1-link").symlink_to(tops["a"])
+          (root / "nix/var/nix/profiles/system").symlink_to("system-1-link")
+          (root / "run/booted-system").symlink_to(tops["a"])
+          (root / "run/current-system").symlink_to(tops["a"])
+          (root / "machine").mkdir()
+          (root / "machine/flake.nix").write_text("{ }\n")
+          (root / "state").mkdir()
+          (root / "proc/sys/kernel/random").mkdir(parents=True)
+          (root / "proc/sys/kernel/random/boot_id").write_text("boot-1\n")
+          # THE UPDATE MOVED THE INPUT: the folder names B, the running
+          # system was built from A — kept beside it, or carried by it.
+          if snapshot:
+              (root / "state/applied.lock").write_text(LOCK_A)
+          else:
+              carried = tops["a"] / INSIDE
+              carried.parent.mkdir(parents=True, exist_ok=True)
+              carried.write_text(LOCK_A)
+          (root / "machine/flake.lock").write_text(LOCK_B)
+          (root / "build-result").write_text(str(tops["b"]))
+          return root, tops
+
+      def apply(root):
+          env = {
+              "PATH": "/no-path",
+              "FAKE_ROOT": str(root),
+              "RONOCTUA_MACHINE_SYSROOT": str(root),
+              "RONOCTUA_MACHINE_DIR": str(root / "machine"),
+              "RONOCTUA_MACHINE_STATE": str(root / "state"),
+              "RONOCTUA_MACHINE_RUN": str(root / "run/ronoctua-update"),
+              "RONOCTUA_MACHINE_ATTR": "noctua",
+              "RONOCTUA_MACHINE_MENU_LIMIT": "5",
+              "RONOCTUA_MACHINE_SYSTEM_LOCK": INSIDE,
+              "RONOCTUA_NIX": str(root / "bin/nix"),
+              "RONOCTUA_BOOTCTL": str(root / "bin/bootctl"),
+          }
+          return subprocess.run([MACHINE, "apply"], env=env, capture_output=True, text=True)
+
+      def text(path):
+          return path.read_text() if path.exists() else ""
+
+      wrong = []
+
+      # 1. THE BUILD FAILS.
+      root, tops = world("fails")
+      (root / "build-fails").write_text("")
+      ran = apply(root)
+      print(ran.stderr, file=sys.stderr)
+      if ran.returncode != 1 or ran.stdout.strip().splitlines()[-1:] != ["refused build-failed"]:
+          wrong.append(f"a failed build answered {ran.returncode} {ran.stdout.strip()!r}, not `refused build-failed`")
+      if text(root / "machine/flake.lock") != LOCK_A:
+          wrong.append("after a failed build the folder's lock is not the running system's")
+      if os.readlink(root / "nix/var/nix/profiles/system") != "system-1-link":
+          wrong.append("a failed build moved the system profile")
+      if text(root / "switched"):
+          wrong.append("a failed build switched: " + text(root / "switched"))
+      record = json.loads(text(root / "state/state.json") or "{}")
+      if (record.get("last-apply") or {}).get("result") != "build-failed":
+          wrong.append(f"the record does not say build-failed: {record}")
+      calls = text(root / "calls").splitlines()
+      floor(len(calls), 1, "programs run by the failing apply")
+      if not any(c.startswith("nix build") and "--no-update-lock-file" in c for c in calls):
+          wrong.append(f"the build may move an input: {calls}")
+
+      # 2. THE SAME MOVED LOCK, AND A BUILD THAT WORKS.
+      root, tops = world("works")
+      ran = apply(root)
+      print(ran.stderr, file=sys.stderr)
+      if ran.returncode != 0:
+          wrong.append(f"a good build answered {ran.returncode} {ran.stdout.strip()!r}")
+      if text(root / "machine/flake.lock") != LOCK_B or text(root / "state/applied.lock") != LOCK_B:
+          wrong.append("a good build did not keep the lock it was built from")
+      if os.path.realpath(root / "nix/var/nix/profiles/system") != str(tops["b"]):
+          wrong.append("a good build did not move the system profile")
+      if text(root / "switched") != "b switch\n":
+          wrong.append(f"a good build did not switch to it: {text(root / 'switched')!r}")
+      if (text(root / "efi-default"), text(root / "efi-oneshot")) != ("nixos-generation-1.conf", "nixos-generation-2.conf"):
+          wrong.append("the boot trial is not armed: default on the system that booted, one-shot on the new one")
+      record = json.loads(text(root / "state/state.json") or "{}")
+      if (record.get("trial") or {}).get("outcome") != "pending":
+          wrong.append(f"the record holds no pending trial: {record}")
+
+      # 3. NO SNAPSHOT YET: the lock the running system carries.
+      if not INSIDE.startswith("etc/") or FACTS["etc"].get(INSIDE.removeprefix("etc/")) != FACTS["lock"]:
+          wrong.append(f"a system built from a machine flake does not carry its lock at {INSIDE}: {FACTS['etc']}")
+      if FACTS["plain"]:
+          wrong.append("a system built from no machine flake carries a lock anyway")
+      root, tops = world("carried", snapshot=False)
+      (root / "build-fails").write_text("")
+      ran = apply(root)
+      print(ran.stderr, file=sys.stderr)
+      if (root / "state/applied.lock").exists():
+          wrong.append("the planted world was not one without a snapshot")
+      if text(root / "machine/flake.lock") != LOCK_A:
+          wrong.append("with no snapshot, a failed build did not put back the lock the running system carries")
+
+      if wrong:
+          print("ERROR: an apply does not leave the machine directory describing the running system.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          sys.exit(1)
+      print("OK: a failed build put the running lock back (kept, or carried by the system) and changed nothing; a good one kept its lock, switched and armed the trial")
+      END
+    '';
+
+  # ONE RULE LETS THE PERSON APPLY THE MACHINE WITHOUT MOVING ITS INPUTS, and
+  # it is one millimetre wide — and the units around it are wired to happen.
+  #
+  # `ronoctua-update-apply.service` is what the software centre starts after
+  # a declaration, with no polkit agent in the session — so the rule answers
+  # `YES`, and what buys the width back is: one unit, verb `start`, the one
+  # user, a condition that tests nothing else. The unit takes no word from
+  # anybody: the update's own lock (`flock -n`, the same file the update's
+  # root half holds, read from the update module's own sources), then
+  # `ronoctua-machine apply`. The rescue's rebuild runs that same command
+  # line, lock included; the rescue's rollback disarms the boot trial; and NO
+  # rule names the boot's bless, which only systemd starts.
+  #
+  # THE BLESS HANGS OFF THE TARGET THE BOOT REALLY REACHES: the system's
+  # default unit, for the VM and for the reference machine alike (no
+  # display manager: `graphical.target` is never reached, and a bless wanted
+  # by it would never run — every trial would stay pending and every boot
+  # after the first come back on the old system). And the trial boot's
+  # deadline starts with stage 2 and survives the isolation into emergency
+  # or rescue mode, which want it too.
+  update-apply-rule-is-narrow =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      reference = self.nixosConfigurations.noctua.config;
+      services = vm.systemd.services;
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      deadline = services.ronoctua-boot-trial-deadline;
+      facts = pkgs.writeText "update-apply-facts.json" (
+        builtins.toJSON {
+          rules = plain vm.security.polkit.extraConfig;
+          apply = plain services.ronoctua-update-apply.serviceConfig.ExecStart;
+          applyEnv = lib.mapAttrs (_: plain) services.ronoctua-update-apply.environment;
+          rescue = plain services.ronoctua-rescue-rebuild.serviceConfig.ExecStart;
+          rescueEnv = lib.mapAttrs (_: plain) services.ronoctua-rescue-rebuild.environment;
+          rescueRun = services.ronoctua-rescue-rebuild.serviceConfig.RuntimeDirectory or null;
+          bless = plain services.ronoctua-boot-bless.serviceConfig.ExecStart;
+          booted =
+            map
+              (c: {
+                target = c.systemd.defaultUnit;
+                wanted = c.systemd.services.ronoctua-boot-bless.wantedBy;
+                after = c.systemd.services.ronoctua-boot-bless.after;
+              })
+              [
+                vm
+                reference
+              ];
+          blessRemains = services.ronoctua-boot-bless.serviceConfig.RemainAfterExit or false;
+          deadlineWanted = deadline.wantedBy;
+          deadlineUnit = deadline.unitConfig;
+          machinePackage = plain vm.ronoctua.machine.package;
+          restarts = map (n: services.${n}.restartIfChanged) [
+            "ronoctua-update-apply"
+            "ronoctua-rescue-rebuild"
+            "ronoctua-boot-bless"
+          ];
+          table = lib.mapAttrs (_: plain) vm.ronoctua.machine.environment;
+          user = vm.ronoctua.user;
+          runDir = vm.ronoctua.machine.runDir;
+        }
+      );
+      # The rescue's rollback, as the unit runs it (read whole below).
+      rollback = lib.head (
+        lib.splitString " " services."ronoctua-rescue-rollback@".serviceConfig.ExecStart
+      );
+    in
+    mkCheck "update-apply-rule-is-narrow" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated system arrives as JSON — the merged polkit
+      # rules, the units' command lines, wiring and environments; the
+      # rollback's script is read whole, as the unit runs it.
+      # FILE-WIDE: the crate's unit names are constants of a file read whole
+      # (strings kept); the update's lock is narrowed to the runner's own
+      # `lock = …` line and its folder to the module's `stateDir`.
+      got = json.load(open("${facts}"))
+      crate = uncommented(pathlib.Path("${../crates/ronoctua-machine/src/lib.rs}").read_text())
+      runner = hashless(pathlib.Path("${../crates/ronoctua-brain/modules/system-update/gen-updates.py}").read_text())
+      module = hashless(pathlib.Path("${../crates/ronoctua-brain/modules/system-update/module.nix}").read_text())
+      floor(len(crate), 2000, "characters of ronoctua-machine's lib.rs")
+      wrong = []
+
+      def const(text, name):
+          m = re.search(r"const " + name + r': &str = "([^"]+)";', text)
+          if not m:
+              sys.exit(f"ERROR: ronoctua-machine no longer names `{name}`")
+          return m.group(1)
+
+      unit = const(crate, "UPDATE_APPLY_UNIT")
+      bless_unit = const(crate, "BLESS_UNIT")
+      user = got["user"]
+
+      # 1. THE UPDATE'S LOCK IS THE ONE THE UPDATE HOLDS.
+      lock_line = re.search(r"lock = f\"\{wiring\['state-dir'\]\}/([\w.]+)\"", runner)
+      lock_name = must(lock_line and lock_line.group(1), "the root half's lock in gen-updates.py")
+      state_line = re.search(r'stateDir = "([^"]+)";', module)
+      state_dir = must(state_line and state_line.group(1), "the update module's stateDir")
+      update_lock = f"{state_dir}/{lock_name}"
+      if got["runDir"] != state_dir:
+          wrong.append(f"ronoctua.machine.runDir is {got['runDir']}, the update's folder is {state_dir}")
+
+      # 2. THE UNIT: the update's lock, never waited for, then the apply.
+      m = re.fullmatch(r"(/nix/store/[^ ]+/bin/flock) --nonblock --conflict-exit-code 75 (\S+) (/nix/store/[^ ]+/bin/ronoctua-machine) apply", got["apply"])
+      if not m:
+          wrong.append(f"{unit} runs {got['apply']!r}; it may run <store>/flock --nonblock --conflict-exit-code 75 <the update's lock> <store>/ronoctua-machine apply")
+      elif m.group(2) != update_lock:
+          wrong.append(f"{unit} takes the lock {m.group(2)}, and the update holds {update_lock}")
+      if got["rescue"] != got["apply"]:
+          wrong.append(f"the rescue's rebuild runs {got['rescue']!r}, not the update's lock and the machine's apply")
+      if got["rescueRun"] != got["runDir"].rsplit("/", 1)[-1]:
+          wrong.append(f"the rescue's rebuild does not make the update's folder for its lock ({got['rescueRun']!r})")
+      script = pathlib.Path("${rollback}").read_text()
+      back = script.find("--rollback")
+      disarm = script.find(f"{got['machinePackage']}/bin/ronoctua-machine disarm")
+      switch = script.find("switch-to-configuration")
+      if not (0 <= back < disarm < switch):
+          wrong.append("the rescue's rollback does not disarm the boot trial between the rollback and the switch")
+      if not re.fullmatch(r"/nix/store/[^ ]+/bin/ronoctua-machine bless", got["bless"]):
+          wrong.append(f"the boot's bless runs {got['bless']!r}")
+      for name, env in (("the apply", got["applyEnv"]), ("the rescue's rebuild", got["rescueEnv"])):
+          for k, v in got["table"].items():
+              if env.get(k) != v:
+                  wrong.append(f"{name} is not told {k} as the machine's table says ({env.get(k)!r})")
+      for b in got["booted"]:
+          if b["target"] not in b["wanted"] or b["target"] not in b["after"]:
+              wrong.append(
+                  f"the bless is wanted by {b['wanted']} after {b['after']}, and the system boots to "
+                  f"{b['target']}: nothing would ever start it"
+              )
+      for target in ("sysinit.target", "emergency.target", "rescue.target"):
+          if target not in got["deadlineWanted"]:
+              wrong.append(f"the trial boot's deadline is not wanted by {target}")
+      deadline = got["deadlineUnit"]
+      if deadline.get("IgnoreOnIsolate") is not True or deadline.get("DefaultDependencies") is not False:
+          wrong.append(f"the trial boot's deadline would be stopped by emergency mode, or start late: {deadline}")
+      if not got["blessRemains"]:
+          wrong.append("the bless runs again at every switch: a trial armed now would be judged before any boot")
+      if any(got["restarts"]):
+          wrong.append("a switch may restart the unit that runs it")
+
+      # 3. THE ONE RULE.
+      text = uncommented(got["rules"])
+      floor(len(text), 500, "characters of the merged polkit rules")
+      every = re.split(r"polkit\.addRule", text)[1:]
+      floor(len(every), 3, "rules in the merged polkit config")
+      ours = [r for r in every if unit in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules name {unit}; there may be one")
+      for rule in ours:
+          if set(re.findall(r"polkit\.Result\.(\w+)", rule)) != {"YES"}:
+              wrong.append("the rule answers something other than YES")
+          if set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule)) != {"org.freedesktop.systemd1.manage-units"}:
+              wrong.append("the rule is about another action")
+          if set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule)) != {unit}:
+              wrong.append(f"the rule names other units than {unit}")
+          if set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule)) != {"start"}:
+              wrong.append("the rule allows another verb than `start`")
+          if set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule)) != {user}:
+              wrong.append(f"the rule is for another person than {user}")
+          body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+          if not body:
+              wrong.append("the rule has no condition")
+          else:
+              left = body.group(1)
+              for known in (
+                  r'action\.id\s*==\s*"[^"]+"',
+                  r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+                  r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
+                  r'subject\.user\s*==\s*"[^"]+"',
+              ):
+                  left = re.sub(known, "", left)
+              leftover = re.sub(r"[\s()&]", "", left)
+              if leftover:
+                  wrong.append(f"the condition tests something else as well: {leftover!r}")
+      # 4. NO RULE NAMES THE BLESS, nor the rebuild beyond the rescue's own.
+      if bless_unit in text or bless_unit.removesuffix(".service") in text:
+          wrong.append(f"a polkit rule names {bless_unit}: only systemd starts it")
+
+      if wrong:
+          print("ERROR: the machine's apply, bless or rollback is wider, or wired otherwise, than it says.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: one rule ({unit}, start, {user}, YES); the unit and the rescue's rebuild take {update_lock} and run the machine's apply; the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
+      END
+    '';
+
+  # ONE DRIVER OF THE BOOT LOADER.
+  #
+  # `bootctl`, the EFI variables it writes (`LoaderEntryDefault`,
+  # `LoaderEntryOneShot`), the system profile and `switch-to-configuration`
+  # are the boot trial's, and the boot trial is ONE crate's: a second writer
+  # of `LoaderEntryDefault` would shadow the trial's default, or the rescue's
+  # rollback, and nothing would say so. No other Rust source names any of
+  # them in code (strings kept: a program's name is a string), and no Nix
+  # file but the machine's own module hands a unit `bootctl`. Reading the
+  # Secure Boot variables, as the security view does, is not driving the
+  # boot loader and is not swept.
+  one-bootctl-driver = mkCheck "one-bootctl-driver" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a program's name anywhere in a crate's code is a way to run
+    # it; there is no function to narrow to. Comments are off, strings kept.
+    crates = pathlib.Path("${../crates}")
+    home = crates / "ronoctua-machine"
+    NEEDLE = re.compile(r"\bbootctl\b|LoaderEntry|switch-to-configuration|profiles/system\b|set-oneshot")
+    wrong, swept = [], 0
+    for f in workspace_sources(crates):
+        if home in f.parents:
+            continue
+        code = uncommented(without_tests(f.read_text()))
+        swept += 1
+        for m in NEEDLE.finditer(code):
+            line = code.count("\n", 0, m.start()) + 1
+            wrong.append(f"{f.relative_to(crates)}:{line}: names `{m.group(0)}` — the boot loader is ronoctua-machine's")
+    floor(swept, 300, "Rust sources outside ronoctua-machine swept")
+
+    # PROVED ON THE DRIVER ITSELF: the sweep sees ronoctua-machine name all
+    # four, so it would see anybody else's.
+    at_home = "".join(uncommented(without_tests(f.read_text())) for f in rust_sources(home))
+    floor(len(at_home), 5000, "characters of ronoctua-machine")
+    for needle in ("bootctl", "switch-to-configuration", "profiles/system", "set-oneshot"):
+        if needle not in at_home:
+            wrong.append(f"the sweep does not see ronoctua-machine name `{needle}`: it would see nobody's")
+
+    # THE UNITS: only the machine's module hands a program `bootctl`.
+    nix = pathlib.Path("${../nix}")
+    swept_nix = 0
+    for f in sorted(nix.rglob("*.nix")):
+        swept_nix += 1
+        if f.relative_to(nix).as_posix() == "modules/machine.nix":
+            continue
+        if re.search(r"bin/bootctl\b", hashless(f.read_text())):
+            wrong.append(f"nix/{f.relative_to(nix)} hands something `bootctl`")
+    floor(swept_nix, 100, "Nix files swept")
+
+    if wrong:
+        print("ERROR: something besides ronoctua-machine drives the boot loader.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {swept} Rust sources and {swept_nix} Nix files; the boot loader has one driver")
+    END
+  '';
+
+  # THE TRIM KEEPS THE BOOT TRIAL'S WAY BACK.
+  #
+  # The generations' trim keeps the newest N and the running, booted and
+  # previous systems; the boot trial adds two it must never delete: the LAST
+  # GOOD system (the trial's default entry, what the machine falls back to)
+  # and the system ON TRIAL. Planted: eight generations, the record naming
+  # 2 as the last good and 3 as the trial, the newest two kept by count —
+  # the rehearsal keeps 2 and 3 for those reasons and would remove 1, 4, 5
+  # and 6; without the record it would remove 2 and 3 too. And the units run
+  # the trim with the record's path.
+  generations-keep-the-boot-trial =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      store = vm.ronoctua.store;
+      start = builtins.unsafeDiscardStringContext (
+        vm.systemd.services.${lib.removeSuffix ".service" store.generationsUnit}.serviceConfig.ExecStart
+      );
+      record = "${vm.ronoctua.machine.stateDir}/state.json";
+    in
+    mkCheck "generations-keep-the-boot-trial" [ pkgs.coreutils pkgs.gnugrep ] ''
+      trim=${store.programs.generations}/bin/ronoctua-system-generations
+      p=$TMPDIR/profiles
+      mkdir -p "$p" "$TMPDIR/sys"
+      for n in 1 2 3 4 5 6 7 8; do
+        mkdir -p "$TMPDIR/sys/s$n"
+        ln -s "$TMPDIR/sys/s$n" "$p/system-$n-link"
+      done
+      ln -s system-8-link "$p/system"
+      cat > "$TMPDIR/state.json" <<EOF
+      {"format": 1,
+       "last-good": {"toplevel": "$TMPDIR/sys/s2", "entry": "nixos-generation-2.conf", "distro-rev": "r", "blessed-at": "2026-10-05T12:00:00Z"},
+       "trial": {"toplevel": "$TMPDIR/sys/s3", "outcome": "pending"},
+       "hold": null, "last-apply": null}
+      EOF
+      none=$TMPDIR/none
+      with=$("$trim" --profile "$p/system" --keep 2 --running "$none" --booted "$none" --previous "$none" \
+        --machine-state "$TMPDIR/state.json")
+      without=$("$trim" --profile "$p/system" --keep 2 --running "$none" --booted "$none" --previous "$none")
+      echo "$with"
+      fail() { echo "ERROR: $*" >&2; exit 1; }
+      echo "$with" | grep -qx "keeps generation 2: the last good system, the boot trial's way back" \
+        || fail "the trim does not keep the last good system"
+      echo "$with" | grep -qx "keeps generation 3: the system on boot trial" \
+        || fail "the trim does not keep the system on trial"
+      echo "$with" | grep -qx "would remove system generations 1 4 5 6 (rehearsal: nothing was touched)" \
+        || fail "the trim keeps more, or less, than the trial's two: $with"
+      echo "$without" | grep -qx "would remove system generations 1 2 3 4 5 6 (rehearsal: nothing was touched)" \
+        || fail "without the record the planted tree does not show the difference: $without"
+      for n in 1 2 3 4 5 6 7 8; do
+        test -L "$p/system-$n-link" || fail "a rehearsal removed generation $n"
+      done
+      case "${start} " in
+        *"--machine-state ${record} "* | *"--machine-state '${record}' "*) ;;
+        *) fail "the trim's unit does not read the machine's record (${record}): ${start}" ;;
+      esac
+      echo "OK: the last good system and the one on trial stay, by the record the units hand the trim"
+    '';
+
+  # THE BOOT TRIAL AND THE MIGRATION, each on a machine of its own. The first
+  # reboots (twice), so it is in `tests/slow.nix`; the second runs the real
+  # `nix` against a distro of its own, offline, and stays in the battery.
+  bootTrialVm = import ./boot-trial-vm.nix {
+    inherit pkgs lib;
+    machineTool = rust.machine;
+  };
+  migrationVm = import ./migration-vm.nix {
+    inherit pkgs lib;
+    machineTool = rust.machine;
+  };
+  # ── anchor: L06 ──
+  # THE PERSON'S FILES, AS ROOT'S PROGRAM READS THEM.
+  #
+  # The golden fixtures of `ronoctua-person` (`crates/ronoctua-person/fixtures`)
+  # are the contract between every reader and writer of the person's data —
+  # the software centre, the belongings, the update, Nix's reports and root.
+  # The crate's own test reads them through the library; this reads them
+  # through the EXTRACTED binary, the one the units run as root
+  # (`ronoctua-person read`): every good file comes back byte for byte, and
+  # every bad one is refused for the reason it was written to show — read
+  # from a table here, and the table must name every bad file there is, so a
+  # fixture added without saying what it shows fails instead of passing.
+  #
+  # AND THE REASON IS NOT A COINCIDENCE: the good `declared.json` with its
+  # format raised is refused as `newer` — the refusal an older machine gives a
+  # newer machine's file, before reading a field of it.
+  person-schema-golden = mkCheck "person-schema-golden" [ pkgs.diffutils ] ''
+    person=${rust.person}/bin/ronoctua-person
+    fixtures=${../crates/ronoctua-person/fixtures}
+
+    good=0
+    for f in "$fixtures"/good/*.json; do
+      kind=$(basename "$f" .json)
+      if ! "$person" read "$kind" "$f" > got.json; then
+        echo "ERROR: the good fixture $kind was refused: $(cat got.json)" >&2
+        exit 1
+      fi
+      if ! cmp -s got.json "$f"; then
+        echo "ERROR: $kind does not read back byte for byte:" >&2
+        diff "$f" got.json >&2 || true
+        exit 1
+      fi
+      good=$((good + 1))
+    done
+    [ "$good" -ge 10 ] || { echo "ERROR: only $good good fixtures; this stopped reaching them" >&2; exit 1; }
+
+    # name : the kind it is read as : the reason it shows
+    table="
+      approved-not-a-person-module:approved:invalid
+      declared-bad-stamp:declared:shape
+      declared-empty-machines:declared:invalid
+      declared-id-mismatch:declared:invalid
+      declared-newer:declared:newer
+      declared-unknown-entry-field:declared:shape
+      declared-unknown-field:declared:shape
+      declared-unknown-source:declared:shape
+      declined-duplicate:declined:duplicate
+      held-unknown-reason:held:shape
+      not-json:declared:not-json
+      signer-not-a-key:signer:invalid
+    "
+    bad=0
+    for f in "$fixtures"/bad/*.json; do
+      name=$(basename "$f" .json)
+      row=$(printf '%s\n' $table | grep "^$name:" || true)
+      [ -n "$row" ] || {
+        echo "ERROR: the bad fixture $name is not in this check's table: say what it shows" >&2
+        exit 1
+      }
+      kind=$(printf '%s' "$row" | cut -d: -f2)
+      why=$(printf '%s' "$row" | cut -d: -f3)
+      if "$person" read "$kind" "$f" > got.txt; then
+        echo "ERROR: the bad fixture $name was ACCEPTED as $kind" >&2
+        exit 1
+      fi
+      said=$(tail -n 1 got.txt | cut -d' ' -f1,2)
+      [ "$said" = "refused $why" ] || {
+        echo "ERROR: $name was refused as '$said', and it shows $why" >&2
+        exit 1
+      }
+      bad=$((bad + 1))
+    done
+    for row in $table; do
+      name=$(printf '%s' "$row" | cut -d: -f1)
+      [ -f "$fixtures/bad/$name.json" ] || { echo "ERROR: the table names $name, which is not a fixture" >&2; exit 1; }
+    done
+    [ "$bad" -ge 12 ] || { echo "ERROR: only $bad bad fixtures; this stopped reaching them" >&2; exit 1; }
+
+    sed 's/"format": 1,/"format": 2,/' "$fixtures/good/declared.json" > newer.json
+    cmp -s newer.json "$fixtures/good/declared.json" && { echo "ERROR: the format was not raised" >&2; exit 1; }
+    if "$person" read declared newer.json > got.txt; then
+      echo "ERROR: a newer declared.json was accepted" >&2
+      exit 1
+    fi
+    [ "$(cut -d' ' -f1,2 got.txt)" = "refused newer" ] || { echo "ERROR: a newer file was refused as $(cat got.txt)" >&2; exit 1; }
+
+    echo "OK: $good good fixtures read back byte for byte, $bad bad ones refused for their reasons, and a newer format refused as newer"
+  '';
+
+  # THE PERSON'S APPLIER NEVER READS THROUGH A LINK, and a refused tree
+  # leaves the machine's data as it was. The script says how (links where it
+  # reads a file, walks a folder, inside a brain module and as the staged
+  # folder itself; a hard link; a pipe; a file over its cap; a folder others
+  # may write; a newer format; an empty staging folder; a tree signed by
+  # another key than the one the machine pinned, one with no signature, and a
+  # rollback) — a file of its own so the same text runs against a binary
+  # `cargo` built. It runs here with the EXTRACTED binary, the one the unit
+  # runs as root, and `ronoctua-test-pq`, which makes the person's signing
+  # key and signs a staged tree as the belongings sign one.
+  person-apply-refuses-links = mkCheck "person-apply-refuses-links" [ pkgs.diffutils ] ''
+    bash ${./person-apply-refuses-links.sh} ${rust.person}/bin/ronoctua-person \
+      ${rust.workspace}/bin/ronoctua-test-pq
+  '';
+
+  # THE APPLIER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
+  #
+  # The person starts `ronoctua-person-apply.service` with no password: the
+  # software centre after a declaration, the update's person half. There is
+  # no polkit agent in this session, so the rule answers YES — and what buys
+  # that width back is that it is one millimetre wide, measured on the MERGED
+  # rules of the real system (a rule smuggled in from another module, or a
+  # `mkIf` that never turns on, is invisible to a grep of one file):
+  #
+  #   - one rule names the unit; it answers YES, about `manage-units`, for
+  #     the verb `start` (never `restart`, never `enable`), that unit, the one
+  #     user — and its condition tests nothing else;
+  #   - NO rule names the approval's unit, which only the sudo door starts:
+  #     the helper's `PersonModuleApprove` arm starts exactly it and nothing
+  #     else, after a person was named;
+  #   - the two units take no word from anybody: fixed folders, the machine
+  #     directory, the user — the same names the crate's `root` module writes
+  #     (one name in three places: the crate, the module, the helper);
+  #   - the folders the person stages into are theirs and `0700`, under a
+  #     folder of root's, so they can never be swapped for a link — and the
+  #     verdicts and root's lock live in that folder of root's, never in the
+  #     machine directory everybody may read;
+  #   - and each unit keeps only the capabilities it needs: reading the
+  #     person's files, and — the approval alone — removing the request;
+  #   - the apply has NO START LIMIT: each start is one gesture of the
+  #     person, and systemd's default (five in ten seconds) refused a sixth;
+  #   - and the PIN of the person's signing key (the plain-signature
+  #     package) is the approval's shape: no rule names its unit, the
+  #     helper's `PersonSignerPin` arm writes the door's key in root's folder
+  #     and starts exactly that unit, which runs with no capability.
+  person-apply-rule-is-narrow =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      services = vm.systemd.services;
+      facts = pkgs.writeText "person-apply-facts.json" (
+        builtins.toJSON {
+          rules = builtins.unsafeDiscardStringContext vm.security.polkit.extraConfig;
+          services = builtins.filter (n: lib.hasPrefix "ronoctua-person" n) (builtins.attrNames services);
+          tmpfiles = builtins.filter (r: lib.hasInfix "/run/ronoctua-person" r) vm.systemd.tmpfiles.rules;
+          apply = builtins.unsafeDiscardStringContext services.ronoctua-person-apply.serviceConfig.ExecStart;
+          approve = builtins.unsafeDiscardStringContext services.ronoctua-person-approve.serviceConfig.ExecStart;
+          pin = builtins.unsafeDiscardStringContext services.ronoctua-person-pin.serviceConfig.ExecStart;
+          applyCaps = services.ronoctua-person-apply.serviceConfig.CapabilityBoundingSet;
+          approveCaps = services.ronoctua-person-approve.serviceConfig.CapabilityBoundingSet;
+          pinCaps = services.ronoctua-person-pin.serviceConfig.CapabilityBoundingSet;
+          applyStartLimit = services.ronoctua-person-apply.unitConfig.StartLimitIntervalSec or null;
+          pinStartLimit = services.ronoctua-person-pin.unitConfig.StartLimitIntervalSec or null;
+          user = vm.ronoctua.user;
+          dir = vm.ronoctua.machine.dir;
+        }
+      );
+    in
+    mkCheck "person-apply-rule-is-narrow" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated system arrives as JSON — the merged polkit
+      # rules, the person's units, their command lines, capabilities and
+      # tmpfiles lines.
+      # FILE-WIDE: the crate's `root` constants are a file of names, read
+      # whole (`uncommented`, strings KEPT — the names are the subject); the
+      # helper is narrowed to its `PersonModuleApprove` and `PersonSignerPin`
+      # arms (`scope` from each arm's head, so a neighbour's `start` cannot
+      # answer for it).
+      got = json.load(open("${facts}"))
+      crate = uncommented(pathlib.Path("${../crates/ronoctua-person/src/root.rs}").read_text())
+      helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
+      wrong = []
+
+      def const(text, name, where):
+          m = re.search(r"const " + name + r': &str = "([^"]+)";', text)
+          if not m:
+              sys.exit(f"ERROR: {where} no longer names `{name}`")
+          return m.group(1)
+
+      apply_unit = const(crate, "APPLY_UNIT", "ronoctua_person::root")
+      approve_unit = const(crate, "APPROVE_UNIT", "ronoctua_person::root")
+      run = const(crate, "RUN", "ronoctua_person::root")
+      staged = const(crate, "STAGED", "ronoctua_person::root")
+      approve = const(crate, "APPROVE", "ronoctua_person::root")
+      verdict = const(crate, "VERDICT", "ronoctua_person::root")
+      approve_verdict = const(crate, "APPROVE_VERDICT", "ronoctua_person::root")
+      approve_pin = const(crate, "APPROVE_PIN", "ronoctua_person::root")
+      pin_unit = const(crate, "PIN_UNIT", "ronoctua_person::root")
+      signer_pin = const(crate, "SIGNER_PIN", "ronoctua_person::root")
+      lock = const(crate, "LOCK", "ronoctua_person::root")
+      user, machine = got["user"], got["dir"]
+
+      # 1. THE THREE UNITS, AND NO FOURTH.
+      want = sorted(u.removesuffix(".service") for u in (apply_unit, approve_unit, pin_unit))
+      if sorted(got["services"]) != want:
+          wrong.append(f"the system declares {sorted(got['services'])} for the person; {want} are the units")
+
+      # 2. THEIR COMMAND LINES, fixed: nothing in them comes from a person.
+      lines = {
+          "apply": f"/bin/ronoctua-person apply --staged {staged} --machine {machine} --owner {user} --verdict {verdict}",
+          "approve": f"/bin/ronoctua-person approve --request {approve} --pin {approve_pin} --machine {machine} --owner {user} --verdict {approve_verdict}",
+          "pin": f"/bin/ronoctua-person pin --pin {signer_pin} --machine {machine}",
+      }
+      for unit, line in lines.items():
+          if not got[unit].endswith(line) or not got[unit].startswith("/nix/store/"):
+              wrong.append(f"the {unit} unit runs {got[unit]!r}; it may run <store>{line}")
+      if got["applyCaps"] != ["CAP_DAC_READ_SEARCH"]:
+          wrong.append(f"the apply unit keeps {got['applyCaps']}; reading the person's files is all it needs")
+      if sorted(got["approveCaps"]) != ["CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH"]:
+          wrong.append(f"the approval keeps {got['approveCaps']}; reading and removing the request is all it needs")
+      # EVERY START IS A GESTURE: a start limit refuses the sixth in ten
+      # seconds as `start-limit-hit`, and the person is told nothing.
+      if got["applyStartLimit"] != "0":
+          wrong.append(f"the apply unit's StartLimitIntervalSec is {got['applyStartLimit']!r}; it may only be 0")
+      if got["pinCaps"] != [""]:
+          wrong.append(f"the pin's unit keeps {got['pinCaps']}; root's own file in root's folder needs no capability")
+      if got["pinStartLimit"] != "0":
+          wrong.append(f"the pin's unit's StartLimitIntervalSec is {got['pinStartLimit']!r}; it may only be 0")
+
+      # 3. THE FOLDERS: root's above, the person's two below, private.
+      folders = got["tmpfiles"]
+      expected = [
+          rf"d {re.escape(run)} 0755 root root -",
+          rf"d {re.escape(staged)} 0700 {re.escape(user)} \S+ -",
+          rf"d {re.escape(approve)} 0700 {re.escape(user)} \S+ -",
+      ]
+      if len(folders) != len(expected) or not all(
+          any(re.fullmatch(e, f) for f in folders) for e in expected
+      ):
+          wrong.append(f"the person's folders are {folders}")
+      for inside in (staged, approve, approve_pin, signer_pin, verdict, approve_verdict, lock):
+          if str(pathlib.PurePath(inside).parent) != run:
+              wrong.append(f"{inside} is not in root's {run}")
+      # The lock is a file of root's folder and never the machine directory,
+      # which everybody may read — and so `flock`, and hold for ever.
+      if lock.startswith(machine.rstrip("/") + "/") or lock == machine:
+          wrong.append(f"the lock {lock} is in the machine directory, which anybody may read")
+
+      # 4. THE ONE RULE.
+      text = got["rules"]
+      floor(len(text), 500, "characters of the merged polkit rules")
+      every = re.split(r"polkit\.addRule", text)[1:]
+      floor(len(every), 3, "rules in the merged polkit config")
+      ours = [r for r in every if apply_unit in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules mention {apply_unit}; there may be one")
+      for rule in ours:
+          results = set(re.findall(r"polkit\.Result\.(\w+)", rule))
+          if results != {"YES"}:
+              wrong.append(f"the rule answers {sorted(results)}, and may only answer YES")
+          actions = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule))
+          if actions != {"org.freedesktop.systemd1.manage-units"}:
+              wrong.append(f"the rule is about {sorted(actions)}")
+          units = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+          if units != {apply_unit}:
+              wrong.append(f"the rule names the units {sorted(units)}, and may name {apply_unit}")
+          verbs = set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule))
+          if verbs != {"start"}:
+              wrong.append(f"the rule allows the verbs {sorted(verbs)}; `start` is the one")
+          users = set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule))
+          if users != {user}:
+              wrong.append(f"the rule is for {sorted(users)}, and may be for {user}")
+          body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+          if not body:
+              wrong.append("the rule has no condition at all")
+          else:
+              left = body.group(1)
+              for known in (
+                  r'action\.id\s*==\s*"[^"]+"',
+                  r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+                  r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
+                  r'subject\.user\s*==\s*"[^"]+"',
+              ):
+                  left = re.sub(known, "", left)
+              leftover = re.sub(r"[\s()&]", "", left)
+              if leftover:
+                  wrong.append(f"the condition tests something else as well: {leftover!r}")
+
+      # 5. NO RULE NAMES THE APPROVAL, nor any other unit of the person's.
+      if approve_unit in text or approve_unit.removesuffix(".service") in text:
+          wrong.append(f"a polkit rule names {approve_unit}: a second door, which only the sudo door may open")
+      if pin_unit in text or pin_unit.removesuffix(".service") in text:
+          wrong.append(f"a polkit rule names {pin_unit}: a second door, which only the sudo door may open")
+      for rule in every:
+          if rule not in ours and "ronoctua-person" in rule:
+              wrong.append("another rule names a unit of the person's data")
+
+      # 6. THE HELPER'S ARM PINS WHAT THE DOOR WAS GIVEN, IN ROOT'S FOLDER,
+      # AND STARTS THE APPROVAL — the crate's own names, no word of its own.
+      arm = must(scope(helper, r"RootVerb::PersonModuleApprove\s*\{[^}]*\}\s*=>"), "the helper's `PersonModuleApprove` arm")
+      if '&["start", ronoctua_person::root::APPROVE_UNIT]' not in arm:
+          wrong.append("the helper's `person-module-approve` does not `start` exactly the crate's unit")
+      if "pin(Path::new(ronoctua_person::root::APPROVE_PIN), &id, &hash)" not in arm:
+          wrong.append("the helper's `person-module-approve` does not pin the door's words at the crate's path")
+      if arm.index("pin(") > arm.index('"start"'):
+          wrong.append("the helper starts the approval before it pins what the door was given")
+      if len(re.findall(r'"[^"]*"', arm)) != 1:
+          wrong.append("the helper's `person-module-approve` passes words beyond `start` and the unit")
+      if "named()?" not in arm:
+          wrong.append("the helper's `person-module-approve` runs without a person named by sudo")
+      # AND THE PIN'S ARM, the same shape: the door's key in root's folder,
+      # then exactly the crate's unit.
+      # Whitespace off: the formatter breaks a long call where it likes.
+      arm = re.sub(r"\s+", "", must(scope(helper, r"RootVerb::PersonSignerPin\s*\{[^}]*\}\s*=>"), "the helper's `PersonSignerPin` arm"))
+      if '&["start",ronoctua_person::root::PIN_UNIT]' not in arm:
+          wrong.append("the helper's `person-signer-pin` does not `start` exactly the crate's unit")
+      if "pin_text(Path::new(ronoctua_person::root::SIGNER_PIN)" not in arm:
+          wrong.append("the helper's `person-signer-pin` does not pin the door's key at the crate's path")
+      if "pin_text(" in arm and arm.index("pin_text(") > arm.index('"start"'):
+          wrong.append("the helper starts the pin's unit before it pins what the door was given")
+      if "named()?" not in arm:
+          wrong.append("the helper's `person-signer-pin` runs without a person named by sudo")
+
+      if wrong:
+          print("ERROR: the person's root half is wider than it says.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       There is no polkit agent in this session, so the rule answers YES", file=sys.stderr)
+          print("       and never asks. What buys that width back is that the door is", file=sys.stderr)
+          print("       one millimetre wide: one unit, one verb, one user, no argument.", file=sys.stderr)
+          raise SystemExit(1)
+
+      print(f"OK: one rule ({apply_unit}, start, {user}, YES), none for {approve_unit} nor {pin_unit}, which the sudo door starts; fixed command lines, private folders")
+      END
+    '';
+
+  # THE MACHINE'S COPY OF THE PERSON'S DATA HAS ONE WRITER.
+  #
+  # `person/` in the machine directory, `local/held.json`,
+  # `local/approved.json` and `local/signer.json` are written by the
+  # `ronoctua-person` binary, as root, and by nothing else: `apply` swaps
+  # `person/` whole after holding it to the pinned key, `verify` writes what
+  # the update holds back, `approve` records an approval only at the hash
+  # root computed, and `pin` (with `apply`'s counter) keeps the person's key. A second writer — the
+  # machine's rebuild "fixing" `held.json`, an update step copying the
+  # person's mirror straight into `person/` — would be a door around all
+  # three, and every other check of this package would go on passing.
+  #
+  # So: every Rust source outside `crates/ronoctua-person` (tests cut off),
+  # and every Nix, shell and Python file under `nix/` and `crates/`, is swept
+  # for a WRITE that names one of the three. In Rust, the question is asked
+  # of each function: one that names them (`held.json`, `approved.json`,
+  # `names::HELD`, `names::APPROVED`, `MACHINE_PERSON`, `nixos/person`, or a
+  # constant of its file that holds one of those) and writes a file is the
+  # offence; READING them is everybody's right (the update's window, the
+  # software centre). In the other languages, a line that names one and
+  # writes (a redirection, `cp`, `mv`, `install`, `tee`, `rm`, `ln`, a
+  # tmpfiles rule, Python's writes).
+  #
+  # AND THE DETECTOR IS PROVED ON THE ONE WRITER: the same sweep over
+  # `crates/ronoctua-person` must find its functions that write `held.json`
+  # and `approved.json` — a detector that finds nothing passes over anything.
+  one-person-boundary = mkCheck "one-person-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    crates = pathlib.Path("${../crates}")
+    nix = pathlib.Path("${../nix}")
+    home = crates / "ronoctua-person"
+
+    # FILE-WIDE: the sweep reads every source whole (comments off, STRINGS
+    # KEPT — the file names are strings), and asks its question per function.
+    TARGET = r'held\.json|approved\.json|signer\.json|\bnames::(?:HELD|APPROVED|SIGNER|MACHINE_PERSON)\b|\bMACHINE_PERSON\b|nixos/person\b'
+    WRITE = re.compile(
+        r'\bfs::write\b|\bFile::create\b|\bcreate_new\b|\.write\(true\)|\.append\(true\)'
+        r'|\bfs::rename\b|\brenameat\w*\(|\bremove_file\b|\bremove_dir\w*\b|\bcreate_dir\w*\b'
+        r'|\bfs::copy\b|\bhard_link\b|\bsymlink\b|\bunlinkat\b|\bmkdirat\b'
+        r'|\bwrite_whole\b|\bwrite_local\b|\bStore::|\.save\('
+    )
+    CONST = re.compile(r'\b(?:const|static)\s+(\w+)\s*:\s*&(?:\x27static\s+)?str\s*=\s*"[^"]*(?:held\.json|approved\.json|signer\.json|nixos/person)')
+
+    def spans(code):
+        # Every function's body, by braces: (start, end, name).
+        out = []
+        for m in re.finditer(r"\bfn\s+(\w+)", code):
+            start = code.find("{", m.end())
+            if start < 0:
+                continue
+            depth = 0
+            for k in range(start, len(code)):
+                if code[k] == "{":
+                    depth += 1
+                elif code[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        out.append((start, k, m.group(1)))
+                        break
+        return out
+
+    def writers(code):
+        # The functions that name the machine's copy and write a file.
+        names = [re.escape(n) for n in CONST.findall(code)]
+        target = re.compile(TARGET + "".join(r"|\b" + n + r"\b" for n in names))
+        found = set()
+        for start, end, name in spans(code):
+            body = code[start:end]
+            if target.search(body) and WRITE.search(body):
+                # Innermost only: a function wrapping another is not the writer
+                # twice — but a closure or a nested fn is inside its parent's
+                # span, and the parent is named as well; both are reported.
+                found.add(name)
+        return found
+
+    wrong, swept = [], 0
+    for f in sorted(crates.rglob("*.rs")):
+        if home in f.parents:
+            continue
+        # A FILE THAT IS A TEST MODULE has no production part: its
+        # `#[cfg(test)]` sits on the `mod tests;` line of the parent, so
+        # `without_tests` finds nothing to cut in the file itself.
+        if f.name == "tests.rs" or "tests" in f.relative_to(crates).parts:
+            continue
+        code = uncommented(without_tests(f.read_text()))
+        swept += 1
+        for name in sorted(writers(code)):
+            wrong.append(f"{f.relative_to(crates)}: `fn {name}` writes the machine's copy of the person's data")
+    floor(swept, 300, "Rust sources outside ronoctua-person swept")
+
+    # PROVED ON THE WRITER ITSELF: the sweep finds the functions of
+    # ronoctua-person that write held.json, approved.json and signer.json.
+    at_home = set()
+    for f in sorted(home.rglob("*.rs")):
+        at_home |= writers(uncommented(without_tests(f.read_text())))
+    for must_find in ("verify", "record", "write"):
+        if must_find not in at_home:
+            wrong.append(f"the sweep does not see ronoctua-person's own `fn {must_find}` write: it would see nobody's")
+
+    # THE OTHER LANGUAGES, line by line (comments off).
+    NAMED = re.compile(r'held\.json|approved\.json|signer\.json|nixos/person\b|(?:dir|Dir)\}?(?:\s*\+\s*")?/person\b')
+    WRITES = re.compile(
+        r'(?<![-=<])>(?!=)|\b(?:cp|mv|install|tee|rm|ln|rsync|truncate|touch)\b'
+        r'|\bwrite_text\b|\bwrite_bytes\b|\bopen\([^)]*["\x27][wa]|\bshutil\.|\bos\.(?:replace|rename|remove|unlink)\b'
+        r'|"[fFwdDLCrRzZ]\+?\s+\S*(?:held|approved|signer)\.json'
+    )
+    others = 0
+    for root in (nix, crates):
+        for f in sorted(root.rglob("*")):
+            if f.suffix not in (".nix", ".sh", ".py") or home in f.parents:
+                continue
+            others += 1
+            for n, l in enumerate(hashless(f.read_text()).splitlines(), 1):
+                if NAMED.search(l) and WRITES.search(l):
+                    wrong.append(f"{f.relative_to(root.parent)}:{n} writes the machine's copy of the person's data: {l.strip()}")
+    floor(others, 100, "Nix, shell and Python files swept")
+
+    if wrong:
+        print("ERROR: the machine's copy of the person's data has a writer besides ronoctua-person.", file=sys.stderr)
+        print("", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       person/, local/held.json, local/approved.json and local/signer.json are", file=sys.stderr)
+        print("       written by the ronoctua-person binary as root (apply, verify, approve, pin) and by nothing", file=sys.stderr)
+        print("       else; anybody may READ them. Ask that binary, or stage for it.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {swept} Rust sources and {others} Nix, shell and Python files; only ronoctua-person writes the machine's copy ({', '.join(sorted(at_home))} there)")
+    END
+  '';
+
+  # THE UPDATE'S CHECK OF THE PERSON'S ENTRIES, AND THE TWO UNITS, ON A
+  # BOOTED MACHINE (`tests/person-vm.nix`): the person's tree applied through
+  # the polkit rule with no agent — a brain module left out until the person's
+  # signing key is pinned through the sudo door, and brought in by the tree
+  # they signed —, `verify` holding exactly the broken entries of a fixture
+  # machine flake with the real Nix — each for its reason, the good one never
+  # — and a brain module approved through the sudo door only at the hash
+  # `nix/person-hash.nix` computes.
+  personVm = import ./person-vm.nix {
+    inherit pkgs lib;
+    person = rust.person;
+    securityRoot = rust.securityRoot;
+    testPq = rust.workspace;
+  };
+  # ── anchor: L07 ──
+  # THE LENIENT STORES AND THE BELONGINGS' HYGIENE (the store-resilience
+  # package). Each check is ONE named test of the crate that holds the
+  # behaviour, run over the loop's dependency layer the way
+  # `subtitles-stack-in-libass` is — and a run that did not execute exactly
+  # that test, and pass, is refused: a filter that matched nothing is a green
+  # build that tested nothing.
+  storeResilienceTest =
+    name: crate: test:
+    rust.tests.overrideAttrs (old: {
+      pname = "ronoctua-${name}";
+      checkPhase = ''
+        runHook preCheck
+        cargoWithProfile test --locked -p ${crate} --lib -- ${test} --exact 2>&1 | tee ran.txt
+        grep -q 'test result: ok. 1 passed' ran.txt || {
+          echo "ERROR: ${test} did not run exactly once and pass" >&2
+          exit 1
+        }
+        runHook postCheck
+      '';
+    });
+
+  # ONE UNKNOWN VARIANT, ONE WRONG TYPE AND ONE BAD ELEMENT OF A LIST cost
+  # those three: the rest of the file is read through a `Store` under the
+  # person's roots, and the repair LEDGER it writes (`state/repairs/`) lists
+  # exactly three lines, the element's saying what the file had.
+  a-store-keeps-the-rest-of-a-broken-file =
+    storeResilienceTest "a-store-keeps-the-rest-of-a-broken-file" "ronoctua-store"
+      "tests::a_store_keeps_the_rest_of_a_broken_file";
+
+  # A NEWER MACHINE'S FIELD survives an older machine's write, and so does the
+  # order the person wrote the file in.
+  a-newer-field-survives-an-older-write =
+    storeResilienceTest "a-newer-field-survives-an-older-write" "ronoctua-store"
+      "tests::a_newer_field_survives_an_older_write";
+
+  # A REPAIR NOBODY ACCEPTED IS NEVER WRITTEN: a write that did not change the
+  # repaired value puts the file's own back — at the top of the file and
+  # inside a map's value, where the type writes its own default — and the
+  # ledger follows the file ("leave it" remembered, gone once a choice
+  # overrides it).
+  an-untouched-repair-is-not-written =
+    storeResilienceTest "an-untouched-repair-is-not-written" "ronoctua-store"
+      "tests::an_untouched_repair_is_not_written";
+
+  # A STORE'S DRAFT — `write_atomically`'s `<file>.<pid>.new` and the older
+  # `.<file>.<pid>.tmp`, both planted — is never walked as kept.
+  belongings-drafts-are-never-kept =
+    storeResilienceTest "belongings-drafts-are-never-kept" "ronoctua-belongings"
+      "sift::tests::walked::belongings_drafts_are_never_kept";
+
+  # A LINK INTO THE SYSTEM'S STORE (Home Manager's) is never kept — it would
+  # come back dangling — and the merge neither pulls the repository's copy
+  # over it (nor a file through it, when it links a folder) nor deletes it
+  # for the others.
+  belongings-store-links-are-not-kept =
+    storeResilienceTest "belongings-store-links-are-not-kept" "ronoctua-belongings"
+      "sift::tests::walked::belongings_store_links_are_not_kept";
+
+  # THE DEPLOY KEY UNDER ANOTHER NAME — a hard link of it inside `~/.ssh`, a
+  # copy of its public half — never travels, while the person's own keys do;
+  # one the repository has already leaves it.
+  belongings-access-never-travels =
+    storeResilienceTest "belongings-access-never-travels" "ronoctua-belongings"
+      "sift::tests::walked::belongings_access_never_travels";
+  # ── anchor: L08 ──
+  # THE BELONGINGS' FORMAT 2 (the belongings-sealed package): chunks, the
+  # post-quantum keyring, the format refused when it is not this one, the
+  # compaction and the consent of the git transport.
+  #
+  # ONE RUN OF THE TESTS THAT PROVE THEM, over the `rust-tests` derivation
+  # with its check phase narrowed to these tests (`--exact`, and
+  # `--include-ignored`: the 300 MiB and 64 MiB ones are too heavy for every
+  # `cargo test`), and the repository the recovery is followed on, kept in
+  # `$out/recover`. Each check below asks this run for ITS tests by name, so a
+  # test renamed or gone is a red check and never a filter that matched
+  # nothing. The recovery with Go `age` is a derivation of its own
+  # (`belongingsRecovered`): one property failing never hides the others.
+  belongingsFormat2 = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-format-2";
+    checkPhase = ''
+      runHook preCheck
+      mkdir -p $out
+      export RONOCTUA_RECOVER_FIXTURE=$TMPDIR/recover
+      cargoWithProfile test --locked -p ronoctua-belongings --lib -- \
+        --include-ignored --exact \
+        engine::tests::no_file_reaches_the_limit \
+        engine::tests::an_edit_moves_few_chunks \
+        engine::tests::chunk_ids_are_keyed \
+        crypt::tests::chunk_ids_are_keyed \
+        engine::tests::a_format_not_its_own_is_refused \
+        tests::only_this_format_is_read \
+        crypt::tests::only_a_post_quantum_identity_opens \
+        engine::tests::belongings_compaction_is_safe \
+        engine::tests::belongings_compaction_loses_no_race \
+        engine::tests::a_clone_shrinks_after_a_compaction_beat_its_push \
+        engine::tests::nothing_to_compact_is_said_and_never_recommended \
+        engine::tests::a_host_not_let_is_never_asked \
+        engine::tests::a_repository_for_the_recovery_check 2>&1 | tee $out/ran.txt
+      grep -q 'test result: ok. 13 passed' $out/ran.txt || {
+        echo "ERROR: the belongings' format-2 tests did not run exactly once, green" >&2
+        exit 1
+      }
+      cp -R "$RONOCTUA_RECOVER_FIXTURE" $out/recover
+      runHook postCheck
+    '';
+  });
+
+  # `RECOVER.md` FOLLOWED AS WRITTEN, with Go `age` (1.3 reads a post-quantum
+  # identity), `jq` and a shell — no distro. The passphrase goes to `age`'s
+  # terminal through `script`. Twice: over the repository as it is (every
+  # file back, its mode, the link a link), and over a copy where one file's
+  # chunk is cut short — `age` refuses it, and the script must name that file
+  # in `damaged.txt`, restore every other one, end with a failure and leave
+  # neither the identity nor the index behind.
+  belongingsRecovered =
+    pkgs.runCommand "ronoctua-belongings-recovered"
+      {
+        nativeBuildInputs = [
+          pkgs.age
+          pkgs.jq
+          pkgs.util-linux
+        ];
+      }
+      ''
+        set -euo pipefail
+        mkdir -p $out
+        fixture=${belongingsFormat2}/recover
+        version=$(age --version | sed 's/^v//')
+        case "$version" in
+          0.* | 1.[0-2] | 1.[0-2].*)
+            echo "ERROR: Go age $version cannot read a post-quantum identity" >&2
+            exit 1
+            ;;
+        esac
+        awk '/^```sh$/ { inside = 1; next } /^```$/ { inside = 0 } inside' \
+          "$fixture/repo/RECOVER.md" > recover.sh
+        test "$(wc -l < recover.sh)" -gt 10 || {
+          echo "ERROR: RECOVER.md carries no script" >&2
+          exit 1
+        }
+        here=$PWD
+        # A WRITABLE COPY of the repository, and the script run inside it.
+        copy() {
+          rm -rf "$1"
+          cp -R --no-preserve=mode "$fixture/repo" "$1"
+        }
+        recover() {
+          ( cd "$1" && { cat "$fixture/passphrase"; echo; } |
+              script -q -e -c "sh $here/recover.sh" /dev/null )
+        }
+        same() {
+          # File $2 restored in copy $1 is the expected one, with its mode.
+          cmp "$fixture/expected/$2" "$1/restored/$2"
+          mode=$(awk -v p="$2" '$1 == p { print $2 }' "$fixture/expected.modes")
+          if [ "$(stat -c %a "$1/restored/$2")" != "$mode" ]; then
+            echo "ERROR: $2 came back as $(stat -c %a "$1/restored/$2"), not $mode" >&2
+            exit 1
+          fi
+        }
+        left() {
+          for f in identity.txt index.json; do
+            if [ -e "$1/$f" ]; then
+              echo "ERROR: the script left $1/$f behind" >&2
+              exit 1
+            fi
+          done
+        }
+
+        copy whole
+        recover whole
+        diff -r --no-dereference whole/restored "$fixture/expected"
+        while read -r path _; do same whole "$path"; done < "$fixture/expected.modes"
+        test -L whole/restored/home/notes/latest
+        test ! -e whole/damaged.txt
+        left whole
+        echo "recovered: every file, mode and link, with Go age $version" >> $out/ran.txt
+
+        # ONE CHUNK CUT SHORT: what a damaged repository looks like to `age`,
+        # which authenticates every piece.
+        read -r chunk damaged < "$fixture/damage"
+        copy broken
+        truncate -s -1 "broken/$chunk"
+        if recover broken; then
+          echo "ERROR: a damaged chunk did not fail the recovery" >&2
+          exit 1
+        fi
+        test "$(cat broken/damaged.txt)" = "$damaged" || {
+          echo "ERROR: damaged.txt says '$(cat broken/damaged.txt)', not $damaged" >&2
+          exit 1
+        }
+        while read -r path _; do
+          if [ "$path" != "$damaged" ]; then same broken "$path"; fi
+        done < "$fixture/expected.modes"
+        test -L broken/restored/home/notes/latest
+        left broken
+        echo "damaged: $damaged named, every other file back, nothing left behind" >> $out/ran.txt
+      '';
+
+  # Whether `belongingsFormat2` ran these tests green, by name.
+  belongingsTestsRan =
+    tests:
+    lib.concatMapStringsSep "\n" (t: ''
+      grep -qxF ${lib.escapeShellArg "test ${t} ... ok"} ${belongingsFormat2}/ran.txt || {
+        echo ${lib.escapeShellArg "ERROR: ${t} did not pass"} >&2
+        exit 1
+      }
+    '') tests;
+
+  # A FILE OF 300 MiB is chunks of at most `chunk.maxKiB` (and age's
+  # overhead): no repository file reaches GitHub's 100 MB, and the file comes
+  # back whole on another machine.
+  belongings-no-file-reaches-the-limit = mkCheck "belongings-no-file-reaches-the-limit" [ ] ''
+    ${belongingsTestsRan [ "engine::tests::no_file_reaches_the_limit" ]}
+    echo "OK: 300 MiB became chunks under the limit and came back whole"
+  '';
+
+  # ONE BYTE CHANGED IN 64 MiB adds at most three chunk files (the chunks
+  # around it and the index's), the sweep keeps the count, and the same
+  # content twice is one set of chunks.
+  belongings-an-edit-moves-few-chunks = mkCheck "belongings-an-edit-moves-few-chunks" [ ] ''
+    ${belongingsTestsRan [ "engine::tests::an_edit_moves_few_chunks" ]}
+    echo "OK: an edit moves the chunks around it, and a copy moves none"
+  '';
+
+  # A CHUNK'S NAME IS KEYED: two identities name the same content apart, and
+  # no name is the content's own SHA-256.
+  belongings-chunk-ids-are-keyed = mkCheck "belongings-chunk-ids-are-keyed" [ ] ''
+    ${belongingsTestsRan [
+      "engine::tests::chunk_ids_are_keyed"
+      "crypt::tests::chunk_ids_are_keyed"
+    ]}
+    echo "OK: the chunks' names say nothing to whoever lacks the identity"
+  '';
+
+  # ONLY FORMAT 2 IS READ: a repository whose `FORMAT` is newer is refused
+  # as newer, a lower one (format 1 was never deployed) as not ours — by a
+  # sync, a compaction and a restore alike, each with its sentence — and a
+  # `key.age` or a kept secret holding anything but a post-quantum identity
+  # never opens.
+  belongings-refuses-a-format-not-its-own = mkCheck "belongings-refuses-a-format-not-its-own" [ ] ''
+    ${belongingsTestsRan [
+      "engine::tests::a_format_not_its_own_is_refused"
+      "tests::only_this_format_is_read"
+      "crypt::tests::only_a_post_quantum_identity_opens"
+    ]}
+    echo "OK: a repository of another format is refused with its sentence"
+  '';
+
+  # `RECOVER.md` IS FOLLOWED: Go `age` ≥ 1.3, `jq` and a shell restore every
+  # file of a format-2 repository — content, mode and link — with no distro,
+  # and a damaged chunk is named while every other file still comes back.
+  belongings-recover-without-the-distro = mkCheck "belongings-recover-without-the-distro" [ ] ''
+    for said in '^recovered: every file, mode and link' '^damaged: .* named, every other file back'; do
+      grep -q "$said" ${belongingsRecovered}/ran.txt || {
+        echo "ERROR: RECOVER.md was not followed to the end ($said)" >&2
+        exit 1
+      }
+    done
+    echo "OK: $(grep -E '^(recovered|damaged):' ${belongingsRecovered}/ran.txt | paste -sd ';')"
+  '';
+
+  # A COMPACTION keeps every byte, drops the old history and the orphans,
+  # and another machine — its base from before, an edit of its own — deletes
+  # nothing, meets no conflict, sends its edit and drops the old history too.
+  belongings-compaction-is-safe = mkCheck "belongings-compaction-is-safe" [ ] ''
+    ${belongingsTestsRan [
+      "engine::tests::belongings_compaction_is_safe"
+      "engine::tests::a_clone_shrinks_after_a_compaction_beat_its_push"
+      "engine::tests::nothing_to_compact_is_said_and_never_recommended"
+    ]}
+    echo "OK: a compacted history keeps the content, and the other machines follow it"
+  '';
+
+  # A PUSH between a compaction's fetch and its forced push breaks the lease,
+  # and the compaction starts over on top of it: nothing is lost.
+  belongings-compaction-loses-no-race = mkCheck "belongings-compaction-loses-no-race" [ ] ''
+    ${belongingsTestsRan [ "engine::tests::belongings_compaction_loses_no_race" ]}
+    echo "OK: the lease refuses a compaction another push beat"
+  '';
+
+  # NOTHING IS FETCHED OR PUSHED BEFORE THE PERSON LET THE REPOSITORY'S HOST.
+  #
+  # The behaviour is `a_host_not_let_is_never_asked`: a repository whose
+  # address has a host, reached through a folder, refused with `NotLet` and
+  # nothing fetched or pushed until the host is let, and again once it is
+  # taken back — a sync and a compaction alike. What a test of
+  # today's calls cannot see is TOMORROW's call reaching the host another
+  # way, so this reads the engine for the one door: `let_in` mints from the
+  # engine's consent, the product's consent is the person's file, and every
+  # call that reaches the host — git's `fetch`, `push`, a forced push — holds
+  # a pass minted right before it — and the door lets the host the person
+  # typed, and draws the consent row for a host nobody let, which is where
+  # the refusal's sentence sends them.
+  belongings-ask-with-a-pass = mkCheck "belongings-ask-with-a-pass" [ pkgs.python3 ] ''
+    ${belongingsTestsRan [ "engine::tests::a_host_not_let_is_never_asked" ]}
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the engine's functions, read by their bodies, comments off and
+    # strings KEPT (a git subcommand is a string).
+    src = pathlib.Path("${../crates/ronoctua-belongings/src}") / "engine"
+    files = {f.name: uncommented(without_tests(f.read_text()))
+             for f in sorted(src.glob("*.rs")) if f.name != "tests.rs"}
+    floor(len(files), 7, "files of the belongings' engine")
+    bad = []
+
+    mod = files["mod.rs"]
+    let_in = must(body_of(mod, "let_in"), "`Engine::let_in`")
+    for needle in ("host_of(", "(self.consent)(", "Why::NotLet"):
+        if needle not in let_in:
+            bad.append(f"`let_in` no longer has {needle}")
+    this = must(body_of(mod, "for_this_machine"), "`Engine::for_this_machine`")
+    if not re.search(r"consent:\s*&ronoctua_consent::pass\b", this):
+        bad.append("the product's engine does not mint from the person's consent.json")
+
+    def mints_before(body, at, what):
+        minted = body.find("self.let_in()")
+        if minted < 0 or minted > at:
+            bad.append(f"{what} reaches the host without a pass minted before it")
+
+    # `git`: a call that reaches the host mints first.
+    git = must(body_of(mod, "git"), "`Engine::git`")
+    if not re.search(r"if\s+network\s*\{\s*self\.let_in\(\)\?", git):
+        bad.append("`Engine::git` runs a network call without minting a pass")
+    # `fetch`: the one place the engine fetches.
+    fetch = must(body_of(mod, "fetch"), "`Engine::fetch`")
+    at = fetch.find("repo.fetch(")
+    if at < 0:
+        bad.append("`Engine::fetch` no longer fetches")
+    mints_before(fetch, at, "`Engine::fetch`")
+
+    NETWORK = ("push", "fetch", "pull", "clone", "ls-remote")
+    sites = 0
+    for name, code in files.items():
+        # A FETCH outside `Engine::fetch`, through the repository directly.
+        for m in re.finditer(r"\.fetch\(\s*self\.credentials", code):
+            if whose(code, m.start()) != "fetch" or name != "mod.rs":
+                bad.append(f"engine/{name}: `{whose(code, m.start())}` fetches around `Engine::fetch`")
+            sites += 1
+        # A FORCED PUSH, with its pass minted first in the same function.
+        for m in re.finditer(r"\.push_force_with_lease\(", code):
+            fn = whose(code, m.start())
+            body = must(body_of(code, fn), f"engine/{name}: `{fn}`")
+            mints_before(body, body.find(".push_force_with_lease("), f"engine/{name}: `{fn}`")
+            sites += 1
+        # A NETWORK SUBCOMMAND through `git` says so (`true`), so `git` mints;
+        # never through `Repo::output`, which mints nothing.
+        for m in re.finditer(r"\bself\.git\(", code):
+            args = shut_at(code, m.end())
+            words = re.findall(r'"([a-z-]+)"', args)
+            if words and words[0] in NETWORK:
+                sites += 1
+                if not re.match(r"\s*[^,]+,\s*true\s*,", args):
+                    bad.append(f"engine/{name}: `git {words[0]}` is not asked as a network call")
+        for m in re.finditer(r"\.output\(", code):
+            args = shut_at(code, m.end())
+            words = re.findall(r'"([a-z-]+)"', args)
+            if words and words[0] in NETWORK:
+                bad.append(f"engine/{name}: `{words[0]}` through `Repo::output`, around the pass")
+    floor(sites, 3, "network calls of the engine (a fetch, a push, a forced push)")
+
+    # AND THE DOOR: typing the address lets its host before it is kept; a
+    # host nobody let (an address from before the consent) is read from the
+    # same `consent.json` the CLI mints from — the config root the view reads
+    # — and draws the consent row under Sync, whose press lets it there.
+    door = code_of(pathlib.Path("${../crates/ronoctua-shell/src/belongings.rs}").read_text())
+    answered = must(body_of(door, "answered"), "the belongings view's `answered`")
+    arm = answered[answered.find("Ask::Repository =>"):]
+    arm = arm[: arm.find("Ask::User =>")]
+    floor(len(arm), 200, "characters of the address's answer")
+    lets, changes = arm.find("let_host("), arm.find("self.change(")
+    if "host_of(" not in arm or lets < 0 or changes < 0 or lets > changes:
+        bad.append("typing the repository's address no longer lets its host before it is kept")
+    let_host = must(body_of(door, "let_host"), "the belongings view's `let_host`")
+    if not re.search(r"let_hosts_under\(\s*&places\.config\b", let_host):
+        bad.append("the view lets a host in another file than the one its readings ask")
+    read = must(body_of(door, "read"), "`Readings::read`")
+    if not re.search(r"allows_under\(\s*&p\.config\b", read):
+        bad.append("the view no longer asks consent.json whether the repository's host is let")
+    sync = must(body_of(door, "sync_section"), "the view's `sync_section`")
+    for needle in ("r.unlet", "consent_rows::label(", "Target::Let("):
+        if needle not in sync:
+            bad.append(f"the sync section no longer draws the consent row ({needle})")
+
+    for b in bad:
+        print("ERROR: " + b, file=sys.stderr)
+    if bad:
+        sys.exit(1)
+    print(f"OK: {sites} network calls of the belongings, each on a pass for the repository's host")
+    END
+  '';
+  # ── anchor: L09 ──
+  # THE PLAIN PART, SIGNED POST-QUANTUM (the plain-signature package): the
+  # person's ML-DSA-65 key born with the repository and kept in `key.age`, a
+  # manifest of the plain part signed with it, the person's side taking from
+  # the repository only what that key signed (and not older than it saw), and
+  # root's applier taking from a staging only what the key it PINNED signed.
+  #
+  # ONE RUN OF THE TESTS THAT PROVE THEM, over the `rust-tests` derivation
+  # narrowed to them by name (`--exact`) — the belongings against a real git
+  # and a `file://` remote, the person crate's pure rules, root's binary
+  # against real folders, and the signature itself. Each check below asks
+  # this run for ITS tests, so a test renamed or gone is a red check.
+  belongingsSigned = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-signed";
+    checkPhase = ''
+      runHook preCheck
+      mkdir -p $out
+      # $1: how many must pass, $2: whose, the rest: cargo's words.
+      run_tests() {
+        n=$1
+        what=$2
+        shift 2
+        cargoWithProfile test --locked "$@" 2>&1 | tee $out/last.txt
+        cat $out/last.txt >> $out/ran.txt
+        grep -q "test result: ok. $n passed" $out/last.txt || {
+          echo "ERROR: the plain signature's tests ($what) did not run exactly once, green" >&2
+          exit 1
+        }
+      }
+      run_tests 12 belongings -p ronoctua-belongings --lib -- --exact \
+        engine::tests::plain::belongings_tampered_plain_is_held \
+        engine::tests::plain::belongings_plain_rollback_is_refused \
+        engine::tests::plain::a_signature_never_vouches_for_what_it_held \
+        engine::tests::plain::a_push_of_signed_files_waits_for_an_unlock \
+        engine::tests::plain::the_installer_pins_the_key_the_passphrase_opened \
+        engine::tests::plain::belongings_brain_modules_travel \
+        engine::tests::plain::the_options_arrive_as_the_person_signed_them \
+        engine::signing::tests::a_change_holds_only_as_signed \
+        engine::signing::tests::a_signature_never_vouches_for_a_held_change \
+        crypt::tests::the_signing_key_travels_in_key_age_beside_the_identity \
+        plain::tests::the_signature_covers_the_persons_data_but_the_machines_records \
+        plain::tests::a_counter_is_of_its_key
+      run_tests 5 person -p ronoctua-person --lib -- --exact \
+        tree::tests::an_unsigned_module_never_reaches_the_machine \
+        tree::tests::a_document_not_as_signed_is_kept_back_and_the_rest_arrives \
+        tree::tests::with_no_key_pinned_only_the_declarations_arrive \
+        tree::tests::a_staging_as_signed_arrives_whole \
+        tree::tests::the_signature_covers_the_persons_data_but_the_machines_records
+      run_tests 7 root -p ronoctua-person --bin ronoctua-person -- --exact \
+        apply::tests::a_tree_not_signed_by_the_pinned_key_is_refused \
+        apply::tests::a_rollback_is_refused \
+        apply::tests::an_unsigned_module_never_reaches_the_machine \
+        apply::tests::a_document_not_as_signed_is_kept_back \
+        pin::tests::a_key_is_pinned_once_from_its_owners_file \
+        pin::tests::a_pin_root_cannot_read_trusts_nothing \
+        pin::tests::the_pins_shape_is_the_keys
+      run_tests 6 signature -p ronoctua-pq --lib -- --exact \
+        sign::tests::a_key_is_its_seed_and_comes_back_from_it \
+        sign::tests::the_signing_key_never_prints \
+        sign::tests::a_public_key_is_written_one_way \
+        sign::tests::a_manifest_opens_only_as_its_key_signed_it \
+        sign::tests::a_manifest_that_is_not_whole_is_neither_signed_nor_opened \
+        sign::tests::a_sha256_is_written_lower_case
+      rm $out/last.txt
+      runHook postCheck
+    '';
+  });
+
+  # Whether `belongingsSigned` ran these tests green, by name.
+  belongingsSignedRan =
+    tests:
+    lib.concatMapStringsSep "\n" (t: ''
+      grep -qxF ${lib.escapeShellArg "test ${t} ... ok"} ${belongingsSigned}/ran.txt || {
+        echo ${lib.escapeShellArg "ERROR: ${t} did not pass"} >&2
+        exit 1
+      }
+    '') tests;
+
+  # A PLAIN FILE SOMEBODY CHANGED WITHOUT THE PERSON'S KEY IS HELD: a
+  # declaration changed in the repository, a brain module added, the
+  # signature replaced by another key's or taken away — each held on a
+  # pinned machine with its reason, across runs, until the person decides
+  # (asked with the reason, no suggestion); a machine signing meanwhile signs
+  # its own file for a held path and never the held change; and a change of
+  # the repository's holds only as the manifest names it.
+  belongings-tampered-plain-is-held = mkCheck "belongings-tampered-plain-is-held" [ ] ''
+    ${belongingsSignedRan [
+      "engine::tests::plain::belongings_tampered_plain_is_held"
+      "engine::tests::plain::a_signature_never_vouches_for_what_it_held"
+      "engine::tests::plain::the_options_arrive_as_the_person_signed_them"
+      "engine::signing::tests::a_change_holds_only_as_signed"
+      "engine::signing::tests::a_signature_never_vouches_for_a_held_change"
+      "plain::tests::the_signature_covers_the_persons_data_but_the_machines_records"
+    ]}
+    echo "OK: what the person's key did not sign is held, with its reason, and never signed in"
+  '';
+
+  # A ROLLBACK IS REFUSED: an older plain part the person really signed, put
+  # back in the repository, is held on a machine that took a newer one; root
+  # refuses a staging signed with a lower counter than it took; a counter is
+  # of its key (a repository made again counts from nothing).
+  belongings-plain-rollback-is-refused = mkCheck "belongings-plain-rollback-is-refused" [ ] ''
+    ${belongingsSignedRan [
+      "engine::tests::plain::belongings_plain_rollback_is_refused"
+      "plain::tests::a_counter_is_of_its_key"
+      "apply::tests::a_rollback_is_refused"
+    ]}
+    echo "OK: an older signed plain part never replaces a newer one, on either side"
+  '';
+
+  # ROOT REFUSES A TREE NOT SIGNED BY ITS PINNED KEY: unsigned, signed by
+  # another key, one byte of the manifest changed — refused whole, the
+  # machine's data untouched and the pin saying why (for the machine's
+  # report); a document changed after the signature kept back while the rest
+  # arrives; a key pinned once, from its owner's private file, and a pin root
+  # cannot read trusting nothing. (`person-apply-refuses-links` runs the same
+  # refusals against the EXTRACTED binary, as the unit runs it.)
+  person-apply-refuses-unsigned-tree = mkCheck "person-apply-refuses-unsigned-tree" [ ] ''
+    ${belongingsSignedRan [
+      "apply::tests::a_tree_not_signed_by_the_pinned_key_is_refused"
+      "apply::tests::a_document_not_as_signed_is_kept_back"
+      "tree::tests::a_document_not_as_signed_is_kept_back_and_the_rest_arrives"
+      "tree::tests::a_staging_as_signed_arrives_whole"
+      "pin::tests::a_key_is_pinned_once_from_its_owners_file"
+      "pin::tests::a_pin_root_cannot_read_trusts_nothing"
+      "pin::tests::the_pins_shape_is_the_keys"
+    ]}
+    echo "OK: root takes from a staging only what its pinned key signed"
+  '';
+
+  # AN UNSIGNED BRAIN MODULE IS NEVER COMPILED INTO THE BRAIN.
+  #
+  # The brain compiles the person's modules from the machine's copy,
+  # `<machine dir>/person/brain/` (`nix/machine.nix`), and only root's applier
+  # writes it. So: the applier never puts a module there the pinned key did
+  # not sign — a file changed, one added, one signed and gone, a module
+  # nobody signed — and with NO key pinned it puts none at all (the pure rule
+  # and the binary, against real folders); the person's side never writes a
+  # module the signature does not vouch for into their own folder either.
+  # And the machine reads its modules from that one folder and no other.
+  brain-unsigned-module-never-compiled =
+    mkCheck "brain-unsigned-module-never-compiled" [ pkgs.python3 ]
+      ''
+        ${belongingsSignedRan [
+          "tree::tests::an_unsigned_module_never_reaches_the_machine"
+          "tree::tests::with_no_key_pinned_only_the_declarations_arrive"
+          "apply::tests::an_unsigned_module_never_reaches_the_machine"
+          "engine::tests::plain::belongings_tampered_plain_is_held"
+        ]}
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        # FILE-WIDE: `nix/machine.nix` read whole (its `#` comments off —
+        # `hashless`, never the Rust-shaped `uncommented`, whose `//` is Nix's
+        # update operator — strings kept: the folder's name is the subject) for
+        # where the machine's person modules come from; the person crate's
+        # names (comments off, strings kept) for where root's applier writes
+        # them.
+        machine = hashless(pathlib.Path("${../nix/machine.nix}").read_text())
+        tree = uncommented(pathlib.Path("${../crates/ronoctua-person/src/tree.rs}").read_text())
+        names = uncommented(pathlib.Path("${../crates/ronoctua-person/src/lib.rs}").read_text())
+        floor(len(machine.splitlines()), 200, "lines of nix/machine.nix read")
+        wrong = []
+        brain = re.search(r'\bbrain\s*=\s*"([^"]+)";', machine)
+        if not brain:
+            sys.exit("ERROR: nix/machine.nix no longer names the folder of the person's modules")
+        person = re.search(r'MACHINE_PERSON: &str = "([^"]+)"', names)
+        folder = re.search(r'pub const BRAIN: &str = "([^"]+)"', tree)
+        if not person or not folder:
+            sys.exit("ERROR: the person crate no longer names where root's applier writes the modules")
+        person, folder = person.group(1), folder.group(1)
+        if brain.group(1) != f"{person}/{folder}":
+            wrong.append(f"the machine reads its modules from {brain.group(1)!r}; root's applier writes {person}/{folder}")
+        if 'brainDir = dir + "/''${parts.brain}";' not in machine:
+            wrong.append("the modules' folder is not the machine directory's own `parts.brain`")
+        given = re.findall(r"\bbrainModules\s*=\s*([^;]+);", machine)
+        if given != ["brain.included"]:
+            wrong.append(f"the machine's brain modules are {given}; only `brain.included` (the approvals of the machine's folder) may give them")
+        if not re.search(r"\bbrain\s*=\s*approvals\s+dir\s*;", machine):
+            wrong.append("`brain` is not `approvals dir`: the modules may come from somewhere else")
+        if wrong:
+            print("ERROR: the brain may compile a module root's applier did not take:", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            raise SystemExit(1)
+        print("OK: the brain's person modules come from root's copy alone, and root copies only signed ones")
+        END
+      '';
+
+  # THE PLAIN PART AND THE MERGES (the belongings-plain-merge package): the
+  # person's declarations and brain modules in clear under `plain/`, synced
+  # with no passphrase; JSON joined field by field and text hunk by hunk over
+  # a base kept sealed; the installer's restore, probe, verify and init.
+  #
+  # ONE RUN OF THE TESTS THAT PROVE THEM — real git, a `file://` bare remote,
+  # two or three machines — over the `rust-tests` derivation narrowed to
+  # these tests (`--exact`), and `ronoctua-git`'s own `merge-file` test.
+  # Each check below asks this run for ITS tests by name, so a test renamed
+  # or gone is a red check and never a filter that matched nothing.
+  belongingsPlainMerge = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-plain-merge";
+    checkPhase = ''
+      runHook preCheck
+      mkdir -p $out
+      cargoWithProfile test --locked -p ronoctua-belongings --lib -- --exact \
+        engine::tests::plain::belongings_plain_needs_no_passphrase \
+        engine::tests::plain::belongings_plain_is_only_plain \
+        kept::tests::a_plain_root_beats_its_tree_and_keeps_its_drafts_out \
+        engine::tests::plain::belongings_brain_modules_travel \
+        merge_json::tests::belongings_json_merges_by_field \
+        merge_json::tests::the_persons_lists_settle_pins_by_time_and_deletions_win \
+        plan::tests::merged_decisions_and_fields_settle_what_a_merge_reached \
+        engine::tests::plain::belongings_json_merges_by_field_in_a_sync \
+        engine::tests::plain::the_persons_declarations_settle_their_pins_without_asking \
+        engine::tests::plain::a_plain_conflict_waits_for_a_sync_with_the_person \
+        engine::tests::plain::belongings_text_merges_clean_hunks \
+        engine::tests::plain::belongings_merge_needs_a_base \
+        engine::tests::plain::belongings_base_cache_is_sealed \
+        engine::tests::plain::belongings_restore_makes_a_home \
+        engine::tests::plain::a_restore_refuses_a_format_not_its_own \
+        engine::tests::plain::a_probe_says_read_write_and_empty \
+        engine::tests::plain::init_makes_an_empty_repository_and_verify_touches_nothing \
+        engine::tests::plain::the_plain_part_is_copied_out_as_the_repository_lays_it \
+        engine::tests::plain::a_push_is_the_base_of_what_it_sent \
+        engine::tests::plain::a_file_written_meanwhile_is_never_landed_over \
+        engine::tests::plain::an_empty_repository_again_at_the_same_address_takes_every_plain_file \
+        engine::tests::plain::a_plain_run_speaks_only_where_no_door_has \
+        engine::tests::plain::the_installers_copy_of_the_plain_part_leaves_no_clone_behind \
+        engine::tests::plain::the_installers_probe_takes_the_credential_it_names \
+        engine::tests::plain::the_installers_questions_keep_the_passphrase_through_the_network \
+        engine::restore::tests::only_a_refusal_about_the_passphrase_takes_it 2>&1 | tee $out/ran.txt
+      grep -q 'test result: ok. 26 passed' $out/ran.txt || {
+        echo "ERROR: the belongings' plain and merge tests did not run exactly once, green" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-git --lib -- --exact \
+        tests::merge_file_joins_hunks_and_counts_the_clashes 2>&1 | tee -a $out/ran.txt
+      grep -q 'test result: ok. 1 passed' $out/ran.txt || {
+        echo "ERROR: git's merge-file test did not run exactly once, green" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # Whether `belongingsPlainMerge` ran these tests green, by name.
+  belongingsPlainRan =
+    tests:
+    lib.concatMapStringsSep "\n" (t: ''
+      grep -qxF ${lib.escapeShellArg "test ${t} ... ok"} ${belongingsPlainMerge}/ran.txt || {
+        echo ${lib.escapeShellArg "ERROR: ${t} did not pass"} >&2
+        exit 1
+      }
+    '') tests;
+
+  # A MACHINE'S RECORD GOES UP WITH NOBODY TYPING ANYTHING: no passphrase
+  # file, no identity — `index.age`, `key.age` and every chunk byte for byte
+  # what they were — and another machine takes it with no passphrase either,
+  # without that passing for a sync of the sealed part; and a plain run
+  # never covers in `status.json` what a run a door started said, nor says a
+  # sync failed when only the plain part was refused.
+  belongings-plain-needs-no-passphrase = mkCheck "belongings-plain-needs-no-passphrase" [ ] ''
+    ${belongingsPlainRan [
+      "engine::tests::plain::belongings_plain_needs_no_passphrase"
+      "engine::tests::plain::a_plain_run_speaks_only_where_no_door_has"
+    ]}
+    echo "OK: the plain part travels with no passphrase and leaves the sealed part alone"
+  '';
+
+  # THE PLAIN PART IS ONLY PLAIN: in clear under `plain/` and nowhere in the
+  # index; a sealed file never in clear; a draft, a link or a file past
+  # `plainMostKiB` never in the plain part (the last named); a plain root
+  # beats the tree it lies under.
+  belongings-plain-is-only-plain = mkCheck "belongings-plain-is-only-plain" [ ] ''
+    ${belongingsPlainRan [
+      "engine::tests::plain::belongings_plain_is_only_plain"
+      "kept::tests::a_plain_root_beats_its_tree_and_keeps_its_drafts_out"
+    ]}
+    echo "OK: what is plain is plain, and nothing else is"
+  '';
+
+  # THE PERSON'S BRAIN MODULES go to another machine as they were written,
+  # and an edit there comes back with no passphrase.
+  belongings-brain-modules-travel = mkCheck "belongings-brain-modules-travel" [ ] ''
+    ${belongingsPlainRan [ "engine::tests::plain::belongings_brain_modules_travel" ]}
+    echo "OK: the brain modules travel both ways"
+  '';
+
+  # JSON IS JOINED FIELD BY FIELD: two machines that changed different fields
+  # are asked nothing, a list whose elements carry ids is joined by id, a
+  # field both changed is a conflict naming its place and decided on its own
+  # or merged one way; the person's software lists settle a pin by the later
+  # edit and let a deletion beat a pin-only change; a plain run leaves a
+  # clash for a sync with the person, who decides it.
+  belongings-json-merges-by-field = mkCheck "belongings-json-merges-by-field" [ ] ''
+    ${belongingsPlainRan [
+      "merge_json::tests::belongings_json_merges_by_field"
+      "merge_json::tests::the_persons_lists_settle_pins_by_time_and_deletions_win"
+      "plan::tests::merged_decisions_and_fields_settle_what_a_merge_reached"
+      "engine::tests::plain::belongings_json_merges_by_field_in_a_sync"
+      "engine::tests::plain::the_persons_declarations_settle_their_pins_without_asking"
+      "engine::tests::plain::a_plain_conflict_waits_for_a_sync_with_the_person"
+    ]}
+    echo "OK: JSON is merged by field, the person's lists by id, and a clash is asked"
+  '';
+
+  # TEXT IS JOINED HUNK BY HUNK (`git merge-file`, hardened): different hunks
+  # are asked nothing; a hunk both changed offers the two merged decisions,
+  # and taking the repository's keeps this machine's other hunks.
+  belongings-text-merges-clean-hunks = mkCheck "belongings-text-merges-clean-hunks" [ ] ''
+    ${belongingsPlainRan [
+      "engine::tests::plain::belongings_text_merges_clean_hunks"
+      "tests::merge_file_joins_hunks_and_counts_the_clashes"
+    ]}
+    echo "OK: clean hunks are joined, clashing ones are offered both merges"
+  '';
+
+  # NO BASE, NO MERGE: with the base cache gone, or on a first sync, a change
+  # on both sides is a conflict — never a guess — and nothing is written while
+  # it waits. And the plain part's base is what both sides held: what a push
+  # sent (not what the file holds once it is in), never a base of an empty
+  # repository made again at the same address, and never moved by a land
+  # that did not happen — a file changed here since the run read it is left
+  # alone, and both changes meet at the next run.
+  belongings-merge-needs-a-base = mkCheck "belongings-merge-needs-a-base" [ ] ''
+    ${belongingsPlainRan [
+      "engine::tests::plain::belongings_merge_needs_a_base"
+      "engine::tests::plain::a_push_is_the_base_of_what_it_sent"
+      "engine::tests::plain::a_file_written_meanwhile_is_never_landed_over"
+      "engine::tests::plain::an_empty_repository_again_at_the_same_address_takes_every_plain_file"
+    ]}
+    echo "OK: a merge is never made without its base"
+  '';
+
+  # THE BASE CACHE IS SEALED: each base post-quantum sealed to the identity,
+  # `0600` in a `0700` folder, named by its content's hash, only for text,
+  # and pruned when `last.json` stops naming it.
+  belongings-base-cache-is-sealed = mkCheck "belongings-base-cache-is-sealed" [ ] ''
+    ${belongingsPlainRan [ "engine::tests::plain::belongings_base_cache_is_sealed" ]}
+    echo "OK: the merge bases are sealed and pruned"
+  '';
+
+  # THE INSTALLER'S RESTORE MAKES A HOME: every file, mode, link, addition
+  # and the plain part, no passphrase left, nothing pushed — and the first
+  # sync of that home moves nothing; a format not its own is refused and
+  # nothing of it written; the probe says read,
+  # write and empty without writing, with the credential it is named; init
+  # makes an empty repository and only verifies a filled one, remembers the
+  # machine it is told, and leaves the passphrase for the restore — which
+  # only a refusal about the passphrase takes, never a network that failed;
+  # the plain part is copied out as laid, its scratch clone gone however it
+  # ends.
+  belongings-restore-makes-a-home = mkCheck "belongings-restore-makes-a-home" [ ] ''
+    ${belongingsPlainRan [
+      "engine::tests::plain::belongings_restore_makes_a_home"
+      "engine::tests::plain::a_restore_refuses_a_format_not_its_own"
+      "engine::tests::plain::a_probe_says_read_write_and_empty"
+      "engine::tests::plain::init_makes_an_empty_repository_and_verify_touches_nothing"
+      "engine::tests::plain::the_plain_part_is_copied_out_as_the_repository_lays_it"
+      "engine::tests::plain::the_installers_copy_of_the_plain_part_leaves_no_clone_behind"
+      "engine::tests::plain::the_installers_probe_takes_the_credential_it_names"
+      "engine::tests::plain::the_installers_questions_keep_the_passphrase_through_the_network"
+      "engine::restore::tests::only_a_refusal_about_the_passphrase_takes_it"
+    ]}
+    echo "OK: a restored home is a synced home"
+  '';
+  # ── anchor: L10 ──
+  # THE 2026-10-11 WAVE: the sudo door's root side.
+  #
+  # THE SUDO DOOR READS ONLY ITS OWN SENTINELS. On its terminal sudo and PAM
+  # say what they like — a lecture, a module's words, translated or not — and
+  # the door listens for three sentences it wrote itself: sudo's `-p` prompt,
+  # `pam_u2f`'s `cue_prompt`, and the `pam_echo` line directly before
+  # `pam_fprintd`. So: the three are distinct and none is inside another; the
+  # evaluated system says the last two exactly as the Rust listens for them
+  # (and `pam_silent` is off, or `pam_echo` would say nothing); the bytes of
+  # the terminal go to the matcher (`Hearing::heard`) and nowhere else, and
+  # only the matcher's answers become what the door asks; the matcher knows
+  # these three and no other; and sudo is given the terminal as its stdin,
+  # with the prompt the door listens for. That the matcher hears nothing a
+  # third party says is the crate's own test
+  # (`the_door_hears_its_own_sentinels_and_nothing_else`).
+  sudo-door-reads-its-own-sentinels =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      file = pkgs.writeText "sudo-sentinels.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            sudo = vm.security.pam.services.sudo.text;
+            sudoers = vm.security.sudo.configFile;
+          }
+        )
+      );
+    in
+    mkCheck "sudo-door-reads-its-own-sentinels" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: sudo's PAM text and the sudoers file of the evaluated system,
+      # as JSON the build wrote. FILE-WIDE: `authority.rs`, without its tests,
+      # for its three sentences and for where its terminal's bytes go.
+      def tokens(line):
+          # A PAM line's words, an argument with spaces in `[…]` (pam.conf's
+          # own quoting, `\]` inside) being one.
+          out, i, n = [], 0, len(line)
+          while i < n:
+              if line[i].isspace():
+                  i += 1
+              elif line[i] == "[":
+                  j, word = i + 1, []
+                  while j < n and line[j] != "]":
+                      if line[j] == "\\" and line[j + 1 : j + 2] == "]":
+                          word.append("]")
+                          j += 2
+                          continue
+                      word.append(line[j])
+                      j += 1
+                  out.append("".join(word))
+                  i = j + 1
+              else:
+                  j = i
+                  while j < n and not line[j].isspace():
+                      j += 1
+                  out.append(line[i:j])
+                  i = j
+          return out
+
+      def auth_lines(text):
+          return [tokens(l.split(" # ", 1)[0]) for l in text.splitlines() if l.startswith("auth ")]
+
+      evaluated = json.loads(pathlib.Path("${file}").read_text())
+      text = without_tests(uncommented(pathlib.Path("${../crates/ronoctua-security/src/authority.rs}").read_text()))
+      wrong = []
+      def const(name):
+          m = re.search(r"pub const " + name + r': &str =\s*"([^"]+)";', text)
+          return must(m and m.group(1), f"authority.rs: `{name}`")
+      prompt, touch, finger = const("PASSWORD_PROMPT"), const("TOUCH_CUE"), const("FINGER_CUE")
+      three = [prompt, touch, finger]
+      for a in three:
+          for b in three:
+              if a is not b and a in b:
+                  wrong.append(f"the sentinel {a!r} is inside {b!r}: one would be heard as the other")
+      if "%" in prompt:
+          wrong.append("the password prompt has a `%`, which sudo expands")
+
+      # THE MATCHER KNOWS THESE THREE AND NO OTHER.
+      hearing = must(scope(text, r"impl Hearing\b"), "authority.rs: `impl Hearing`")
+      listed = re.findall(r"\(\s*(\w+)\s*,\s*Asking::(\w+)\s*\)", hearing)
+      if sorted(listed) != sorted([("PASSWORD_PROMPT", "Password"), ("TOUCH_CUE", "Touch"), ("FINGER_CUE", "Finger")]):
+          wrong.append(f"the matcher listens for {listed}, and must for the three sentinels")
+
+      # THE TERMINAL'S BYTES GO TO THE MATCHER, AND ONLY ITS ANSWERS ASK.
+      talk = must(body_of(text, "talk"), "authority.rs: `talk`")
+      reads = re.findall(r"\breader\.read\(&mut (\w+)\[\.\.\]\)", talk)
+      if len(reads) != 1:
+          wrong.append(f"the terminal is read {len(reads)} times in `talk`, and must be once")
+      else:
+          # THE BUFFER IS BORN, FILLED AND HEARD — three uses in `talk`,
+          # and nothing else ever sees it.
+          read = reads[0]
+          uses = len(re.findall(r"\b" + read + r"\b", code_of(talk)))
+          heard = len(re.findall(r"hearing\.heard\(&" + read + r"\[\.\.n\]\)", talk))
+          if heard != 1 or uses != 3:
+              wrong.append(f"what the terminal said (`{read}`) is used {uses} times, {heard} by the matcher: the matcher alone may have it")
+      if re.search(r"\breader\b", code_of(text.replace(talk, ""))):
+          wrong.append("the terminal's reader is reached outside `talk`")
+      asks = [whose(text, m.start()) for m in re.finditer(r"\bHeard::Asks\(", text)]
+      built = [a for a, m in zip(asks, re.finditer(r"\bHeard::Asks\(", text)) if "send(" in text[max(0, m.start() - 12) : m.start()]]
+      if built != ["talk"]:
+          wrong.append(f"what the door asks is made in {built}, and only the matcher's thread in `talk` may make it")
+      if not re.search(r"to\.send\(Heard::Asks\(asking\)\)", talk) or not re.search(r"for asking in hearing\.heard\(", talk):
+          wrong.append("`talk` sends as asked something other than what the matcher heard")
+      if "command.stdin(Stdio::from(side))" not in " ".join(talk.split()):
+          wrong.append("sudo is not given the door's terminal as its stdin")
+      if "OpenptFlags::CLOEXEC" not in text:
+          wrong.append("the terminal's master is not close-on-exec: sudo would hold it")
+
+      # THE EVALUATED SYSTEM SAYS THEM AS THE DOOR LISTENS.
+      auth = auth_lines(evaluated["sudo"])
+      floor(len(auth), 3, "auth lines of sudo")
+      u2f = [l for l in auth if any(w.endswith("/pam_u2f.so") for w in l)]
+      if len(u2f) != 1 or f"cue_prompt={touch}" not in u2f[0][3:] or "cue" not in u2f[0][3:]:
+          wrong.append(f"pam_u2f's cue is {u2f}, and must be `cue` with `cue_prompt={touch}`")
+      finger_at = [i for i, l in enumerate(auth) if any(w.endswith("/pam_fprintd.so") for w in l)]
+      echoes = [l for l in auth if any(w.endswith("/pam_echo.so") for w in l)]
+      if len(finger_at) != 1 or finger_at[0] == 0 or len(echoes) != 1:
+          wrong.append(f"sudo has {len(finger_at)} pam_fprintd and {len(echoes)} pam_echo, and must have one of each")
+      else:
+          cue = auth[finger_at[0] - 1]
+          if not cue[2].endswith("/pam_echo.so") or " ".join(cue[3:]) != finger:
+              wrong.append(f"the line before pam_fprintd is {cue!r}, and must say {finger!r}")
+      sudoers = [l.strip() for l in evaluated["sudoers"].splitlines()]
+      if "Defaults !pam_silent" not in sudoers:
+          wrong.append("sudo hands PAM `PAM_SILENT`: pam_echo says nothing, and the finger is never heard")
+
+      if wrong:
+          print("ERROR: the sudo door listens to something other than its own sentinels.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       On its terminal the door hears three sentences it wrote itself, and", file=sys.stderr)
+          print("       nothing else: a third party's words never ask the person anything.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: three sentinels, heard by the matcher alone, said by sudo and PAM as written")
+      END
+    '';
+
+  # THE PASSWORDLESS WINDOW SURVIVES A REBOOT, AND ENDS AT ITS END (owner,
+  # 2026-10-11). Read from the evaluated system and the Rust that writes the
+  # window: the folder sudo includes is not tmpfs and is persisted, and so is
+  # the state beside it (which is never inside it: sudo would read it as
+  # sudoers); no unit closes it before the machine sleeps; the boot's unit
+  # looks at it once (`relax-boot`: an expired line goes, a live one gets its
+  # timer back), after the persisted folders are mounted, and never fails a
+  # switch; the timer is on the wall clock, which a suspend does not hold
+  # back; and the spans the door offers are the owner's — up to a day, two
+  # days and no limit (the windows they open are the crate's tests and
+  # `relax-line-parses`').
+  sudo-window-survives-a-reboot =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      services =
+        lib.mapAttrs
+          (_: s: {
+            wantedBy = s.wantedBy;
+            execStart = toString (s.serviceConfig.ExecStart or "");
+            remain = s.serviceConfig.RemainAfterExit or false;
+            mounts = lib.toList (s.unitConfig.RequiresMountsFor or [ ]);
+          })
+          (
+            lib.filterAttrs (
+              n: s: builtins.elem "sleep.target" s.wantedBy || n == "ronoctua-sudo-window"
+            ) vm.systemd.services
+          );
+      file = pkgs.writeText "sudo-window.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            inherit services;
+            persisted = vm.ronoctua.persist.directories;
+            tmpfiles = vm.systemd.tmpfiles.rules;
+            sudoers = vm.security.sudo.configFile;
+          }
+        )
+      );
+    in
+    mkCheck "sudo-window-survives-a-reboot" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the services, the persisted folders, tmpfiles and sudoers of
+      # the evaluated system, as JSON the build wrote. FILE-WIDE: the
+      # constants of `relax.rs`, read as the literals they are, and the body
+      # of `arm_arguments`.
+      evaluated = json.loads(pathlib.Path("${file}").read_text())
+      relax = uncommented(pathlib.Path("${../crates/ronoctua-security/src/relax.rs}").read_text())
+      def const(name):
+          m = re.search(r"pub const " + name + r': &str = "([^"]+)";', relax)
+          return must(m and m.group(1), f"relax.rs: `{name}`")
+      folder, state = const("DIR"), const("STATE")
+      wrong = []
+      covered = lambda path: any(path == d or path.startswith(d.rstrip("/") + "/") for d in evaluated["persisted"])
+      floor(len(evaluated["persisted"]), 5, "persisted folders")
+      if folder.startswith(("/run/", "/tmp/")) or not covered(folder):
+          wrong.append(f"the folder sudo includes, {folder}, does not survive a reboot")
+      if not covered(str(pathlib.PurePosixPath(state).parent)):
+          wrong.append(f"what is open, {state}, does not survive a reboot")
+      if state.startswith(folder.rstrip("/") + "/"):
+          wrong.append(f"{state} is in the folder sudo reads as sudoers")
+      sudoers = [l.strip() for l in evaluated["sudoers"].splitlines()]
+      if f"@includedir {folder}" not in sudoers:
+          wrong.append(f"sudoers does not include {folder}")
+      made = [l.split() for l in evaluated["tmpfiles"] if l.split()[1:2] == [folder]]
+      if len(made) != 1 or made[0][0] != "d" or made[0][3:5] != ["root", "root"]:
+          wrong.append(f"{folder} is made as {made}, and must be root's")
+
+      services = evaluated["services"]
+      for name, unit in services.items():
+          if "sleep.target" in unit["wantedBy"] and "ronoctua-security-root" in unit["execStart"]:
+              wrong.append(f"{name} closes the window before the machine sleeps; it ends only at its end or by the person")
+      boot = services.get("ronoctua-sudo-window")
+      if boot is None:
+          wrong.append("no unit looks at the window at boot: a live one would lose its timer, an expired one would stay")
+      else:
+          if "multi-user.target" not in boot["wantedBy"]:
+              wrong.append(f"ronoctua-sudo-window is wanted by {boot['wantedBy']}, and must be by multi-user.target")
+          if not re.fullmatch(r"-/nix/store/[^ ]+/bin/ronoctua-security-root relax-boot", boot["execStart"]):
+              wrong.append(f"ronoctua-sudo-window runs {boot['execStart']!r}, and must run `-<helper> relax-boot`")
+          if boot["remain"] is not True:
+              wrong.append("ronoctua-sudo-window would run again at every switch")
+          if folder not in boot["mounts"]:
+              wrong.append(f"ronoctua-sudo-window may run before {folder} is mounted")
+
+      arm = must(body_of(relax, "arm_arguments"), "relax.rs: `arm_arguments`")
+      if "--on-calendar=" not in arm or "--on-active" in arm:
+          wrong.append("the window's timer is not on the wall clock: a suspend would hold its end back")
+
+      # FILE-WIDE: the spans of `verb.rs` — every one `ALL` offers, and the
+      # minutes each is, the arithmetic of digits evaluated as written.
+      verb = uncommented(pathlib.Path("${../crates/ronoctua-security/src/verb.rs}").read_text())
+      spans = must(scope(verb, r"impl RelaxSpan\b"), "verb.rs: `impl RelaxSpan`")
+      listed = re.search(r"pub const ALL: \[Self; \d+\] = \[([^\]]*)\]", spans)
+      offered = re.findall(r"Self::(\w+)", must(listed and listed.group(1), "verb.rs: `RelaxSpan::ALL`"))
+      minutes = {}
+      for name, value in re.findall(r"Self::(\w+) => (Some\([\d\s*+]+\)|None)", must(body_of(spans, "minutes"), "verb.rs: `minutes`")):
+          minutes[name] = None if value == "None" else eval(value[5:-1], {"__builtins__": {}})
+      floor(len(offered), 4, "spans offered")
+      for name, want in [("Day", 24 * 60), ("TwoDays", 48 * 60), ("NoLimit", None)]:
+          if name not in offered or minutes.get(name, "absent") != want:
+              wrong.append(f"the span {name} is {minutes.get(name, 'absent')} minutes and offered: {name in offered}; it must be {want} and offered")
+      if [n for n in offered if minutes.get(n) is None] != ["NoLimit"]:
+          wrong.append(f"the spans with no end are {[n for n in offered if minutes.get(n) is None]}, and may be NoLimit alone")
+
+      if wrong:
+          print("ERROR: the passwordless window is not the one the person was promised.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       It survives a reboot and ends only at its end or when the person ends", file=sys.stderr)
+          print("       it; sudo's own NOTAFTER is the guard, the timer and the boot clean up.", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {folder} persisted, no sleep hook, the boot rearms it, the timer on the wall clock, {len(offered)} spans up to no limit")
+      END
+    '';
+  # THE PREDEFINED TARGETS AND THE IDENTITY KEPT FOR THE SESSION (the
+  # belongings-targets-unlock package): `~/.ssh`, git's configuration,
+  # GnuPG, the shell's and Doom's local files kept encrypted on every
+  # machine; "not here" and "nowhere"; what they offer after a sync that
+  # brought them; the identity kept in the kernel's keyring for the session.
+  #
+  # ONE RUN OF THE TESTS THAT PROVE THEM — real git, a `file://` bare remote,
+  # two machines — over the `rust-tests` derivation narrowed to these tests
+  # (`--exact`), and `ronoctua-git`'s own `set_global` test. Each check
+  # below asks this run for ITS tests by name: a test renamed or gone is a
+  # red check, never a filter that matched nothing.
+  belongingsTargetsUnlock = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-targets-unlock";
+    checkPhase = ''
+      runHook preCheck
+      mkdir -p $out
+      cargoWithProfile test --locked -p ronoctua-belongings --lib -- --exact \
+        engine::tests::targets::belongings_targets_come_back_private \
+        kept::target_tests::a_target_is_its_own_verdict_and_skips_what_it_names \
+        kept::target_tests::a_private_target_keeps_its_owners_bits_alone \
+        kept::target_tests::a_target_merges_by_its_own_rule \
+        engine::targets::tests::the_folders_of_a_private_target_are_the_ones_above_the_file \
+        engine::tests::targets::belongings_dropped_everywhere_is_forgotten_elsewhere \
+        requests::tests::one_answer_per_target_and_only_what_was_done_is_consumed \
+        requests::tests::the_file_crosses_whole_and_goes_when_empty \
+        engine::tests::targets::a_sync_that_brings_a_key_offers_what_it_makes_possible \
+        offers::tests::only_what_arrived_and_is_not_on_yet_is_offered \
+        offers::tests::yes_writes_only_what_this_process_may \
+        offers::tests::yes_to_signing_makes_git_sign_with_the_persons_key \
+        offers::tests::yes_never_replaces_another_signing_setup \
+        engine::tests::targets::a_yes_to_signing_travels_with_the_key_alone \
+        engine::tests::targets::belongings_identity_never_touches_disk \
+        engine::tests::targets::belongings_a_second_sync_asks_nothing \
+        engine::tests::targets::forgetting_takes_this_instance_or_every_one \
+        prefs::tests::the_session_keeps_the_identity_unless_the_person_says_no \
+        unlock::tests::a_key_names_its_instance_and_hides_its_repository \
+        unlock::tests::the_marker_says_which_repository_and_until_when \
+        unlock::tests::the_kernel_keeps_takes_and_forgets 2>&1 | tee $out/ran.txt
+      grep -q 'test result: ok. 21 passed' $out/ran.txt || {
+        echo "ERROR: the belongings' targets and unlock tests did not run exactly once, green" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-git --lib -- --exact \
+        tests::a_global_setting_is_the_persons_and_replaces_itself \
+        tests::an_included_file_counts_and_is_added_once 2>&1 | tee -a $out/ran.txt
+      grep -q 'test result: ok. 2 passed' $out/ran.txt || {
+        echo "ERROR: git's global configuration tests did not run exactly once, green" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # Whether `belongingsTargetsUnlock` ran these tests green, by name.
+  belongingsTargetsRan =
+    tests:
+    lib.concatMapStringsSep "\n" (t: ''
+      grep -qxF ${lib.escapeShellArg "test ${t} ... ok"} ${belongingsTargetsUnlock}/ran.txt || {
+        echo ${lib.escapeShellArg "ERROR: ${t} did not pass"} >&2
+        exit 1
+      }
+    '') tests;
+
+  # `~/.ssh` AND `~/.gnupg` COME BACK PRIVATE: a file with its owner's bits
+  # alone (`0644` travels as `0600`), a folder `0700` even where something
+  # made it wider first, what a target skips (sockets, locks, the agent's
+  # seed) never travelling — and the clamped modes moving nothing on the
+  # next syncs. And a target's verdict, skips and merge rule are the table's.
+  belongings-targets-come-back-private = mkCheck "belongings-targets-come-back-private" [ ] ''
+    ${belongingsTargetsRan [
+      "engine::tests::targets::belongings_targets_come_back_private"
+      "kept::target_tests::a_target_is_its_own_verdict_and_skips_what_it_names"
+      "kept::target_tests::a_private_target_keeps_its_owners_bits_alone"
+      "kept::target_tests::a_target_merges_by_its_own_rule"
+      "engine::targets::tests::the_folders_of_a_private_target_are_the_ones_above_the_file"
+    ]}
+    echo "OK: the predefined targets travel sealed and come back private"
+  '';
+
+  # "NOT ON ANY MACHINE" IS FORGOTTEN ELSEWHERE: the copies leave the
+  # repository from the machine that dropped the target, every other machine
+  # forgets what it had and keeps the files, nothing of it is pushed again,
+  # a request made while the sync ran survives it, "everywhere again" brings
+  # it back, and "not here" leaves the copies to the others. And what a key
+  # that travels offers: only when the key itself (or the security keys)
+  # arrived, never over a git that signs already, and a yes whose settings
+  # travel with the key alone — a machine with `~/.ssh` "not here" still
+  # commits.
+  belongings-dropped-everywhere-is-forgotten-elsewhere =
+    mkCheck "belongings-dropped-everywhere-is-forgotten-elsewhere" [ ]
+      ''
+        ${belongingsTargetsRan [
+          "engine::tests::targets::belongings_dropped_everywhere_is_forgotten_elsewhere"
+          "requests::tests::one_answer_per_target_and_only_what_was_done_is_consumed"
+          "requests::tests::the_file_crosses_whole_and_goes_when_empty"
+          "engine::tests::targets::a_sync_that_brings_a_key_offers_what_it_makes_possible"
+          "offers::tests::only_what_arrived_and_is_not_on_yet_is_offered"
+          "offers::tests::yes_writes_only_what_this_process_may"
+          "offers::tests::yes_to_signing_makes_git_sign_with_the_persons_key"
+          "offers::tests::yes_never_replaces_another_signing_setup"
+          "engine::tests::targets::a_yes_to_signing_travels_with_the_key_alone"
+          "tests::an_included_file_counts_and_is_added_once"
+        ]}
+        echo "OK: a target dropped everywhere leaves the repository and is forgotten, never deleted"
+      '';
+
+  # THE IDENTITY NEVER TOUCHES A DISK: kept for the session in the kernel's
+  # keyring (a thread keyring of the test's, readable by its possessor
+  # alone), in no file of the home, the state, the runtime folder, the clone
+  # or the remote; the doors' marker says which repository and until when;
+  # "keep none" forgets it.
+  belongings-identity-never-touches-disk = mkCheck "belongings-identity-never-touches-disk" [ ] ''
+    ${belongingsTargetsRan [
+      "engine::tests::targets::belongings_identity_never_touches_disk"
+      "unlock::tests::the_kernel_keeps_takes_and_forgets"
+      "unlock::tests::a_key_names_its_instance_and_hides_its_repository"
+      "unlock::tests::the_marker_says_which_repository_and_until_when"
+      "prefs::tests::the_session_keeps_the_identity_unless_the_person_says_no"
+    ]}
+    echo "OK: the identity lives in the kernel's keyring, and in no file"
+  '';
+
+  # A SECOND SYNC ASKS NOTHING: the identity the session kept opens the
+  # repository with no passphrase typed; one that no longer opens it is
+  # forgotten and the passphrase asked; one kept for a repository made empty
+  # since makes nothing; `forget` takes every identity and every marker.
+  belongings-a-second-sync-asks-nothing = mkCheck "belongings-a-second-sync-asks-nothing" [ ] ''
+    ${belongingsTargetsRan [
+      "engine::tests::targets::belongings_a_second_sync_asks_nothing"
+      "engine::tests::targets::forgetting_takes_this_instance_or_every_one"
+    ]}
+    echo "OK: the session's identity opens the next sync, and only its repository"
+  '';
+
+  # THE TARGETS ARE NEVER HOME MANAGER'S. A file Home Manager makes is a link
+  # into the store the system makes again; a target over it would carry a
+  # link that comes back dangling (the walk leaves it, `system-managed`) or,
+  # worse, a person's file the next activation replaces. So no target path
+  # and no Home Manager file of the person may lie one under the other, read
+  # from the EVALUATED system — every `home.file`, `xdg.configFile` included
+  # (Home Manager files those under `home.file` too).
+  belongings-targets-avoid-home-manager =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      hm = vm.home-manager.users.${vm.ronoctua.user};
+      facts = pkgs.writeText "home-manager-files.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            home = hm.home.homeDirectory;
+            files = map (f: f.target) (builtins.attrValues hm.home.file);
+          }
+        )
+      );
+    in
+    mkCheck "belongings-targets-avoid-home-manager" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the person's Home Manager files as the evaluated system has
+      # them (JSON the build wrote) and the targets as the generator
+      # normalised the table.
+      # FILE-WIDE: two JSON documents, read whole — there is no function in
+      # either to narrow to.
+      facts = json.loads(pathlib.Path("${facts}").read_text())
+      table = json.loads(pathlib.Path("${belongingsTable.table}/belongings.json").read_text())
+      home = facts["home"].rstrip("/") + "/"
+      files = []
+      for target in facts["files"]:
+          rel = target[len(home):] if target.startswith(home) else target.lstrip("/")
+          files.append("home/" + rel.rstrip("/"))
+      floor(len(files), 5, "Home Manager files of the person")
+      owned = [(t["id"], p) for t in table["targets"] for p in t["paths"]]
+      floor(len(owned), 5, "paths of the predefined targets")
+
+      def covers(root, path):
+          return path == root or path.startswith(root + "/")
+
+      wrong = sorted(
+          f"the target {tid}'s `{path}` and Home Manager's `{f}`"
+          for tid, path in owned for f in files
+          if covers(path, f) or covers(f, path)
+      )
+      if wrong:
+          print("ERROR: a predefined target lies over a file Home Manager makes:", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {len(owned)} target paths, {len(files)} Home Manager files, none over another")
+      END
+    '';
+
+  # PAM_U2F IS ONLY SUFFICIENT, AND ONLY SUDO'S. Read from the generated
+  # `/etc/pam.d` text of every service of TWO evaluated systems: the VM as it
+  # is, where `pam_u2f` is always declared (owner, 2026-10-11) — in `sudo` and
+  # in no other service, never `required` or `requisite` (a lost key never
+  # locks anybody out), never `nouserok` (a person with no key would pass),
+  # the password still asked after it, a terminal's gate directly before it
+  # (the door's password-only `sudo -S` never waits for a touch), the keys it
+  # trusts root's list (`u2f::AUTHFILE`, the same path the belongings' offer
+  # reads) and the one relying party every machine registers keys for
+  # (`u2f::ORIGIN`, as origin and appid) — and the VM with
+  # `ronoctua.yubikey.enable = false`, where it is nowhere.
+  pam-u2f-is-only-sufficient =
+    let
+      textsOf =
+        system:
+        lib.filterAttrs (_: t: t != null) (lib.mapAttrs (_: s: s.text) system.config.security.pam.services);
+      declared = self.nixosConfigurations.vm;
+      without = declared.extendModules {
+        modules = [ { ronoctua.yubikey.enable = false; } ];
+      };
+      file = pkgs.writeText "pam-u2f-services.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            declared = textsOf declared;
+            without = textsOf without;
+          }
+        )
+      );
+    in
+    mkCheck "pam-u2f-is-only-sufficient" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: every service's PAM text of both systems, as JSON the build
+      # wrote; each line is `type control module args… # name (order n)`.
+      # FILE-WIDE: every line of every service is the question — a
+      # `pam_u2f` line anywhere in a stack is what is judged.
+      def tokens(line):
+          # A PAM line's words, an argument with spaces in `[…]` (pam.conf's
+          # own quoting, `\]` inside) being one.
+          out, i, n = [], 0, len(line)
+          while i < n:
+              if line[i].isspace():
+                  i += 1
+              elif line[i] == "[":
+                  j, word = i + 1, []
+                  while j < n and line[j] != "]":
+                      if line[j] == "\\" and line[j + 1 : j + 2] == "]":
+                          word.append("]")
+                          j += 2
+                          continue
+                      word.append(line[j])
+                      j += 1
+                  out.append("".join(word))
+                  i = j + 1
+              else:
+                  j = i
+                  while j < n and not line[j].isspace():
+                      j += 1
+                  out.append(line[i:j])
+                  i = j
+          return out
+
+      def auth_lines(text):
+          return [tokens(l.split(" # ", 1)[0]) for l in text.splitlines() if l.startswith("auth ")]
+
+      both = json.loads(pathlib.Path("${file}").read_text())
+      wrong = []
+      for name, services in both.items():
+          floor(len(services), 10, f"PAM services of the {name} system")
+      # THE KEYS PAM TRUSTS and the relying party, from the Rust that writes
+      # and registers them; the belongings' offer reads the same list.
+      u2f = uncommented(pathlib.Path("${../crates/ronoctua-security/src/u2f.rs}").read_text())
+      offers = uncommented(pathlib.Path("${../crates/ronoctua-belongings/src/offers.rs}").read_text())
+      def const(text, name, where):
+          m = re.search(r"pub const " + name + r': &str = "([^"]+)";', text)
+          return must(m and m.group(1), where)
+      authfile = const(u2f, "AUTHFILE", "`u2f::AUTHFILE`")
+      origin = const(u2f, "ORIGIN", "`u2f::ORIGIN`")
+      if const(offers, "ROOT_U2F_KEYS", "`offers::ROOT_U2F_KEYS`") != authfile:
+          wrong.append("the belongings' offer reads another list than the one PAM trusts")
+
+      asking = sorted(n for n, t in both["without"].items() if "pam_u2f.so" in t)
+      if asking:
+          wrong.append(f"with the security keys turned off, pam_u2f is in {asking}")
+      declared = both["declared"]
+      with_key = sorted(n for n, t in declared.items() if "pam_u2f.so" in t)
+      if with_key != ["sudo"]:
+          wrong.append(f"pam_u2f is in {with_key}, and must be in sudo and nowhere else")
+      for service in with_key:
+          auth = auth_lines(declared[service])
+          at = [i for i, l in enumerate(auth) if any(w.endswith("/pam_u2f.so") for w in l)]
+          for i in at:
+              args = auth[i][3:]
+              if auth[i][1] != "sufficient":
+                  wrong.append(f"{service}: pam_u2f is {auth[i][1]!r}, and may only be sufficient")
+              for needed in [f"authfile={authfile}", f"origin={origin}", f"appid={origin}", "cue"]:
+                  if needed not in args:
+                      wrong.append(f"{service}: pam_u2f has {args}, without {needed!r}")
+              if "nouserok" in args:
+                  wrong.append(f"{service}: pam_u2f lets a person with no key through (nouserok)")
+              if len([a for a in args if a.startswith("authfile=")]) != 1:
+                  wrong.append(f"{service}: pam_u2f names more than one list")
+          unix = lambda lines: any(any(w.endswith("/pam_unix.so") for w in l) for l in lines)
+          if at and not unix(auth[at[-1] + 1 :]):
+              wrong.append(f"{service}: nothing asks for the password after pam_u2f")
+          gate = auth[at[0] - 1] if at and at[0] > 0 else []
+          fits = (
+              gate[1] == "success=ignore default=1"
+              and gate[2].endswith("/pam_succeed_if.so")
+              and gate[3:] == ["quiet", "tty", "=~", "/dev/*"]
+          ) if len(gate) > 2 else False
+          if not fits:
+              wrong.append(f"one line before {service}'s pam_u2f is {gate!r}, and must be the terminal's gate")
+
+      if wrong:
+          print("ERROR: a security key answers the password where it may not.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       pam_u2f answers sudo alone, always sufficient, from root's list of the", file=sys.stderr)
+          print("       person's keys: the password keeps working, and the door's sudo -S never", file=sys.stderr)
+          print("       waits for a touch.", file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: pam_u2f in sudo alone, sufficient, root's list {authfile}, {origin}; nowhere when off")
+      END
+    '';
+
+  # THE KERNEL'S KEYRING HAS ONE DOOR: `ronoctua-belongings`' `unlock.rs`
+  # keeps the session's identity in the user keyring (`@u`) and forgets it;
+  # every door reads the marker the CLI leaves (`runtime/unlocked`) and never
+  # the keyring. A NAME is the break — a manifest that depends on a keyring
+  # crate, or a source (the belongings' own others included) that names
+  # `linux_keyutils`, calls `keyctl`/`add_key`/`request_key`, links
+  # libkeyutils or runs the `keyctl` program.
+  one-keyring-boundary = mkCheck "one-keyring-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a boundary is broken by a NAME anywhere outside it, so each
+    # file is the question. `uncommented` keeps the strings (a program's name IS
+    # a string) and drops the prose; `without_tests` drops the test modules.
+    crates = pathlib.Path("${../crates}")
+    door = crates / "ronoctua-belongings" / "src" / "unlock.rs"
+    NAMES = re.compile(
+        r"\blinux_keyutils\b|\bkeyutils\b"
+        r"|\b(?:keyctl|add_key|request_key)\s*\("
+        r"|\bSYS_(?:keyctl|add_key|request_key)\b"
+        r'|"(?:[^"]*/)?keyctl"'
+        r'|link\s*\(\s*name\s*=\s*"keyutils"|rustc-link-lib=(?:dylib=)?keyutils\b'
+    )
+    wrong, swept = [], 0
+    sources = workspace_sources(crates) + sorted(crates.glob("*/build.rs"))
+    for f in sources:
+        if f == door:
+            continue
+        code = uncommented(without_tests(f.read_text()))
+        swept += 1
+        for m in NAMES.finditer(code):
+            wrong.append(f"{f.relative_to(crates)} names `{m.group(0)}`")
+    floor(swept, 300, "sources of the workspace swept for the kernel's keyring")
+
+    # PARSED: no manifest but the belongings' depends on a keyring crate.
+    CRATE = r"(linux-keyutils|keyutils|keyutils-sys|linux-keyutils-sys|keyring|secret-service)"
+    KEYRING = re.compile(
+        rf"^\s*{CRATE}(?:\.[\w-]+)*\s*=|^\s*\[(?:[^\]]*\.)?dependencies\.{CRATE}\s*\]",
+        re.M,
+    )
+    manifests = 0
+    for toml in sorted(crates.glob("*/Cargo.toml")):
+        manifests += 1
+        if toml.parent.name == "ronoctua-belongings":
+            continue
+        for m in KEYRING.finditer(hashless(toml.read_text())):
+            wrong.append(f"{toml.relative_to(crates)} depends on `{m.group(1) or m.group(2)}`")
+    floor(manifests, 40, "crate manifests swept for a keyring crate")
+
+    # AND THE DOOR IS STILL ONE: `unlock.rs` reaches the user keyring through
+    # linux-keyutils, behind the `keyring` feature the doors never turn on.
+    code = uncommented(without_tests(door.read_text()))
+    floor(len(code), 2000, "characters of the belongings' unlock.rs")
+    if "linux_keyutils::KeyRingIdentifier::User" not in code:
+        wrong.append("unlock.rs no longer keeps the identity in the user keyring; what is this checking?")
+    manifest = hashless((crates / "ronoctua-belongings" / "Cargo.toml").read_text())
+    if not re.search(r'^keyring\s*=\s*\[[^\]]*"dep:linux-keyutils"', manifest, re.M):
+        wrong.append("the belongings' `keyring` feature no longer carries linux-keyutils")
+
+    if wrong:
+        print("ERROR: the kernel's keyring is reached outside ronoctua-belongings' unlock.rs:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       The session's identity lives in @u, kept and forgotten by the belongings' CLI;", file=sys.stderr)
+        print("       a door reads the marker it leaves (runtime/unlocked), never the keyring.", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {swept} sources and {manifests} manifests; the keyring is unlock.rs's alone")
+    END
+  '';
+
+  # THE IDENTITY ENDS WITH THE SESSION, on a machine: kept by a user service
+  # and found by another (user services reach `@u`), in no file, forgotten
+  # when the graphical session ends and before the machine sleeps.
+  belongingsUnlockVm = import ./belongings-unlock-vm.nix {
+    inherit pkgs lib;
+    belongingsCli = rust.belongings;
+  };
+  # ── anchor: L11 ──
+  # THE PERSON'S BRAIN MODULES LOAD (belongings.md WP8b).
+  #
+  # A machine compiles the person's own modules (`my-…`) beside the distro's:
+  # the loader reads a second folder (`personModulesDir`) and says whose each
+  # module is, the generator writes `<id> <snake> <origin>`, and the brain
+  # crate's `build.rs` loads a person's `module.rs` from
+  # `RONOCTUA_BRAIN_PERSON_MODULES_DIR`. This builds the BRAIN, alone, with the
+  # fixture `crates/ronoctua-brain/tests/person/my-sample` exactly as a machine
+  # would hand it in, and asks the binary which modules it MADE
+  # (`ronoctua-brain modules` builds each one) — the fixture's among the
+  # distro's, none missing. It proves at evaluation that the fixture is the
+  # person's, that its NixOS half is offered by id and gated by the brain's
+  # switch alone (the distro's halves untouched), and that the chain a machine
+  # builds (`withPersonModules`) threads the folder through every link the
+  # footer reads: the texts, the tokens, the notifications, the registry and
+  # the six components the WIT enum is compiled into — and that it hands the
+  # machine its modules whole (`machineModules`: the distro's, plus the
+  # approved halves only).
+  #
+  # ONE BAD FOLDER IS LEFT OUT, NEVER THE MACHINE STOPPED: on
+  # `tests/person-refused/`, the loader loads the good folder and says why
+  # each other is not (an id outside the grammar, a folder that is not the
+  # person's, a text prefix another folder has), the build's copy holds the
+  # good one alone, and the folder no evaluation can read is never read when
+  # it is not asked for (`only`). With none loading, every link is the
+  # distro's own.
+  #
+  # AND THE BUILD ITSELF: `build.rs`'s two refusals are planted before the
+  # good build (a table listing the person's module with the variable unset;
+  # a folder in the person's copy the table does not list), each must stop it
+  # with its sentence; and the fixture's own test runs.
+  brain-person-modules-load =
+    let
+      dir = ../crates/ronoctua-brain/tests/person;
+      person = withPersonModules { inherit dir; };
+      loader = person.brainModules;
+      registry = person.brainModulesRs;
+      refusedDir = ../crates/ronoctua-brain/tests/person-refused;
+      # EVERY FOLDER BUT THE ONE NO EVALUATION CAN READ.
+      readable = withPersonModules {
+        dir = refusedDir;
+        only = [
+          "my-fine"
+          "my-fine-too"
+          "my-2fa"
+          "stray"
+        ];
+      };
+      fineOnly = withPersonModules {
+        dir = refusedDir;
+        only = [ "my-fine" ];
+      };
+      none = withPersonModules {
+        dir = refusedDir;
+        only = [ "stray" ];
+      };
+      drvOf = d: builtins.unsafeDiscardStringContext d.drvPath;
+      # THE BRAIN ALONE: the workspace's build narrowed to one crate, with the
+      # person's table and folder — what `build.rs` and the generated shims
+      # are asked to do on a machine. At the loop's profile, as `rust.tests`:
+      # what is proved is what the build script and the shims do, which no
+      # profile changes.
+      brain = rust.loopWorkspace.overrideAttrs (_: {
+        pname = "ronoctua-brain-person";
+        RONOCTUA_BRAIN_MODULES_DIR = "${registry}";
+        RONOCTUA_BRAIN_PERSON_MODULES_DIR = "${registry.personModulesDir}";
+        buildPhase = ''
+          runHook preBuild
+          # A PLANT `build.rs` MUST REFUSE, by its sentence. Before the good
+          # build, whose log is the one installed from.
+          refused() {
+            local what=$1 needle=$2
+            shift 2
+            if "$@" >"$TMPDIR/plant.log" 2>&1; then
+              echo "ERROR: build.rs built the brain with $what" >&2
+              exit 1
+            fi
+            if ! grep -qF "$needle" "$TMPDIR/plant.log"; then
+              echo "ERROR: build.rs refused $what, but not with \`$needle\`:" >&2
+              tail -40 "$TMPDIR/plant.log" >&2
+              exit 1
+            fi
+            echo "plant refused: $what"
+          }
+          unset_variable() (
+            unset RONOCTUA_BRAIN_PERSON_MODULES_DIR
+            cargoWithProfile build --locked -p ronoctua-brain --bin ronoctua-brain
+          )
+          cp -r "$RONOCTUA_BRAIN_PERSON_MODULES_DIR" "$TMPDIR/person-plus"
+          chmod -R u+w "$TMPDIR/person-plus"
+          mkdir "$TMPDIR/person-plus/my-stray"
+          unlisted_folder() (
+            export RONOCTUA_BRAIN_PERSON_MODULES_DIR="$TMPDIR/person-plus"
+            cargoWithProfile build --locked -p ronoctua-brain --bin ronoctua-brain
+          )
+          refused "the person's module listed and the variable unset" \
+            "the table lists the person's modules (my-sample)" unset_variable
+          refused "a person's folder the table does not list" \
+            "that Nix did not list: my-stray" unlisted_folder
+
+          cargoBuildLog=$(mktemp cargoBuildLogXXXX.json)
+          cargoWithProfile build --message-format json-render-diagnostics --locked \
+            -p ronoctua-brain --bin ronoctua-brain >"$cargoBuildLog"
+
+          # THE FIXTURE'S OWN TEST, compiled into the brain as a machine
+          # compiles it — `rust.tests` builds without the person's folder.
+          cargoWithProfile test --locked -p ronoctua-brain --lib -- its_seats_are_the_declared_ones \
+            2>&1 | tee "$TMPDIR/fixture-test.log"
+          if ! grep -q "its_seats_are_the_declared_ones \.\.\. ok" "$TMPDIR/fixture-test.log"; then
+            echo "ERROR: the person's fixture's test did not run and pass" >&2
+            exit 1
+          fi
+          runHook postBuild
+        '';
+      });
+      etcOf =
+        modules: on:
+        builtins.attrNames
+          (lib.evalModules {
+            modules = modules ++ [
+              {
+                options.ronoctua.brain.enable = lib.mkOption { default = true; };
+                options.environment.etc = lib.mkOption {
+                  type = lib.types.attrsOf lib.types.anything;
+                  default = { };
+                };
+                config.ronoctua.brain.enable = on;
+              }
+            ];
+          }).config.environment.etc;
+      env = d: d.drvAttrs;
+      facts = pkgs.writeText "brain-person-facts.json" (
+        builtins.toJSON {
+          distro = brainModules.ids;
+          personIds = loader.personIds;
+          distroIds = loader.distroIds;
+          origin = loader.modules.my-sample.origin;
+          origins = lib.mapAttrs (_: m: m.origin) loader.modules;
+          halves = builtins.attrNames loader.personNixosModules;
+          distroHalves = builtins.length loader.nixosModules == builtins.length brainModules.nixosModules;
+          gateOpens = etcOf [ loader.personNixosModules.my-sample ] true == [ "ronoctua/my-sample" ];
+          gateCloses = etcOf [ loader.personNixosModules.my-sample ] false == [ ];
+          glyph = builtins.hasAttr "my-sample-seat" loader.glyphs;
+          # THE CHAIN, link by link: each variable the workspace reads moved
+          # to the person's derivation, and the components with it.
+          chain =
+            lib.genAttrs
+              [
+                "RONOCTUA_BRAIN_MODULES_DIR"
+                "RONOCTUA_I18N_DIR"
+                "RONOCTUA_TOKENS_RS"
+                "RONOCTUA_NOTIFICATIONS_RS"
+              ]
+              (
+                v:
+                builtins.unsafeDiscardStringContext (env person.rust.workspace).${v}
+                != builtins.unsafeDiscardStringContext (env rust.workspace).${v}
+              );
+          personDir = builtins.unsafeDiscardStringContext (
+            (env person.rust.workspace).RONOCTUA_BRAIN_PERSON_MODULES_DIR or ""
+          );
+          distroHasNoPersonDir = !((env rust.workspace) ? RONOCTUA_BRAIN_PERSON_MODULES_DIR);
+          components = lib.mapAttrs (
+            n: p:
+            builtins.unsafeDiscardStringContext p
+            != builtins.unsafeDiscardStringContext rust.bufferComponents.${n}
+          ) person.rust.bufferComponents;
+          # THE TEXTS: the fixture's fragment handed to the one text generator.
+          texts = lib.hasInfix "my-sample=" person.i18nRs.drvAttrs.buildPhase;
+          # THE MACHINE'S MODULES: the distro's, and an approved half only.
+          machineModules = {
+            none = builtins.length (person.machineModules [ ]);
+            approved = builtins.length (person.machineModules [ "my-sample" ]);
+            unknown = builtins.length (person.machineModules [ "my-nope" ]);
+          };
+          # ONE BAD FOLDER LEFT OUT, the rest loaded — and the folder no
+          # evaluation reads, unread (asking for it would stop this one).
+          readableIds = readable.brainModules.personIds;
+          readableRefused = readable.refused;
+          copied = builtins.attrNames (builtins.readDir readable.brainModules.personModulesDir);
+          fineProblems = readable.brainModules.personProblemsOf.my-fine;
+          fineOnlyRefused = fineOnly.refused;
+          noneIsTheDistros =
+            none.brainModules.personModulesDir == null && drvOf none.rust.workspace == drvOf rust.workspace;
+          # A BROKEN MANIFEST IS A SENTENCE, never an error nothing catches:
+          # each of these stopped the whole evaluation before it was one.
+          odd =
+            lib.mapAttrs
+              (
+                _: m:
+                brainModules.problemsOf {
+                  id = "my-odd";
+                  origin = "person";
+                  files = [
+                    "manifest.nix"
+                    "module.rs"
+                  ];
+                  i18nFiles = map (l: "${l}.ftl") languages;
+                  manifest = {
+                    what = "A person's broken manifest.";
+                    needs = {
+                      root = false;
+                      network = false;
+                      boundaries = [ ];
+                    };
+                    schedule = null;
+                    uses = [ ];
+                    namedBy = { };
+                  }
+                  // m;
+                }
+              )
+              {
+                glyph = {
+                  glyphs.seat = "md-cube_outline";
+                  marks.seat = {
+                    glyph = 3;
+                    hint = "my-odd-mark-seat";
+                  };
+                };
+                tags.events.ping.notification.tags = "ping";
+                function.events.ping.notification.show = x: x;
+                path.uses = [ ./checks.nix ];
+              };
+        }
+      );
+    in
+    mkCheck "brain-person-modules-load" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, subprocess, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the loader's and the chain's answers arrive as JSON written by
+      # Nix; what the brain compiled is what its own binary says it made.
+      # FILE-WIDE: the answers and the sample's generated manifest are read
+      # whole — module-level data, with no function to narrow to.
+      wrong = []
+      facts = json.load(open("${facts}"))
+      distro = facts["distro"]
+      floor(len(distro), 10, "distro modules the loader read")
+      if facts["personIds"] != ["my-sample"]:
+          wrong.append(f"the person's folder loaded {facts['personIds']}, not the fixture")
+      if facts["distroIds"] != distro:
+          wrong.append("a person's folder changed which of the distro's modules load")
+      if facts["origin"] != "person":
+          wrong.append(f"the fixture's origin is {facts['origin']!r}")
+      if any(o != "distro" for i, o in facts["origins"].items() if i != "my-sample"):
+          wrong.append(f"a distro module is not the distro's: {facts['origins']}")
+      if facts["halves"] != ["my-sample"] or not facts["distroHalves"]:
+          wrong.append(f"the person's NixOS half is offered as {facts['halves']}, or it joined the distro's")
+      if not facts["gateOpens"]:
+          wrong.append("the person's NixOS half did not apply with the brain on")
+      if not facts["gateCloses"]:
+          wrong.append("the person's NixOS half applied with the brain off")
+      if not facts["glyph"]:
+          wrong.append("the fixture's glyph token is not in the loader's table")
+      for var, moved in facts["chain"].items():
+          if not moved:
+              wrong.append(f"the machine's workspace reads the distro's {var}: the person's folder never reached it")
+      for name, moved in facts["components"].items():
+          if not moved:
+              wrong.append(f"{name} is the distro's component, compiled against a WIT without the person's glyph")
+      floor(len(facts["components"]), 6, "components of the machine's workspace")
+      if not facts["personDir"].startswith("/nix/store/") or facts["personDir"] != "${registry.personModulesDir}":
+          wrong.append(f"the machine's workspace loads the person's modules from {facts['personDir']!r}")
+      if not facts["texts"]:
+          wrong.append("the machine's texts were generated without the person's fragment")
+      if not facts["distroHasNoPersonDir"]:
+          wrong.append("the distro's own workspace names a person's folder")
+      mm = facts["machineModules"]
+      floor(mm["none"], 20, "NixOS modules of the distro a machine imports")
+      if mm["approved"] != mm["none"] + 1 or mm["unknown"] != mm["none"]:
+          wrong.append(f"the machine's modules are not the distro's plus the approved half: {mm}")
+
+      # ONE BAD FOLDER IS LEFT OUT AND SAID; THE GOOD ONE LOADS.
+      if facts["readableIds"] != ["my-fine"]:
+          wrong.append(f"beside refused folders the loader loaded {facts['readableIds']}, not `my-fine`")
+      refused = facts["readableRefused"]
+      expected = {
+          "my-fine-too": "overlaps `my-fine`",
+          "my-2fa": "is `my-` and an English kebab word",
+          "stray": "is `my-` and an English kebab word",
+          "my-unreadable": "left out unread",
+      }
+      if sorted(refused) != sorted(expected):
+          wrong.append(f"the folders left out are {sorted(refused)}, not {sorted(expected)}")
+      for folder, why in expected.items():
+          if not any(why in s for s in refused.get(folder, [])):
+              wrong.append(f"`{folder}` was not left out with `{why}`: {refused.get(folder)}")
+      if facts["copied"] != ["my-fine"]:
+          wrong.append(f"the build's copy holds {facts['copied']}: a refused folder in it stops build.rs")
+      if facts["fineProblems"]:
+          wrong.append(f"`my-fine`, read alone, has problems: {facts['fineProblems']}")
+      only = facts["fineOnlyRefused"]
+      if sorted(only) != ["my-2fa", "my-fine-too", "my-unreadable", "stray"] or not all(
+          all("left out unread" in s for s in v) for v in only.values()
+      ):
+          wrong.append(f"`only` did not leave every other folder out unread: {only}")
+      if not facts["noneIsTheDistros"]:
+          wrong.append("with no folder loading, the machine does not build the distro's own workspace")
+      for what, why in (
+          ("glyph", "names a glyph `glyphs` does not declare"),
+          ("tags", "notification.tags is a list of tags"),
+          ("function", "holds no function and no path"),
+          ("path", "holds no function and no path"),
+      ):
+          if not any(why in s for s in facts["odd"][what]):
+              wrong.append(f"a person's manifest with a bad {what} was not refused with `{why}`: {facts['odd'][what]}")
+
+      # THE TABLE: whose each module is, the person's from the person's folder.
+      ids = pathlib.Path("${registry}/ids.txt").read_text().splitlines()
+      if "my-sample my_sample person" not in ids:
+          wrong.append(f"ids.txt does not list the fixture as the person's: {ids}")
+      if sorted(l.split()[0] for l in ids if l.endswith(" distro")) != sorted(distro):
+          wrong.append("ids.txt does not list every distro module as the distro's")
+      manifest = uncommented(pathlib.Path("${registry}/my-sample/manifest.rs").read_text())
+      if "crate::module::MarkId::declared(" not in manifest or '"my-sample-seat"' not in manifest:
+          wrong.append("the fixture's mark with instances is not declared with them")
+
+      # THE BRAIN, built with them: every module it MADE, by its own binary.
+      made = subprocess.run(["${brain}/bin/ronoctua-brain", "modules"],
+                            capture_output=True, text=True, check=True).stdout.split()
+      if sorted(made) != sorted(distro + ["my-sample"]):
+          wrong.append(f"the brain made {sorted(made)}; the distro's and the person's are {sorted(distro + ['my-sample'])}")
+
+      if wrong:
+          print("ERROR: the person's brain modules do not load as a machine loads them.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: the brain made {len(made)} modules, the person's `my-sample` among the distro's {len(distro)};"
+            f" the machine's chain moved {len(facts['chain'])} tables and {len(facts['components'])} components;"
+            f" {len(refused)} bad folders left out and said, build.rs refused its 2 plants, the fixture's test passed")
+      END
+    '';
+
+  # A PERSON'S MODULE IS `my-…`, AND ONLY A PERSON'S IS (belongings.md WP8b).
+  #
+  # The one rule that keeps a person's module from being taken for — or
+  # shadowing — one of the distro's: every name a person's module generates
+  # begins with `my-`, and none of the distro's does. Proved on the loader's
+  # pure half (`problemsOf`, each refusal by its sentence after the folder it
+  # breaks is accepted): a person's id outside the grammar, a distro id that
+  # is `my` or begins with `my-`, a person's key prefix outside `my-`, a
+  # distro key prefix inside it. The id grammar is the one table
+  # `ronoctua-person` is proved on too (`fixtures/module-ids.json`), read here
+  # whole. On the loader itself, handed real folders the wrong way round: the
+  # sample module as a person's is left out and said, the person's fixture as
+  # the distro's stops the evaluation. On the real tree: no distro module and
+  # no base text key is in the person's namespace, and the distro compiles no
+  # person's module. And the generator refuses a record whose origin is
+  # neither, before it writes a byte.
+  brain-person-module-ids-are-prefixed =
+    let
+      loaderWith = args: import ../nix/brain-modules.nix ({ inherit lib languages; } // args);
+      refuses = args: !(builtins.tryEval (builtins.deepSeq (loaderWith args).every true)).success;
+      whole = [
+        "manifest.nix"
+        "module.rs"
+        "module.nix"
+        "checks.nix"
+        "why.md"
+      ];
+      folder = {
+        files = [
+          "manifest.nix"
+          "module.rs"
+        ];
+        i18nFiles = map (l: "${l}.ftl") languages;
+        manifest = {
+          what = "A made-up module.";
+          needs = {
+            root = false;
+            network = false;
+            boundaries = [ ];
+          };
+          schedule = null;
+          uses = [ ];
+          namedBy = { };
+        };
+      };
+      said = attrs: brainModules.problemsOf (folder // attrs);
+      withKeys =
+        attrs: keys:
+        said (
+          attrs
+          // {
+            manifest = folder.manifest // {
+              inherit keys;
+            };
+          }
+        );
+      grammar = builtins.fromJSON (builtins.readFile ../crates/ronoctua-person/fixtures/module-ids.json);
+      sampleRecord = builtins.head (
+        (withPersonModules { dir = ../crates/ronoctua-brain/tests/person; }).brainModules.forGenerator (
+          _: { }
+        )
+      );
+      records = pkgs.writeText "origin-records.json" (
+        builtins.toJSON [
+          (sampleRecord // { origin = "elsewhere"; })
+        ]
+      );
+      facts = pkgs.writeText "brain-prefix-facts.json" (
+        builtins.toJSON {
+          prefix = brainModules.personPrefix;
+          ids = brainModules.ids;
+          personIds = brainModules.personIds;
+          # ACCEPTED first: the person's smallest folder, and the distro's
+          # whole one — so a refusal below is the id's and nothing else's.
+          personAccepted = said {
+            id = "my-made-up";
+            origin = "person";
+          };
+          distroAccepted = said {
+            id = "made-up";
+            files = whole;
+          };
+          personUnprefixed = said {
+            id = "made-up";
+            origin = "person";
+          };
+          distroPrefixed = said {
+            id = "my-made-up";
+            files = whole;
+          };
+          distroMy = said {
+            id = "my";
+            files = whole;
+          };
+          strangeOrigin = said {
+            id = "made-up";
+            origin = "elsewhere";
+          };
+          distroThin = said { id = "made-up"; };
+          # THE KEY PREFIXES, each side of the line.
+          personKeysInside = withKeys {
+            id = "my-made-up";
+            origin = "person";
+          } [ "my-made-up-more" ];
+          personKeysOutside = withKeys {
+            id = "my-made-up";
+            origin = "person";
+          } [ "agents" ];
+          distroKeysInside = withKeys {
+            id = "made-up";
+            files = whole;
+          } [ "my-things" ];
+          # THE ID GRAMMAR, on the table `ronoctua-person` reads too.
+          grammar = lib.genAttrs (grammar.accepted ++ grammar.refused) (
+            id:
+            said {
+              inherit id;
+              origin = "person";
+            }
+          );
+          grammarAccepted = grammar.accepted;
+          grammarRefused = grammar.refused;
+          sampleAsPerson =
+            (loaderWith {
+              modulesDir = ../crates/ronoctua-brain/tests/person-none;
+              personModulesDir = ../crates/ronoctua-brain/tests/modules;
+            }).personRefused;
+          fixtureAsDistro = refuses {
+            modulesDir = ../crates/ronoctua-brain/tests/person;
+          };
+          fixtureAsPerson =
+            (loaderWith {
+              modulesDir = ../crates/ronoctua-brain/tests/person-none;
+              personModulesDir = ../crates/ronoctua-brain/tests/person;
+            }).personIds;
+        }
+      );
+    in
+    mkCheck "brain-person-module-ids-are-prefixed" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, subprocess, sys, tempfile
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the loader's answers, as JSON written by Nix; the base texts,
+      # read for their KEYS (the name before `=` at the start of a line).
+      # FILE-WIDE: an `.ftl` key is a module-level line, so the whole file is
+      # where one is.
+      wrong = []
+      f = json.load(open("${facts}"))
+      prefix = f["prefix"]
+      if prefix != "my-":
+          wrong.append(f"a person's prefix is {prefix!r}, not `my-`")
+      def personal(name):
+          return name == "my" or name.startswith(prefix)
+      floor(len(f["ids"]), 10, "distro modules on the real tree")
+      for i in f["ids"]:
+          if personal(i):
+              wrong.append(f"the distro has a module `{i}`, in the person's namespace")
+      if f["personIds"]:
+          wrong.append(f"the distro compiles the person's modules {f['personIds']}")
+      for what in ("personAccepted", "distroAccepted", "personKeysInside"):
+          if f[what]:
+              wrong.append(f"a good folder was refused ({what}): {f[what]}")
+      ID = "is `my-` and an English kebab word"
+      for what, expect in (
+          ("personUnprefixed", ID),
+          ("distroPrefixed", "are the person's names"),
+          ("distroMy", "are the person's names"),
+          ("strangeOrigin", "the origin is `distro` or `person`"),
+          # A DISTRO FOLDER IS WHOLE: the person's smallest is not enough for it.
+          ("distroThin", "why.md is missing"),
+          ("personKeysOutside", "a person's module's prefixes begin with `my-`"),
+          ("distroKeysInside", "are the person's prefixes, never the distro's"),
+      ):
+          if not any(expect in s for s in f[what]):
+              wrong.append(f"{what} was not refused with `{expect}`: {f[what]}")
+
+      # ONE GRAMMAR: every id of the shared table, as the loader reads it.
+      floor(len(f["grammarAccepted"]), 5, "ids the grammar table accepts")
+      floor(len(f["grammarRefused"]), 10, "ids the grammar table refuses")
+      for i in f["grammarAccepted"]:
+          if f["grammar"][i]:
+              wrong.append(f"the loader refuses `{i}`, which ronoctua-person approves: {f['grammar'][i]}")
+      for i in f["grammarRefused"]:
+          if not any(ID in s for s in f["grammar"][i]):
+              wrong.append(f"the loader does not refuse `{i}` by its id: {f['grammar'][i]}")
+
+      sample = f["sampleAsPerson"]
+      if list(sample) != ["pilot-sample"] or not any(ID in s for s in sample["pilot-sample"]):
+          wrong.append(f"the sample module (no `my-`) was not left out as a person's, by its id: {sample}")
+      if not f["fixtureAsDistro"]:
+          wrong.append("the loader took the person's fixture (`my-`) as the distro's")
+      if f["fixtureAsPerson"] != ["my-sample"]:
+          wrong.append(f"the loader did not load the person's fixture as the person's: {f['fixtureAsPerson']}")
+
+      # NO BASE KEY IN THE PERSON'S NAMESPACE, openers and the brain's task
+      # names included: a person's key would otherwise be refused as a base
+      # key, at their update.
+      base = 0
+      for language in "${lib.concatStringsSep " " languages}".split():
+          text = pathlib.Path("${../assets/i18n}", language + ".ftl").read_text()
+          for key in re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M):
+              base += 1
+              rest = re.sub(r"^(cmd|notif|echo|about|ask)-", "", key)
+              rest = re.sub(r"^brain-task-", "", rest)
+              if personal(rest):
+                  wrong.append(f"the base key `{key}` ({language}) is in the person's namespace")
+      floor(base, 2000, "base text keys read")
+
+      # THE GENERATOR, handed a record whose origin is neither.
+      work = pathlib.Path(tempfile.mkdtemp())
+      r = subprocess.run([sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--modules", "${records}",
+                          "--parser", "${../nix/scripts/gen-i18n.py}", "--language", "${builtins.head languages}",
+                          "--out", str(work / "out")], capture_output=True, text=True)
+      if r.returncode == 0 or "its origin is 'elsewhere'" not in r.stderr:
+          wrong.append(f"the generator took a record that is neither the distro's nor the person's: {r.stderr!r}")
+      if (work / "out").exists():
+          wrong.append("the generator wrote before it refused the record's origin")
+
+      if wrong:
+          print("ERROR: a person's module and the distro's can be taken for each other.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(f['ids'])} distro modules and {base} base keys, none in `my`/`my-`; "
+            f"{len(f['grammar'])} ids read as ronoctua-person reads them; the loader and the generator refuse the rest")
+      END
+    '';
+
+  # A MARK HAS FROM ONE TO NINE INSTANCES (features.md WP12).
+  #
+  # The footer draws an instance as ONE digit after the glyph
+  # (`brain::mark_text`), so a mark may declare `instances = N` only from 1
+  # to 9. The loader refuses anything else by its sentence, the generator
+  # writes the number it was given into the declaration
+  # (`MarkId::declared`) and refuses one past nine handed to it directly, and
+  # a mark that declares none stays `MarkId::of`. What a module may then SHOW
+  # is the core's question, and its tests answer it
+  # (`a_mark_is_shown_only_as_its_manifest_declares_it`,
+  # `the_mind_carries_only_the_marks_a_manifest_declares`, in `rust.tests`).
+  mark-instances-are-bounded =
+    let
+      folder = {
+        id = "made-up";
+        files = [
+          "manifest.nix"
+          "module.rs"
+          "module.nix"
+          "checks.nix"
+          "why.md"
+        ];
+        i18nFiles = map (l: "${l}.ftl") languages;
+        manifest = {
+          what = "A made-up module.";
+          needs = {
+            root = false;
+            network = false;
+            boundaries = [ ];
+          };
+          schedule = null;
+          uses = [ ];
+          namedBy = { };
+          glyphs.seat = "md-cube_outline";
+        };
+      };
+      with' =
+        mark:
+        brainModules.problemsOf (
+          folder
+          // {
+            manifest = folder.manifest // {
+              marks.seat = {
+                glyph = "seat";
+                hint = "made-up-mark-seat";
+              }
+              // mark;
+            };
+          }
+        );
+      person = withPersonModules { dir = ../crates/ronoctua-brain/tests/person; };
+      registry = person.brainModulesRs;
+      record = pkgs.writeText "bounded-record.json" (
+        builtins.toJSON (person.brainModules.forGenerator (_: { }))
+      );
+      facts = pkgs.writeText "mark-instances-facts.json" (
+        builtins.toJSON {
+          most = brainModules.mostInstances;
+          accepted = map (n: with' { instances = n; }) [
+            1
+            9
+          ];
+          plain = with' { };
+          refused = map (n: with' { instances = n; }) [
+            0
+            10
+            "3"
+            2.5
+            true
+          ];
+          # THE REAL TREE: every mark, with what it declares.
+          declared = map (m: {
+            inherit (m) id snake;
+            marks = lib.mapAttrs (_: mk: { inherit (mk) instances resting; }) m.marks;
+          }) brainModules.every;
+        }
+      );
+    in
+    mkCheck "mark-instances-are-bounded" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, subprocess, sys, tempfile
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the loader's answers and the generator's output, read as
+      # what they are — JSON, and the generated Rust through `uncommented`.
+      # FILE-WIDE: a generated manifest is module-level constants, read whole.
+      wrong = []
+      f = json.load(open("${facts}"))
+      if f["most"] != 9:
+          wrong.append(f"a mark may declare {f['most']} instances; the footer draws one digit")
+      for said in f["accepted"] + [f["plain"]]:
+          if said:
+              wrong.append(f"a mark with from 1 to 9 instances, or none, was refused: {said}")
+      floor(len(f["refused"]), 5, "bad counts asked of the loader")
+      for said in f["refused"]:
+          if not any("is a whole number from 1 to 9" in s for s in said):
+              wrong.append(f"a count outside 1..9 was not refused by its sentence: {said}")
+      # EVERY MARK OF THE REAL TREE, against what the generator wrote for it:
+      # `MarkId::declared` exactly when it declares instances or a rest, and
+      # never more instances than one digit draws.
+      seen = 0
+      for m in f["declared"]:
+          made = uncommented(pathlib.Path("${brainModulesRs}", m["id"], "manifest.rs").read_text())
+          for k, d in m["marks"].items():
+              seen += 1
+              if not 0 <= d["instances"] <= 9:
+                  wrong.append(f"{m['id']}/{k} declares {d['instances']} instances")
+              const = k.upper().replace("-", "_")
+              found = re.search(r"pub const " + const + r":\s*crate::module::MarkId\s*=\s*crate::module::MarkId::(of|declared)\(", made)
+              want = "declared" if (d["instances"] or d["resting"]) else "of"
+              if not found or found.group(1) != want:
+                  wrong.append(f"{m['id']}/{k} is not written with `MarkId::{want}`")
+      floor(seen, 8, "marks of the real tree")
+
+      # THE GENERATOR, on the person's fixture (3 instances): the number lands
+      # in the declaration; and handed 10 directly, it refuses.
+      seat = uncommented(pathlib.Path("${registry}/my-sample/manifest.rs").read_text())
+      at = seat.find("MarkId::declared(")
+      args = " ".join(shut_at(seat, at + len("MarkId::declared(")).split()) if at >= 0 else ""
+      if not args.endswith("3, false,") and not args.endswith("3, false"):
+          wrong.append(f"the fixture's mark is not declared with its 3 instances: `{args}`")
+      records = json.loads(pathlib.Path("${record}").read_text())
+      mine = [r for r in records if r["id"] == "my-sample"][0]
+      mine["marks"]["seat"]["instances"] = 10
+      work = pathlib.Path(tempfile.mkdtemp())
+      (work / "records.json").write_text(json.dumps([mine]))
+      r = subprocess.run([sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--modules", str(work / "records.json"),
+                          "--parser", "${../nix/scripts/gen-i18n.py}", "--language", "${builtins.head languages}",
+                          "--out", str(work / "out")], capture_output=True, text=True)
+      if r.returncode == 0 or "from 1 to 9" not in r.stderr:
+          wrong.append(f"the generator wrote a mark with 10 instances: {r.stderr!r}")
+
+      if wrong:
+          print("ERROR: a mark's instances are not bounded by the one digit the footer draws.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: instances from 1 to 9, {len(f['refused'])} other counts refused, the generator writes and refuses")
+      END
+    '';
+
+  # THE MARKS DRAWN AT REST ARE THE ONES THE OWNER APPROVED (features.md WP12).
+  #
+  # The modeline at rest is silent (AGENTS.md): a mark in `Tone::Quiet` says
+  # only that all is well, and the core drops one whose manifest does not
+  # declare `resting = true` (its test: `the_mind_carries_only_the_marks_a_
+  # manifest_declares`). The loader lets a mark declare that only when it is
+  # on the owner's list, `assets/brain-resting-marks.nix`, and never on a
+  # person's module. This proves the loader's three answers by their
+  # sentences, takes the census of the real tree (every resting mark is on
+  # the list), and holds the list and AGENTS.md's exception to ONE set of
+  # names, so an approval is never written in one place alone.
+  resting-marks-are-the-approved-ones =
+    let
+      approved = import ../assets/brain-resting-marks.nix;
+      loaderWith =
+        list:
+        import ../nix/brain-modules.nix {
+          inherit lib languages;
+          # The real distro modules load too (the loader's deepSeq), and the
+          # LLM accounts' module declares resting marks: the owner's list stays, and
+          # the planted names are added to it. made-up and my-made-up are on
+          # neither, so the refusals asked below are still the loader's.
+          restingApproved = approved ++ list;
+        };
+      folder = origin: id: {
+        inherit id origin;
+        files = [
+          "manifest.nix"
+          "module.rs"
+          "module.nix"
+          "checks.nix"
+          "why.md"
+        ];
+        i18nFiles = map (l: "${l}.ftl") languages;
+        manifest = {
+          what = "A made-up module.";
+          needs = {
+            root = false;
+            network = false;
+            boundaries = [ ];
+          };
+          schedule = null;
+          uses = [ ];
+          namedBy = { };
+          glyphs.seat = "md-cube_outline";
+          marks.seat = {
+            glyph = "seat";
+            hint = "${id}-mark-seat";
+            resting = true;
+          };
+        };
+      };
+      facts = pkgs.writeText "resting-facts.json" (
+        builtins.toJSON {
+          inherit approved;
+          loaderList = brainModules.restingApproved;
+          onTheList = (loaderWith [ "made-up/seat" ]).problemsOf (folder "distro" "made-up");
+          offTheList = (loaderWith [ "other/seat" ]).problemsOf (folder "distro" "made-up");
+          aPersons = (loaderWith [ "my-made-up/seat" ]).problemsOf (folder "person" "my-made-up");
+          notABool = (loaderWith [ ]).problemsOf (
+            (folder "distro" "made-up")
+            // {
+              manifest = (folder "distro" "made-up").manifest // {
+                marks.seat = {
+                  glyph = "seat";
+                  hint = "made-up-mark-seat";
+                  resting = "yes";
+                };
+              };
+            }
+          );
+          resting = lib.concatMap (
+            m: lib.mapAttrsToList (k: _: "${m.id}/${k}") (lib.filterAttrs (_: mk: mk.resting) m.marks)
+          ) brainModules.every;
+          marks = lib.concatMap (m: builtins.attrNames m.marks) brainModules.every;
+        }
+      );
+    in
+    mkCheck "resting-marks-are-the-approved-ones" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the loader's answers and the list, as JSON written by Nix.
+      # PROSE: AGENTS.md's exception is read for the marks it names — the
+      # bullet that names this check — since an owner's approval is written
+      # there and nowhere a parser could read it otherwise.
+      wrong = []
+      f = json.load(open("${facts}"))
+      approved = f["approved"]
+      if f["loaderList"] != approved:
+          wrong.append("the loader does not read assets/brain-resting-marks.nix")
+      for name in approved:
+          if not re.fullmatch(r"[a-z][a-z0-9-]*/[a-z][a-z0-9-]*", name):
+              wrong.append(f"`{name}` on the list is not `<module>/<mark>`")
+      if len(set(approved)) != len(approved):
+          wrong.append("the list names a mark twice")
+      if f["onTheList"]:
+          wrong.append(f"a mark on the list was refused its rest: {f['onTheList']}")
+      for what, expect in (
+          ("offTheList", "is not a mark the owner approved"),
+          ("aPersons", "a person's module draws nothing at rest"),
+          ("notABool", "resting is a boolean"),
+      ):
+          if not any(expect in s for s in f[what]):
+              wrong.append(f"{what} was not refused with `{expect}`: {f[what]}")
+      floor(len(f["marks"]), 8, "marks of the real tree")
+      for name in f["resting"]:
+          if name not in approved:
+              wrong.append(f"`{name}` rests and the owner did not approve it")
+
+      agents = open("${../AGENTS.md}").read()
+      bullets = [b for b in re.split(r"\n(?=- )", agents) if "`resting-marks-are-the-approved-ones`" in b]
+      if len(bullets) != 1:
+          wrong.append(f"AGENTS.md names this check in {len(bullets)} bullets, not in the one exception")
+      else:
+          named = sorted(set(re.findall(r"`brain:([a-z][a-z0-9-]*/[a-z][a-z0-9-]*)(?:\.<n>)?`", bullets[0])))
+          floor(len(named), 1, "marks AGENTS.md's exception names")
+          if named != sorted(approved):
+              wrong.append(f"AGENTS.md approves {named} and the list {sorted(approved)}")
+
+      if wrong:
+          print("ERROR: a mark may be drawn at rest that the owner did not approve.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(approved)} marks approved to rest, the same in AGENTS.md; {len(f['resting'])} declared on the tree")
+      END
+    '';
+  # ── anchor: L12 ──
+  # /private NEVER OPENS AT BOOT.
+  #
+  # The vault is opened by the person's gesture and by nothing else: no
+  # `fileSystems` entry, no crypttab line and no initrd device names it, and
+  # of the four units only the status one is wanted at boot — the root unit
+  # by nothing (the sudo door starts it), the lock unit by `sleep.target`. And
+  # what keeps `/private` empty underneath is written at BOOT ONLY: `tmpfiles`
+  # runs again at every switch, and a `d` or an `h` line without `!` would
+  # chmod and chattr the person's own open folder — the vault mounted there.
+  # On the distro's layout the image's subvolume mount is `nofail` and waits
+  # for the unit that makes `@private` on a machine installed before it: a
+  # machine without it still boots. Nothing that reads the image runs before
+  # that mount (`local-fs.target` does not wait for a `nofail` one), and no
+  # `tmpfiles` line lays the image folder underneath it.
+  private-never-mounts-at-boot =
+    let
+      of = c: {
+        mounts = lib.mapAttrs (_: fs: {
+          device = if (fs.device or null) == null then "" else fs.device;
+          options = fs.options or [ ];
+        }) c.fileSystems;
+        crypttab =
+          let
+            text = (c.environment.etc.crypttab or { }).text or null;
+          in
+          if text == null then "" else text;
+        initrd = lib.attrNames c.boot.initrd.luks.devices;
+        units = lib.mapAttrs (_: u: {
+          inherit (u) wantedBy requiredBy before;
+          exec = u.serviceConfig.ExecStart or "";
+          mountsFor = u.unitConfig.RequiresMountsFor or [ ];
+        }) (lib.filterAttrs (n: _: lib.hasPrefix "ronoctua-private" n) c.systemd.services);
+        mountUnits = map (m: m.where) c.systemd.mounts ++ map (a: a.where) c.systemd.automounts;
+        tmpfiles = builtins.filter (r: lib.hasInfix " /private" r) c.systemd.tmpfiles.rules;
+        imageTmpfiles = builtins.filter (
+          r: lib.hasInfix " /var/lib/ronoctua-private" r
+        ) c.systemd.tmpfiles.rules;
+        root =
+          let
+            device = c.fileSystems."/".device or null;
+          in
+          if device == null then "" else device;
+      };
+      facts = pkgs.writeText "private-boot-facts.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            noctua = of self.nixosConfigurations.noctua.config;
+            vm = of self.nixosConfigurations.vm.config;
+          }
+        )
+      );
+    in
+    mkCheck "private-never-mounts-at-boot" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+
+      # PARSED: two evaluated systems, as JSON — their mounts, crypttab,
+      # initrd devices, the vault's units and the tmpfiles lines for /private.
+      got = json.load(open("${facts}"))
+      wrong = []
+      for name, system in got.items():
+          mounts = system["mounts"]
+          if len(mounts) < 2:
+              wrong.append(f"{name}: only {len(mounts)} file systems read; the sweep stopped reaching them")
+          for at, fs in mounts.items():
+              if at == "/private" or at.startswith("/private/"):
+                  wrong.append(f"{name}: a file system is mounted at {at} at boot")
+              if "ronoctua-private" in fs["device"] or "private.img" in fs["device"]:
+                  wrong.append(f"{name}: {at} is the vault's device ({fs['device']})")
+          if "ronoctua-private" in system["crypttab"] or "private.img" in system["crypttab"]:
+              wrong.append(f"{name}: crypttab names the vault")
+          if any("private" in d for d in system["initrd"]):
+              wrong.append(f"{name}: the initrd opens {system['initrd']}")
+          if any(w == "/private" or w.startswith("/private/") for w in system["mountUnits"]):
+              wrong.append(f"{name}: a mount unit of its own for /private")
+          units = system["units"]
+          for unit in ("ronoctua-private-root", "ronoctua-private-lock", "ronoctua-private-status"):
+              if unit not in units:
+                  wrong.append(f"{name}: no {unit}")
+          if wrong:
+              continue
+          root, lock, status = (units[u] for u in ("ronoctua-private-root", "ronoctua-private-lock", "ronoctua-private-status"))
+          if root["wantedBy"] or root["requiredBy"]:
+              wrong.append(f"{name}: the root unit is pulled in by {root['wantedBy'] + root['requiredBy']}: it runs only when the door starts it")
+          if not root["exec"].endswith(" run /run/ronoctua-private/staged"):
+              wrong.append(f"{name}: the root unit runs {root['exec']!r}, not the staged request")
+          if lock["wantedBy"] != ["sleep.target"] or "sleep.target" not in lock["before"] or not lock["exec"].endswith(" lock"):
+              wrong.append(f"{name}: the lock unit is {lock}; it is sleep's, and it locks")
+          if status["wantedBy"] != ["multi-user.target"] or not status["exec"].endswith(" status"):
+              wrong.append(f"{name}: the boot's unit is {status}; it only says the status")
+          # AFTER THE IMAGE'S MOUNT, which `local-fs.target` does not wait for
+          # (`nofail`): before it, the status would say "absent" of a vault
+          # that exists — and so would the root unit find no image.
+          for unit, facts_of in (("status", status), ("root", root)):
+              if "/var/lib/ronoctua-private" not in facts_of["mountsFor"]:
+                  wrong.append(f"{name}: the {unit} unit does not wait for the image's mount: {facts_of['mountsFor']}")
+          # UNDERNEATH, AT BOOT ONLY.
+          lines = sorted(" ".join(r.split()) for r in system["tmpfiles"])
+          if lines != ["d! /private 0000 root root -", "h! /private - - - - +i"]:
+              wrong.append(f"{name}: the tmpfiles lines for /private are {lines}; wanted the two boot-only ones")
+      # THE LAYOUT'S MOUNT: `nofail`, after the subvolume's unit.
+      image = got["noctua"]["mounts"].get("/var/lib/ronoctua-private")
+      if image is None:
+          wrong.append("the distro's layout has no @private mount")
+      else:
+          if "subvol=@private" not in image["options"] and "subvol=/@private" not in image["options"]:
+              wrong.append(f"the image's mount is not @private: {image['options']}")
+          for wanted in ("nofail", "x-systemd.requires=ronoctua-private-subvolume.service"):
+              if wanted not in image["options"]:
+                  wrong.append(f"the image's mount lacks {wanted}: a machine without @private would not boot")
+          if image["device"] != got["noctua"]["root"]:
+              wrong.append(f"@private is on {image['device']}, not on the root's {got['noctua']['root']}")
+          sub = got["noctua"]["units"].get("ronoctua-private-subvolume")
+          if sub is None or "ronoctua-private-subvolume" not in sub["exec"]:
+              wrong.append("the distro's layout has no unit making @private")
+      if "ronoctua-private-subvolume" in got["vm"]["units"]:
+          wrong.append("the VM, which has no @private mount, got the subvolume unit")
+      # THE IMAGE'S FOLDER, laid by the subvolume unit where it is a mount —
+      # a `tmpfiles` line runs after `local-fs.target`, which a `nofail`
+      # mount does not hold, and would lay the mode and NOCOW underneath it —
+      # and by `tmpfiles` where it is a plain folder.
+      if got["noctua"]["imageTmpfiles"]:
+          wrong.append(f"the distro's layout lays the image folder by tmpfiles, racing its nofail mount: {got['noctua']['imageTmpfiles']}")
+      if len(got["vm"]["imageTmpfiles"]) != 2:
+          wrong.append(f"a machine without @private does not lay the image folder: {got['vm']['imageTmpfiles']}")
+      if wrong:
+          for w in wrong:
+              print("ERROR: " + w, file=sys.stderr)
+          sys.exit(1)
+      print("OK: /private opens only when asked; its floor is laid at boot only; @private is nofail")
+      END
+    '';
+
+  # THE VAULT'S ROOT UNIT IS REACHED THROUGH THE SUDO DOOR, AND ONLY THERE —
+  # the `files-root-is-narrow` shape, and what this unit adds to it:
+  #
+  #   - ONE NAME for each unit and place, in the crate (`ronoctua_private::*`)
+  #     and in the module — and the helper's `private-root` starts that unit
+  #     and does nothing else; no polkit rule names it;
+  #   - the shell reaches it only through the door (`vault.rs`), and stages
+  #     what the unit reads in the person's `0700` folder under root's `0755`
+  #     one (a person who could plant a link there would have root write
+  #     through it);
+  #   - the three units that run it as root have NO MOUNT NAMESPACE of their
+  #     own (any of these options gives them one, and `/private` would be
+  #     mounted for the unit alone: `PrivateNetwork` and a namespace path
+  #     bring `PrivateMounts` along since systemd 254), say `PrivateMounts`
+  #     false outright so nothing brings one quietly — and hand it every
+  #     program it runs by a store path in the environment, the set the root
+  #     side reads.
+  private-root-is-narrow =
+    let
+      noctua = self.nixosConfigurations.noctua.config;
+      user = noctua.ronoctua.user;
+      group = noctua.users.users.${user}.group;
+      units = lib.filterAttrs (
+        n: _:
+        builtins.elem n [
+          "ronoctua-private-root"
+          "ronoctua-private-lock"
+          "ronoctua-private-status"
+          "ronoctua-private-subvolume"
+        ]
+      ) noctua.systemd.services;
+      facts = pkgs.writeText "private-root-facts.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            inherit user group;
+            rules = noctua.security.polkit.extraConfig;
+            services = lib.mapAttrs (_: u: {
+              keys = lib.attrNames u.serviceConfig;
+              exec = u.serviceConfig.ExecStart or "";
+              environment = u.serviceConfig.Environment or [ ];
+              runtime = u.serviceConfig.RuntimeDirectoryMode or null;
+              privateMounts = u.serviceConfig.PrivateMounts or null;
+            }) units;
+            tmpfiles = builtins.filter (
+              r: lib.hasInfix "/run/ronoctua-private" r
+            ) noctua.systemd.tmpfiles.rules;
+          }
+        )
+      );
+    in
+    mkCheck "private-root-is-narrow" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated system arrives as JSON — the vault's units, its
+      # tmpfiles lines, the merged polkit rules.
+      # FILE-WIDE over four sources, each narrowed where it can be: the
+      # crate's constants (strings kept, `uncommented`), the root side's
+      # `Tool::variable` (`body_of`), the helper's `PrivateRoot` arm and the
+      # shell's `run_at` (`body_of`), and every other crate's code (a sweep:
+      # nobody else names the unit).
+      got = json.load(open("${facts}"))
+      lib = uncommented(pathlib.Path("${../crates/ronoctua-private/src}/lib.rs").read_text())
+      side = uncommented(without_tests(pathlib.Path("${../crates/ronoctua-private/src}/root.rs").read_text()))
+      helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
+      shell = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/vault.rs").read_text()))
+      wrong = []
+
+      def const(name):
+          m = re.search(r"pub const " + name + r': &str = "([^"]+)";', lib)
+          if not m:
+              sys.exit(f"ERROR: ronoctua-private no longer names `{name}`")
+          return m.group(1)
+
+      names = {u: const(u) for u in ("ROOT_UNIT", "LOCK_UNIT", "STATUS_UNIT", "SUBVOLUME_UNIT")}
+      staging, status_file = const("STAGING"), const("STATUS_FILE")
+      declared = sorted(got["services"])
+      wanted = sorted(n.removesuffix(".service") for n in names.values())
+      if declared != wanted:
+          wrong.append(f"the system declares {declared}; the crate names {wanted}")
+      root = got["services"].get(names["ROOT_UNIT"].removesuffix(".service"), {})
+      if root.get("exec", "").split()[-2:] != ["run", staging]:
+          wrong.append(f"the root unit runs {root.get('exec')!r}; the crate stages in {staging}")
+      if root.get("runtime") != "0700":
+          wrong.append("root's own scratch folder is not 0700")
+
+      # THE FOLDERS: the person's 0700 under root's 0755.
+      tmp = sorted(" ".join(r.split()) for r in got["tmpfiles"])
+      parent = status_file.rsplit("/", 1)[0]
+      for line in (f"d {parent} 0755 root root -", f"d {staging} 0700 {got['user']} {got['group']} -"):
+          if line not in tmp:
+              wrong.append(f"no tmpfiles line {line!r}: {tmp}")
+      if not staging.startswith(parent + "/"):
+          wrong.append(f"the staging folder {staging} is not inside root's {parent}")
+
+      # NO MOUNT NAMESPACE, AND EVERY PROGRAM HANDED IN.
+      # Each of these gives the unit a mount namespace, or brings one along
+      # (`PrivateNetwork` and the namespace paths imply `PrivateMounts` since
+      # systemd 254; `PrivatePIDs` and `PrivateBPF` mount their own /proc and
+      # bpffs; `DynamicUser` and `LogNamespace` imply sandboxing).
+      NAMESPACED = ("ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateDevices",
+                    "PrivateNetwork", "NetworkNamespacePath", "PrivateIPC", "IPCNamespacePath",
+                    "PrivateUsers", "PrivatePIDs", "PrivateBPF", "ProtectHostname", "ProtectClock",
+                    "ReadWritePaths", "ReadOnlyPaths", "InaccessiblePaths", "ExecPaths", "NoExecPaths",
+                    "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountAPIVFS",
+                    "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
+                    "ProtectControlGroups", "ProtectProc", "ProcSubset", "MountFlags",
+                    "RootDirectory", "RootImage", "MountImages", "ExtensionImages",
+                    "ExtensionDirectories", "DynamicUser", "LogNamespace", "JoinsNamespaceOf")
+      variables = re.findall(r'=> "(RONOCTUA_[A-Z_]+)"', must(body_of(side, "variable"), "`Tool::variable`"))
+      floor(len(variables), 8, "programs the root side runs")
+      for unit in ("ROOT_UNIT", "LOCK_UNIT", "STATUS_UNIT"):
+          service = got["services"].get(names[unit].removesuffix(".service"), {"keys": [], "environment": []})
+          for key in service["keys"]:
+              if key in NAMESPACED:
+                  wrong.append(f"{names[unit]} sets {key}: a mount namespace of its own keeps /private to itself")
+          if service.get("privateMounts") is not False:
+              wrong.append(f"{names[unit]} does not say PrivateMounts=false: an option that implies a namespace would give it one quietly")
+          handed = dict(e.split("=", 1) for e in service["environment"])
+          for v in variables:
+              if not handed.get(v, "").startswith("/nix/store/"):
+                  wrong.append(f"{names[unit]} does not hand {v} in by a store path")
+
+      # THE HELPER'S VERB STARTS THAT UNIT, and nothing else.
+      arm = re.search(r"RootVerb::PrivateRoot\s*=>\s*\{(.*?)\n        \}", helper, re.S)
+      arm = must(arm and arm.group(1), "the helper's `PrivateRoot` arm")
+      if '&["start", ronoctua_private::ROOT_UNIT]' not in arm:
+          wrong.append("the helper's `private-root` does not `start` exactly ronoctua_private::ROOT_UNIT")
+      if len(re.findall(r'"[^"]*"', arm)) != 1:
+          wrong.append("the helper's `private-root` passes words beyond `start` and the unit")
+
+      # NO POLKIT RULE NAMES IT.
+      floor(len(got["rules"]), 500, "characters of the merged polkit rules")
+      if "ronoctua-private" in got["rules"]:
+          wrong.append("a polkit rule names the vault's units: a second door")
+
+      # THE SHELL REACHES IT THROUGH THE DOOR — asked in the sudo bar, by the
+      # root gesture handed to `run_at` (`crate::sudo_bar`) — and stages before
+      # it knocks.
+      door = must(body_of(shell, "run_at"), "vault.rs `run_at`")
+      for needle in ("RootVerb::PrivateRoot", "root.run(", "ronoctua_private::stage(", "ronoctua_private::unstage("):
+          if needle not in door:
+              wrong.append(f"vault.rs `run_at` lost `{needle}`")
+      if door.find("ronoctua_private::stage(") > door.find("root.run("):
+          wrong.append("vault.rs stages after it knocks")
+
+      # NOBODY ELSE NAMES THE ROOT UNIT.
+      crates = pathlib.Path("${../crates}")
+      swept = 0
+      for f in workspace_sources(crates):
+          rel = str(f.relative_to(crates))
+          if rel.startswith("ronoctua-private/") or rel == "ronoctua-security/src/bin/root.rs":
+              continue
+          text = uncommented(without_tests(f.read_text()))
+          swept += 1
+          if names["ROOT_UNIT"] in text or "ronoctua_private::ROOT_UNIT" in text:
+              wrong.append(f"{rel} names the vault's root unit: only the door starts it")
+      floor(swept, 500, "sources swept for the root unit's name")
+
+      if wrong:
+          for w in wrong:
+              print("ERROR: " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: four units, one name each; the door alone starts the root one; {len(variables)} programs handed in; no mount namespace")
+      END
+    '';
+
+  # ONE CRATE RUNS cryptsetup, losetup AND systemd-cryptenroll FOR THE VAULT,
+  # and one module hands them in: `ronoctua-private` and
+  # `nix/modules/private.nix`. A second crate that knew the vault's programs,
+  # or its image, would be a second root side nobody audits.
+  one-private-boundary = mkCheck "one-private-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a program of the vault's named anywhere outside its crate is
+    # the offence, in code (`uncommented`: the strings kept, since the needles
+    # ARE strings) or in a Nix file (`hashless`).
+    NEEDLES = ("RONOCTUA_CRYPTSETUP", "RONOCTUA_LOSETUP", "RONOCTUA_CRYPTENROLL",
+               "\"luksFormat\"", "\"luksSuspend\"", "\"luksResume\"", "--direct-io",
+               "systemd-cryptenroll", "private.img")
+    crates = pathlib.Path("${../crates}")
+    wrong = []
+    swept = 0
+    for f in workspace_sources(crates):
+        rel = str(f.relative_to(crates))
+        if rel.startswith("ronoctua-private/"):
+            continue
+        text = uncommented(f.read_text())
+        swept += 1
+        for needle in NEEDLES:
+            if needle in text:
+                wrong.append(f"crates/{rel} names {needle}: that is ronoctua-private's")
+    floor(swept, 500, "sources of the workspace swept")
+    nix = pathlib.Path("${../nix}")
+    seen = 0
+    for f in sorted(nix.rglob("*.nix")):
+        rel = str(f.relative_to(nix))
+        if rel == "modules/private.nix":
+            continue
+        text = hashless(f.read_text())
+        seen += 1
+        for needle in NEEDLES[:3]:
+            if needle in text:
+                wrong.append(f"nix/{rel} hands in {needle}: that is nix/modules/private.nix's")
+    floor(seen, 100, "Nix files swept")
+    module = hashless(pathlib.Path("${../nix/modules/private.nix}").read_text())
+    for needle in NEEDLES[:3]:
+        if needle not in module:
+            wrong.append(f"nix/modules/private.nix no longer hands in {needle}")
+    if wrong:
+        for w in wrong:
+            print("ERROR: " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {swept} sources and {seen} Nix files; the vault's programs are ronoctua-private's alone")
+    END
+  '';
+
+  # THE SWAPFILE IS AS LARGE AS THE RAM — the hardware report's, rounded UP to
+  # whole gibibytes, and 16G only where there is no report. It was 16G on
+  # every machine: a 32 GiB laptop could not hibernate, and an 8 GiB one gave
+  # half of that to nothing. Asked of the evaluated system — the option and
+  # the size disko makes the file with — over planted reports.
+  swap-follows-the-ram =
+    let
+      noctua = self.nixosConfigurations.noctua;
+      gib = 1024 * 1024 * 1024;
+      report =
+        banks:
+        builtins.toFile "facter.json" (
+          builtins.toJSON {
+            version = 1;
+            hardware.memory = [
+              null
+              {
+                model = "Main Memory";
+                resources = map (bytes: {
+                  type = "phys_mem";
+                  range = bytes;
+                }) banks;
+              }
+            ];
+          }
+        );
+      sized =
+        banks:
+        let
+          c =
+            (noctua.extendModules {
+              modules = [ { ronoctua.facterReport = lib.mkForce (report banks); } ];
+            }).config;
+        in
+        {
+          option = c.ronoctua.swapSize;
+          disko =
+            c.disko.devices.disk.main.content.partitions.luks.content.content.subvolumes."@swap".swap.swapfile.size;
+        };
+      facts = pkgs.writeText "swap-facts.json" (
+        builtins.toJSON {
+          none = {
+            option = noctua.config.ronoctua.swapSize;
+            disko =
+              noctua.config.disko.devices.disk.main.content.partitions.luks.content.content.subvolumes."@swap".swap.swapfile.size;
+          };
+          thirtyTwo = sized [ (32 * gib) ];
+          odd = sized [ 8160437862 ];
+          twoBanks = sized [
+            (16 * gib)
+            (16 * gib)
+          ];
+          eight = sized [ (8 * gib) ];
+        }
+      );
+    in
+    mkCheck "swap-follows-the-ram" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+
+      # PARSED: the evaluated swap size, over four planted reports and none.
+      got = json.load(open("${facts}"))
+      wanted = {"none": "16G", "thirtyTwo": "32G", "odd": "8G", "twoBanks": "32G", "eight": "8G"}
+      wrong = []
+      for name, size in wanted.items():
+          if got[name]["option"] != size:
+              wrong.append(f"{name}: ronoctua.swapSize is {got[name]['option']}, wanted {size}")
+          if got[name]["disko"] != got[name]["option"]:
+              wrong.append(f"{name}: disko makes {got[name]['disko']}, the option says {got[name]['option']}")
+      if wrong:
+          for w in wrong:
+              print("ERROR: " + w, file=sys.stderr)
+          sys.exit(1)
+      print("OK: the swapfile is the RAM, rounded up; 16G without a report")
+      END
+    '';
+
+  # /private ON A MACHINE WITH A DISK OF ITS OWN: the subvolume made, the door
+  # making a sparse LUKS2 vault, a gigabyte given back after a delete, a wrong
+  # passphrase said as that, the sleep hook closing or suspending, a resume, a
+  # grow, a new passphrase. One machine; see the file.
+  privateVm = import ./private-vm.nix {
+    inherit pkgs lib;
+    securityRoot = rust.securityRoot;
+    privateRoot = rust.privateRoot;
+  };
+  # ── anchor: L13 ──
+  # INCUS HAS ONE CRATE (`ronoctua-incus`, AGENTS.md's table).
+  #
+  # It is the only code that names the daemon's socket, the CLI's variable or
+  # the API's paths, and the only one that runs the CLI; the queue names its
+  # child's variable through the crate's constant; the CLI's path comes from
+  # the environment and is never compiled in (QEMU's closure would ride in
+  # every binary that links the crate, on every profile); and
+  # `nix/modules/incus.nix` is the one module that gives either variable a
+  # value or configures the daemon.
+  one-incus-boundary = mkCheck "one-incus-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    crates = pathlib.Path("${../crates}")
+    home = crates / "ronoctua-incus"
+    # FILE-WIDE: a boundary is broken by a NAME anywhere outside it, so the
+    # file is the question. `uncommented` and not `code_of`: every name here
+    # is a string literal (a path, a variable); `without_tests` cuts the test
+    # module, whose stand-ins are not a product's calls.
+    NAMES = ("unix.socket", "INCUS_SOCKET", "RONOCTUA_INCUS", "/1.0/instances",
+             "/1.0/operations", "/1.0/events", "/1.0/images")
+    RUNS = re.compile(r'Command::new\(\s*"(?:[^"]*/)?incus"')
+    wrong, swept = [], 0
+    for f in workspace_sources(crates):
+        if home in f.parents:
+            continue
+        code = uncommented(without_tests(f.read_text()))
+        swept += 1
+        for name in NAMES:
+            if name in code:
+                wrong.append(f"{f.relative_to(crates)} names `{name}` outside ronoctua-incus")
+        if RUNS.search(code):
+            wrong.append(f"{f.relative_to(crates)} runs the incus CLI itself")
+    floor(swept, 300, "sources outside ronoctua-incus swept")
+
+    # THE CRATE COMPILES NO PATH IN, in any of its files.
+    own = rust_sources(home)
+    floor(len(own), 8, "sources of ronoctua-incus")
+    for f in own:
+        if "option_env!" in code_of(f.read_text()):
+            wrong.append(f"{f.relative_to(crates)} compiles a path in; the CLI's closure would ride everywhere")
+    # …AND READS THE CLI FROM THE ENVIRONMENT, in `from_env`, by its constant.
+    client = code_of((home / "src/client.rs").read_text())
+    if "crate::VARIABLE" not in must(body_of(client, "from_env"), "Incus::from_env"):
+        wrong.append("Incus::from_env no longer reads the CLI from RONOCTUA_INCUS")
+    consts = uncommented((home / "src/lib.rs").read_text())
+    for const, value in (("VARIABLE", "RONOCTUA_INCUS"), ("JOB_VARIABLE", "RONOCTUA_INCUS_JOB")):
+        if not re.search(r"pub const " + const + r': &str = "' + value + r'";', consts):
+            wrong.append(f"ronoctua_incus::{const} is no longer {value}")
+    # THE QUEUE names its child's variable through the crate.
+    engine = code_of((crates / "ronoctua-transfers/src/incus.rs").read_text())
+    if "ronoctua_incus::JOB_VARIABLE" not in must(body_of(engine, "run"), "the incus engine's run"):
+        wrong.append("the queue's incus engine no longer finds its child by ronoctua_incus::JOB_VARIABLE")
+
+    # Nix: one module gives the variables a value and configures the daemon.
+    nix = sorted(pathlib.Path("${../nix}").rglob("*.nix"))
+    floor(len(nix), 100, "Nix files swept")
+    for p in nix:
+        code = hashless(p.read_text())
+        if p.name == "incus.nix":
+            continue
+        if re.search(r"\bRONOCTUA_INCUS(_JOB)?\s*=", code):
+            wrong.append(f"nix/{p.name} gives an Incus variable a value; nix/modules/incus.nix is the one place")
+        if re.search(r"\bvirtualisation\.incus\b", code):
+            wrong.append(f"nix/{p.name} configures Incus; nix/modules/incus.nix is the one place")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print(f"OK: {swept} sources outside ronoctua-incus name none of it; {len(own)} of its own compile no path in")
+    END
+  '';
+
+  # A REMOTE IS ASKED FOR ONLY UNDER A PASS FOR EVERY HOST IT ASKS.
+  #
+  # The daemon never reaches the network by itself (the preseed's
+  # `images.auto_update_interval = 0`, held by `incus-platform`); what makes it
+  # — a remote image for a new instance, an image copied here — and what makes
+  # the CLI reach one — a remote's catalogue — is built only inside a function
+  # that takes a `ronoctua_consent::Pass`, the one thing `consent.json` mints.
+  # The queue's child mints its passes BEFORE it asks the daemon anything. The
+  # behaviour is the crate's unit tests' (a pass for another host, or Docker
+  # Hub's address without its two other hosts, is refused before the socket);
+  # this holds the shape that makes them mean it.
+  incus-asks-with-a-pass = mkCheck "incus-asks-with-a-pass" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    crate = pathlib.Path("${../crates/ronoctua-incus}")
+    # FILE-WIDE: the question is every function of every source, and each is
+    # asked by its own signature and its own body, cut by braces below.
+    # `uncommented`: the needles are string literals (`"server"`, the CLI's
+    # `"image", "list"`); `without_tests`: a test builds requests on purpose.
+    REMOTE = re.compile(r'"server"\s*:')
+    CATALOGUE = re.compile(r'"image",\s*"list"')
+
+    def functions(text):
+        # (name, signature, body) of every `fn` with a body, by braces.
+        out = []
+        for m in re.finditer(r"\bfn\s+(\w+)", text):
+            opened = text.find("{", m.end())
+            ended = text.find(";", m.end())
+            if opened < 0 or 0 <= ended < opened:
+                continue
+            depth, at = 0, opened
+            for at in range(opened, len(text)):
+                if text[at] == "{":
+                    depth += 1
+                elif text[at] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            out.append((m.group(1), text[m.start():opened], text[opened:at + 1]))
+        return out
+
+    wrong, swept, remote, catalogue = [], 0, 0, 0
+    for f in rust_sources(crate):
+        text = uncommented(without_tests(f.read_text()))
+        for name, signature, body in functions(text):
+            swept += 1
+            asks = REMOTE.search(body) is not None
+            lists = CATALOGUE.search(body) is not None
+            remote += asks
+            catalogue += lists
+            if (asks or lists) and "Pass" not in signature:
+                what = "names a remote server for the daemon" if asks else "asks the CLI for a remote's catalogue"
+                wrong.append(f"{f.name}: `{name}` {what} and takes no Pass")
+    floor(swept, 60, "functions of ronoctua-incus swept")
+    floor(remote, 2, "functions naming a remote server (the instance's source, the image copy)")
+    floor(catalogue, 1, "functions asking for a catalogue")
+
+    # THE DOORS' TWO CALLS take a pass by their signature.
+    client = code_of((crate / "src/client.rs").read_text())
+    incus = must(scope(client, r"impl\s+Incus\b"), "impl Incus")
+    for name in ("create", "catalogue"):
+        at = re.search(r"\bfn\s+" + name + r"\b([^{]*)", incus)
+        if not at or "pass: &Pass" not in at.group(1):
+            wrong.append(f"Incus::{name} no longer takes a `pass: &Pass`")
+
+    # THE QUEUE'S CHILD MINTS FIRST: in `job::run`, a pass for every host the
+    # job's remote asks (`needs_hosts`, Docker Hub's three) is minted before
+    # anything is asked of the daemon.
+    job = code_of((crate / "src/job.rs").read_text())
+    run = must(body_of(job, "run"), "job::run")
+    minted = run.find("minter(")
+    asked = [run.find(c) for c in ("start_create(", "image_copy_of(", "operate(", "export(", "import(", "push(", "pull(")]
+    asked = [a for a in asked if a >= 0]
+    floor(len(asked), 5, "calls of job::run that reach the daemon")
+    if minted < 0 or "needs_hosts()" not in run or minted > min(asked):
+        wrong.append("job::run asks the daemon before it mints the passes for the job's hosts")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print(f"OK: {swept} functions; the {remote} that name a remote and the {catalogue} that list one all take a Pass")
+    END
+  '';
+
+  # THE PLATFORM, AS THE TWO SYSTEMS EVALUATE IT.
+  #
+  # Full has Incus and minimal does not (the owner's decision); the daemon is
+  # the pinned LTS; nothing updates by itself; the bridge is trusted and its
+  # interfaces are not NetworkManager's; the person is in `incus-admin`; the
+  # state is persisted, a subvolume of its own made before the bind, and
+  # every unit of the daemon's waits for that bind; the variables reach the
+  # session, the footer and the queue; and a snapshot target at the
+  # instances' storage is refused.
+  incus-platform =
+    let
+      full = self.nixosConfigurations.noctua;
+      minimal = self.nixosConfigurations.minimal.config;
+      c = full.config;
+      # Strings compared, never built: the job's path would make this check
+      # build the workspace.
+      text = builtins.unsafeDiscardStringContext;
+      refused =
+        probe:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (full.extendModules { modules = [ probe ]; }).config.assertions
+        );
+      facts = pkgs.writeText "incus-facts.json" (
+        builtins.toJSON {
+          fullOn = c.ronoctua.incus.enable;
+          minimalOn = minimal.ronoctua.incus.enable;
+          package = c.virtualisation.incus.package.name;
+          lts = pkgs.incus-lts.name;
+          preseed = c.virtualisation.incus.preseed;
+          subnet = c.ronoctua.incus.subnet;
+          btrfs = c.ronoctua.filesystem.btrfs;
+          groups = c.users.users.${c.ronoctua.user}.extraGroups;
+          trusted = c.networking.firewall.trustedInterfaces;
+          local = c.environment.etc."ronoctua-security/local-interfaces".text;
+          unmanaged = c.networking.networkmanager.unmanaged;
+          flush = c.networking.nftables.flushRuleset;
+          viewer = builtins.any (p: (p.pname or "") == "virt-viewer") c.environment.systemPackages;
+          persisted = builtins.elem "/var/lib/incus" c.ronoctua.persist.directories;
+          minimalPersisted = builtins.elem "/var/lib/incus" minimal.ronoctua.persist.directories;
+          subvolumeBefore = c.systemd.services.ronoctua-incus-subvolume.before;
+          subvolumeWanted = c.systemd.services.ronoctua-incus-subvolume.wantedBy;
+          subvolumeRun = text c.systemd.services.ronoctua-incus-subvolume.serviceConfig.ExecStart;
+          waits = map (u: c.systemd.services.${u}.unitConfig.RequiresMountsFor or [ ]) [
+            "incus"
+            "incus-user"
+            "incus-startup"
+            "incus-preseed"
+          ];
+          socketsWait = map (u: c.systemd.sockets.${u}.unitConfig.RequiresMountsFor or [ ]) [
+            "incus"
+            "incus-user"
+          ];
+          cli = text "${c.virtualisation.incus.clientPackage}/bin/incus";
+          session = text (c.environment.sessionVariables.RONOCTUA_INCUS or "");
+          footer = text (c.systemd.user.services.ronoctua-footer.environment.RONOCTUA_INCUS or "");
+          queue = text (c.systemd.user.services.ronoctua-transfers.environment.RONOCTUA_INCUS or "");
+          queueJob = text (c.systemd.user.services.ronoctua-transfers.environment.RONOCTUA_INCUS_JOB or "");
+          job = text "${c.ronoctua.incus.job}/bin/ronoctua-incus-job";
+          minimalFooter = minimal.systemd.user.services.ronoctua-footer.environment.RONOCTUA_INCUS or null;
+          minimalSession = minimal.environment.sessionVariables.RONOCTUA_INCUS or null;
+          refusedBtrbk = refused {
+            services.btrbk.instances.probe.settings.volume."/".subvolume = "var/lib/incus/storage-pools";
+          };
+          refusedSnapper = refused { services.snapper.configs.probe.SUBVOLUME = "/persist/var/lib/incus"; };
+          refusedPersist = refused { services.snapper.configs.probe.SUBVOLUME = "/persist"; };
+          failing = map (a: a.message) (builtins.filter (a: !a.assertion) c.assertions);
+        }
+      );
+    in
+    mkCheck "incus-platform" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+
+      # PARSED: the evaluated systems, as JSON — nothing searched.
+      f = json.load(open("${facts}"))
+      wrong = []
+      if f["fullOn"] is not True or f["minimalOn"] is not False:
+          wrong.append(f"Incus: full={f['fullOn']}, minimal={f['minimalOn']}; wanted on and off")
+      if f["package"] != f["lts"]:
+          wrong.append(f"the daemon is {f['package']}, not the pinned LTS {f['lts']}")
+      p = f["preseed"] or {}
+      if (p.get("config") or {}).get("images.auto_update_interval") != "0":
+          wrong.append("images update by themselves: the preseed lost images.auto_update_interval = 0")
+      bridges = [n for n in p.get("networks", []) if n.get("name") == "incusbr0"]
+      if not bridges or bridges[0].get("type") != "bridge":
+          wrong.append(f"no incusbr0 bridge in the preseed: {p.get('networks')}")
+      else:
+          cfg = bridges[0].get("config", {})
+          if cfg.get("ipv4.address") != f["subnet"] or cfg.get("ipv4.nat") != "true":
+              wrong.append(f"the bridge is {cfg}, not NAT on {f['subnet']}")
+          if cfg.get("ipv4.address") == "auto":
+              wrong.append("the bridge's subnet is drawn again at every boot")
+      pools = [s for s in p.get("storage_pools", []) if s.get("name") == "default"]
+      if not pools or pools[0].get("driver") != ("btrfs" if f["btrfs"] else "dir"):
+          wrong.append(f"the default pool is {pools}")
+      elif pools[0].get("config", {}).get("source") != "/var/lib/incus/storage-pools/default":
+          wrong.append(f"the pool's source is {pools[0].get('config')}")
+      profiles = [x for x in p.get("profiles", []) if x.get("name") == "default"]
+      devices = profiles[0].get("devices", {}) if profiles else {}
+      if devices.get("root", {}).get("pool") != "default" or devices.get("eth0", {}).get("network") != "incusbr0":
+          wrong.append(f"the default profile is {devices}")
+      if "incus-admin" not in f["groups"]:
+          wrong.append(f"the person is not in incus-admin: {f['groups']}")
+      if "incusbr0" not in f["trusted"] or "incusbr0" not in f["local"].split():
+          wrong.append("the bridge is not trusted, so the shields would refuse the instances' DHCP and DNS")
+      for pattern in ("interface-name:incusbr*", "interface-name:veth*", "interface-name:tap*"):
+          if pattern not in f["unmanaged"]:
+              wrong.append(f"NetworkManager manages {pattern}")
+      if f["flush"] is not False:
+          wrong.append("an nftables reload flushes the whole ruleset, Incus's table with it")
+      if f["viewer"] is not True:
+          wrong.append("no virt-viewer for a VM's VGA console")
+      if f["persisted"] is not True or f["minimalPersisted"] is not False:
+          wrong.append(f"/var/lib/incus persisted: full={f['persisted']}, minimal={f['minimalPersisted']}")
+      for unit in ("var-lib-incus.mount", "ronoctua-persist-seed.service"):
+          if unit not in f["subvolumeBefore"]:
+              wrong.append(f"the subvolume is not made before {unit}")
+      if "var-lib-incus.mount" not in f["subvolumeWanted"]:
+          wrong.append("starting the bind does not make the subvolume")
+      if not f["subvolumeRun"].endswith("/bin/ronoctua-incus-subvolume /persist/var/lib/incus /var/lib/incus"):
+          wrong.append(f"the subvolume is made of {f['subvolumeRun']!r}")
+      for waits in f["waits"] + f["socketsWait"]:
+          if "/var/lib/incus" not in waits:
+              wrong.append("a unit of the daemon's does not wait for the bind of /var/lib/incus")
+      if not (f["session"] == f["footer"] == f["queue"] == f["cli"]):
+          wrong.append(f"RONOCTUA_INCUS: session {f['session']!r}, footer {f['footer']!r}, queue {f['queue']!r}; wanted {f['cli']!r}")
+      if f["queueJob"] != f["job"]:
+          wrong.append(f"the queue's RONOCTUA_INCUS_JOB is {f['queueJob']!r}, not {f['job']!r}")
+      if f["minimalFooter"] is not None or f["minimalSession"] is not None:
+          wrong.append("the minimal profile is told about an Incus it does not have")
+      for probe in ("refusedBtrbk", "refusedSnapper"):
+          if not any("it is the instances' storage" in m for m in f[probe]):
+              wrong.append(f"a snapshot target at Incus's storage is not refused ({probe}): {f[probe]}")
+      if any("instances' storage" in m for m in f["refusedPersist"]):
+          wrong.append("a snapshot of /persist is refused, but the subvolume keeps Incus out of it")
+      if f["failing"]:
+          wrong.append(f"the full system fails its assertions: {f['failing']}")
+
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          raise SystemExit(1)
+      print("OK: Incus on full and off on minimal, nothing fetched by itself, the bridge trusted, the state its own subvolume")
+      END
+    '';
+
+  # INCUS ON A BOOTED MACHINE (`tests/incus-vm.nix`). Not in `slow.nix`: it
+  # boots one machine from a handful of modules — no installation, no
+  # partitioning of the system's disk, no reboot, no TPM.
+  incusVm = import ./incus-vm.nix {
+    inherit pkgs lib;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      inherit scroll;
+      shell = rust.shell;
+      incusJob = rust.incusJob;
+    };
+  };
+  # ── anchor: L14 ──
+  # L14 — the LLM accounts (`ronoctua-llm`).
+  #
+  # THE LLM ACCOUNTS' STATE HAS ONE READER.
+  #
+  # `ronoctua-llm` is the one crate that knows where Claude Code and Codex keep
+  # their state — the folder variables, the credentials files, the transcripts
+  # and the session logs, the status line's field — and the one that asks
+  # Anthropic's usage endpoint and writes `llm-accounts.json`. None of those
+  # formats is a documented interface, and a token lives in one of them: a
+  # second reader would be a second copy of both. The brain module and the view
+  # ask the crate; the shell sources the file the crate writes.
+  #
+  # And the system around it: the CLI is on the PATH of both profiles, at the
+  # very path a wrapped `settings.json` names; the agents' programs reach the
+  # crate at run time only (Claude Code is unfree, and a path compiled in would
+  # carry it into every closure); and no Nix module sets an agent's folder
+  # variable — the default account is the person's, in `llm-default.env`.
+  one-llm-boundary =
+    let
+      onPath =
+        config: builtins.any (p: (p.name or "") == "ronoctua-llm") config.environment.systemPackages;
+      facts = pkgs.writeText "llm-facts.json" (
+        builtins.toJSON {
+          full = onPath self.nixosConfigurations.noctua.config;
+          minimal = onPath self.nixosConfigurations.minimal.config;
+        }
+      );
+    in
+    mkCheck "one-llm-boundary" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      crates = pathlib.Path("${../crates}")
+      home = crates / "ronoctua-llm"
+      # FILE-WIDE: a name anywhere in another crate's product is the offence,
+      # wherever in the file. `uncommented` keeps the strings — every needle
+      # here IS one — and takes the comments off, so a sentence naming a name
+      # does not count as the code using it.
+      NAMES = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", ".credentials.json", "claudeAiOauth",
+               "api.anthropic.com", "oauth/usage", "anthropic-beta", "llm-accounts.json",
+               "llm-default.env", "rate_limits", "statusLine", "\"auth.json\"", "\"rollout-",
+               "\"archived_sessions\"", "ronoctua-statusline.json", "\"limits.json\"",
+               "\"usage.json\"")
+      # And the folders, joined: where the agents keep their logs and where the
+      # crate keeps an account's numbers. A watcher asks `ronoctua_llm::watched`
+      # for them; a folder spelled out beside it would stay on the old layout
+      # the day the crate's changes.
+      FOLDER = re.compile(r"\.join\(\s*\"(projects|sessions|archived_sessions|llm)\"\s*\)")
+      AGENT_COMPILED_IN = re.compile(r"option_env!\(\s*\"RONOCTUA_(CLAUDE|CODEX)\"")
+      wrong, swept = [], 0
+      for f in workspace_sources(crates):
+          code = uncommented(without_tests(f.read_text()))
+          rel = f.relative_to(crates)
+          if AGENT_COMPILED_IN.search(code):
+              wrong.append(f"{rel} compiles an agent's path in: Claude Code is unfree, and it "
+                           "would ride in every closure that links this")
+          if home in f.parents:
+              continue
+          swept += 1
+          for name in NAMES:
+              if name in code:
+                  wrong.append(f"{rel} names `{name}` outside ronoctua-llm")
+          for m in FOLDER.finditer(code):
+              wrong.append(f"{rel} joins `{m.group(1)}` outside ronoctua-llm: an agent's log folder "
+                           "or an account's state is the crate's to say (`watched`)")
+      floor(swept, 300, "sources outside ronoctua-llm swept")
+      # PARSED: the crate does say them — `watched` answers the paths the
+      # crate writes and reads, from the functions that write and read them.
+      lib_code = code_of(without_tests((home / "src" / "lib.rs").read_text()))
+      watched = must(body_of(lib_code, "watched_in"), "ronoctua-llm: `watched_in`")
+      for needle in ("statusline::limits_path(", "usage::kept_path(", "tokens::kept_path(",
+                     "tokens::trees_of("):
+          if needle not in watched:
+              wrong.append(f"`watched_in` no longer asks `{needle}`: a watcher would watch a "
+                           "path the crate no longer uses")
+
+      # PARSED: the path a wrapped `settings.json` names, and the file the
+      # shell sources, against the crate's own constants.
+      statusline = uncommented(without_tests((home / "src" / "statusline.rs").read_text()))
+      floor(len(statusline), 3000, "characters of statusline.rs")
+      program = re.search(r"pub const PROGRAM: &str = \"([^\"]+)\";", statusline)
+      if not program or program.group(1) != "/run/current-system/sw/bin/ronoctua-llm":
+          wrong.append("statusline::PROGRAM is not /run/current-system/sw/bin/ronoctua-llm: a "
+                       "settings.json would name a program that a collection deletes")
+      lib = uncommented(without_tests((home / "src" / "lib.rs").read_text()))
+      env = re.search(r"pub const DEFAULT_ENV_FILE: &str = \"([^\"]+)\";", lib)
+      shellrc = hashless(pathlib.Path("${../assets/shell/shellrc.sh}").read_text())
+      floor(len(shellrc), 2000, "characters of shellrc.sh")
+      sourced = env and re.search(r"\.\s+\"[^\"]*/ronoctua/" + re.escape(env.group(1)) + "\"", shellrc)
+      if not sourced:
+          wrong.append("the shell does not source the default accounts the crate writes "
+                       "(DEFAULT_ENV_FILE): `claude` in a terminal would open the wrong account")
+
+      # Nix: no module sets an agent's folder variable.
+      modules = 0
+      for p in sorted(pathlib.Path("${../nix}").rglob("*.nix")):
+          modules += 1
+          if re.search(r"\b(CLAUDE_CONFIG_DIR|CODEX_HOME)\s*=", hashless(p.read_text())):
+              wrong.append(f"nix/{p.name} sets an agent's folder; the default account is the "
+                           "person's (llm-default.env)")
+      floor(modules, 50, "Nix files swept")
+
+      # PARSED: the evaluated systems.
+      facts = json.load(open("${facts}"))
+      for profile in ("full", "minimal"):
+          if facts[profile] is not True:
+              wrong.append(f"ronoctua-llm is not on the {profile} profile's PATH")
+
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          raise SystemExit(1)
+      print(f"OK: {swept} sources outside ronoctua-llm, none reads an agent's state; the CLI "
+            "is on both profiles' PATH")
+      END
+    '';
+
+  # A TOKEN OF AN LLM ACCOUNT NEVER LINGERS.
+  #
+  # Claude Code's OAuth token reaches one function, the usage request, and only
+  # for as long as the request takes: read into memory that is zeroed when it
+  # is dropped, BORROWED from it (a `&str`, never a `String` of its own) into a
+  # bearer header that is zeroed too. The renewal token is never read at all,
+  # nor any of Codex's tokens but the `id_token` whose claims say the plan —
+  # decoded into wiped memory as well. The three facts the view shows come out
+  # of the same wiped buffer, the tokens skipped by the parser.
+  #
+  # And the header is followed past the crate: `ronoctua-http` writes the
+  # request it rides in from a buffer it MEASURED first and wipes, framed
+  # piece by piece — a `format!` there was a temporary holding `Bearer <token>`
+  # that nobody wiped, and a check that stopped at `usage.rs` passed over it.
+  llm-tokens-never-linger = mkCheck "llm-tokens-never-linger" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    crates = pathlib.Path("${../crates}")
+    src = crates / "ronoctua-llm" / "src"
+    wrong = []
+
+    # FILE-WIDE: where each token's NAME may be written in the product — the
+    # name is what deserializes one, as a `rename` or as a field. Strings kept,
+    # comments off (`uncommented`).
+    WHERE = {
+        "accessToken": {"ronoctua-llm/src/usage.rs"},
+        "id_token": {"ronoctua-llm/src/credentials.rs"},
+        "refreshToken": set(),
+        "refresh_token": set(),
+        "access_token": set(),
+    }
+    swept, seen = 0, set()
+    for f in workspace_sources(crates):
+        code = uncommented(without_tests(f.read_text()))
+        rel = str(f.relative_to(crates))
+        swept += 1
+        for name, allowed in WHERE.items():
+            if re.search(r"\b" + name + r"\b", code):
+                seen.add((name, rel))
+                if rel not in allowed:
+                    wrong.append(f"{rel} names `{name}`: a token is read only where it is wiped")
+    floor(swept, 300, "sources of the workspace swept for a token's name")
+    for name, allowed in WHERE.items():
+        for rel in allowed:
+            if (name, rel) not in seen:
+                wrong.append(f"{rel} no longer names `{name}`: what reads it now?")
+
+    # PARSED: usage.rs — the token is a borrowed `&str` in structs that derive
+    # nothing but `Deserialize` (no `Debug` to print it, no `Clone` to copy it).
+    usage_kept = uncommented(without_tests((src / "usage.rs").read_text()))
+    floor(len(usage_kept), 3000, "characters of usage.rs")
+    field = (re.escape("rename = \"accessToken\"") + r"[^\]]*\]\s*\w+:\s*Option<"
+             + re.escape("&'a str") + ">")
+    if not re.search(field, usage_kept):
+        wrong.append("usage.rs: the access token is not a `&'a str` borrowed from the wiped buffer")
+    holders = 0
+    for m in re.finditer(r"#\[derive\(([^)]*)\)\]\s*struct\s+(\w+)", usage_kept):
+        body = scope(usage_kept[m.start():], r"struct\s+" + m.group(2) + r"\b") or ""
+        if "accessToken" in body or "claudeAiOauth" in body:
+            holders += 1
+            derives = {d.strip() for d in m.group(1).split(",") if d.strip()}
+            if derives != {"Deserialize"}:
+                wrong.append(f"usage.rs: `{m.group(2)}` holds the token and derives {sorted(derives)}")
+    floor(holders, 2, "structs of usage.rs that hold the token")
+
+    # PARSED: `fetch_by` reads through the wiped read and builds the header in
+    # wiped memory, and copies the token into nothing else.
+    usage_code = code_of(without_tests((src / "usage.rs").read_text()))
+    by = must(body_of(usage_code, "fetch_by"), "usage.rs: `fetch_by`")
+    for needle in ("crate::files::read_secret(", "Zeroizing::new(String::with_capacity("):
+        if needle not in by:
+            wrong.append(f"usage.rs: `fetch_by` no longer has `{needle}`")
+    for copy in ("format!(", ".to_owned()", ".to_string()", "String::from(", ".clone()"):
+        if copy in by:
+            wrong.append(f"usage.rs: `fetch_by` copies with `{copy}` into memory nobody wipes")
+
+    # PARSED: credentials.rs — every file through the wiped read; Codex's
+    # claims decoded into wiped memory; its `id_token` borrowed.
+    cred = code_of(without_tests((src / "credentials.rs").read_text()))
+    floor(len(cred), 1500, "characters of credentials.rs")
+    secret = must(body_of(cred, "secret"), "credentials.rs: `secret`")
+    if "crate::files::read_secret(" not in secret:
+        wrong.append("credentials.rs: `secret` no longer reads through `files::read_secret`")
+    facts = must(body_of(cred, "facts"), "credentials.rs: `facts`")
+    if len(re.findall(r"\bsecret\(", facts)) < 2:
+        wrong.append("credentials.rs: `facts` reads a credentials file around `secret`")
+    if re.search(r"std::fs::read\b|read_to_string|read_to_end", cred):
+        wrong.append("credentials.rs reads a file into memory nobody wipes")
+    codex = must(body_of(cred, "codex_facts"), "credentials.rs: `codex_facts`")
+    if "Zeroizing::new(" not in codex or "decode_slice(" not in codex:
+        wrong.append("credentials.rs: Codex's claims are not decoded into wiped memory")
+    if not re.search(r"\bid_token:\s*Option<" + re.escape("&'a str") + ">",
+                     uncommented(without_tests((src / "credentials.rs").read_text()))):
+        wrong.append("credentials.rs: Codex's id_token is not borrowed from the wiped buffer")
+
+    # PARSED: files.rs — the wiped read is sized first and never grows.
+    files = code_of(without_tests((src / "files.rs").read_text()))
+    read = must(body_of(files, "read_secret"), "files.rs: `read_secret`")
+    if "Zeroizing::new(vec![0_u8; wanted])" not in read or "read_to_end" in read:
+        wrong.append("files.rs: `read_secret` grows its buffer (a grown Vec leaves an unwiped copy)")
+
+    # PARSED: the header past the crate. `usage::fetch` asks through
+    # `web::request_let`, whose transport is `tls::fetch_abortable` — and,
+    # past its abort check, `fetch_with`, the same call with the client handed
+    # in; that writes the request from `request_wiped`, a buffer sized by
+    # `head_len` before `frame_head` fills it — and `frame_head` copies a
+    # header into nothing else.
+    http = crates / "ronoctua-http" / "src"
+    web = code_of(without_tests((http / "web.rs").read_text()))
+    asking = must(body_of(web, "request_let"), "ronoctua-http web.rs: `request_let`")
+    if "crate::tls::fetch_abortable(" not in asking:
+        wrong.append("web::request_let no longer sends through tls::fetch_abortable: what writes "
+                     "the bearer header now?")
+    tls = code_of(without_tests((http / "tls.rs").read_text()))
+    floor(len(tls), 3000, "characters of ronoctua-http's tls.rs")
+    fetch = must(body_of(tls, "fetch_abortable"), "ronoctua-http tls.rs: `fetch_abortable`")
+    if re.search(r"\bfetch_with\(", fetch):
+        fetch = must(body_of(tls, "fetch_with"), "ronoctua-http tls.rs: `fetch_with`")
+    if "crate::request_wiped(call)" not in fetch:
+        wrong.append("tls::fetch_abortable does not write the request from `request_wiped`: the "
+                     "bearer header is copied into memory nobody wipes")
+    # FILE-WIDE: no transport to another machine writes a request, or a head,
+    # from memory that is not wiped.
+    for unwiped in ("crate::request_of(", "crate::head_of("):
+        if unwiped in tls:
+            wrong.append(f"ronoctua-http tls.rs writes with `{unwiped}`: a header (a bearer "
+                         "token, an API key) copied into memory nobody wipes")
+    lib = code_of(without_tests((http / "lib.rs").read_text()))
+    wiped = must(body_of(lib, "request_wiped"), "ronoctua-http lib.rs: `request_wiped`")
+    if "framed_wiped(" not in wiped:
+        wrong.append("ronoctua-http: `request_wiped` is not built by `framed_wiped`")
+    framed = must(body_of(lib, "framed_wiped"), "ronoctua-http lib.rs: `framed_wiped`")
+    for needle in ("Zeroizing::new(String::with_capacity(", "head_len(", "frame_head("):
+        if needle not in framed:
+            wrong.append(f"ronoctua-http: `framed_wiped` no longer has `{needle}` — the request "
+                         "is not measured before it is written into wiped memory")
+    frame = must(body_of(lib, "frame_head"), "ronoctua-http lib.rs: `frame_head`")
+    for copy in ("format!(", ".to_string()", ".to_owned()", "String::", ".clone()", "concat("):
+        if copy in frame:
+            wrong.append(f"ronoctua-http: `frame_head` copies with `{copy}` into a temporary "
+                         "nobody wipes")
+    if "fn a_request_with_a_secret_is_written_where_it_is_wiped" not in (http / "lib.rs").read_text():
+        wrong.append("ronoctua-http: the test that proves the wiped request never grows went away")
+
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print(f"OK: the account tokens are named in {len(seen)} places, each read into wiped memory, "
+          "and the request that carries one is written from wiped memory too")
+    END
+  '';
+
+  # THE USAGE ENDPOINT IS ASKED WITH A PASS.
+  #
+  # `ronoctua-llm` reaches the network for one thing — Anthropic's usage
+  # endpoint, unofficial — and only with a `ronoctua_consent::Pass` for its
+  # host, checked before the token is even read. The test
+  # `nothing_leaves_without_a_pass_for_anthropic` proves the behaviour; this
+  # keeps a second request from opening beside it, and the CLI minting its pass
+  # from the person's own `consent.json`.
+  llm-usage-asks-with-a-pass = mkCheck "llm-usage-asks-with-a-pass" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    home = pathlib.Path("${../crates/ronoctua-llm}")
+    bad = []
+    # PARSED: `fetch` takes a pass; `fetch_by` checks it before the token is
+    # read, and the token before anything is sent.
+    usage_code = code_of(without_tests((home / "src" / "usage.rs").read_text()))
+    floor(len(usage_code), 2000, "characters of usage.rs")
+    if not re.search(r"pub fn fetch\(pass: &Pass, dir: &Path\) -> Result<Usage, Refusal>", usage_code):
+        bad.append("`usage::fetch` does not take a `&Pass`")
+    by = must(body_of(usage_code, "fetch_by"), "`usage::fetch_by`")
+    covers, read, sent = by.find("pass.covers(HOST)"), by.find("read_secret("), by.find("send(")
+    if min(covers, read, sent) < 0 or not covers < read < sent:
+        bad.append("`fetch_by` does not check the pass, then read the token, then send")
+    elif "Why::NotLet" not in by[covers:read]:
+        bad.append("`fetch_by` reads the token even when the pass is for another host")
+    kept = uncommented(without_tests((home / "src" / "usage.rs").read_text()))
+    host = re.search(r"pub const HOST: &str = \"([^\"]+)\";", kept)
+    address = re.search(r"const ADDRESS: &str = \"([^\"]+)\";", kept)
+    if not host or host.group(1) != "api.anthropic.com":
+        bad.append("usage::HOST is not api.anthropic.com: the consent row would name another host")
+    elif not address or not address.group(1).startswith("https://" + host.group(1) + "/"):
+        bad.append("the usage address is not on usage::HOST: the pass would not cover it")
+    if "fn nothing_leaves_without_a_pass_for_anthropic" not in (home / "src" / "usage.rs").read_text():
+        bad.append("the test that proves a wrong pass sends nothing went away")
+
+    # FILE-WIDE: every request of the crate is inside `fetch`, through the
+    # pass-checking writer.
+    fetch = must(body_of(usage_code, "fetch"), "`usage::fetch`")
+    if "web::request_let(pass," not in fetch:
+        bad.append("`usage::fetch` does not ask through `web::request_let` with its pass")
+    REQUEST = re.compile(r"\b(web::request\w*|tls::\w+|TcpStream|UdpSocket)\b")
+    swept = 0
+    for f in rust_sources(home):
+        text = without_tests(code_of(f.read_text()))
+        swept += 1
+        outside = text.replace(fetch, "") if f.name == "usage.rs" else text
+        for m in REQUEST.finditer(outside):
+            bad.append(f"{f.relative_to(home)}: `{m.group(1)}` outside `usage::fetch`")
+    floor(swept, 8, "files of ronoctua-llm")
+
+    # PARSED: the CLI mints its pass from the person's file, and the helpers
+    # over a test's file are not in the product.
+    cli = code_of((home / "src" / "bin" / "cli.rs").read_text())
+    if not re.search(r"ronoctua_consent::pass\(usage::HOST\)", cli):
+        bad.append("`ronoctua-llm refresh` does not mint its pass from consent.json for usage::HOST")
+    for helper in ("pass_in", "store_at", "let_hosts_in", "allows_in"):
+        if re.search(r"\b" + helper + r"\b", cli):
+            bad.append(f"the CLI calls `{helper}`, which mints a pass the person never gave")
+    cargo = hashless((home / "Cargo.toml").read_text())
+    if "test-support" in cargo.split("[dev-dependencies]")[0]:
+        bad.append("ronoctua-llm takes ronoctua-consent's test-support outside its dev-dependencies")
+
+    for b in bad:
+        print("ERROR: " + b, file=sys.stderr)
+    if bad:
+        sys.exit(1)
+    print(f"OK: the usage endpoint is asked once, with a pass for api.anthropic.com ({swept} files)")
+    END
+  '';
+
+  # THE PERSON'S STATUS LINE IS CHAINED, AND GIVEN BACK.
+  #
+  # Run against the EXTRACTED CLI, as Claude Code runs it: an account whose
+  # `settings.json` already has a status line is wrapped; our line, given a
+  # status line's stdin, keeps the limits it says and runs the person's own
+  # with the same stdin — its stdout and its exit code are what Claude Code
+  # gets. Unwrapped, the file is back byte for byte. And an account with no
+  # status line of its own prints nothing, and keeps no `settings.json` we
+  # made only to wrap it. Removing the account gives the line back too; and
+  # a list that lost the account behind our back does not silence the
+  # person's line, which is found in the folder Claude Code runs us in.
+  statusline-chains = mkCheck "statusline-chains" [ pkgs.python3 pkgs.diffutils ] ''
+    llm=${rust.llm}/bin/ronoctua-llm
+    ${statuslineChainsScript}
+  '';
+
+  # The script of `statusline-chains`, apart so it runs against any build of
+  # the CLI (`$llm`).
+  statuslineChainsScript = ''
+    fail() {
+      echo "ERROR: $*" >&2
+      exit 1
+    }
+    work=$PWD
+    export HOME=$work/home XDG_CONFIG_HOME=$work/config XDG_STATE_HOME=$work/state XDG_CACHE_HOME=$work/cache
+    unset RONOCTUA_INSTANCE RONOCTUA_LLM_CHAINED
+    acct=$HOME/work-claude
+    mkdir -p "$acct" "$XDG_CONFIG_HOME/ronoctua"
+    printf '{"format":1,"accounts":[{"id":"claude-1","kind":"claude","name":"Work","dir":"%s","default":true}]}\n' "$acct" \
+      > "$XDG_CONFIG_HOME/ronoctua/llm-accounts.json"
+    cat > "$acct/settings.json" <<'JSON'
+    {
+      "model": "opus",
+      "statusLine": {
+        "type": "command",
+        "command": "tr a-z A-Z; exit 3",
+        "padding": 1
+      },
+      "env": {
+        "DISABLE_TELEMETRY": "1"
+      }
+    }
+    JSON
+    cp "$acct/settings.json" "$work/original.json"
+
+    "$llm" wrap --profile claude-1
+    grep -q '"command": "/run/current-system/sw/bin/ronoctua-llm statusline --profile claude-1"' "$acct/settings.json" \
+      || fail "wrap did not put ours in front: $(cat "$acct/settings.json")"
+
+    printf '%s' '{"model":{"id":"m"},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":4102444800},"seven_day":{"used_percentage":41.2,"resets_at":4102531200}}}' \
+      > "$work/in.json"
+    code=0
+    "$llm" statusline --profile claude-1 < "$work/in.json" > "$work/out.txt" || code=$?
+    [ "$code" = 3 ] || fail "the person's exit code was not passed through (got $code)"
+    tr a-z A-Z < "$work/in.json" > "$work/expected.txt"
+    cmp -s "$work/out.txt" "$work/expected.txt" \
+      || fail "the person's line did not get the same stdin, or its stdout was not ours: $(cat "$work/out.txt")"
+    python3 - "$XDG_STATE_HOME/ronoctua/llm/claude-1/limits.json" <<'PY' || fail "the limits were not kept"
+    import json, sys
+    kept = json.load(open(sys.argv[1]))
+    assert kept["five-hour"] == {"used-percent": 23.5, "resets-at-s": 4102444800}, kept
+    assert kept["seven-day"] == {"used-percent": 41.2, "resets-at-s": 4102531200}, kept
+    PY
+
+    "$llm" unwrap --profile claude-1
+    cmp -s "$acct/settings.json" "$work/original.json" \
+      || fail "the settings did not come back byte for byte: $(diff "$work/original.json" "$acct/settings.json")"
+    [ ! -e "$acct/ronoctua-statusline.json" ] || fail "the saved line stayed after unwrap"
+
+    rm "$acct/settings.json"
+    "$llm" wrap --profile claude-1
+    code=0
+    "$llm" statusline --profile claude-1 < "$work/in.json" > "$work/none.txt" || code=$?
+    [ "$code" = 0 ] || fail "nothing to chain answered $code"
+    [ ! -s "$work/none.txt" ] || fail "nothing to chain printed: $(cat "$work/none.txt")"
+    "$llm" unwrap --profile claude-1
+    [ ! -e "$acct/settings.json" ] || fail "the settings.json made only to wrap stayed"
+
+    # Removing the account gives the person's line back, before the list
+    # forgets where its folder is.
+    cp "$work/original.json" "$acct/settings.json"
+    "$llm" wrap --profile claude-1
+    "$llm" remove --profile claude-1
+    cmp -s "$acct/settings.json" "$work/original.json" \
+      || fail "removing the account did not give the line back: $(diff "$work/original.json" "$acct/settings.json")"
+    [ ! -e "$acct/ronoctua-statusline.json" ] || fail "the saved line stayed after the account was removed"
+    if grep -q '"claude-1"' "$XDG_CONFIG_HOME/ronoctua/llm-accounts.json"; then
+      fail "remove did not remove the account"
+    fi
+
+    # And a list that lost the account behind our back (edited by hand)
+    # still runs the person's line: Claude Code runs us in the account's
+    # folder, and the line saved for it is there.
+    printf '{"format":1,"accounts":[{"id":"claude-1","kind":"claude","name":"Work","dir":"%s","default":true}]}\n' "$acct" \
+      > "$XDG_CONFIG_HOME/ronoctua/llm-accounts.json"
+    "$llm" wrap --profile claude-1
+    printf '{"format":1,"accounts":[]}\n' > "$XDG_CONFIG_HOME/ronoctua/llm-accounts.json"
+    code=0
+    CLAUDE_CONFIG_DIR=$acct "$llm" statusline --profile claude-1 < "$work/in.json" > "$work/lost.txt" || code=$?
+    [ "$code" = 3 ] || fail "a line whose account the list lost did not run (got $code)"
+    cmp -s "$work/lost.txt" "$work/expected.txt" \
+      || fail "a line whose account the list lost printed: $(cat "$work/lost.txt")"
+
+    echo "OK: the person's line ran behind ours with the same stdin, its stdout and exit code passed through; given back byte for byte, on unwrap and on removal; still run when the list lost its account"
+  '';
+  # ── anchor: L15 ──
+  # WORKING ON THE DISTRO FROM THE DISTRO — the facts of both profiles,
+  # evaluated once for the four checks below. Context discarded: these are
+  # questions about what the systems SAY, and nothing here builds them.
+  devToolsFacts =
+    let
+      discard = builtins.unsafeDiscardStringContext;
+      shell = self.devShells.${system}.default;
+      # AS THE SHELL ASKS FOR THEM: these lists are the derivation's own
+      # attributes, already through `chooseDevOutputs`, so each element is
+      # the OUTPUT `nix develop` realises (`jq.dev`, not `jq`). Plus the
+      # shell's `stdenv`, whose setup `nix develop` sources before anything.
+      shellInputs = (shell.nativeBuildInputs or [ ]) ++ (shell.buildInputs or [ ]) ++ [ shell.stdenv ];
+      # THE REFERENCE MACHINE ON A CPU OF EACH VENDOR, and on none: the
+      # report is the machine's `facter.json`, planted.
+      withCpu =
+        vendor: flags:
+        (self.nixosConfigurations.noctua.extendModules {
+          modules = [
+            {
+              facter.report = lib.mkForce {
+                version = 2;
+                inherit system;
+                hardware.cpu = [
+                  {
+                    vendor_name = vendor;
+                    features = flags;
+                  }
+                ];
+              };
+            }
+          ];
+        }).config.boot.kernelModules;
+      factsOf =
+        name:
+        let
+          c = self.nixosConfigurations.${name}.config;
+          footer = c.systemd.user.services.ronoctua-footer.environment;
+          packages = map (p: discard (p.outPath or "")) c.environment.systemPackages;
+        in
+        {
+          kept = map (p: discard (p.outPath or "")) c.system.extraDependencies;
+          # A C compiler `rustc` can link with, on the PATH: the devshell's
+          # own `cc`.
+          cc = builtins.elem (discard shell.stdenv.cc.outPath) packages;
+          rust = {
+            out = discard c.ronoctua.apps.rust.package.outPath;
+            installed = c.ronoctua.distroApps.installed.rust;
+            onThePath = builtins.elem (discard c.ronoctua.apps.rust.package.outPath) packages;
+          };
+          features = c.nix.settings.system-features;
+          groups = c.users.users.${c.ronoctua.user}.extraGroups;
+          kvmGroup = c.users.groups ? kvm;
+          modules = c.boot.kernelModules;
+          direnv = {
+            config = c.environment.variables.DIRENV_CONFIG or null;
+            hooks = lib.hasInfix "direnv" (
+              c.programs.zsh.interactiveShellInit + c.programs.bash.interactiveShellInit
+            );
+          };
+          agents = lib.genAttrs [ "claude-code" "codex" ] (id: {
+            installed = c.ronoctua.distroApps.installed.${id};
+            onThePath = builtins.elem (discard c.ronoctua.apps.${id}.package.outPath) packages;
+            bin = discard "${c.ronoctua.apps.${id}.package}/bin";
+          });
+          footer = {
+            claude = if footer ? RONOCTUA_CLAUDE then discard footer.RONOCTUA_CLAUDE else null;
+            codex = if footer ? RONOCTUA_CODEX then discard footer.RONOCTUA_CODEX else null;
+          };
+        };
+    in
+    pkgs.writeText "dev-tools-facts.json" (
+      builtins.toJSON {
+        shell = map (p: {
+          name = "${p.name or ""}${lib.optionalString ((p.outputName or "out") != "out") ".${p.outputName}"}";
+          out = discard (p.outPath or "");
+        }) shellInputs;
+        systems = lib.genAttrs [ "noctua" "minimal" ] factsOf;
+        cpu = {
+          vmx = withCpu "GenuineIntel" [ "vmx" ];
+          svm = withCpu "AuthenticAMD" [ "svm" ];
+        };
+      }
+    );
+
+  # THE DEVSHELL IS IN THE STORE OF BOTH PROFILES.
+  #
+  # `nix develop` on an installed machine must find the devshell's toolchain
+  # already there — every package and library it lists, and its stdenv — or
+  # a machine that installed offline cannot start working on the distro it
+  # runs. The two sides are written once (`nix/toolchain.nix`) but
+  # instantiated twice — the flake's `pkgs` and the system's — so the
+  # question is asked OUTPUT by output, as `nix develop` realises them: an
+  # overlay that reaches one side and not the other changes a path, a store
+  # that kept `jq` and not `jq.dev` still downloads, and this names either.
+  # What the checkout itself generates (the hooks, the WIT, the buffers, the
+  # `-rs` tables) and the programs the build bakes in are not toolchain:
+  # they follow the commit, and no installed store can hold them ahead of
+  # it. And the rust and the `cc` on the PATH are the devshell's own.
+  devshell-is-in-the-store = mkCheck "devshell-is-in-the-store" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the devshell's inputs and both systems' kept paths, evaluated.
+    facts = json.load(open("${devToolsFacts}"))
+    shell = facts["shell"]
+    floor(len(shell), 15, "inputs of the devshell")
+    # Output by output: a `.drv` is shared by every output, and a store that
+    # kept `jq` still downloads `jq.dev`.
+    floor(sum(i["name"].endswith(".dev") for i in shell), 3, "`dev` outputs among the devshell's inputs")
+    floor(sum(i["name"].startswith("stdenv") for i in shell), 1, "stdenv among the devshell's inputs")
+    wrong = []
+    outs = {i["out"] for i in shell}
+    for name, s in facts["systems"].items():
+        kept = set(s["kept"])
+        for i in shell:
+            if i["out"] not in kept:
+                wrong.append(f"{name}: the devshell's {i['name']} is not kept ({i['out']})")
+        r = s["rust"]
+        if r["out"] not in outs:
+            wrong.append(f"{name}: the rust on the PATH is not the devshell's ({r['out']})")
+        if not (r["installed"] and r["onThePath"]):
+            wrong.append(f"{name}: rust is not on the PATH")
+        if not s["cc"]:
+            wrong.append(f"{name}: no `cc` on the PATH — `cargo run` outside the devshell cannot link")
+    if wrong:
+        print("ERROR: an installed machine does not hold the devshell's toolchain:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: the devshell's {len(shell)} inputs, output by output and its stdenv included, are kept in both profiles, and its rust and its cc are on their PATH")
+    END
+  '';
+
+  # KVM IS READY: the module of the machine's CPU, the person in `kvm`, and
+  # the four features a VM test and a heavy build ask the daemon for. The
+  # module is asked of the reference machine on a planted CPU of each vendor:
+  # the other vendor's module listed blind fails to load on every boot.
+  kvm-is-ready = mkCheck "kvm-is-ready" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the evaluated systems.
+    facts = json.load(open("${devToolsFacts}"))
+    wrong = []
+    for name, s in facts["systems"].items():
+        for f in ["kvm", "nixos-test", "big-parallel", "benchmark"]:
+            if f not in s["features"]:
+                wrong.append(f"{name}: the daemon does not offer `{f}`")
+        if "kvm" not in s["groups"] or not s["kvmGroup"]:
+            wrong.append(f"{name}: the person is not in the group `kvm`")
+        if {"kvm-intel", "kvm-amd"} & set(s["modules"]):
+            wrong.append(f"{name}: a KVM module is listed with no CPU to say which")
+    for cpu, (wanted, other) in {"vmx": ("kvm-intel", "kvm-amd"), "svm": ("kvm-amd", "kvm-intel")}.items():
+        modules = facts["cpu"][cpu]
+        if wanted not in modules:
+            wrong.append(f"a `{cpu}` CPU does not load {wanted}")
+        if other in modules:
+            wrong.append(f"a `{cpu}` CPU loads {other}, which fails on it")
+    if wrong:
+        print("ERROR: KVM is not ready:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: kvm in the groups and the features of both profiles; the module follows the CPU")
+    END
+  '';
+
+  # THE SYSTEM'S DIRENVRC SOURCES NIX-DIRENV, so the repository's `.envrc`
+  # fetches nothing: it asks `has nix_direnv_version` and goes to GitHub only
+  # when that is missing. Run, not read: direnv itself loads the system's
+  # direnvrc and an `.envrc` with the repository's own condition.
+  direnv-sources-nix-direnv =
+    let
+      rcOf = name: self.nixosConfigurations.${name}.config.environment.etc."direnv/direnvrc".text;
+      rcs = lib.genAttrs [ "noctua" "minimal" ] (name: pkgs.writeText "direnvrc-${name}" (rcOf name));
+    in
+    mkCheck "direnv-sources-nix-direnv"
+      [
+        pkgs.direnv
+        pkgs.bash
+        pkgs.coreutils
+        pkgs.gnused
+        pkgs.python3
+      ]
+      ''
+        # PARSED: the facts say which hooks and where direnv reads its
+        # configuration; the run says what the configuration does.
+        python3 - <<'END'
+        import json, sys
+        facts = json.load(open("${devToolsFacts}"))
+        wrong = []
+        for name, s in facts["systems"].items():
+            if s["direnv"]["config"] != "/etc/direnv":
+                wrong.append(f"{name}: DIRENV_CONFIG is {s['direnv']['config']!r}")
+            if s["direnv"]["hooks"]:
+                wrong.append(f"{name}: the shells' init hooks direnv a second time (shellrc.sh hooks it)")
+        if wrong:
+            print("ERROR: " + "; ".join(wrong), file=sys.stderr)
+            sys.exit(1)
+        END
+
+        version=$(sed -n 's/.*nix_direnv_version \([0-9][0-9.]*\).*/\1/p' ${../.envrc} | head -1)
+        [ -n "$version" ] || { echo "ERROR: the .envrc no longer names the nix-direnv it wants" >&2; exit 1; }
+        export HOME=$TMPDIR/home XDG_CONFIG_HOME=$TMPDIR/config XDG_DATA_HOME=$TMPDIR/data \
+               XDG_CACHE_HOME=$TMPDIR/cache XDG_STATE_HOME=$TMPDIR/state
+        mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+        for name in noctua minimal; do
+          case $name in
+            noctua) rc=${rcs.noctua} ;;
+            minimal) rc=${rcs.minimal} ;;
+          esac
+          export DIRENV_CONFIG=$TMPDIR/etc-$name
+          mkdir -p "$DIRENV_CONFIG" "$TMPDIR/project-$name"
+          cp "$rc" "$DIRENV_CONFIG/direnvrc"
+          {
+            echo "if ! has nix_direnv_version || ! nix_direnv_version $version; then"
+            echo "  echo would-fetch >&2; exit 3"
+            echo "fi"
+            echo "export SOURCED=nix-direnv"
+          } > "$TMPDIR/project-$name/.envrc"
+          direnv allow "$TMPDIR/project-$name"
+          got=$(direnv exec "$TMPDIR/project-$name" sh -c 'echo "''${SOURCED:-}"' 2>"$TMPDIR/err-$name" || true)
+          if [ "$got" != nix-direnv ]; then
+            echo "ERROR: $name: the system's direnvrc does not give nix-direnv $version to an .envrc" >&2
+            cat "$TMPDIR/err-$name" >&2
+            exit 1
+          fi
+        done
+        echo "OK: in both profiles direnv loads nix-direnv ($version or newer) from the system's direnvrc, and hooks once"
+      '';
+
+  # THE CODING AGENTS ARE IN BOTH PROFILES, on the PATH, and the footer has
+  # their store paths (the LLM accounts open a session from it).
+  agents-in-both-profiles = mkCheck "agents-in-both-profiles" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the evaluated systems.
+    facts = json.load(open("${devToolsFacts}"))
+    wrong = []
+    systems = facts["systems"]
+    floor(len(systems), 2, "profiles asked")
+    for name, s in systems.items():
+        for id, var in [("claude-code", "claude"), ("codex", "codex")]:
+            a = s["agents"][id]
+            if not (a["installed"] and a["onThePath"]):
+                wrong.append(f"{name}: {id} is not on the PATH")
+            got = s["footer"][var]
+            if got is None or not got.startswith(a["bin"] + "/"):
+                wrong.append(f"{name}: the footer's RONOCTUA_{var.upper()} is {got!r}, not {id}'s")
+    if wrong:
+        print("ERROR: the agents are not in both profiles:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: Claude Code and Codex on the PATH of both profiles, and in the footer's environment")
+    END
+  '';
+  # ── anchor: L16 ──
+  # THE PERSON'S BINARY CACHE AS THE SYSTEMS SEE IT: the judge of what a
+  # person names (`nix/binary-cache.nix`) over the table the Rust validator is
+  # held to, the reference systems as they are (no person, no cache), the
+  # same machine with a public, a private, a refused and a newer `options.json`
+  # planted where root's applier leaves it (`extendModules`), the same public
+  # cache on a machine of another name, and the ISO — evaluated, never built.
+  binaryCacheFacts =
+    let
+      shared = import ../nix/binary-cache.nix;
+      cases = builtins.fromJSON (
+        builtins.readFile ../crates/ronoctua-person/fixtures/binary-cache-cases.json
+      );
+      key = name: "${name}.cachix.org-1:" + lib.strings.replicate 43 "Q" + "=";
+      public = {
+        name = "ronoctua-test";
+        public-key = key "ronoctua-test";
+        visibility = "public";
+      };
+      private = public // {
+        visibility = "private";
+      };
+      optionsOf =
+        format: cache:
+        pkgs.writeText "options.json" (
+          builtins.toJSON {
+            inherit format;
+            ssh-signing = null;
+            binary-cache = cache;
+          }
+        );
+      plant =
+        file: extra: sys:
+        sys.extendModules {
+          modules = [
+            {
+              ronoctua.person.options = lib.mkForce file;
+            }
+            extra
+          ];
+        };
+      seen = c: {
+        substituters = c.nix.settings.substituters;
+        keys = c.nix.settings.trusted-public-keys;
+        netrc = c.nix.settings.netrc-file or null;
+        etc =
+          if c.environment.etc ? "ronoctua/binary-cache.json" then
+            builtins.fromJSON c.environment.etc."ronoctua/binary-cache.json".text
+          else
+            null;
+        cache = c.ronoctua.binaryCache.cache;
+      };
+      noctua = self.nixosConfigurations.noctua;
+      installer = self.nixosConfigurations.installer;
+      outOf = p: if lib.isDerivation p then builtins.unsafeDiscardStringContext p.outPath else null;
+    in
+    pkgs.writeText "binary-cache-facts.json" (
+      builtins.toJSON {
+        judged = map (c: {
+          inherit (c) case valid;
+          named = c.binary-cache != null;
+          taken =
+            shared.judge {
+              format = 1;
+              binary-cache = c.binary-cache;
+            } != null;
+        }) cases;
+        ours = lib.mapAttrs (_: s: seen s.config) {
+          inherit (self.nixosConfigurations) noctua minimal;
+        };
+        public = seen (plant (optionsOf 1 public) { } noctua).config;
+        # THE SAME PUBLIC CACHE ON A MACHINE OF ANOTHER NAME AND PERSON: what
+        # a public cache may receive must not move with the machine's data.
+        elsewhere =
+          seen
+            (plant (optionsOf 1 public) { networking.hostName = lib.mkForce "elsewhere"; } noctua).config;
+        private = seen (plant (optionsOf 1 private) { } noctua).config;
+        refused =
+          seen
+            (plant (optionsOf 1 (
+              public
+              // {
+                public-key = key "somebody-else";
+              }
+            )) { } noctua).config;
+        newer = seen (plant (optionsOf 2 public) { } noctua).config;
+        seedRoots = builtins.filter (p: p != null) (map outOf installer._module.args.ronoctua.seed);
+        wholeSeed = map outOf installer._module.args.ronoctua.seed;
+        isoSeed = map outOf installer.config.isoImage.storeContents;
+        installerTop = builtins.unsafeDiscardStringContext installer.config.system.build.toplevel.outPath;
+        installer = {
+          substituters = installer.config.nix.settings.substituters;
+          keys = installer.config.nix.settings.trusted-public-keys;
+          declares = installer.options.ronoctua ? binaryCache;
+        };
+        planted = {
+          inherit public private;
+        };
+        paths = {
+          inherit (shared) systemFile netrc;
+        };
+      }
+    );
+
+  # THE BINARY CACHE IS THE PERSON'S, DECLARED ONCE, AND ONLY FROM THEIR
+  # VALIDATED OPTIONS.
+  #
+  # The distro has no cache of its own: a reference system adds no
+  # substituter and no key, and the ISO declares none and ALWAYS carries its
+  # whole seed. The cache a person names in `options.json` — root's validated
+  # copy, which `ronoctua.person.options` points at — comes FIRST, exactly
+  # once, BEFORE `cache.nixos.org` and never instead of it, with its key; a
+  # private one adds root's netrc and nothing else (the token is never in a
+  # Nix expression). A name that is not Cachix's, a key of another cache, a
+  # newer format: nothing is added, and nothing is mended into a plausible
+  # cache. The judge and the Rust validator agree on one table of cases. What
+  # a PUBLIC cache may receive is the distro's own seed as the distro
+  # evaluates it — the same on a machine of another name — and the unfree
+  # names it may never receive include the two that come in by a nixpkgs of
+  # their own. The two paths the Rust spells are the Nix's. And no other file
+  # that builds a machine or the ISO declares a substituter, a key, a netrc
+  # or names a Cachix host.
+  binary-cache-declared-once = mkCheck "binary-cache-declared-once" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import json, pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: the evaluated systems, the judge and the shared table.
+    facts = json.load(open("${binaryCacheFacts}"))
+    upstream = "https://cache.nixos.org/"
+    wrong = []
+
+    judged = facts["judged"]
+    floor(len(judged), 10, "cases of the shared table")
+    # A VALID FILE THAT NAMES NO CACHE is taken as no cache: the judge
+    # answers a cache only for a cache the table calls valid.
+    for c in judged:
+        if c["taken"] != (c["valid"] and c["named"]):
+            wrong.append(f"the judge {'takes' if c['taken'] else 'refuses'} {c['case']!r}, which the table calls {'valid' if c['valid'] else 'invalid'}")
+
+    def nothing(name, got):
+        if got["substituters"] != [upstream]:
+            wrong.append(f"{name}: substituters are {got['substituters']}, not cache.nixos.org alone")
+        if [k for k in got["keys"] if not k.startswith("cache.nixos.org-1:")]:
+            wrong.append(f"{name}: keys {got['keys']} beside cache.nixos.org's")
+        if got["netrc"] is not None or got["etc"] is not None or got["cache"] is not None:
+            wrong.append(f"{name}: a netrc, a machine file or a cache, with no cache named")
+
+    for name, got in facts["ours"].items():
+        nothing(name, got)
+    nothing("a key of another cache", facts["refused"])
+    nothing("a newer format", facts["newer"])
+
+    planted = facts["planted"]
+    url = "https://" + planted["public"]["name"] + ".cachix.org"
+    for name in ("public", "private", "elsewhere"):
+        got = facts[name]
+        if got["substituters"] != [url, upstream]:
+            wrong.append(f"{name}: substituters are {got['substituters']}, not the cache once and before cache.nixos.org")
+        if got["keys"].count(planted["public"]["public-key"]) != 1:
+            wrong.append(f"{name}: the cache's key is there {got['keys'].count(planted['public']['public-key'])} times")
+        etc = got["etc"] or {}
+        if etc.get("cache") != planted["private" if name == "private" else "public"]:
+            wrong.append(f"{name}: the machine's file names {etc.get('cache')}")
+    if facts["public"]["netrc"] is not None:
+        wrong.append("a public cache is read through a netrc")
+    if facts["private"]["netrc"] != facts["paths"]["netrc"]:
+        wrong.append(f"a private cache is read through {facts['private']['netrc']}, not root's netrc")
+
+    # WHAT A PUBLIC CACHE MAY RECEIVE: the distro's own seed, and only it.
+    roots = sorted(facts["seedRoots"])
+    floor(len(roots), 5, "derivations in the seed")
+    public = facts["public"]["etc"]
+    if sorted(public["public-roots"]) != roots:
+        wrong.append(f"a public cache may receive {public['public-roots']}, not the distro's seed {roots}")
+    if sorted(facts["elsewhere"]["etc"]["public-roots"]) != roots:
+        wrong.append("what a public cache may receive moves with the machine's name")
+    if not {"uade", "unrar"} <= set(public["unfree"]):
+        wrong.append(f"the unfree names {public['unfree']} miss uade or unrar, which come in by a nixpkgs of their own")
+    private = facts["private"]["etc"]
+    if private["public-roots"] or private["unfree"]:
+        wrong.append("a private cache's file carries a public cache's lists")
+
+    # THE ISO: no cache of its own, and its seed whole, always.
+    inst = facts["installer"]
+    if inst["declares"] or inst["substituters"] != [upstream] or [k for k in inst["keys"] if not k.startswith("cache.nixos.org-1:")]:
+        wrong.append(f"the ISO declares a cache: {inst}")
+    carried = sorted(p for p in facts["isoSeed"] if p is not None and p != facts["installerTop"])
+    if carried != roots:
+        wrong.append(f"the ISO does not carry its whole seed: {carried}")
+    if facts["isoSeed"].count(None) != facts["wholeSeed"].count(None):
+        wrong.append("the ISO lost the flake inputs' sources, which evaluating a machine needs")
+
+    # PARSED: the two paths the Rust spells.
+    lib_rs = (pathlib.Path("${../crates/ronoctua-cachix/src}") / "lib.rs").read_text()
+    for const, nix_name in (("SYSTEM_FILE", "systemFile"), ("NETRC", "netrc")):
+        m = re.search(r"pub const " + const + r': &str = "([^"]+)";', lib_rs)
+        if not m or m.group(1) != facts["paths"][nix_name]:
+            wrong.append(f"ronoctua_cachix::{const} is not nix/binary-cache.nix's {nix_name} ({facts['paths'][nix_name]})")
+
+    # FILE-WIDE: no other file that builds a machine or the ISO declares a
+    # substituter, a key or a netrc, or names a Cachix host. `tests/` is the
+    # harness: a VM test that takes every substituter away (`mkForce [ ]`)
+    # to stay offline adds no cache.
+    root = pathlib.Path("${self}")
+    allowed = {"nix/modules/binary-cache.nix", "nix/binary-cache.nix"}
+    needle = re.compile(r"substituters|trusted-public-keys|netrc-file|\.cachix\.org")
+    swept = 0
+    for path in sorted(root.rglob("*.nix")):
+        rel = str(path.relative_to(root))
+        if rel in allowed or rel.startswith("tests/"):
+            continue
+        swept += 1
+        for n, line in enumerate(hashless(path.read_text()).splitlines(), 1):
+            if needle.search(line):
+                wrong.append(f"{rel}:{n} declares a cache: {line.strip()}")
+    floor(swept, 200, ".nix files swept")
+    if (root / "assets" / "cachix.nix").exists():
+        wrong.append("assets/cachix.nix is back: the distro has no binary cache of its own")
+
+    if wrong:
+        print("ERROR: the binary cache is not the person's, declared once from their validated options:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {len(judged)} cases judged as the table says; no cache on the reference systems or the ISO, "
+          f"which carries its {len(roots)} seed derivations; the person's cache first and once, a netrc only "
+          f"for a private one; a public cache may receive the distro's seed alone, on any machine; "
+          f"{swept} files declare none")
+    END
+  '';
+
+  # THE PUSH TOKEN NEVER REACHES AN ARGUMENT OR A LOG.
+  #
+  # The token is a secret (`ronoctua_cachix::token`): it reaches `cachix` in
+  # that child's environment alone, root's helper takes it from a staged
+  # file, and the installer reads it into a file. The behaviour is proved by
+  # the crates' own tests (`cargo test`: the stand-in `cachix`'s command line
+  # never holds it, what it prints is scrubbed; the installer's stand-in
+  # belongings' command line never holds it; the root verb refuses a third
+  # word). This holds the code to it everywhere it is handled: no argument,
+  # no environment of this process, no line printed or logged with it.
+  binary-cache-token-never-prints = mkCheck "binary-cache-token-never-prints" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+    crates = pathlib.Path("${../crates}")
+    wrong = []
+
+    # PARSED: the one place the token leaves the process — `run_cachix`.
+    push = without_tests((crates / "ronoctua-cachix/src/push.rs").read_text())
+    run = must(body_of(code_of(push), "run_cachix"), "push::run_cachix")
+    exposed = [m.start() for m in re.finditer(r"\btoken\s*\.\s*expose\s*\(", run)]
+    if len(exposed) != 1:
+        wrong.append(f"run_cachix exposes the token {len(exposed)} times, not once")
+    for at in exposed:
+        opened = run.rfind("(", 0, at)
+        call = run[max(0, opened - 4):opened]
+        if not call.endswith(".env"):
+            wrong.append("the token reaches cachix other than by its environment (`.env(`)")
+    for m in re.finditer(r"\.args?\s*\(", run):
+        if re.search(r"\btoken\b", shut_at(run, m.end())):
+            wrong.append("run_cachix puts the token in an argument")
+
+    # FILE-WIDE: every file that holds the token — no `set_var`, no line
+    # printed, formatted into a message or logged with it.
+    holders = [
+        "ronoctua-cachix/src/push.rs",
+        "ronoctua-cachix/src/token.rs",
+        "ronoctua-cachix/src/netrc.rs",
+        "ronoctua-cachix/src/bin/cli.rs",
+        "ronoctua-security/src/bin/root.rs",
+        "ronoctua-shell/src/binary_cache.rs",
+        "ronoctua-installer/src/executor.rs",
+    ]
+    # What prints or logs: the macros, and the push's own `say`, which is
+    # standard error — the update's journal. A line `scrubbed` of the token
+    # first is the one way a line that held it may go out.
+    out = re.compile(r"\b(?:(?:println|eprintln|print|eprint|panic|tracing::\w+|info|warn|error|debug|trace)!|say)\s*\(")
+    swept = 0
+    for rel in holders:
+        code = code_of(without_tests((crates / rel).read_text()))
+        swept += 1
+        if re.search(r"\bset_var\s*\(", code):
+            wrong.append(f"{rel} sets an environment variable of its own process")
+        for m in out.finditer(code):
+            args = shut_at(code, m.end())
+            cleaned = re.sub(r"\bscrubbed\s*\([^()]*\)", "", args)
+            if re.search(r"\b(?:token|secret)\b", cleaned):
+                wrong.append(f"{rel}: `{m.group(0)}` is handed the token: {args.strip()[:80]}")
+    floor(swept, 7, "files that hold the token")
+
+    # PARSED: the root verb carries a cache's name, and never the token.
+    verb = code_of(without_tests((crates / "ronoctua-security/src/verb.rs").read_text()))
+    arm = re.search(r"Self::BinaryCacheNetrc\s*\{\s*name\s*\}\s*=>\s*\{(.*?)\}", verb, re.S)
+    if not arm or "name.clone()" not in arm.group(1) or "token" in arm.group(1):
+        wrong.append("RootVerb::BinaryCacheNetrc's arguments are not the cache's name alone")
+
+    if wrong:
+        print("ERROR: the push token could reach an argument or a log:", file=sys.stderr)
+        for w in wrong:
+            print("  " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: the token leaves by cachix's environment alone; {swept} files that hold it print, format and log none of it; the root verb carries a name")
+    END
+  '';
+
+  # THE STAND-INS THE RELEASE DRIVES, each writing down that it was called
+  # (`$CALLS`), so the check can say what the release did and in which order.
+  #
+  # `gh` keeps a GitHub of its own in `$GH_STATE` — a file per release tag,
+  # `draft <rev>` or `published <rev>` — and answers from it: `release view`
+  # (absent, a draft or published), `release list` (the published ones),
+  # `release create --draft` (a draft, noting where the origin's `release`
+  # branch stood and whether the tag was already on the origin), `release
+  # edit --draft=false` (published, making the tag at the draft's target as
+  # GitHub does when none is there — and refusing, as GitHub does, under
+  # `--verify-tag` without one). `FAKE_GH_AUTH=1` is a `gh` nobody logged in
+  # to. `nix` builds three folders: the two systems and the ISO (which carries
+  # its seed — the distro has no binary cache to push to).
+  releaseStandIns =
+    let
+      git = "${pkgs.git}/bin/git";
+    in
+    {
+      gh = pkgs.writeShellScript "stand-in-gh" ''
+        echo "gh $*" >>"$CALLS"
+        at_release() {
+          ${git} --git-dir="$ORIGIN" rev-parse --verify --quiet refs/heads/release || echo nothing
+        }
+        case "$1 $2" in
+          "auth status")
+            [ "''${FAKE_GH_AUTH:-0}" = 0 ] || exit 1
+            ;;
+          "release view")
+            [ -f "$GH_STATE/$3" ] || exit 1
+            read -r kind _ <"$GH_STATE/$3"
+            if [ "$kind" = draft ]; then echo true; else echo false; fi
+            ;;
+          "release list")
+            for f in "$GH_STATE"/*; do
+              [ -f "$f" ] || continue
+              read -r kind _ <"$f"
+              if [ "$kind" = published ]; then basename "$f"; fi
+            done
+            ;;
+          "release create")
+            tag=$3 target=""
+            shift 3
+            while [ $# -gt 0 ]; do
+              if [ "$1" = --target ]; then target=$2; fi
+              shift
+            done
+            on=no
+            if ${git} --git-dir="$ORIGIN" rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then on=yes; fi
+            echo "draft $tag made with release at $(at_release), the tag on origin: $on" >>"$CALLS"
+            echo "draft $target" >"$GH_STATE/$tag"
+            ;;
+          "release edit")
+            case "$*" in
+              *--draft=false*)
+                tag=$3
+                read -r _ target <"$GH_STATE/$tag"
+                if ! ${git} --git-dir="$ORIGIN" rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+                  case "$*" in
+                    *--verify-tag*)
+                      echo "refused to publish $tag: no such tag on origin" >>"$CALLS"
+                      exit 1
+                      ;;
+                  esac
+                  ${git} --git-dir="$ORIGIN" tag "$tag" "$target"
+                fi
+                echo "published $tag with release at $(at_release)" >>"$CALLS"
+                echo "published $target" >"$GH_STATE/$tag"
+                ;;
+            esac
+            ;;
+        esac
+        exit 0
+      '';
+      nix = pkgs.writeShellScript "stand-in-nix" ''
+        echo "nix $*" >>"$CALLS"
+        case "$1" in
+          build)
+            mkdir -p "$FAKE_STORE/noctua" "$FAKE_STORE/minimal" "$FAKE_STORE/iso/iso"
+            head -c 3000 /dev/zero >"$FAKE_STORE/iso/iso/ronoctua-distro-26.05.check-x86_64.iso"
+            printf '%s\n' "$FAKE_STORE/noctua" "$FAKE_STORE/minimal" "$FAKE_STORE/iso"
+            ;;
+        esac
+      '';
+      gate = pkgs.writeShellScript "stand-in-gate" ''
+        echo "gate" >>"$CALLS"
+        exit "''${FAKE_GATE_EXIT:-0}"
+      '';
+    };
+
+  # A RELEASE IS `main`, CLEAN, EQUAL TO `origin/main`, AND ONLY EVER MOVES
+  # `release` FORWARD — and it never makes a commit.
+  #
+  # The release itself, built around stand-ins for `gh`, `nix` and the gate
+  # (`releaseStandIns`), in a repository whose `origin` is a bare one
+  # on this disk under the GitHub address the release insists on (git's
+  # `insteadOf`). Every refusal must come BEFORE anything is built, uploaded
+  # or pushed: a dirty tree, an untracked file, another branch, a detached
+  # HEAD, a checkout ahead of or behind origin, an origin that is another
+  # repository, a `gh` nobody logged in to, a release already published (at
+  # the branch, or rolled back from), a `release` that is not behind main, a
+  # failed gate. Then the whole run, in
+  # order: the draft is made while `release` has not moved, it is published
+  # once `release` points at the commit, and the origin holds no commit it did
+  # not hold. A run onto a draft that is already there uploads to it again and
+  # makes no other. The one way back, `--rollback-to`, goes only to a commit a
+  # published release names — never to one the branch only jumped over — and
+  # marks that release the latest again. The distro has no binary cache: no
+  # `cachix` is ever run, and `--without-cache` is no flag any more. And
+  # `--sign`: the
+  # signed tag stays in the checkout until `release` has moved (a push of the
+  # branch that is refused leaves it there, and says so), then reaches the
+  # origin before the release is published against it.
+  release-refuses-dirty-tree =
+    let
+      release = releaseApps.releaseWith {
+        inherit (releaseStandIns)
+          gh
+          nix
+          gate
+          ;
+      };
+    in
+    mkCheck "release-refuses-dirty-tree"
+      [
+        pkgs.git
+        pkgs.coreutils
+        pkgs.gnugrep
+        pkgs.openssh
+      ]
+      ''
+        export HOME=$PWD/home XDG_CACHE_HOME=$PWD/cache CALLS=$PWD/calls FAKE_STORE=$PWD/store
+        export ORIGIN=$PWD/origin.git GH_STATE=$PWD/github
+        mkdir -p "$HOME" "$GH_STATE"
+        git config --global user.email check@example.invalid
+        git config --global user.name check
+        git config --global init.defaultBranch main
+        git init --quiet --bare "$ORIGIN"
+        # The origin refuses to move `release` while `reject-release` is there.
+        cat >"$ORIGIN/hooks/pre-receive" <<'END'
+        #!/bin/sh
+        while read -r old new ref; do
+          if [ "$ref" = refs/heads/release ] && [ -e reject-release ]; then
+            echo "release is held by the check" >&2
+            exit 1
+          fi
+        done
+        END
+        chmod +x "$ORIGIN/hooks/pre-receive"
+        git config --global url."$ORIGIN".insteadOf git@github.com:ronoctua/ronoctua-distro.git
+        git clone --quiet git@github.com:ronoctua/ronoctua-distro.git work 2>/dev/null
+        git clone --quiet git@github.com:ronoctua/ronoctua-distro.git other 2>/dev/null
+        cd work
+        echo '{ }' >flake.nix
+        git add flake.nix
+        git commit --quiet -m one
+        git push --quiet origin main
+        release=${release}/bin/ronoctua-release
+        failed=0
+        said=$PWD/../said
+        # The tag of a commit, as the release names it.
+        tag_of() {
+          echo "v$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%m.%d "$1")-$(git rev-parse --short=7 "$1")"
+        }
+        at_release() {
+          git --git-dir="$ORIGIN" rev-parse --verify --quiet refs/heads/release || echo none
+        }
+
+        # A refusal: not zero, the sentence said, and nothing started.
+        refused() {
+          local what=$1 sentence=$2 stood
+          shift 2
+          : >"$CALLS"
+          stood=$(at_release)
+          if "$release" "$@" >"$said" 2>&1; then
+            echo "ERROR: $what: the release went ahead" >&2
+            cat "$said" >&2
+            failed=1
+            return 0
+          fi
+          if ! grep -q -e "$sentence" "$said"; then
+            echo "ERROR: $what: refused without saying '$sentence'" >&2
+            cat "$said" >&2
+            failed=1
+          fi
+          if grep -q -e '^gh release \(create\|upload\|edit\)' -e '^nix' "$CALLS"; then
+            echo "ERROR: $what: refused after it had started:" >&2
+            cat "$CALLS" >&2
+            failed=1
+          fi
+          if [ "$(at_release)" != "$stood" ]; then
+            echo "ERROR: $what: origin's release branch moved" >&2
+            failed=1
+          fi
+        }
+
+        echo x >>flake.nix
+        refused "a changed file" "the tree is not clean" --dry-run
+        git checkout --quiet -- flake.nix
+        touch untracked
+        refused "an untracked file" "the tree is not clean" --dry-run
+        rm untracked
+        git checkout --quiet -b topic
+        refused "another branch" "on topic, not main" --dry-run
+        git checkout --quiet main
+        git checkout --quiet --detach
+        refused "a detached HEAD" "HEAD is detached" --dry-run
+        git checkout --quiet main
+        git commit --quiet --allow-empty -m ahead
+        refused "a commit not pushed" "ahead of origin/main" --dry-run
+        git push --quiet origin main
+        (cd ../other && git pull --quiet origin main && git commit --quiet --allow-empty -m theirs && git push --quiet origin main)
+        refused "a commit not pulled" "behind origin/main" --dry-run
+        git pull --quiet --ff-only origin main
+        git remote set-url origin git@github.com:somebody/else.git
+        refused "another repository" "not github.com/ronoctua/ronoctua-distro" --dry-run
+        git remote set-url origin git@github.com:ronoctua/ronoctua-distro.git
+        FAKE_GH_AUTH=1 refused "gh not logged in" "gh is not logged in" --dry-run
+        refused "a flag the release no longer has" "usage: nix run .#release" --without-cache
+        FAKE_GATE_EXIT=1 refused "a failed gate" "the gate failed"
+        grep -qx gate "$CALLS" || { echo "ERROR: the gate was never run" >&2; failed=1; }
+        refused "a rollback with nothing released" "nothing to roll back" --rollback-to HEAD
+        # A release that is not behind main: moving it would be a force push.
+        (cd ../other && git checkout --quiet -b side HEAD~1 && git commit --quiet --allow-empty -m side &&
+          git push --quiet origin side:release)
+        refused "a release that is not behind main" "would not be a fast-forward" --dry-run
+        git push --quiet origin :release
+        # ALREADY PUBLISHED: at the branch, nothing to do; behind it, the
+        # branch was rolled back from it, and it is not published again.
+        head=$(git rev-parse HEAD)
+        echo "published $head" >"$GH_STATE/$(tag_of HEAD)"
+        git push --quiet origin HEAD:release
+        refused "a release already published" "is already published" --dry-run
+        git push --quiet --force origin HEAD~1:release
+        refused "a release rolled back from" "was rolled back from it" --dry-run
+        git push --quiet origin :release
+        rm "$GH_STATE/$(tag_of HEAD)"
+
+        # THE DRY RUN: everything that costs nothing, and nothing else.
+        : >"$CALLS"
+        if ! "$release" --dry-run >"$said" 2>&1; then
+          echo "ERROR: the dry run of a clean main refused:" >&2
+          cat "$said" >&2
+          failed=1
+        fi
+        grep -q "dry run: nothing was built" "$said" || { echo "ERROR: the dry run did not say so" >&2; failed=1; }
+        if grep -v -e '^gh auth status' -e '^gh release view' "$CALLS"; then
+          echo "ERROR: the dry run did more than ask" >&2
+          failed=1
+        fi
+
+        # THE RELEASE, whole.
+        rev=$(git rev-parse HEAD)
+        first=$(tag_of HEAD)
+        before=$(git --git-dir="$ORIGIN" rev-list --all | sort)
+        : >"$CALLS"
+        if ! "$release" >"$said" 2>&1; then
+          echo "ERROR: the release of a clean main failed:" >&2
+          cat "$said" >&2
+          failed=1
+        fi
+        [ "$(at_release)" = "$rev" ] || { echo "ERROR: origin's release is not the commit released" >&2; failed=1; }
+        [ "$(git --git-dir="$ORIGIN" rev-list --all | sort)" = "$before" ] ||
+          { echo "ERROR: the origin holds a commit it did not hold: the release committed" >&2; failed=1; }
+        [ "$(git rev-parse HEAD)" = "$rev" ] && [ -z "$(git status --porcelain)" ] ||
+          { echo "ERROR: the checkout changed" >&2; failed=1; }
+        grep -q "^gh release create $first --repo ronoctua/ronoctua-distro --draft --target $rev .*SHA256SUMS" "$CALLS" ||
+          { echo "ERROR: no draft with the ISO and SHA256SUMS for $rev" >&2; failed=1; }
+        grep -qx "draft $first made with release at nothing, the tag on origin: no" "$CALLS" ||
+          { echo "ERROR: release moved before the draft existed" >&2; cat "$CALLS" >&2; failed=1; }
+        grep -qx "published $first with release at $rev" "$CALLS" ||
+          { echo "ERROR: the release was not published after release moved" >&2; failed=1; }
+        grep -q -e '--draft=false --latest' "$CALLS" || { echo "ERROR: not published as the latest" >&2; failed=1; }
+        grep -qx gate "$CALLS" || { echo "ERROR: released without the gate" >&2; failed=1; }
+
+        # A RUN ONTO A DRAFT THAT IS THERE: the assets go to it again, and no
+        # other draft is made. `mid` is released by nobody.
+        git commit --quiet --allow-empty -m mid
+        git push --quiet origin main
+        mid=$(git rev-parse HEAD)
+        git commit --quiet --allow-empty -m two
+        git push --quiet origin main
+        second=$(git rev-parse HEAD)
+        echo "draft $second" >"$GH_STATE/$(tag_of HEAD)"
+        : >"$CALLS"
+        "$release" >"$said" 2>&1 || { echo "ERROR: the run onto a draft failed" >&2; cat "$said" >&2; failed=1; }
+        grep -q "^gh release upload $(tag_of HEAD) --repo ronoctua/ronoctua-distro --clobber .*SHA256SUMS" "$CALLS" ||
+          { echo "ERROR: the draft that was there did not get the assets again" >&2; cat "$CALLS" >&2; failed=1; }
+        if grep -q '^gh release create' "$CALLS"; then
+          echo "ERROR: a second draft was made beside the one that was there" >&2
+          failed=1
+        fi
+        grep -qx "published $(tag_of HEAD) with release at $second" "$CALLS" ||
+          { echo "ERROR: the draft that was there was not published" >&2; failed=1; }
+
+        # THE WAY BACK: only back, only to what was released, and the latest
+        # follows.
+        refused "a rollback to where release already is" "already at" --rollback-to "$second"
+        refused "a rollback to a commit never released" "never published as a release" --rollback-to "$mid"
+        : >"$CALLS"
+        "$release" --rollback-to "$rev" >"$said" 2>&1 || { echo "ERROR: the rollback refused:" >&2; cat "$said" >&2; failed=1; }
+        [ "$(at_release)" = "$rev" ] || { echo "ERROR: the rollback did not move release back" >&2; failed=1; }
+        grep -qx "gh release edit $first --repo ronoctua/ronoctua-distro --latest" "$CALLS" ||
+          { echo "ERROR: the release rolled back to is not the latest again" >&2; cat "$CALLS" >&2; failed=1; }
+        if grep -q -e '^nix' -e '^gh release \(create\|upload\)' -e '--draft=false' "$CALLS"; then
+          echo "ERROR: a rollback built or published something:" >&2
+          cat "$CALLS" >&2
+          failed=1
+        fi
+        refused "publishing again what was rolled back from" "was rolled back from it"
+
+        # A THIRD RELEASE, plain — the systems and the ISO built, no cache
+        # pushed anywhere — so the signed one below follows it.
+        git commit --quiet --allow-empty -m three
+        git push --quiet origin main
+        third=$(git rev-parse HEAD)
+        : >"$CALLS"
+        "$release" >"$said" 2>&1 || { echo "ERROR: the third release failed:" >&2; cat "$said" >&2; failed=1; }
+        [ "$(at_release)" = "$third" ] || { echo "ERROR: release did not move to the third commit" >&2; failed=1; }
+        grep -q "^nix build .*#iso\$" "$CALLS" ||
+          { echo "ERROR: the release did not build the ISO alone after the systems" >&2; cat "$CALLS" >&2; failed=1; }
+        if grep -q -e 'iso-seed' -e '^cachix' -e 'path-info' "$CALLS"; then
+          echo "ERROR: the release built a seed apart, or pushed to a cache" >&2
+          cat "$CALLS" >&2
+          failed=1
+        fi
+
+        # SIGNED: the tag stays here until release moves.
+        ssh-keygen -q -t ed25519 -N "" -f "$HOME/signing"
+        git config gpg.format ssh
+        git config user.signingkey "$HOME/signing"
+        git commit --quiet --allow-empty -m four
+        git push --quiet origin main
+        fourth=$(git rev-parse HEAD)
+        signed=$(tag_of HEAD)
+        touch "$ORIGIN/reject-release"
+        : >"$CALLS"
+        if "$release" --sign >"$said" 2>&1; then
+          echo "ERROR: a release whose branch the origin refused went ahead" >&2
+          failed=1
+        fi
+        grep -q "only in this checkout" "$said" ||
+          { echo "ERROR: the refused branch did not say where the signed tag is" >&2; cat "$said" >&2; failed=1; }
+        if git --git-dir="$ORIGIN" rev-parse --verify --quiet "refs/tags/$signed" >/dev/null; then
+          echo "ERROR: the signed tag of a release that did not happen is on the origin" >&2
+          failed=1
+        fi
+        git rev-parse --verify --quiet "refs/tags/$signed" >/dev/null ||
+          { echo "ERROR: the signed tag was not made" >&2; failed=1; }
+        grep -qx "draft $signed made with release at $third, the tag on origin: no" "$CALLS" ||
+          { echo "ERROR: the signed tag reached the origin before the draft" >&2; cat "$CALLS" >&2; failed=1; }
+        rm "$ORIGIN/reject-release"
+        : >"$CALLS"
+        "$release" --sign >"$said" 2>&1 || { echo "ERROR: the signed release failed when run again" >&2; cat "$said" >&2; failed=1; }
+        [ "$(at_release)" = "$fourth" ] || { echo "ERROR: the signed release did not move release" >&2; failed=1; }
+        [ "$(git --git-dir="$ORIGIN" cat-file -t "refs/tags/$signed" 2>/dev/null)" = tag ] ||
+          { echo "ERROR: the origin does not hold the signed tag" >&2; failed=1; }
+        grep -q "^gh release edit $signed --repo ronoctua/ronoctua-distro --draft=false --latest --verify-tag" "$CALLS" &&
+          grep -qx "published $signed with release at $fourth" "$CALLS" ||
+          { echo "ERROR: the signed release was not published against its tag" >&2; cat "$CALLS" >&2; failed=1; }
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: seventeen refusals before anything was built or pushed; a release drafts, moves release forward, publishes, commits nothing and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
+      '';
+
+  # THE ISO COMES BACK WHOLE FROM ITS PARTS, AND FROM NOTHING ELSE.
+  #
+  # GitHub refuses an asset of 2 GiB or more, so the release cuts a bigger
+  # ISO, and `nix run .#fetch-iso` (and the installer stick's queue, from the
+  # same contract) joins it. This packs a small ISO with small limits, the
+  # way `.#release` packs the real one, and fetches it back from the folder
+  # with the program as it ships: the same bytes; parts named as the stick
+  # reads them, from 00 with no gap and three digits past a hundred; and
+  # refused, leaving no ISO behind, when a part is corrupt, missing, or right
+  # on its own and joined in the wrong place — which only the whole's line
+  # in `SHA256SUMS` can catch. And DOWNLOADED, from a release served on this
+  # machine the way GitHub serves one (the API's answer, a redirect to the
+  # asset host, byte ranges): whole in one run, resumed from a part cut
+  # short, and fetched anew over a part that is at its full length and wrong.
+  iso-parts-reassemble =
+    let
+      serve = pkgs.writeText "release-serve.py" ''
+        # A release as GitHub serves one: the API's answer, a redirect from the
+        # download address to the asset host, and the asset with byte ranges.
+        import http.server, json, os, sys
+        folder, port_file = sys.argv[1], sys.argv[2]
+        names = sorted(os.listdir(folder))
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+            def send(self, code, body=b"", headers=()):
+                self.send_response(code)
+                for k, v in headers:
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def do_GET(self):
+                base = f"http://127.0.0.1:{self.server.server_port}"
+                if self.path == "/repos/ronoctua/ronoctua-distro/releases/latest":
+                    assets = [{"name": n, "state": "uploaded", "browser_download_url": f"{base}/download/{n}"} for n in names]
+                    return self.send(200, json.dumps({"tag_name": "v-check", "draft": False, "prerelease": False, "assets": assets}).encode())
+                if self.path.startswith("/download/"):
+                    return self.send(302, headers=[("Location", base + "/asset/" + self.path[len("/download/"):])])
+                if self.path.startswith("/asset/"):
+                    name = self.path[len("/asset/"):]
+                    if name not in names:
+                        return self.send(404)
+                    data = open(os.path.join(folder, name), "rb").read()
+                    r = self.headers.get("Range")
+                    if r and r.startswith("bytes=") and r.endswith("-"):
+                        start = int(r[len("bytes="):-1])
+                        if start >= len(data):
+                            return self.send(416, headers=[("Content-Range", f"bytes */{len(data)}")])
+                        return self.send(206, data[start:], [("Content-Range", f"bytes {start}-{len(data)-1}/{len(data)}")])
+                    return self.send(200, data)
+                self.send(404)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        with open(port_file + ".new", "w") as f:
+            f.write(str(server.server_port))
+        os.replace(port_file + ".new", port_file)
+        server.serve_forever()
+      '';
+    in
+    mkCheck "iso-parts-reassemble"
+      [
+        pkgs.python3
+        pkgs.coreutils
+        pkgs.gnugrep
+        pkgs.diffutils
+      ]
+      ''
+        release_py=${../nix/scripts/release.py}
+        fetch=${releaseApps.fetchIso}/bin/ronoctua-fetch-iso
+        iso=ronoctua-distro-26.05.check-x86_64.iso
+        python3 -c 'import random, sys; open(sys.argv[1], "wb").write(random.Random(16).randbytes(2500000))' "$iso"
+        failed=0
+        fail() {
+          echo "ERROR: $*" >&2
+          failed=1
+        }
+        # The stick's grammar (`ronoctua-stick`'s `release.rs`).
+        named='^ronoctua-distro-[A-Za-z0-9._+-]\{1,64\}-x86_64\.iso\.part-[0-9]\{2,3\}$'
+
+        # IN PARTS.
+        python3 "$release_py" pack "$iso" parts --most-bytes 1000000 --part-bytes 999999 >listed
+        [ "$(wc -l <listed)" = 4 ] || fail "2.5 MB in parts of 1 MB is not three parts and SHA256SUMS"
+        for n in 00 01 02; do
+          [ -f "parts/$iso.part-$n" ] || fail "no part $n"
+          basename "parts/$iso.part-$n" | grep -q "$named" || fail "part $n is not named as the stick reads"
+          [ "$(stat -c %s "parts/$iso.part-$n")" -lt 1000000 ] || fail "part $n is an asset too big"
+        done
+        [ "$(wc -l <parts/SHA256SUMS)" = 4 ] || fail "SHA256SUMS is not a line per part and one for the whole"
+        grep -q "  $iso\$" parts/SHA256SUMS || fail "SHA256SUMS has no line for the whole ISO"
+        (cd parts && sha256sum --check --quiet --ignore-missing SHA256SUMS) || fail "the parts fail their own sums"
+        "$fetch" --from parts --into joined >/dev/null || fail "the parts did not join"
+        cmp -s "$iso" "joined/$iso" || fail "the joined ISO is not the ISO"
+        [ "$(ls -A joined)" = "$iso" ] || fail "the join left something beside the ISO: $(ls -A joined)"
+        "$fetch" --from parts --into joined | grep -q "already here" || fail "a second fetch did not find it whole"
+
+        # WHOLE, under the limit: one asset, a line for it.
+        python3 "$release_py" pack "$iso" whole >/dev/null
+        [ "$(ls whole | sort | tr '\n' ' ')" = "SHA256SUMS $iso " ] || fail "a small ISO is not one asset"
+        "$fetch" --from whole --into fromwhole >/dev/null && cmp -s "$iso" "fromwhole/$iso" ||
+          fail "the whole ISO did not come back"
+
+        # PAST A HUNDRED PARTS: three digits, still in order.
+        python3 "$release_py" pack "$iso" many --most-bytes 30000 --part-bytes 20000 >/dev/null
+        [ -f "many/$iso.part-000" ] && [ -f "many/$iso.part-124" ] && [ ! -e "many/$iso.part-125" ] ||
+          fail "125 parts are not numbered 000 to 124"
+        "$fetch" --from many --into frommany >/dev/null && cmp -s "$iso" "frommany/$iso" ||
+          fail "125 parts did not join into the ISO"
+
+        # DOWNLOADED, as from GitHub.
+        python3 ${serve} parts port &
+        server=$!
+        for _ in $(seq 100); do
+          if [ -s port ]; then break; fi
+          sleep 0.1
+        done
+        [ -s port ] || fail "the release server did not start"
+        export RONOCTUA_FETCH_ISO_API=http://127.0.0.1:$(cat port)
+        "$fetch" --into fetched >/dev/null || fail "the release did not download"
+        cmp -s "$iso" "fetched/$iso" || fail "the downloaded ISO is not the ISO"
+        [ "$(ls -A fetched)" = "$iso" ] || fail "the download left something beside the ISO: $(ls -A fetched)"
+        mkdir -p "resumed/$iso.download"
+        head -c 300000 "parts/$iso.part-01" >"resumed/$iso.download/$iso.part-01"
+        head -c 999999 /dev/zero >"resumed/$iso.download/$iso.part-00"
+        "$fetch" --into resumed >/dev/null || fail "a part cut short and a part that is wrong stopped the download"
+        cmp -s "$iso" "resumed/$iso" || fail "the ISO from a resumed download is not the ISO"
+        kill "$server"
+        unset RONOCTUA_FETCH_ISO_API
+
+        # WHAT MUST BE REFUSED, leaving no ISO.
+        refused() {
+          local what=$1 from=$2 sentence=$3
+          if "$fetch" --from "$from" --into "out-$from" >out 2>&1; then
+            fail "$what: joined"
+          elif ! grep -q -e "$sentence" out; then
+            fail "$what: refused without saying '$sentence': $(cat out)"
+          fi
+          [ ! -e "out-$from/$iso" ] || fail "$what: an ISO was left behind"
+        }
+        cp -r parts corrupt
+        chmod u+w corrupt/*
+        printf X | dd of="corrupt/$iso.part-01" bs=1 seek=10 conv=notrunc 2>/dev/null
+        refused "a corrupt part" corrupt "is not the release's"
+        cp -r parts gap
+        rm "gap/$iso.part-01"
+        refused "a missing part" gap "with no gap"
+        # Two parts swapped, each with a line that matches it: only the whole
+        # is wrong.
+        cp -r parts swapped
+        chmod u+w swapped/*
+        mv "swapped/$iso.part-00" swapped/held
+        mv "swapped/$iso.part-01" "swapped/$iso.part-00"
+        mv swapped/held "swapped/$iso.part-01"
+        (cd swapped && { sha256sum "$iso".part-*; grep "  $iso\$" SHA256SUMS; } >sums && mv sums SHA256SUMS)
+        refused "parts in the wrong order" swapped "the parts joined are not"
+        mkdir nameless
+        cp "$iso" nameless/an.iso
+        if python3 "$release_py" pack nameless/an.iso misnamed 2>/dev/null; then
+          fail "an ISO not named as the contract says was packed"
+        fi
+
+        # THE REAL LIMITS: an asset under GitHub's 2 GiB in both readings, a
+        # part under the asset.
+        python3 - "$release_py" <<'END' || fail "the release's limits do not keep an asset under 2 GiB"
+        import importlib.util, sys
+        spec = importlib.util.spec_from_file_location("release", sys.argv[1])
+        r = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(r)
+        assert r.MOST_BYTES <= 2_000_000_000 < 2**31, r.MOST_BYTES
+        assert 0 < r.PART_BYTES < r.MOST_BYTES, r.PART_BYTES
+        END
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: parts and whole come back byte for byte, from a folder and downloaded (resumed, a wrong part fetched anew); corrupt, missing and swapped parts are refused"
+      '';
+
+  # A PERSON'S PUBLIC CACHE HOLDS ONLY FREE BUILDS.
+  #
+  # A public cache is redistribution, so what a person's machine pushes to one
+  # may never be an unfree program (`ronoctua_cachix::closure::public`, which
+  # its own tests prove over a closure shaped like a machine's: no download,
+  # no unfree program and nothing that refers to one, and the rest closed
+  # under references). The unfree names it is handed are what
+  # `nix/release-unfree.nix` answers (the licence of the package of that
+  # name, the machine's predicate, and `android…` with Android on) of the
+  # names the machine carries (`nix/modules/binary-cache.nix`). That question
+  # is asked here with the same function, of the evaluated reference machine: Chrome, Claude Code, the SDK's pieces — and
+  # the two that come in by a nixpkgs of their own, by their REAL store
+  # names: `uade` (the player's, `nix/player-tools.nix`, which no predicate
+  # of the system names) and `unrar` (the archives'). And of everything the
+  # workspace bakes in (`generated`): an unfree program there is a reference
+  # of the most expensive build there is, which then never reaches the cache.
+  #
+  # FILE-WIDE, every place that admits an unfree package is one this check
+  # knows, with what keeps its packages out of a public cache; a new one
+  # fails until it says.
+  release-cache-holds-only-free-builds =
+    let
+      noctua = self.nixosConfigurations.noctua;
+      # A store path's name, without its hash — and without the string's
+      # context: the check asks about names, and builds none of them.
+      storeName =
+        path:
+        builtins.substring 33 (-1) (
+          builtins.head (
+            lib.splitString "/" (
+              lib.removePrefix "${builtins.storeDir}/" (builtins.unsafeDiscardStringContext path)
+            )
+          )
+        );
+      uade = storeName noctua.config.systemd.user.services.ronoctua-player.environment.RONOCTUA_UADE;
+      unrar = storeName rust.atRunTime.RONOCTUA_UNRAR;
+      ask =
+        names:
+        import ../nix/release-unfree.nix {
+          config = noctua.config.nixpkgs.config;
+          inherit (noctua) pkgs;
+          inherit names;
+        };
+      names = [
+        uade
+        unrar
+        "google-chrome-141.0.7390.65"
+        "claude-code-2.0.30"
+        "platform-tools-37.0.0"
+        "androidsdk"
+        "android-studio-stable-2025.1.4.8"
+        "ronoctua-0.1.0"
+        "ronoctua-shell"
+        "glibc-2.40-66"
+        "emacs-30.2"
+        "scroll-unwrapped-1.12.21"
+      ];
+      # WHAT THE WORKSPACE BAKES IN: every derivation the string context of
+      # a `generated` value names.
+      baked = lib.unique (
+        lib.concatMap (
+          v:
+          map (drv: lib.removeSuffix ".drv" (storeName drv)) (
+            builtins.attrNames (builtins.getContext (toString v))
+          )
+        ) (builtins.attrValues rust.generated)
+      );
+      facts = pkgs.writeText "release-unfree-facts.json" (
+        builtins.toJSON {
+          inherit uade unrar;
+          answer = ask names;
+          baked = builtins.length baked;
+          bakedUnfree = ask baked;
+        }
+      );
+    in
+    mkCheck "release-cache-holds-only-free-builds" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      wrong = []
+
+      # PARSED: the answers, from the evaluated reference machine.
+      facts = json.load(open("${facts}"))
+      unfree = facts["answer"]
+      uade, unrar = facts["uade"], facts["unrar"]
+      if not uade.startswith("uade-") or not unrar.startswith("unrar-"):
+          wrong.append(f"the player's and the archives' programs are {uade!r} and {unrar!r}")
+      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30",
+              "platform-tools-37.0.0", "androidsdk", "android-studio-stable-2025.1.4.8"}
+      if set(unfree) != want:
+          wrong.append(f"the release calls unfree {sorted(unfree)}, not {sorted(want)}")
+      floor(facts["baked"], 20, "derivations the workspace bakes in")
+      if facts["bakedUnfree"]:
+          wrong.append(f"the workspace bakes in {facts['bakedUnfree']}: unfree, so the workspace never reaches "
+                       "the public cache and every machine compiles it — read it at run time (`atRunTime`)")
+
+      # FILE-WIDE: every door an unfree package comes in by, and what keeps
+      # its packages out of the public cache.
+      KNOWN = {
+          "nix/modules/nixpkgs-config.nix": "the system's predicate, which the machine's question asks by name",
+          "nix/modules/binary-cache.nix": "reads whether Android let every unfree package in, so every `android…` name stays out of a public cache; admits nothing itself",
+          "nix/player-tools.nix": "uade, by a nixpkgs of its own: asked by licence (the player's store name, above)",
+          "nix/archive-tools.nix": "unrar, by a nixpkgs of its own: asked by licence and predicate (above)",
+          "nix/modules/person.nix": "what a person's consent needs: asked by licence; the consented names are in the predicate",
+          "nix/declared-apps/nix.nix": "reads the policy to judge a declaration, and admits nothing itself",
+          "flake.nix": "the single-mirror sources: fixed-output downloads, which never go to the cache",
+          "nix/release-unfree.nix": "the question itself",
+      }
+      root = pathlib.Path("${self}")
+      door = re.compile(r"\ballowUnfree(Predicate)?\b")
+      found, swept = set(), 0
+      for path in sorted(root.rglob("*.nix")):
+          rel = str(path.relative_to(root))
+          if rel.startswith("tests/"):
+              continue
+          swept += 1
+          if door.search(hashless(path.read_text())):
+              found.add(rel)
+              if rel not in KNOWN:
+                  wrong.append(f"{rel} lets an unfree package in, and nothing says what keeps it out of the "
+                               "public cache: make sure nix/release-unfree.nix catches it, and add it here")
+      floor(swept, 200, ".nix files swept")
+      for rel in sorted(set(KNOWN) - found):
+          wrong.append(f"{rel} no longer lets an unfree package in: remove it from this list")
+
+      if wrong:
+          print("ERROR: a public cache would hold what it may not:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {len(want)} unfree names, {uade} and {unrar} among them; {facts['baked']} baked derivations, "
+            f"none unfree; {len(found)} doors to unfree packages, each covered")
+      END
+    '';
+
+  # ADOPTING A MACHINE AND APPLYING THE CHECKOUT STOP BEFORE THE SWITCH,
+  # UNLESS THE SWITCH IS SAFE.
+  #
+  # `.#adopt-machine` goes on to `apply` only when `migrate` SAID it
+  # finished: a sudo that was not let in, a migration killed before it
+  # spoke, or one that refused, switch nothing. Run as it ships, around a
+  # stand-in `ronoctua-machine` and a stand-in `sudo`.
+  #
+  # `.#apply-here`'s root half switches only under the update's lock — busy
+  # is refused, never waited for; a missing folder is made —, after reading
+  # the record again under it (a trial waiting, or a record that cannot be
+  # read, is refused), and only if the boot menu keeps the last good system
+  # (the record's, else the booted one); then the profile, then the switch.
+  # Run on a planted profile of five generations, a record and a lock.
+  machine-apps-stop-before-the-switch =
+    let
+      tool = pkgs.writeShellScript "stand-in-ronoctua-machine" ''
+        echo "machine $*" >>"$CALLS"
+        case "$1" in
+          migrate)
+            printf '%s\n' "''${FAKE_MIGRATE-migrated; the old layout is in /var/lib/ronoctua-machine/legacy-1}"
+            exit "''${FAKE_MIGRATE_EXIT:-0}"
+            ;;
+          apply)
+            printf '%s\n' "''${FAKE_APPLY-switched; trial pending}"
+            exit "''${FAKE_APPLY_EXIT:-0}"
+            ;;
+        esac
+      '';
+      sudo = pkgs.writeShellScriptBin "sudo" ''
+        if [ "''${FAKE_SUDO_FAIL:-0}" = 1 ]; then
+          echo "sudo: 3 incorrect password attempts" >&2
+          exit 1
+        fi
+        exec "$@"
+      '';
+      nixEnv = pkgs.writeShellScript "stand-in-nix-env" ''
+        echo "nix-env $*" >>"$CALLS"
+      '';
+      adopt = releaseApps.adoptMachineWith { tool = "${tool}"; };
+      # Paths relative to the folder the check runs it in.
+      switch = releaseApps.applyHereSwitchWith {
+        lock = "run/system.lock";
+        stateDir = "state";
+        profiles = "profiles";
+        booted = "booted-system";
+        menuLimit = "5";
+        nixEnv = "${nixEnv}";
+      };
+    in
+    mkCheck "machine-apps-stop-before-the-switch"
+      [
+        pkgs.coreutils
+        pkgs.gnugrep
+        pkgs.util-linux
+      ]
+      ''
+        export CALLS=$PWD/calls PATH=${sudo}/bin:$PATH
+        failed=0
+        said=$PWD/said
+        fail() {
+          echo "ERROR: $*" >&2
+          failed=1
+        }
+
+        # ADOPT.
+        adopt=${adopt}/bin/ronoctua-adopt-machine
+        stops() {
+          local what=$1 sentence=$2
+          : >"$CALLS"
+          if "$adopt" >"$said" 2>&1; then
+            fail "$what: adopt-machine went on"
+          elif ! grep -q -e "$sentence" "$said"; then
+            fail "$what: refused without saying '$sentence': $(cat "$said")"
+          fi
+          if grep -q '^machine apply' "$CALLS"; then
+            fail "$what: apply ran"
+          fi
+        }
+        FAKE_SUDO_FAIL=1 stops "a sudo that was not let in" "did not say it finished"
+        FAKE_MIGRATE= FAKE_MIGRATE_EXIT=137 stops "a migration killed before it spoke" "did not say it finished"
+        FAKE_MIGRATE="refused build-failed" FAKE_MIGRATE_EXIT=1 stops "a migration that refused" "the old layout is as it was"
+        : >"$CALLS"
+        FAKE_MIGRATE="refused nothing-to-migrate" FAKE_MIGRATE_EXIT=1 "$adopt" >"$said" 2>&1 ||
+          fail "a machine already adopted: $(cat "$said")"
+        grep -q "nothing to adopt" "$said" && ! grep -q '^machine apply' "$CALLS" ||
+          fail "a machine already adopted was applied, or not told so"
+        : >"$CALLS"
+        FAKE_APPLY="refused busy" FAKE_APPLY_EXIT=1 "$adopt" >"$said" 2>&1 && fail "an apply that refused passed for done"
+        grep -q "did not say it switched" "$said" || fail "an apply that refused was not said: $(cat "$said")"
+        : >"$CALLS"
+        "$adopt" >"$said" 2>&1 || fail "a migration and an apply that finished: $(cat "$said")"
+        [ "$(cat "$CALLS")" = "$(printf 'machine migrate\nmachine apply')" ] ||
+          fail "adopt-machine ran $(cat "$CALLS"), not migrate then apply"
+
+        # APPLY HERE: five generations, the fifth the profile and the boot.
+        switch=${switch}/bin/ronoctua-apply-here-switch
+        mkdir profiles state
+        for n in 1 2 3 4 5 new; do
+          mkdir -p "sys/$n/bin"
+          printf '#!/bin/sh\necho "switch %s $1" >>"$CALLS"\n' "$n" >"sys/$n/bin/switch-to-configuration"
+          chmod +x "sys/$n/bin/switch-to-configuration"
+        done
+        for n in 1 2 3 4 5; do ln -s "$PWD/sys/$n" "profiles/system-$n-link"; done
+        ln -s system-5-link profiles/system
+        ln -s "$PWD/sys/5" booted-system
+        record() {
+          printf '{"format": 1, "last-good": {"toplevel": "%s"}, "trial": %s}\n' "$PWD/sys/$1" "$2" >state/state.json
+        }
+        refused() {
+          local what=$1 sentence=$2
+          shift 2
+          : >"$CALLS"
+          if "$switch" "$@" "$PWD" >"$said" 2>&1; then
+            fail "$what: it switched"
+          elif ! grep -q -e "$sentence" "$said"; then
+            fail "$what: refused without saying '$sentence': $(cat "$said")"
+          fi
+          if [ -s "$CALLS" ]; then
+            fail "$what: refused after the profile or the switch: $(cat "$CALLS")"
+          fi
+        }
+        record 2 null
+        mkdir run
+        exec 7>>run/system.lock
+        flock 7
+        refused "the update holding its lock" "the update, or another apply, is running" sys/new
+        exec 7>&-
+        rm -r run
+        record 2 '{"toplevel": "/nix/store/x", "outcome": "pending"}'
+        refused "a trial waiting" "waiting to be judged" sys/new
+        echo '{ not json' >state/state.json
+        refused "a record that cannot be read" "cannot be read" sys/new
+        record 1 null
+        refused "a sixth generation over the last good first" "push the last good system out of the boot menu" sys/new
+        rm state/state.json
+        ln -sfn "$PWD/sys/1" booted-system
+        refused "no record, and the booted system first" "push the last good system out of the boot menu" sys/new
+        : >"$CALLS"
+        "$switch" sys/5 "$PWD" >"$said" 2>&1 || fail "the system the profile names, again: $(cat "$said")"
+        grep -qx "switch 5 switch" "$CALLS" || fail "the system the profile names was refused a menu it does not grow"
+        ln -sfn "$PWD/sys/5" booted-system
+        record 2 null
+        : >"$CALLS"
+        "$switch" sys/new "$PWD" >"$said" 2>&1 || fail "a switch with room in the menu: $(cat "$said")"
+        [ "$(cat "$CALLS")" = "$(printf 'nix-env --profile profiles/system --set %s\nswitch new switch' "$PWD/sys/new")" ] ||
+          fail "the switch with room did $(cat "$CALLS"), not the profile and then the switch"
+        [ -d run ] && [ "$(stat -c %a run/system.lock)" = 600 ] || fail "the lock's folder was not made, or the lock is not private"
+
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: adopt-machine applies only after a migration that said it finished; apply-here switches only under the update's lock, with no trial waiting and the last good system kept in the boot menu"
+      '';
+  # ── anchor: L17 ──
+  # THE INSTALLER STICK WRITES ONLY A STICK — both halves of the rule, run as
+  # their own tests over the loop's dependency layer (the `rust-tests`
+  # derivation narrowed to them, `subtitles-stack-in-libass`'s shape): the
+  # SCREEN's judgement of a fixture rack (`drives::judge` — the system's disk,
+  # a soldered one, a mounted stick, a stick the system runs from, FireWire, a
+  # read-only card, a nameless stick, an empty reader and a soldered eMMC on
+  # the cards' bus, against the one blank stick that fits) and the ROOT
+  # UNIT's of the kernel's reading (`device::judge` — internal, mounted, the
+  # boot disk, swap, held, read-only, a partition, another size, another
+  # serial; and `device::probe` of a planted `mmcblk0`: an eMMC refused, an
+  # SD card written). Three tests by their shared name; a filter that matched
+  # fewer is a green build that judged nothing.
+  stick-writes-only-removable = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-stick-writes-only-removable";
+    checkPhase = ''
+      runHook preCheck
+      cargoWithProfile test --locked -p ronoctua-stick --lib -- writes_only_removable 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 3 passed' ran.txt || {
+        echo "ERROR: the three judgements of a stick did not all run" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # A BLANK STICK IS ON THE SIDEBAR, and the installer is offered on it.
+  #
+  # A stick with no table and no filesystem has no volume to be a row, and
+  # the sidebar used to show nothing at all for it: "I plugged it in and
+  # nothing happened" — the case `ronoctua_disks::worth_a_heading` was
+  # written for and nothing called. The file manager's own test racks a blank
+  # stick, a used one and a soldered disk and reads the sidebar's rows (a
+  # heading per stick, its volume under it, none for the soldered disk, no
+  # object path in an id) and presses `W` on the blank one; the sidebar
+  # menu's test holds that `W` is offered on a removable drive's heading and
+  # nowhere else. Each by its full path, `--exact`.
+  blank-sticks-have-a-heading = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-blank-sticks-have-a-heading";
+    checkPhase = ''
+      runHook preCheck
+      cargoWithProfile test --locked -p ronoctua-shell --bin ronoctua-shell -- \
+        files::tests::blank_sticks_have_a_heading_where_the_installer_is_offered --exact 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the sidebar's blank-stick test did not run exactly once" >&2
+        exit 1
+      }
+      cargoWithProfile test --locked -p ronoctua-files --lib -- \
+        sidebar_menu::tests::the_installer_is_offered_on_a_sticks_heading_only --exact 2>&1 | tee menu.txt
+      grep -q 'test result: ok. 1 passed' menu.txt || {
+        echo "ERROR: the sidebar menu's test did not run exactly once" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # THE STICK'S ROOT UNIT IS REACHED THROUGH THE SUDO DOOR, AND ONLY THERE —
+  # and what it may touch is the kernel's to refuse, not only the binary's.
+  #
+  # `files-root-is-narrow`'s shape, for the one unit of this distro that
+  # writes a whole drive as root:
+  #
+  #   - ONE NAME in three places (the crate's `WRITE_UNIT`, the helper's
+  #     `STICK_WRITE_UNIT`, the module's `unit`), and the system declares
+  #     that unit and no other `ronoctua-stick-*`;
+  #   - the helper's `StickWrite` arm starts exactly it, and no polkit rule
+  #     names it (a second door, which nothing in this session can answer);
+  #   - the shell reaches it only through the sudo door, asked in the sudo bar
+  #     (`gesture.run(RootVerb::StickWrite`, `stick::Feed::arm`), never naming
+  #     the unit or `systemctl` itself;
+  #   - nothing wants it at boot; its program is the EXTRACTED writer, never
+  #     the workspace; the device controller lets it reach `block-sd` and
+  #     `block-mmc` and nothing else; one capability, no network;
+  #   - the staging folder is the person's (`0700`) inside a folder that is
+  #     root's (`0755`), where the unit answers;
+  #   - NO START LIMIT: each start is one gesture of the person, and
+  #     systemd's default (five in ten seconds) refused a sixth.
+  stick-root-is-narrow =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      unit = vm.systemd.services."ronoctua-stick-write";
+      facts = pkgs.writeText "stick-root-facts.json" (
+        builtins.toJSON {
+          rules = builtins.unsafeDiscardStringContext vm.security.polkit.extraConfig;
+          services = builtins.filter (n: lib.hasPrefix "ronoctua-stick" n) (
+            builtins.attrNames vm.systemd.services
+          );
+          exec = builtins.unsafeDiscardStringContext unit.serviceConfig.ExecStart;
+          stopped = builtins.unsafeDiscardStringContext unit.serviceConfig.ExecStopPost;
+          writer = builtins.unsafeDiscardStringContext "${rust.stickWrite}";
+          policy = unit.serviceConfig.DevicePolicy;
+          allow = unit.serviceConfig.DeviceAllow;
+          caps = unit.serviceConfig.CapabilityBoundingSet;
+          network = unit.serviceConfig.PrivateNetwork;
+          wanted = unit.wantedBy;
+          startLimit = unit.unitConfig.StartLimitIntervalSec or null;
+          tmpfiles = builtins.filter (r: lib.hasInfix "ronoctua-stick" r) vm.systemd.tmpfiles.rules;
+          user = vm.ronoctua.user;
+        }
+      );
+    in
+    mkCheck "stick-root-is-narrow" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated system arrives as JSON — the unit's settings,
+      # the merged polkit rules, the tmpfiles rules.
+      # FILE-WIDE over four sources, each narrowed: the crate's constant and
+      # the helper's (strings kept, `uncommented`), the module's `unit`
+      # binding (`hashless`), the helper's `StickWrite` arm and the shell's
+      # `Feed::arm` (`body_of` over code with the tests cut off).
+      got = json.load(open("${facts}"))
+      crate = uncommented(pathlib.Path("${../crates/ronoctua-stick/src}/lib.rs").read_text())
+      helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
+      module = hashless(pathlib.Path("${../nix/modules/stick.nix}").read_text())
+      shell_dir = pathlib.Path("${../crates/ronoctua-shell/src}")
+      wrong = []
+
+      def const(text, name, where):
+          m = re.search(r"const " + name + r': &str = "([^"]+)";', text)
+          if not m:
+              sys.exit(f"ERROR: {where} no longer names `{name}`")
+          return m.group(1)
+
+      unit = const(crate, "WRITE_UNIT", "ronoctua-stick's lib.rs")
+      started = const(helper, "STICK_WRITE_UNIT", "the security helper")
+      declared = re.search(r'unit = "([^"]+)";', module)
+      if started != unit:
+          wrong.append(f"the helper starts {started!r} and the crate names {unit!r}")
+      if not declared or declared.group(1) != unit:
+          wrong.append(f"the module's unit is {declared and declared.group(1)!r}, the crate's {unit!r}")
+      if got["services"] != [unit.removesuffix(".service")]:
+          wrong.append(f"the system declares {got['services']}; one unit, {unit!r}, is the door")
+
+      # THE HELPER'S VERB STARTS THAT UNIT, and nothing else.
+      arm = re.search(r"RootVerb::StickWrite\s*=>\s*\{(.*?)\n        \}", helper, re.S)
+      arm = must(arm and arm.group(1), "the helper's `StickWrite` arm")
+      if '&["start", STICK_WRITE_UNIT]' not in arm:
+          wrong.append("the helper's `stick-write` does not `start` exactly STICK_WRITE_UNIT")
+      # The arm declares its unit's name where it uses it; that literal is
+      # the name, read above, and not a word the helper passes.
+      words = re.sub(r"const STICK_WRITE_UNIT: &str = \"[^\"]*\";", "", arm)
+      if len(re.findall(r'"[^"]*"', words)) != 1:
+          wrong.append("the helper's `stick-write` passes words beyond `start` and the unit")
+
+      # NO POLKIT RULE NAMES IT.
+      floor(len(got["rules"]), 500, "characters of the merged polkit rules")
+      if unit in got["rules"] or "stick-write" in got["rules"]:
+          wrong.append(f"a polkit rule names {unit!r}: a second door")
+
+      # THE SHELL REACHES IT THROUGH THE DOOR, and never by itself.
+      stick = code_of(without_tests((shell_dir / "stick.rs").read_text()))
+      door = must(body_of(stick, "arm"), "stick.rs `Feed::arm`")
+      if "RootVerb::StickWrite" not in door or not re.search(r"\bgesture\.run\(", door):
+          wrong.append("stick.rs `Feed::arm` does not go through the sudo bar (`gesture.run(RootVerb::StickWrite…)`)")
+      swept = 0
+      for f in sorted(shell_dir.glob("*.rs")):
+          swept += 1
+          text = uncommented(without_tests(f.read_text()))
+          if re.search(r"\bWRITE_UNIT\b|ronoctua-stick-write\.service", text):
+              wrong.append(f"{f.name} names the writer's unit: the shell starts it itself again")
+      floor(swept, 100, "shell sources swept for the writer's unit")
+
+      # WHAT IT RUNS, WHEN, AND WHAT THE KERNEL LETS IT TOUCH.
+      if not got["exec"].startswith(got["writer"] + "/bin/ronoctua-stick-write "):
+          wrong.append(f"the unit runs {got['exec']!r}, not the extracted writer")
+      # HOWEVER IT ENDS, ITS LAST ANSWER IS FINAL: a `progress.json` left
+      # saying "writing" would have every view refuse a write until reboot.
+      if not got["stopped"].startswith(got["writer"] + "/bin/ronoctua-stick-write --stopped "):
+          wrong.append(f"the unit's ExecStopPost is {got['stopped']!r}, not the writer's --stopped")
+      if got["wanted"]:
+          wrong.append(f"something wants the writer at boot: {got['wanted']}")
+      if got["policy"] != "closed":
+          wrong.append(f"DevicePolicy is {got['policy']!r}: every device is the writer's to open")
+      allow = got["allow"] if isinstance(got["allow"], list) else [got["allow"]]
+      if not allow or any(a not in ("block-sd rw", "block-mmc rw") for a in allow):
+          wrong.append(f"DeviceAllow reaches beyond sticks and cards: {allow}")
+      if got["caps"] != ["CAP_DAC_READ_SEARCH"]:
+          wrong.append(f"the writer holds {got['caps']}, more than reading the person's files")
+      if got["network"] is not True:
+          wrong.append("the writer has a network")
+      # EVERY START IS A GESTURE: a start limit refuses the sixth in ten
+      # seconds as `start-limit-hit`.
+      if got["startLimit"] != "0":
+          wrong.append(f"the writer's StartLimitIntervalSec is {got['startLimit']!r}; it may only be 0")
+
+      # THE STAGING FOLDER IS THE PERSON'S, INSIDE ROOT'S.
+      rules = got["tmpfiles"]
+      if f"d /run/ronoctua-stick 0755 root root -" not in rules:
+          wrong.append(f"the writer's folder is not root's 0755: {rules}")
+      if not any(r.startswith(f"d /run/ronoctua-stick/staged 0700 {got['user']} ") for r in rules):
+          wrong.append(f"the staging folder is not the person's 0700: {rules}")
+
+      if wrong:
+          for w in wrong:
+              print("ERROR: " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: one unit ({unit}), started by the sudo door's stick-write and by no polkit rule; the extracted writer, {allow} and one capability")
+      END
+    '';
+
+  # ONE CRATE WRITES A WHOLE DRIVE: `ronoctua-stick`.
+  #
+  # The boundary row of `AGENTS.md`, held: the raw write (`O_DIRECT`), the
+  # disk the firmware loaded the system from (`LoaderDevicePartUUID`), and the
+  # root writer's folder (`/run/ronoctua-stick`; the `stage`/`cancel`/
+  # `progress` calls are the crate's API) are named in that crate and nowhere
+  # else — a second writer of sticks is a second set of refusals that
+  # disagree, and the one without them is the one that erases somebody's
+  # disk. Not the bare `request.json`: other root units stage a file of that
+  # name in folders of their own; the folder is what only this writer has.
+  # FILE-WIDE: a needle is a defect wherever it is written,
+  # so every product source of the workspace is read, its tests cut off; the
+  # string needles with the strings kept (`uncommented`), the flag with them
+  # emptied (`code_of`).
+  one-stick-boundary = mkCheck "one-stick-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a needle is a defect wherever a product source writes it —
+    # in any function of any crate — so the question is the whole file, its
+    # tests cut off (`without_tests`), stripped as each needle asks.
+    crates = pathlib.Path("${../crates}")
+    CODE = [
+        (r"\bOFlags::DIRECT\b|\bO_DIRECT\b", "a write that goes around the page cache"),
+    ]
+    STRINGS = [
+        (r"LoaderDevicePartUUID", "the disk the system was loaded from"),
+        (r'"/run/ronoctua-stick', "the root writer's folder"),
+    ]
+    wrong, swept, ours = [], 0, 0
+    for f in workspace_sources(crates):
+        rel = f.relative_to(crates)
+        text = without_tests(f.read_text())
+        code, kept = code_of(text), uncommented(text)
+        swept += 1
+        found = [(w, rx) for rx, w in CODE if re.search(rx, code)]
+        found += [(w, rx) for rx, w in STRINGS if re.search(rx, kept)]
+        if rel.parts[0] == "ronoctua-stick":
+            ours += len(found)
+            continue
+        for what, _ in found:
+            wrong.append(f"{rel} reaches {what} — ask `ronoctua-stick`")
+    floor(swept, 100, "workspace sources swept")
+    # THE CRATE STILL HOLDS EVERY NEEDLE: a sweep that finds none there has
+    # stopped matching, and would pass over a second writer too.
+    floor(ours, len(CODE) + len(STRINGS), "needles found in ronoctua-stick itself")
+    if wrong:
+        for w in wrong:
+            print("ERROR: " + w, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {swept} sources, and only ronoctua-stick writes a whole drive")
+    END
+  '';
+
+  # THE WRITER AGAINST A STICK PLUGGED INTO A BOOTED MACHINE: written whole
+  # and read back; a changed drive, someone else's file, a mounted stick and
+  # bytes that are not the image's refused by name; a cancel heard while it
+  # waits. Boots one machine, partitions nothing of its own, builds no
+  # installation — the everyday battery's (`tests/slow.nix`).
+  stickVm = import ./stick-vm.nix {
+    inherit pkgs lib;
+    stickWrite = rust.stickWrite;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      inherit scroll;
+      shell = rust.shell;
+      filesRoot = rust.filesRoot;
+    };
+  };
+  # ── anchor: L18 ──
+  # THE PERSON'S DECLARATION, FROM THE SOFTWARE CENTRE (the software
+  # package, `docs/ARCHITECTURE.md`, L18).
+  #
+  # RECONCILE TOUCHES ONLY ITS LEDGER. The reconciler is the one part of the
+  # declaration that acts on this machine as the person and not through Nix:
+  # it puts declared apks into Android and takes out the copies by hand a
+  # declared program replaces. Its test drives it over a scratch home with a
+  # FAKE `waydroid` and a FAKE `nix` that write down how they were called: a
+  # declared apk goes in from the store and into the ledger; an app the
+  # ledger put in that nobody declares goes out; an app the person installed
+  # by hand is never removed; a profile package goes once its declared copy is
+  # applied and stays while its declaration was skipped; no other file of the
+  # person's moves; and with Android down nothing goes in or out. ONE named
+  # test of the crate, run over the loop's dependency layer with the
+  # features the workspace builds it with — and a run that did not execute
+  # exactly that test, and pass, is refused.
+  reconcile-touches-only-the-ledger = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-reconcile-touches-only-the-ledger";
+    checkPhase = ''
+      runHook preCheck
+      cargoWithProfile test --locked -p ronoctua-software --features net,draw --lib -- \
+        reconcile::tests::reconcile_touches_only_the_ledger --exact 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 1 passed' ran.txt || {
+        echo "ERROR: the reconciler's ledger test did not run exactly once and pass" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # DECLARE INSTALLS NOW AND RECORDS, on a booted machine with the real Nix,
+  # systemd and polkit (`tests/declare-vm.nix`): the order as the queue hands
+  # it to the CLI's wrapper, `hello` in the person's profile at once, the
+  # mirror naming it with this machine's name, the staging applied by root
+  # through the polkit rule with nobody to ask; a decline elsewhere and a
+  # forget, neither rebuilding. One machine from a handful of modules, no
+  # installation built — the everyday battery's.
+  declareVm = import ./declare-vm.nix {
+    inherit pkgs lib inputs;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      inherit scroll;
+      shell = rust.shell;
+      transfers = rust.transfers;
+      software = rust.software;
+      person = rust.person;
+      softwareIndex = self.packages.${system}.software-nix-index;
+      iconNames = self.packages.${system}.icon-names;
+    };
+  };
+
+  # THE SOFTWARE CENTRE'S TWO DOORS over ONE machine laid out in a room
+  # (`tests/fixtures/software-room`: a person's declaration in every
+  # standing, declines in every state, the system's reports): the window's
+  # camera (`photograph --door software`) and the footer's (`--door footer
+  # --software <host>`, `LEADER i` walked to the level), in both languages.
+  # Each prints its frame (`--list`) — the frame its PNG is drawn from — and
+  # the checks read it run by run.
+  softwareDoors = ''
+    export VK_DRIVER_FILES=${xvfb.icd}
+    export VK_ICD_FILENAMES=${xvfb.icd}
+    export LIBGL_ALWAYS_SOFTWARE=1
+    room() {
+      rm -rf "$PWD/room"
+      cp -r ${self}/tests/fixtures/software-room "$PWD/room"
+      chmod -R u+w "$PWD/room"
+    }
+    # A window: the frame's name, the language, then the camera's words.
+    window() {
+      name=$1 language=$2; shift 2
+      room
+      ${rust.workspace}/bin/ronoctua-shell photograph --door software --room "$PWD/room" \
+        --language "$language" --columns 110 --lines 34 --list "$@" > "$PWD/$name.txt"
+    }
+    # The footer: the same, walked from `LEADER i`.
+    footer() {
+      name=$1 language=$2; shift 2
+      room
+      ${rust.workspace}/bin/ronoctua-shell photograph --door footer --room "$PWD/room" \
+        --software noctua --language "$language" --list --leader --key i "$@" > "$PWD/$name.txt"
+    }
+    down6="--key <down> --key <down> --key <down> --key <down> --key <down> --key <down>"
+  '';
+  # What both checks read a frame and a language with.
+  softwareFrames = pkgs.writeText "software-frames.py" ''
+    import pathlib, re
+
+    # A RUN OF THE FRAME, as `--list` prints it: its line, its column, its
+    # colour token and its text, which is Rust's `{:?}` of a string.
+    RUN = re.compile(r'^run line (\d+) column (\d+) \S+ (color\.[\w.]+) "(.*)"$', re.M)
+
+    def unescaped(text):
+        text = re.sub(r"\\u\{([0-9a-f]+)\}", lambda m: chr(int(m.group(1), 16)), text)
+        return text.replace('\\"', '"').replace("\\\\", "\\")
+
+    def lines_of(said):
+        lines = {}
+        for line, column, colour, text in RUN.findall(said):
+            lines.setdefault(int(line), []).append((int(column), colour, unescaped(text)))
+        return {n: sorted(runs) for n, runs in lines.items()}
+
+    def keys_of(text):
+        # One line per key: every sentence these checks read is one line.
+        return dict(re.findall(r"^([a-z0-9-]+) = (.+)$", text, re.M))
+
+    def prose(sentence):
+        # What stands before the first placeable, which a frame shows whole.
+        return sentence.split("{")[0].strip()
+
+    def agrees(drawn, sentence):
+        # A value column cuts what does not fit with an ellipsis.
+        drawn = drawn.rstrip("…").strip()
+        return bool(drawn) and (sentence.startswith(drawn) or drawn.startswith(sentence))
+  '';
+
+  # DECLINED BY YOU IS DRAWN, in both doors and both languages: every
+  # program the person declined, by the name its launcher entry gives, beside
+  # what the decline did on this machine — removed, still here through
+  # another program (in the danger tone, name and all), kept with the
+  # distro's reason, no longer known, declined on the person's other machine
+  # (named), leaving with the next update — and, in the window, the rest of
+  # the distro's programs after them, each once.
+  #
+  # PARSED: frames and the `.ftl` files are read, never searched as source.
+  declined-list-is-drawn = mkCheck "declined-list-is-drawn" [ pkgs.python3 ] ''
+    ${softwareDoors}
+    for language in en-GB pt-BR; do
+      window "window-$language" "$language" --opening declined
+      # shellcheck disable=SC2086
+      footer "footer-$language" "$language" $down6 --key '<down>' --key RET
+    done
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${softwareFrames}").read())
+
+    # PARSED: what is read is each door's frame, run by run, and the sentence
+    # each key says in each language — no source is searched, so no comment
+    # can answer for the screen.
+    # FILE-WIDE: a frame is one whole surface, and an `.ftl` is read whole for
+    # its keys; neither has a function to narrow to. The floors below refuse
+    # a frame or a language that came back short.
+    WANT = [
+        ("Blender", "software-declared-decline-honoured"),
+        ("VLC media player", "software-declared-decline-still-present"),
+        ("zsh", "software-declared-decline-essential"),
+        ("gimp", "software-declared-decline-unknown"),
+        ("Htop", "software-declared-decline-elsewhere"),
+        ("btop++", "software-declared-decline-waiting"),
+    ]
+    REST = ["Google Chrome", "Emacs", "mpv Media Player", "Ghostty"]
+    wrong = []
+    for language in ("en-GB", "pt-BR"):
+        keys = keys_of(pathlib.Path("${self}/assets/i18n/" + language + ".ftl").read_text())
+        floor(len(keys), 1000, f"keys of {language}")
+        for door in ("window", "footer"):
+            name = f"{door}-{language}"
+            lines = lines_of(pathlib.Path(name + ".txt").read_text())
+            floor(len(lines), 8, f"lines of the frame {name}")
+            texts = [t for runs in lines.values() for _, _, t in runs]
+            for program, key in WANT:
+                at = [n for n, runs in lines.items() if any(t.strip() == program for _, _, t in runs)]
+                if len(at) != 1:
+                    wrong.append(f"{name}: {program} is drawn on {len(at)} lines, not one")
+                    continue
+                runs = lines[at[0]]
+                column = next(c for c, _, t in runs if t.strip() == program)
+                values = [t for c, _, t in runs if c > column and t.strip()]
+                sentence = prose(keys[key])
+                if not any(agrees(v, sentence) for v in values):
+                    wrong.append(f"{name}: {program} says {values}, not {sentence!r} ({key})")
+                if program == "Htop" and not any("laptop" in v for v in values):
+                    wrong.append(f"{name}: the decline elsewhere does not name the machine: {values}")
+                if program == "VLC media player":
+                    tones = {colour for _, colour, t in runs if t.strip()}
+                    if "color.state.error" not in tones:
+                        wrong.append(f"{name}: still-present is not in the danger tone: {runs}")
+            if door == "window":
+                for program in REST:
+                    many = sum(1 for t in texts if t.strip() == program)
+                    if many != 1:
+                        wrong.append(f"{name}: the distro's {program} is drawn {many} times, not once")
+    for w in wrong:
+        print("ERROR: " + w, file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: every decline says what it did, in both doors and both languages")
+    END
+  '';
+
+  # REMOVE FOR GOOD EXPLAINS ITSELF, in both doors and both languages:
+  # `C-d` on a declared program asks, on "no", whether to remove it FOR GOOD
+  # — and before the answers the question says what the yes does beyond this
+  # computer: it leaves this computer and the declaration, the person's other
+  # computers remove it at their next update, what it saved stays unless the
+  # second yes erases it (that one in the danger tone).
+  #
+  # PARSED: frames and the `.ftl` files are read, never searched as source.
+  forget-explains-itself = mkCheck "forget-explains-itself" [ pkgs.python3 ] ''
+    ${softwareDoors}
+    for language in en-GB pt-BR; do
+      window "window-$language" "$language" --opening declared --key C-d
+      # shellcheck disable=SC2086
+      footer "footer-$language" "$language" $down6 --key RET --key C-d
+    done
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${softwareFrames}").read())
+
+    # PARSED: what is read is each door's frame, run by run, and the sentence
+    # each key says in each language — no source is searched.
+    # FILE-WIDE: a frame is one whole surface, and an `.ftl` is read whole for
+    # its keys; the floors refuse a frame or a language that came back short.
+    wrong = []
+    for language in ("en-GB", "pt-BR"):
+        keys = keys_of(pathlib.Path("${self}/assets/i18n/" + language + ".ftl").read_text())
+        floor(len(keys), 1000, f"keys of {language}")
+        said = [
+            keys["software-declared-sure-forget"].replace("{ $app }", "ripgrep"),
+            keys["software-declared-forget-here"],
+            keys["software-declared-forget-elsewhere"],
+            keys["software-declared-forget-data"],
+            keys["software-no"],
+            keys["software-declared-yes-forget"],
+            keys["software-yes-remove-data"],
+        ]
+        for door in ("window", "footer"):
+            name = f"{door}-{language}"
+            lines = lines_of(pathlib.Path(name + ".txt").read_text())
+            # THE HEADER AND THE ANSWERS ALONE are four lines: the floor
+            # refuses less, and what the question says is asked below.
+            floor(len(lines), 4, f"lines of the frame {name}")
+            where = []
+            for sentence in said:
+                at = [n for n, runs in sorted(lines.items())
+                      if any(t.strip() == sentence for _, _, t in runs)]
+                if not at:
+                    wrong.append(f"{name}: {sentence!r} is not drawn")
+                    where.append(None)
+                else:
+                    where.append(at[0])
+            if None in where:
+                continue
+            # IN THAT ORDER: the question, the three lines of what happens,
+            # and only then "no", and the yeses after it.
+            if where != sorted(where) or len(set(where)) != len(where):
+                wrong.append(f"{name}: the question's lines are out of order: {where}")
+            erase = lines[where[-1]]
+            if not any(colour == "color.state.error" for _, colour, t in erase if t.strip()):
+                wrong.append(f"{name}: erasing what it saved is not in the danger tone: {erase}")
+    for w in wrong:
+        print("ERROR: " + w, file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: removing a declared program for good says what it does, in both doors and both languages")
+    END
+  '';
+  # ── anchor: L19 ──
+  # ── anchor: L20 ──
+  # THE INSTALLER FOLLOWS THE RELEASE.
+  #
+  # A machine follows the `release` branch, so the installer asks the release
+  # which revision it is at, right after the network question: a NEWER one
+  # starts the release's installer in its place (with the answers given),
+  # the same one goes on, one this ISO is ahead of keeps this installer (a
+  # new installer being tried), and one that does not answer goes on with
+  # the ISO's own distro and SAYS so — a development build never follows,
+  # and a hop never hops again. The decision is a pure function; this runs
+  # its test by name over the `rust-tests` derivation (`--exact`), so a
+  # renamed test is a red check and never a filter that matched nothing.
+  installer-follows-release = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-installer-follows-release";
+    checkPhase = ''
+      runHook preCheck
+      cargoWithProfile test --locked -p ronoctua-installer --lib -- --exact \
+        release::tests::installer_follows_release \
+        release::tests::the_hop_starts_the_release_installer_with_what_this_one_was_given 2>&1 | tee ran.txt
+      grep -q 'test result: ok. 2 passed' ran.txt || {
+        echo "ERROR: the release follower's tests did not run exactly once, green" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # THE INSTALLER REQUIRES THE NETWORK.
+  #
+  # The person's repository is mandatory and is checked for real, the release
+  # is asked, and `nixos-install` downloads: with no way out, `--execute`
+  # stops BEFORE ITS FIRST STEP with the sentence and exit code 3. This runs
+  # the real binary, every answer given, where there is no network at all
+  # (the build sandbox: no NetworkManager, no system bus). The dry run still
+  # runs there: a rehearsal asks nothing of the network.
+  #
+  # What "before its first step" rests on is the exit code and the missing
+  # `[1/` line, and nothing else: the scratch home is made only AFTER the
+  # gate (`Reach::prepare`), and in this sandbox it cannot be made at all
+  # (`/run` does not exist) — a gate that let the installer through would end
+  # it with 4, not 3. Looking for the files themselves would prove nothing
+  # here: `/run` is not there to hold them, and `/tmp` is not the machine's.
+  installer-requires-network =
+    mkCheck "installer-requires-network"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        export RONOCTUA_INST_DISK=/dev/nvme0n1
+        export RONOCTUA_INST_HOSTNAME=noctua-teste
+        export RONOCTUA_INST_PASSWORD=test-password
+        export RONOCTUA_INST_PASSPHRASE=test-passphrase
+        export RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git
+        export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
+        export RONOCTUA_INST_BELONGINGS_PASSPHRASE=belongings-passphrase
+        # NO SYSTEM BUS, said out loud: the sandbox has none, and a machine
+        # running this by hand must not have its own NetworkManager answer.
+        export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/system_bus_socket
+
+        status=0
+        ${rust.workspace}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
+        cat said.txt
+        [ "$status" = 3 ] || {
+          echo "ERROR: with no network, --execute exited $status and not 3 (the gate's)" >&2
+          exit 1
+        }
+        grep -q 'refused before any step: network' said.txt || {
+          echo "ERROR: the installer did not say the network stopped it" >&2
+          exit 1
+        }
+        if grep -q '^\[1/' said.txt; then
+          echo "ERROR: a step started with no network" >&2
+          exit 1
+        fi
+        # THE REHEARSAL asks nothing of the network, and runs.
+        ${rust.workspace}/bin/ronoctua-install < /dev/null > dry.txt
+        grep -q -- '--execute' dry.txt || {
+          echo "ERROR: the dry run did not run without the network" >&2
+          exit 1
+        }
+        echo "OK: with no network the installer stops before its first step, and says so"
+      '';
+
+  # A MACHINE THAT DOES NOT HIBERNATE ASKS FOR NO HIBERNATION.
+  #
+  # The installer writes `ronoctua.hibernation = false` into `host.nix` when
+  # the swapfile cannot hold a hibernation image (capped below the RAM by a
+  # small disk, or with no resume offset measured) — the reference machine's
+  # `host.nix` is exactly that file, as the installer's dry run writes it
+  # (`host-nix-golden-evaluates`). Off, the machine must not name a resume
+  # device, systemd must refuse every sleep that writes the RAM to the
+  # swapfile, and UPower must power off at its last percent instead of
+  # hibernating; on (a measured offset, the option's default), all three are
+  # what they were. Read from the evaluated systems, not from the module's
+  # text.
+  hibernation-follows-the-swap =
+    let
+      off = self.nixosConfigurations.noctua.config;
+      on =
+        (self.nixosConfigurations.noctua.extendModules {
+          modules = [
+            {
+              ronoctua.hibernation = lib.mkForce true;
+              boot.kernelParams = [ "resume_offset=4242" ];
+            }
+          ];
+        }).config;
+      read = config: {
+        hibernation = config.ronoctua.hibernation;
+        resume = config.boot.resumeDevice;
+        params = config.boot.kernelParams;
+        sleep = config.systemd.sleep.settings.Sleep;
+        upower = config.services.upower.criticalPowerAction;
+      };
+      facts = pkgs.writeText "hibernation-facts.json" (
+        builtins.unsafeDiscardStringContext (
+          builtins.toJSON {
+            off = read off;
+            on = read on;
+          }
+        )
+      );
+    in
+    mkCheck "hibernation-follows-the-swap" [ pkgs.python3 ] ''
+      python3 - ${facts} <<'END'
+      # PARSED: the evaluated options of two systems, as JSON.
+      import json, sys
+      f = json.load(open(sys.argv[1]))
+      off, on = f["off"], f["on"]
+      wrong = []
+      if off["hibernation"] is not False:
+          wrong.append("the reference host.nix (no resume offset) leaves hibernation on")
+      if off["resume"] != "" or any(p.startswith("resume=") for p in off["params"]):
+          wrong.append(f"off, the machine still resumes from {off['resume']!r}")
+      for allow in ("AllowHibernation", "AllowHybridSleep", "AllowSuspendThenHibernate"):
+          if off["sleep"].get(allow) is not False:
+              wrong.append(f"off, systemd's {allow} is {off['sleep'].get(allow)!r}")
+      if off["upower"] != "PowerOff":
+          wrong.append(f"off, UPower's last-percent action is {off['upower']!r}")
+      if on["hibernation"] is not True or on["resume"] != "/dev/mapper/cryptroot":
+          wrong.append(f"on, the resume device is {on['resume']!r}")
+      if not any(p == "resume=/dev/mapper/cryptroot" for p in on["params"]):
+          wrong.append("on, the kernel is not told where to resume from")
+      if any(on["sleep"].get(a) is False for a in ("AllowHibernation", "AllowHybridSleep", "AllowSuspendThenHibernate")):
+          wrong.append(f"on, systemd refuses a sleep: {on['sleep']}")
+      if on["upower"] != "Hibernate":
+          wrong.append(f"on, UPower's last-percent action is {on['upower']!r}")
+      if wrong:
+          print("ERROR: hibernation does not follow ronoctua.hibernation:", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: a machine without hibernation names no resume device, refuses the sleeps that hibernate and powers off at its last percent")
+      END
+    '';
+
+  # ── anchor: L21 ──
+  # WHAT GOES TO THE REPOSITORY IS ONE LISTING, GENERATED FROM THE WALK (the
+  # belongings-view package): the page "What goes to your repository" is the
+  # walk a sync makes, read through ONE reader of the tables
+  # (`ronoctua_belongings::scope`), so it can never promise a file the sync
+  # leaves out, nor leave out one it sends.
+  #
+  # THE BEHAVIOUR, over the `rust-tests` derivation narrowed to these tests
+  # (`--exact`): a home with a file of every origin (a rule, a target, the
+  # person's addition, one followed from another machine, the plain part)
+  # and of every reason a file is never kept, walked by the sync's walk and
+  # the plain part's and listed by a door's inventory — every walked path
+  # listed as what the walk made of it, nothing listed as travelling that no
+  # walk sends; a real sync over a `file://` remote leaving the listing in
+  # step (what it wrote is in step, an edit of the same size later is
+  # changed, a file deleted here is listed as leaving before the sync that
+  # deletes it from the repository and the other machine); a repair written
+  # by itself only on the machine that runs the newest distro, never one the
+  # person left; a copy of an access file found by its sum, never by bytes
+  # kept; and the scope's and the inventory's own tests.
+  belongingsListing = rust.tests.overrideAttrs (old: {
+    pname = "ronoctua-belongings-listing";
+    checkPhase = ''
+      runHook preCheck
+      mkdir -p $out
+      cargoWithProfile test --locked -p ronoctua-belongings --lib -- --exact \
+        engine::tests::listing::belongings_list_is_the_walk \
+        engine::tests::listing::a_sync_leaves_the_listing_in_step \
+        scope::tests::every_kind_of_root_is_walked_once \
+        scope::tests::a_path_comes_from_the_most_specific_thing_that_names_it \
+        scope::tests::a_request_is_laid_over_what_the_index_dropped \
+        scope::tests::the_walk_meets_every_path_once_and_follows_no_link \
+        inventory::tests::a_state_is_what_a_stat_says_against_the_base \
+        inventory::tests::what_is_not_kept_says_why \
+        inventory::tests::a_run_stamps_only_what_it_can_vouch_for \
+        inventory::tests::a_file_deleted_here_is_said_to_leave_the_repository \
+        inventory::tests::an_access_file_is_found_by_its_sum \
+        inventory::tests::a_repair_writes_itself_only_on_the_newest_machine 2>&1 | tee $out/ran.txt
+      grep -q 'test result: ok. 12 passed' $out/ran.txt || {
+        echo "ERROR: the listing's tests did not run exactly once, green" >&2
+        exit 1
+      }
+      runHook postCheck
+    '';
+  });
+
+  # AND NOTHING ELSE READS THE TABLES: the trees, the files, the targets, the
+  # plain roots and what is never kept are named only in `kept.rs` (the
+  # arithmetic) and `scope.rs` (the one reader) — a second reader is a second
+  # list, and the page and the sync would drift apart. The generated table is
+  # included by `kept.rs` alone.
+  belongings-list-is-the-walk = mkCheck "belongings-list-is-the-walk" [ pkgs.python3 ] ''
+    for t in \
+      engine::tests::listing::belongings_list_is_the_walk \
+      engine::tests::listing::a_sync_leaves_the_listing_in_step \
+      scope::tests::the_walk_meets_every_path_once_and_follows_no_link \
+      inventory::tests::a_state_is_what_a_stat_says_against_the_base \
+      inventory::tests::a_file_deleted_here_is_said_to_leave_the_repository \
+      inventory::tests::a_repair_writes_itself_only_on_the_newest_machine; do
+      grep -qxF "test $t ... ok" ${belongingsListing}/ran.txt || {
+        echo "ERROR: $t did not pass" >&2
+        exit 1
+      }
+    done
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    crates = pathlib.Path("${../crates}")
+    buffers = pathlib.Path("${../buffers}")
+    home = crates / "ronoctua-belongings" / "src"
+    allowed = {home / "kept.rs", home / "scope.rs"}
+    TABLES = ("TREES", "FILES", "TARGETS", "PLAIN", "NEVER")
+    # FILE-WIDE: a read of a table anywhere in a file is the offence — tests
+    # included, which would test a list of their own. `code_of` takes the
+    # comments and the strings off, so a sentence naming a table is no read.
+    # A GROUP may hold one group inside it (`kept::{Place, x::{y}}`), and is
+    # read whole: a table named anywhere in it, a glob, or `self` renamed
+    # (`kept::{self as k}`, then `k::TREES`) is the offence.
+    PATH = re.compile(r"\bkept\s*::\s*(\{(?:[^{}]|\{[^{}]*\})*\}|\*|\w+)")
+    ALIAS = re.compile(r"\bkept\s+as\s+\w+")
+    SELF_AS = re.compile(r"\bself\s+as\s+\w+")
+    INCLUDE = re.compile(r"include!\s*\(\s*concat!\s*\(\s*env!\s*\(\s*\"OUT_DIR\"\s*\)\s*,\s*\"/belongings\.rs\"")
+    files = list(workspace_sources(crates)) + sorted(buffers.rglob("*.rs"))
+    wrong, swept = [], 0
+    for f in files:
+        text = f.read_text()
+        code = code_of(text)
+        rel = f.relative_to(crates) if crates in f.parents else f.relative_to(buffers)
+        if INCLUDE.search(uncommented(text)) and f != home / "kept.rs":
+            wrong.append(f"{rel} includes the generated table: kept.rs is the one that does")
+        if f in allowed:
+            continue
+        swept += 1
+        for m in PATH.finditer(code):
+            named = m.group(1)
+            if "*" in named:
+                wrong.append(f"{rel} imports all of `kept`, its tables with it")
+                continue
+            if SELF_AS.search(named):
+                wrong.append(f"{rel} renames `kept`: a table read through the alias would not be seen")
+                continue
+            for table in TABLES:
+                if re.search(r"\b" + table + r"\b", named):
+                    wrong.append(f"{rel} reads kept::{table}: ask ronoctua_belongings::scope")
+        if ALIAS.search(code):
+            wrong.append(f"{rel} renames `kept`: a table read through the alias would not be seen")
+    floor(swept, 300, "sources swept for a reader of the tables")
+    # PARSED: the walk and the listing meet their paths through the same
+    # scope — the one traversal both take.
+    walk = must(body_of(code_of((home / "walk.rs").read_text()), "walk"), "walk::walk")
+    listing = must(body_of(code_of((home / "inventory.rs").read_text()), "inventory"), "inventory::inventory")
+    for name, body in (("walk::walk", walk), ("inventory::inventory", listing)):
+        if ".meet(" not in body:
+            wrong.append(f"{name} does not meet its paths through the scope")
+    if wrong:
+        print("ERROR: the listing and the walk can drift apart:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: {swept} sources read no table of what is kept; the walk and the listing meet the same paths")
+    END
+  '';
+  # ── anchor: L22 ──
+  # ENCRYPT ANYTHING NEVER WRITES OVER ANYTHING, AND NEVER TAKES THE ORIGINAL.
+  #
+  # What the file manager's `E`/`U` and `LEADER s e c` promise, asked of the
+  # program the queue runs for every `Work::Seal` (`ronoctua-seal`,
+  # extracted): a name that is there — a file, or a link to somebody's file —
+  # is refused and left as it was, and the original stays byte for byte; a
+  # refused open leaves no half behind; a folder is sealed whole as the tar of
+  # itself, opened back to the same tree, with no tar in clear left on the disk
+  # — and a folder with a member that cannot be read is refused whole, never
+  # sealed short. The door's half (a name nothing uses, `note (2).txt.age`) is
+  # `seal::sealed_target`, which the shell's own tests prove over a real folder.
+  seal-never-overwrites =
+    mkCheck "seal-never-overwrites"
+      [
+        pkgs.coreutils
+        pkgs.diffutils
+        pkgs.libarchive
+      ]
+      ''
+        seal=${rust.seal}/bin/ronoctua-seal
+        w=$PWD
+        fail() {
+          echo "ERROR: $*" >&2
+          exit 1
+        }
+        # One job on the sealer's stdin; its LAST line is the verdict.
+        verdict() {
+          printf '{"action":%s,"from":"%s","into":"%s"}\n' "$1" "$w/$2" "$w/$3" \
+            | "$seal" 2> /dev/null | tail -n 1 || true
+        }
+        sealing=$(printf '{"do":"seal-passphrase","passphrase-file":"%s","work":10}' "$w/pw")
+        opening() { printf '{"do":"open-passphrase","passphrase-file":"%s"}' "$w/$1"; }
+        (
+          umask 077
+          printf 'horse battery staple' > pw
+          printf 'not it' > wrong
+        )
+        printf 'the note' > note.txt
+        cp note.txt note.kept
+        printf 'somebody else' > taken.age
+        cp taken.age taken.kept
+        printf 'victim' > victim
+        cp victim victim.kept
+        ln -s victim link.age
+
+        # A NAME THAT IS THERE, a file or a link to one: refused, untouched.
+        for into in taken.age link.age; do
+          said=$(verdict "$sealing" note.txt $into)
+          [ "$said" = "refused failed" ] || fail "sealing into $into, which is there, said: $said"
+        done
+        cmp -s taken.age taken.kept || fail "a seal wrote over a file that was there"
+        cmp -s victim victim.kept || fail "a seal wrote through a link that was there"
+        [ -L link.age ] || fail "the link that was there is not a link any more"
+
+        # A NAME NOTHING USES: sealed, the original as it was, the copy 0600.
+        said=$(verdict "$sealing" note.txt note.txt.age)
+        [ "$said" = "done 8" ] || fail "sealing into a fresh name said: $said"
+        cmp -s note.txt note.kept || fail "the original changed when it was sealed"
+        [ "$(stat -c %a note.txt.age)" = 600 ] || fail "the sealed file is not 0600"
+
+        # OPENING: never over the original, never a half when refused.
+        said=$(verdict "$(opening pw)" note.txt.age note.txt)
+        [ "$said" = "refused failed" ] || fail "opening over the original said: $said"
+        cmp -s note.txt note.kept || fail "an open wrote over the original"
+        said=$(verdict "$(opening wrong)" note.txt.age nothing.txt)
+        [ "$said" = "refused wrong-passphrase" ] || fail "a wrong passphrase said: $said"
+        [ ! -e nothing.txt ] || fail "a refused open left its half behind"
+        said=$(verdict "$(opening pw)" note.txt.age back.txt)
+        [ "$said" = "done 8" ] || fail "opening into a fresh name said: $said"
+        cmp -s back.txt note.kept || fail "the open gave back another file"
+        [ -e note.txt.age ] || fail "the sealed file went away when it was opened"
+
+        # A FOLDER: the tar of itself, and nothing in clear beside it.
+        mkdir -p photos/2026/june photos/empty
+        printf 'ay' > photos/2026/a.jpg
+        printf 'bee' > photos/2026/june/-b.jpg
+        printf 'at' > photos/@types
+        before=$(ls -A | sort)
+        said=$(verdict "$sealing" photos photos.tar.age)
+        case "$said" in "done "*) ;; *) fail "sealing a folder said: $said" ;; esac
+        after=$(ls -A | grep -vx photos.tar.age | sort)
+        [ "$before" = "$after" ] || fail "sealing a folder left something beside it: $(ls -A | tr '\n' ' ')"
+        said=$(verdict "$(opening pw)" photos.tar.age photos.tar)
+        case "$said" in "done "*) ;; *) fail "opening the folder's seal said: $said" ;; esac
+        mkdir out
+        bsdtar -x -f photos.tar -C out
+        diff -r photos out/photos > /dev/null || fail "the folder came back other than it went"
+        [ -d out/photos/empty ] || fail "the folder came back without its empty folder"
+        said=$(verdict "$sealing" photos photos.tar.age)
+        [ "$said" = "refused failed" ] || fail "sealing a folder over its own seal said: $said"
+
+        # NOTHING BUT A FILE OR A FOLDER is read, a link followed or not: a
+        # device behind a link (`/dev/zero` named like a photo) would be
+        # sealed until the disk is full, and a pipe would hold the job at
+        # nought for ever. The clock is the verdict's — a sealer that waits is
+        # one that failed — and so is the file-size limit: a sealer that reads
+        # a device fails here at a megabyte, not at the builder's full disk.
+        ln -s /dev/zero zero.jpg
+        mkfifo pipe.txt
+        for from in zero.jpg pipe.txt; do
+          said=$(printf '{"action":%s,"from":"%s","into":"%s"}\n' "$sealing" "$w/$from" "$w/$from.age" \
+            | (ulimit -f 2048 && timeout 20 "$seal" 2> /dev/null) | tail -n 1 || true)
+          [ "$said" = "refused failed" ] || fail "sealing $from, which is no file, said: '$said'"
+          [ ! -e "$from.age" ] || fail "sealing $from, which is no file, left $from.age"
+        done
+        rm zero.jpg pipe.txt
+
+        # A MEMBER THAT CANNOT BE READ refuses the folder whole. The builder
+        # is not root, so a file of mode 000 is one it cannot read; were it
+        # root, this half would prove nothing, and it says so.
+        chmod 000 photos/2026/a.jpg
+        if [ -r photos/2026/a.jpg ]; then
+          fail "the builder reads a file of mode 000: the unreadable member cannot be planted"
+        fi
+        said=$(verdict "$sealing" photos short.tar.age)
+        [ "$said" = "refused failed" ] || fail "a folder with an unreadable member said: $said"
+        [ ! -e short.tar.age ] || fail "a folder was sealed short of a member"
+        chmod 644 photos/2026/a.jpg
+
+        echo "OK: nothing that was there was written over or through; the originals stayed; a refused open left nothing; a device or a pipe was never read; a folder went whole and came back whole, or not at all"
+      '';
+
+  # A PASSPHRASE REACHES THE SEALER AS A FILE, NEVER AS AN ARGUMENT — the
+  # rule `stream-key-is-never-an-argument` keeps for a stream key, kept here
+  # for encrypt anything. Every program on the machine can read another's
+  # command line, and a passphrase is the key to a file.
+  #
+  # BEHAVIOUR, of the extracted program: a passphrase file another user could
+  # read (`0644`) is refused, and so is a link where the file should be
+  # (`O_NOFOLLOW`), and a job that tries to carry the passphrase itself in
+  # place of its file is refused as no job at all — and nothing is written in
+  # any of the three. The program never removes the file: that is the queue's
+  # (`secrets::forget`, when the job ends, however it ends — its own tests).
+  #
+  # PARSED, the two halves around it: the queue starts the program with no
+  # argument whatsoever and hands the job on its standard input; and the door
+  # writes a passphrase only through `ronoctua_transfers::secrets::keep` —
+  # `create_new` with the mode on the creation — never a write of its own.
+  seal-secrets-are-files =
+    mkCheck "seal-secrets-are-files"
+      [
+        pkgs.coreutils
+        pkgs.python3
+      ]
+      ''
+        seal=${rust.seal}/bin/ronoctua-seal
+        w=$PWD
+        fail() {
+          echo "ERROR: $*" >&2
+          exit 1
+        }
+        verdict() {
+          printf '{"action":%s,"from":"%s","into":"%s"}\n' "$1" "$w/$2" "$w/$3" \
+            | "$seal" 2> /dev/null | tail -n 1 || true
+        }
+        with() { printf '{"do":"seal-passphrase","passphrase-file":"%s","work":10}' "$w/$1"; }
+        printf 'the note' > note.txt
+        (
+          umask 077
+          printf 'horse battery staple' > private
+        )
+        cp private open
+        chmod 644 open
+        ln -s private linked
+
+        said=$(verdict "$(with open)" note.txt a.age)
+        [ "$said" = "refused failed" ] || fail "a passphrase file others can read said: $said"
+        [ ! -e a.age ] || fail "a refused secret left an output behind"
+        said=$(verdict "$(with linked)" note.txt b.age)
+        [ "$said" = "refused failed" ] || fail "a link where the passphrase file should be said: $said"
+        [ ! -e b.age ] || fail "a refused link left an output behind"
+        inline=$(printf '{"do":"seal-passphrase","passphrase":"horse battery staple","work":10}')
+        said=$(verdict "$inline" note.txt c.age)
+        [ "$said" = "refused failed" ] || fail "a job carrying the passphrase itself said: $said"
+        [ ! -e c.age ] || fail "a job carrying the passphrase itself wrote something"
+        said=$(verdict "$(with private)" note.txt d.age)
+        [ "$said" = "done 8" ] || fail "a 0600 passphrase file said: $said"
+        [ -e private ] || fail "the sealer removed the passphrase file: that is the queue's to do"
+
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        wrong = []
+        # PARSED: the queue's half — `carry` builds the command, and nothing
+        # after `Command::new(program)` gives it an argument.
+        queue = code_of(without_tests(pathlib.Path("${../crates/ronoctua-transfers/src/seal.rs}").read_text()))
+        carry = must(body_of(queue, "carry"), "ronoctua-transfers' `seal::carry`")
+        floor(len(carry), 800, "characters of `seal::carry`")
+        if "Command::new(program)" not in carry:
+            wrong.append("the queue no longer starts the sealer as `Command::new(program)`")
+        for verb in (".arg(", ".args(", ".env("):
+            if verb in carry:
+                wrong.append(f"the queue hands the sealer something by `{verb}`: the job goes on stdin, whole")
+        if "stdin.write_all(" not in carry:
+            wrong.append("the queue no longer writes the job on the sealer's standard input")
+        # PARSED: the door's half — every passphrase is written by the
+        # queue's `secrets::keep`, and the door writes no file itself.
+        door = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src/seal.rs}").read_text()))
+        floor(len(door), 6000, "characters of the shell's seal.rs")
+        written = must(scope(door, r"impl\s+Written\b"), "the shell's `Written`")
+        if "ronoctua_transfers::secrets::keep(" not in written:
+            wrong.append("the door's passphrase file is no longer written by `secrets::keep`")
+        for writer in ("fs::write(", "File::create(", "OpenOptions::new(", ".write_all("):
+            if writer in door:
+                wrong.append(f"the door's seal.rs writes a file itself (`{writer}`)")
+        # PARSED: the wire — a secret in a job is a PATH. Every field of an
+        # `Action` that carries one is named `…_file` and typed `PathBuf`, and
+        # no field is named after a secret otherwise.
+        wire = code_of(pathlib.Path("${../crates/ronoctua-pq/src/lib.rs}").read_text())
+        action = must(scope(wire, r"pub\s+enum\s+Action\b"), "ronoctua-pq's `Action`")
+        fields = re.findall(r"(\w+)\s*:\s*([A-Za-z_][\w<>:, ]*?)\s*[,}]", action)
+        floor(len(fields), 6, "fields of the job's actions")
+        for name, ty in fields:
+            secretish = re.search(r"passphrase|identit|secret|key", name)
+            if name.endswith("_file") and ty.strip() != "PathBuf":
+                wrong.append(f"`{name}` is a `{ty.strip()}`, not a path")
+            elif secretish and not name.endswith("_file"):
+                wrong.append(f"`{name}` carries a secret in the job itself")
+        for w in wrong:
+            print(f"ERROR: {w}", file=sys.stderr)
+        if wrong:
+            sys.exit(1)
+        print(f"OK: secrets cross as 0600 files the door made with `secrets::keep`; the job goes on stdin; {len(fields)} fields of the wire checked")
+        END
+      '';
+
+  # THE QUEUE AND THE FOOTER NEVER LINK `age`.
+  #
+  # Sealing links `age` and the X-Wing pieces. The queue's daemon is up for as
+  # long as the session is, and the footer IS the desktop: neither has any
+  # business holding the code that opens a person's files. The program the
+  # queue runs for `Work::Seal` (`ronoctua-seal`, extracted) does; the two of
+  # them link only the job's wire (`ronoctua-pq` without features: the `Job`,
+  # `sniff`, `is_recipient`).
+  #
+  # MEASURED IN THE BINARIES, and not with `nix why-depends`: `age` is a Rust
+  # crate compiled INTO a binary, never a store path, so `why-depends` would
+  # say "no" about any binary whatever it linked. What a linked crate leaves in
+  # a binary are its panic locations (`age-0.12.1/src/format.rs`), so a binary
+  # that carries any of its code carries its paths — and the sealer, which
+  # does link it, is the needle's control: were the needle wrong it would find
+  # nothing there either, and the check refuses to pass on that. The whole
+  # workspace is one cargo build and features unify (`ronoctua-pq` is compiled
+  # WITH `crypt` for the sealer), so what keeps `age` out is that the two call
+  # none of it — which only the binaries can say. And the manifests, which
+  # are what keeps a call to it from compiling there in the first place.
+  transfers-never-link-age = mkCheck "transfers-never-link-age" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: three binaries read whole, and two manifests' dependency line.
+    NEEDLE = re.compile(
+        rb"(?:/age-0\.[0-9.]+|/age-core-0\.[0-9.]+|/ml-kem-0\.[0-9.]+)/src/[a-z0-9_/]+\.rs"
+        rb"|ronoctua-pq/src/(?:crypt|xwing|vectors)\.rs"
+    )
+    sealer = pathlib.Path("${rust.seal}/bin/ronoctua-seal").read_bytes()
+    control = sorted(set(NEEDLE.findall(sealer)))
+    floor(len(control), 5, "sources of age and the X-Wing pieces traced in the sealer (the needle's control)")
+    wrong = []
+    for name, path in (
+        ("the queue's daemon", "${rust.transfers}/bin/ronoctua-transfers"),
+        ("the footer", "${rust.workspace}/bin/ronoctua-shell"),
+    ):
+        linked = sorted(set(NEEDLE.findall(pathlib.Path(path).read_bytes())))
+        if linked:
+            wrong.append(f"{name} carries {len(linked)} of age's sources, e.g. {linked[0].decode()}")
+    for crate in ("ronoctua-transfers", "ronoctua-shell"):
+        manifest = hashless((pathlib.Path("${../crates}") / crate / "Cargo.toml").read_text())
+        lines = [l for l in manifest.splitlines() if re.match(r"\s*ronoctua-pq\s*=", l)]
+        if len(lines) != 1:
+            wrong.append(f"{crate} names ronoctua-pq {len(lines)} times, not once")
+        elif "default-features = false" not in lines[0]:
+            wrong.append(f"{crate} depends on ronoctua-pq with its features: {lines[0].strip()!r}")
+        if re.search(r"^\s*age\s*=", manifest, re.M):
+            wrong.append(f"{crate} depends on age itself")
+    if wrong:
+        print("ERROR: age reached the queue or the footer.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: the queue and the footer carry none of the {len(control)} sources traced in the sealer")
+    END
+  '';
+
+  # EVERY CHANNEL SAYS WHERE IT STANDS AGAINST A QUANTUM COMPUTER.
+  #
+  # The security centre's post-quantum section (`LEADER s e q`) is a table
+  # (`ronoctua_security::quantum`) over facts. Two ways it would lie with every
+  # test of the table green:
+  #
+  #   * a channel, a reason or a status with no sentence in a language, or a
+  #     variant left out of its `ALL` — `channels` walks `Channel::ALL`, so a
+  #     channel missing there is simply never drawn (PARSED, against the
+  #     merged texts the binary carries);
+  #   * the versions the build writes (`nix/pq-facts.nix`, built HERE) not
+  #     being the fields `Built` reads, or not versions — an attribute nixpkgs
+  #     renamed, a `go.mod` that lost its line — or the footer not carrying the
+  #     file's path at all: every version-based channel would then say "not
+  #     built" on every machine, quietly;
+  #   * a system's own copy (`nix/modules/security.nix`, which the footer's
+  #     unit names) not saying which optional channels that configuration
+  #     turned on, or saying it in words `Ships` does not read — then the
+  #     whole copy fails to parse, and every row says "not built". Asked of
+  #     the GENERATED unit of both profiles: the minimal one has no Chrome,
+  #     and its table must not speak for one.
+  #
+  # That every channel gets exactly one row under every combination of facts
+  # is the crate's test (`every_channel_says_its_status_under_every_fact`), and
+  # that the section draws each with its status and its sentence in both
+  # languages is the shell's (`the_quantum_section_draws_every_channel_…`).
+  every-channel-says-its-quantum-status =
+    let
+      facts = import ../nix/pq-facts.nix { inherit pkgs; };
+      # THE UNIT'S OWN VALUE, per profile; an absent one arrives empty.
+      unitFacts =
+        name:
+        self.nixosConfigurations.${name}.config.systemd.user.services.ronoctua-footer.environment.RONOCTUA_PQ_FACTS
+          or "";
+      systems = builtins.toJSON {
+        full = unitFacts "noctua";
+        minimal = unitFacts "minimal";
+      };
+    in
+    mkCheck "every-channel-says-its-quantum-status" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # `uncommented`: the ids are string literals, and the comments go.
+      table = uncommented(without_tests(pathlib.Path("${../crates/ronoctua-security/src/quantum.rs}").read_text()))
+      floor(len(table), 8000, "characters of quantum.rs")
+      wrong = []
+      ids = {}
+      for enum, prefix, least in (("Channel", "channel", 15), ("Why", "why", 25), ("Status", "status", 4)):
+          decl = must(scope(table, r"pub\s+enum\s+" + enum + r"\b"), f"`quantum::{enum}`")
+          variants = re.findall(r"^\s*([A-Z]\w*)\s*,", decl, re.M)
+          floor(len(variants), least, f"variants of `{enum}`")
+          impl = must(scope(table, r"impl\s+" + enum + r"\b"), f"`impl {enum}`")
+          listed = re.search(r"pub const ALL: \[Self; (\d+)\] = \[(.*?)\];", impl, re.S)
+          if not listed:
+              wrong.append(f"`{enum}::ALL` went away")
+              continue
+          members = re.findall(r"Self::(\w+)", listed.group(2))
+          if sorted(members) != sorted(variants) or int(listed.group(1)) != len(variants):
+              wrong.append(f"`{enum}::ALL` is not every variant once: missing {sorted(set(variants) - set(members))}")
+          named = dict(re.findall(r"Self::(\w+)\s*=>\s*\"([a-z0-9-]+)\"", must(body_of(impl, "id"), f"`{enum}::id`")))
+          if set(named) != set(variants):
+              wrong.append(f"`{enum}::id` does not name {sorted(set(variants) - set(named))}")
+          if len(set(named.values())) != len(named):
+              wrong.append(f"two variants of `{enum}` share an id")
+          ids[prefix] = sorted(named.values())
+      for lang in ${builtins.toJSON languages}:
+          # FILE-WIDE: a key is a line of the merged `.ftl`, and `hashless`
+          # takes the comments off it.
+          text = hashless(pathlib.Path(f"${texts}/{lang}.ftl").read_text())
+          have = set(re.findall(r"^([a-z][a-z0-9-]*) =", text, re.M))
+          for prefix, names in ids.items():
+              for n in names:
+                  if f"security-quantum-{prefix}-{n}" not in have:
+                      wrong.append(f"{lang} has no `security-quantum-{prefix}-{n}`")
+
+      # PARSED: what the build wrote, against the fields `Built` reads.
+      built = json.loads(pathlib.Path("${facts}").read_text())
+      def fields_of(struct):
+          body = must(scope(table, r"pub\s+struct\s+" + struct + r"\b"), f"`quantum::{struct}`")
+          return {f.replace("_", "-") for f in re.findall(r"pub (\w+):", body)}
+      wants = fields_of("Built")
+      floor(len(wants), 7, "fields of `Built`")
+      # THE WORKSPACE'S COPY knows no configuration: no `ships`.
+      if set(built) != wants - {"ships"}:
+          wrong.append(f"the build writes {sorted(built)}, `Built` reads {sorted(wants)} (all but `ships`)")
+      # PARSED: each profile's own copy, as the footer's unit names it.
+      channels = fields_of("Ships")
+      floor(len(channels), 5, "fields of `Ships`")
+      expected_chrome = {"full": True, "minimal": False}
+      for profile, path in json.loads('${systems}').items():
+          if not path:
+              wrong.append(f"the {profile} profile's footer is given no RONOCTUA_PQ_FACTS")
+              continue
+          system = json.loads(pathlib.Path(path).read_text())
+          if set(system) != wants:
+              wrong.append(f"the {profile} profile's copy writes {sorted(system)}, `Built` reads {sorted(wants)}")
+          ships = system.get("ships") or {}
+          if set(ships) != channels or not all(isinstance(v, bool) for v in ships.values()):
+              wrong.append(f"the {profile} profile's copy says {ships!r}, `Ships` reads {sorted(channels)} as bools")
+          if ships.get("chrome") is not expected_chrome[profile]:
+              wrong.append(f"the {profile} profile's copy says Chrome is {ships.get('chrome')!r}")
+          if {k: v for k, v in system.items() if k != "ships"} != built:
+              wrong.append(f"the {profile} profile's versions are not the workspace's")
+      syncthing = built.get("syncthing") or {}
+      if set(syncthing) != fields_of("Syncthing"):
+          wrong.append(f"the build writes Syncthing's {sorted(syncthing)}, `Syncthing` reads {sorted(fields_of('Syncthing'))}")
+      versions = [(k, v) for k, v in built.items() if k != "syncthing"]
+      versions += [("syncthing " + k, syncthing.get(k)) for k in ("version", "go", "go-mod")]
+      for k, v in versions:
+          if not (isinstance(v, str) and re.match(r"[0-9]+\.[0-9]", v)):
+              wrong.append(f"the build's {k} is not a version: {v!r}")
+      if not isinstance(syncthing.get("pins-curves"), bool):
+          wrong.append("the build did not say whether Syncthing pins its curves")
+      # AND THE FOOTER READS THAT FILE: its path is in the binary.
+      shell = pathlib.Path("${rust.workspace}/bin/ronoctua-shell").read_bytes()
+      if b"${facts}" not in shell:
+          wrong.append("the footer does not carry the path of the facts the build wrote")
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          sys.exit(1)
+      print(f"OK: {sum(len(v) for v in ids.values())} ids, each with its sentence in every language; the build's {len(versions)} versions are the ones the table reads, and the footer reads them")
+      END
+    '';
+  # ── anchor: L23 ──
+  # A CONSOLE AND A SHELL OF AN INSTANCE OPEN IN OUR TERMINAL.
+  #
+  # Incus's text console and a shell inside an instance are a terminal's, and
+  # the terminal of this system is its own (`ronoctua-shell terminal <program>
+  # …`): its tokens, its keys, its font. The screen of a virtual machine is
+  # not a terminal's — `incus console --type=vga` opens remote-viewer and
+  # waits — so it is started by itself, and never inside one. Both doors (the
+  # footer's region and the window) launch exactly what ONE function says
+  # (`incus::launched`, over the CLI's line the feed asks the crate for), and
+  # the view's unit tests prove what it says for each (`a_console_and_a_shell
+  # _open_in_our_terminal_and_the_screen_by_itself`, and the window's own, which
+  # reads what its door would have started). This holds the shape that makes
+  # those tests mean it: no other path to a console.
+  incus-console-is-the-terminal = mkCheck "incus-console-is-the-terminal" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: one function's arms and two doors' arms, each found by its
+    # name with `body_of` and cut by braces; the needles are the words a
+    # launch is made of, so `uncommented` (comments off, strings kept) and
+    # `without_tests` (a test builds lines on purpose).
+    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
+    read = lambda name: uncommented(without_tests((shell / name).read_text()))
+    view, feed, window = read("incus.rs"), read("incus_feed.rs"), read("incus_window.rs")
+    surface = read("surface.rs")
+    wrong = []
+
+    # 1) WHAT EACH USE IS STARTED BY: the console and the shell in the
+    #    terminal, the screen by itself.
+    how = must(body_of(view, "launch"), "`Use::launch`")
+    arms = dict()
+    for m in re.finditer(r"((?:Self::\w+\s*\|\s*)*Self::\w+)\s*=>\s*(Some\(Launch::(\w+)\)|None)", how):
+        for variant in re.findall(r"Self::(\w+)", m.group(1)):
+            arms[variant] = m.group(3)
+    for variant, wanted in (("Console", "InTheTerminal"), ("Shell", "InTheTerminal"), ("Screen", "ByItself")):
+        if arms.get(variant) != wanted:
+            wrong.append(f"`Use::{variant}` is started {arms.get(variant)!r}, not {wanted}")
+
+    # 2) WHAT "IN THE TERMINAL" IS: this binary, `terminal` first, then the
+    #    CLI's whole line — and "by itself" the CLI as the program.
+    launched = must(body_of(view, "launched"), "`incus::launched`")
+    terminal = re.search(r"Launch::InTheTerminal\s*=>\s*\{(.*?)\n\s*\}", launched, re.S)
+    if not terminal or not re.search(r'vec!\[\s*"terminal"\.to_owned\(\),\s*cli\.clone\(\)\s*\]', terminal.group(1)) \
+            or "(me.to_owned(), words)" not in terminal.group(1):
+        wrong.append("`launched` no longer starts this binary's `terminal` with the CLI's line after it")
+    if not re.search(r"Launch::ByItself\s*=>\s*\(cli\.clone\(\),\s*args\.to_vec\(\)\)", launched):
+        wrong.append("`launched` no longer starts the screen as the CLI by itself")
+
+    # 3) THE FEED ASKS THE CRATE FOR THE LINE AND HANDS IT TO `launched` —
+    #    and is the only place in the shell that asks for a console's line.
+    opening = must(body_of(feed, "opening"), "`Feed::opening`")
+    if "crate::incus::launched(" not in opening or "what.launch()" not in opening:
+        wrong.append("`Feed::opening` no longer goes through `incus::launched`")
+    LINES = re.compile(r"\b(console_command|shell_command|console_arguments|shell_arguments)\(")
+    for f in sorted(shell.glob("*.rs")):
+        text = read(f.name)
+        for m in LINES.finditer(text):
+            if not (f.name == "incus_feed.rs" and m.start() > text.find("fn opening") and whose(text, m.start()) == "opening"):
+                wrong.append(f"{f.name} builds a console's line in `{whose(text, m.start())}`, outside `Feed::opening`")
+
+    # 4) BOTH DOORS START WHAT `opening` ANSWERED, and nothing else.
+    def arm(body, what):
+        m = re.search(r"Errand::Open\(what, name\)\s*=>\s*\{", body)
+        if not m:
+            return None
+        return scope(body[m.start():], r"Errand::Open\(what, name\)\s*=>")
+    doors = (
+        ("the window", must(body_of(window, "apply"), "the window's `apply`"),
+         r"ui\.launch\(&program, &words, None\)"),
+        ("the footer", must(body_of(surface, "incus_errand"), "the footer's `incus_errand`"),
+         r"self\.open_foreign\(&program, &words, None\)"),
+    )
+    for door, body, starts in doors:
+        piece = arm(body, door)
+        if piece is None:
+            wrong.append(f"{door} has no `Errand::Open` arm")
+            continue
+        if ".opening(what, &name, &me)" not in piece or not re.search(starts, piece):
+            wrong.append(f"{door} does not start exactly what `Feed::opening` answered")
+        if "current_exe()" not in piece:
+            wrong.append(f"{door} does not hand `opening` this binary, whose `terminal` it is")
+
+    floor(len(arms), 7, "uses of an instance read")
+    for w in wrong:
+        print(f"ERROR: {w}", file=sys.stderr)
+    if wrong:
+        raise SystemExit(1)
+    print("OK: a console and a shell open in our terminal, the screen by itself, in both doors, by one function")
+    END
+  '';
+  # ── anchor: L24 ──
+  # L24 — the LLM accounts' view (`LEADER m a`).
+  #
+  # THE AGENTS REACH THE FOOTER, BY STORE PATH, WHEN THEY ARE THERE.
+  #
+  # The view opens a session and a login of an account through the crate's
+  # command line, whose program comes in `RONOCTUA_CLAUDE` / `RONOCTUA_CODEX`
+  # — never compiled in (Claude Code is unfree). A footer not handed one says
+  # "not installed" for every session of an agent that IS installed, and
+  # nothing fails anywhere else; one handed a program the person declined
+  # offers what is not there. So, read as each machine gets it (the evaluated
+  # systems): each variable is set exactly when its program is in the
+  # registry's installed set, to that program's `bin/`, and the footer's
+  # Claude Code is the one the lifeline's "ask an AI" opens. The usage unit is
+  # checked by the LLM accounts' brain module, in its folder.
+  agents-reach-the-footer =
+    let
+      factsOf =
+        config:
+        let
+          env = config.systemd.user.services.ronoctua-footer.environment;
+          lifeline = config.systemd.user.services.ronoctua-lifeline.environment;
+          bare = v: if v == null then null else builtins.unsafeDiscardStringContext "${v}";
+        in
+        {
+          installed = {
+            claude = config.ronoctua.distroApps.installed.claude-code or false;
+            codex = config.ronoctua.distroApps.installed.codex or false;
+          };
+          footer = {
+            claude = bare (env.RONOCTUA_CLAUDE or null);
+            codex = bare (env.RONOCTUA_CODEX or null);
+          };
+          lifeline = bare (lifeline.RONOCTUA_CLAUDE or null);
+        };
+      facts = pkgs.writeText "agents-reach-the-footer.json" (
+        builtins.toJSON {
+          full = factsOf self.nixosConfigurations.noctua.config;
+          minimal = factsOf self.nixosConfigurations.minimal.config;
+        }
+      );
+    in
+    mkCheck "agents-reach-the-footer" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      # PARSED: the two evaluated systems, as JSON.
+      facts = json.load(open("${facts}"))
+      wrong, seen = [], 0
+      for profile, f in facts.items():
+          for agent, program in (("claude", "claude"), ("codex", "codex")):
+              there, given = f["installed"][agent], f["footer"][agent]
+              if there:
+                  seen += 1
+                  if not (given and given.startswith("/nix/store/") and given.endswith("/bin/" + program)):
+                      wrong.append(f"{profile}: {program} is installed and the footer is handed {given!r}")
+              elif given is not None:
+                  wrong.append(f"{profile}: {program} is not installed and the footer is handed {given!r}")
+          if f["footer"]["claude"] != f["lifeline"]:
+              wrong.append(f"{profile}: the footer's Claude Code ({f['footer']['claude']}) is not the "
+                           f"lifeline's ({f['lifeline']})")
+      if seen == 0:
+          wrong.append("no profile installs an agent: this check asks nothing")
+      for w in wrong:
+          print("ERROR: " + w, file=sys.stderr)
+      if wrong:
+          sys.exit(1)
+      print(f"OK: {seen} installed agents reach the footer by store path, and only those")
+      END
+    '';
+
   core = {
     # =================================================================
     # Milestones
@@ -37380,6 +47972,186 @@ let
           fi
           touch $out
       '';
+
+    # THE 2026-10-05 WAVE'S CHECKS, by name — each package after its anchor.
+    # ── anchor: L01 ──
+    inherit pq-xwing-vectors pq-age-interop pq-identity-never-prints;
+    # ── anchor: L02 ──
+    inherit
+      tls-is-post-quantum-first
+      one-crypto-implementation
+      ssh-kex-is-pq-first
+      belongings-ssh-is-pq-only
+      belongings-https-is-pq-only
+      no-rsa-host-key
+      ;
+    # ── anchor: L03 ──
+    inherit
+      machine-template-evaluates
+      machine-uses-the-distro-pins
+      machine-flake-target-exists
+      machine-dir-has-one-name
+      host-nix-golden-evaluates
+      person-bad-entry-does-not-break-eval
+      person-packages-are-per-user
+      person-root-module-needs-approval
+      web-app-ids-agree
+      ;
+    # ── anchor: L04 ──
+    # The program registry (`nix/modules/distro-apps.nix`).
+    inherit
+      declining-an-app-removes-it
+      essential-apps-say-why
+      distro-app-ids-are-stable
+      distro-apps-are-registered
+      distro-pins-move-only-what-follows
+      distro-app-sources-are-checked
+      ;
+    # ── anchor: L05 ──
+    inherit
+      apply-reverts-the-lock-on-build-failure
+      update-apply-rule-is-narrow
+      one-bootctl-driver
+      generations-keep-the-boot-trial
+      ;
+    boot-trial-falls-back = bootTrialVm;
+    migration-keeps-the-machine = migrationVm;
+    # ── anchor: L06 ──
+    inherit
+      person-schema-golden
+      person-apply-refuses-links
+      person-apply-rule-is-narrow
+      one-person-boundary
+      ;
+    person-verify-holds-only-the-broken-entry = personVm;
+    # ── anchor: L07 ──
+    inherit
+      a-store-keeps-the-rest-of-a-broken-file
+      a-newer-field-survives-an-older-write
+      an-untouched-repair-is-not-written
+      belongings-drafts-are-never-kept
+      belongings-store-links-are-not-kept
+      belongings-access-never-travels
+      ;
+    # ── anchor: L08 ──
+    inherit
+      belongings-no-file-reaches-the-limit
+      belongings-an-edit-moves-few-chunks
+      belongings-chunk-ids-are-keyed
+      belongings-refuses-a-format-not-its-own
+      belongings-recover-without-the-distro
+      belongings-compaction-is-safe
+      belongings-compaction-loses-no-race
+      belongings-ask-with-a-pass
+      ;
+    # ── anchor: L09 ──
+    inherit
+      belongings-plain-needs-no-passphrase
+      belongings-plain-is-only-plain
+      belongings-brain-modules-travel
+      belongings-json-merges-by-field
+      belongings-text-merges-clean-hunks
+      belongings-merge-needs-a-base
+      belongings-base-cache-is-sealed
+      belongings-restore-makes-a-home
+      belongings-tampered-plain-is-held
+      belongings-plain-rollback-is-refused
+      person-apply-refuses-unsigned-tree
+      brain-unsigned-module-never-compiled
+      ;
+    # ── anchor: L10 ──
+    inherit
+      sudo-door-reads-its-own-sentinels
+      sudo-window-survives-a-reboot
+      ;
+    inherit
+      belongings-targets-come-back-private
+      belongings-dropped-everywhere-is-forgotten-elsewhere
+      belongings-identity-never-touches-disk
+      belongings-a-second-sync-asks-nothing
+      belongings-targets-avoid-home-manager
+      pam-u2f-is-only-sufficient
+      one-keyring-boundary
+      ;
+    belongings-unlock-ends-with-the-session = belongingsUnlockVm;
+    # ── anchor: L11 ──
+    inherit
+      brain-person-modules-load
+      brain-person-module-ids-are-prefixed
+      mark-instances-are-bounded
+      resting-marks-are-the-approved-ones
+      ;
+    # ── anchor: L12 ──
+    inherit
+      private-never-mounts-at-boot
+      private-root-is-narrow
+      one-private-boundary
+      swap-follows-the-ram
+      ;
+    private-vm = privateVm;
+    # ── anchor: L13 ──
+    inherit one-incus-boundary incus-asks-with-a-pass incus-platform;
+    incus-vm = incusVm;
+    # ── anchor: L14 ──
+    inherit
+      one-llm-boundary
+      llm-tokens-never-linger
+      llm-usage-asks-with-a-pass
+      statusline-chains
+      ;
+    # ── anchor: L15 ──
+    inherit
+      devshell-is-in-the-store
+      kvm-is-ready
+      direnv-sources-nix-direnv
+      agents-in-both-profiles
+      ;
+    # ── anchor: L16 ──
+    inherit
+      binary-cache-declared-once
+      binary-cache-token-never-prints
+      release-refuses-dirty-tree
+      iso-parts-reassemble
+      release-cache-holds-only-free-builds
+      machine-apps-stop-before-the-switch
+      ;
+    # ── anchor: L17 ──
+    inherit
+      stick-writes-only-removable
+      blank-sticks-have-a-heading
+      stick-root-is-narrow
+      one-stick-boundary
+      ;
+    stick-vm = stickVm;
+    # ── anchor: L18 ──
+    inherit
+      reconcile-touches-only-the-ledger
+      declined-list-is-drawn
+      forget-explains-itself
+      ;
+    declare-installs-now-and-records = declareVm;
+    # ── anchor: L19 ──
+    # ── anchor: L20 ──
+    inherit
+      installer-follows-release
+      installer-requires-network
+      hibernation-follows-the-swap
+      ;
+    # ── anchor: L21 ──
+    inherit
+      belongings-list-is-the-walk
+      ;
+    # ── anchor: L22 ──
+    inherit
+      seal-never-overwrites
+      seal-secrets-are-files
+      transfers-never-link-age
+      every-channel-says-its-quantum-status
+      ;
+    # ── anchor: L23 ──
+    inherit incus-console-is-the-terminal;
+    # ── anchor: L24 ──
+    inherit agents-reach-the-footer;
 
     # THE BUFFERS' FORMATTING, WHICH NOTHING CHECKED.
     #

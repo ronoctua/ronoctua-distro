@@ -672,7 +672,7 @@ impl Pace {
 /// own failure (see [`download_into`] for why).
 struct Hashing<W: std::io::Write> {
     inner: W,
-    digest: ring::digest::Context,
+    digest: aws_lc_rs::digest::Context,
     written: u64,
     failed: Option<String>,
 }
@@ -681,7 +681,7 @@ impl<W: std::io::Write> Hashing<W> {
     fn new(inner: W) -> Self {
         Self {
             inner,
-            digest: ring::digest::Context::new(&ring::digest::SHA256),
+            digest: aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256),
             written: 0,
             failed: None,
         }

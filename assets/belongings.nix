@@ -42,6 +42,144 @@
   # refused.
   largeMB = 100;
 
+  # ── the 2026-10-05 wave: format 2 ─────────────────────────────────────
+  #
+  # THE PREDEFINED ENCRYPTED TARGETS (`~/.ssh`, git, GnuPG, the shell's and
+  # Doom's local files), by id: `paths` (logical), `skip` (name patterns),
+  # `private` (restored 0700/0600), `merge` (per file name or `default`:
+  # `choose` or `union`) and `offers` (`ssh-signing`, `pam-u2f`).
+  # ── anchor: L10 ──
+  # Kept ENCRYPTED like the rest of the sealed part, on every machine, by
+  # default. Each can be taken out on one machine ("not here": its paths go
+  # into the person's `excluded`, the repository's copies stay for the others)
+  # or on all of them ("nowhere": `requests.json` → the index's `dropped`, the
+  # repository's copies deleted, the other machines forget theirs and keep
+  # the files). THE ACCESS TO THE REPOSITORY NEVER TRAVELS among them: the
+  # deploy key is refused by what it IS, under any name (`crate::sift`).
+  #
+  # A target never overlaps a tree, a file, a plain root, a path `never`
+  # names or another target, and never a file Home Manager makes
+  # (`belongings-targets-avoid-home-manager`): those are the system's.
+  targets = {
+    # THE PERSON'S SSH: keys, configuration, known hosts. Sockets and
+    # multiplexing masters are not files of anybody's. A key's parts mean
+    # nothing apart, so a change on both sides is a choice; a known host is a
+    # fact per line, so both sides' lines are kept.
+    ssh = {
+      paths = [ "home/.ssh" ];
+      skip = [
+        "*.sock"
+        "control-*"
+        "S.*"
+      ];
+      private = true;
+      merge = {
+        default = "choose";
+        known_hosts = "union";
+      };
+      offers = [ "ssh-signing" ];
+    };
+    # GIT'S OWN CONFIGURATION, and the security keys a person registered for
+    # the password (`pam_u2f` reads `~/.config/Yubico/u2f_keys`). The signers
+    # a person trusts are facts per line, like known hosts.
+    git = {
+      paths = [
+        "home/.gitconfig"
+        "home/.config/git"
+        "home/.config/Yubico/u2f_keys"
+      ];
+      merge = {
+        allowed_signers = "union";
+      };
+      offers = [
+        "ssh-signing"
+        "pam-u2f"
+      ];
+    };
+    # GNUPG: the keyring and the trust database. The agent's sockets, its
+    # random seed and its locks are this machine's moment, never the
+    # person's; a keyring's parts mean nothing apart.
+    gnupg = {
+      paths = [ "home/.gnupg" ];
+      skip = [
+        "S.*"
+        "random_seed"
+        "*.lock"
+        ".#lk*"
+      ];
+      private = true;
+      merge = {
+        default = "choose";
+      };
+    };
+    # The shell's own file of the person's (`nix/modules/home.nix` seeds it
+    # once and never writes it again): tokens and credentials live there.
+    shell = {
+      paths = [ "home/.shellrc.local" ];
+    };
+    # Doom Emacs' local file: a name, an e-mail, what is personal.
+    doom = {
+      paths = [ "home/.config/doom/local.el" ];
+    };
+  };
+
+  # THE PLAIN PART: logical roots kept IN CLEAR under `plain/<at>` (the
+  # person's declared data, their brain modules), each with its reason.
+  # ── anchor: L09 ──
+  # What the machine reads BEFORE anybody types a passphrase — the update
+  # fetches the declarations, the installer stages them before
+  # `nixos-install`, a machine publishes its record after a switch — so it
+  # travels with no identity, and the page says that whoever reads the
+  # repository reads it. It is SIGNED with the person's ML-DSA-65 key
+  # (`plain/signed.json`, `plain/signed.sig`): a change of the repository's
+  # is taken by itself only as that key signed it, and anything else is held
+  # with its reason (`ronoctua_belongings::plain::HeldWhy`); each machine's
+  # record is not signed, and nothing reads it as configuration. A plain
+  # root beats a tree (`config/brain-modules` is
+  # under `config`, and is never sealed too); the name patterns of `never`
+  # still apply below it, so a draft stays out.
+  plain = {
+    # The programs the person declared and declined, each machine's record
+    # and their options (`ronoctua-person`'s files), as the machine mirrors
+    # them for the root applier.
+    "state/person" = {
+      at = "person";
+      reason = "person-data";
+    };
+    # The person's own brain modules (`my-…`), where they write them.
+    "config/brain-modules" = {
+      at = "brain-modules";
+      reason = "brain-module";
+    };
+  };
+  # The largest file the plain part keeps, in KiB.
+  plainMostKiB = 8192;
+
+  # THE CHUNKS of the sealed part (FastCDC), in KiB: no repository file
+  # reaches GitHub's limit, and an edit moves few chunks.
+  # ── anchor: L08 ──
+  chunk = {
+    minKiB = 256;
+    avgKiB = 1024;
+    maxKiB = 4096;
+  };
+
+  # THE BUDGET, in MB (10⁶ bytes): a push of new chunks above `pushMB` goes in
+  # batches (GitHub refuses a push over 2 GiB); the view warns past `warnMB`
+  # and recommends compacting past `recommendMB` or when the history weighs
+  # `historyOverTree` times the tree; a compaction keeps `keepDays` of history.
+  budget = {
+    pushMB = 1500;
+    recommendMB = 1000;
+    warnMB = 750;
+    historyOverTree = 2;
+    keepDays = 30;
+  };
+
+  # HOW LONG THE IDENTITY STAYS IN THE KERNEL'S KEYRING at most, in hours —
+  # the session's end (logout, suspend) forgets it first.
+  unlockHours = 12;
+
   trees = {
     # EVERY PREFERENCE OF THE DISTRO: theme, language, keyboards, the footer's
     # modes, the player's sources and keys, the brain modules' choices.
@@ -60,9 +198,17 @@
       name = "*.pid";
       reason = "draft";
     }
-    # A draft: `Store` writes `.<file>.<pid>.tmp` and renames it.
+    # A hidden file: an editor's swap (`.theme.json.swp`), an older draft
+    # (`.<file>.<pid>.tmp`).
     {
       name = ".*";
+      reason = "draft";
+    }
+    # A DRAFT of `write_atomically` (`ronoctua-xdg`): `<file>.<pid>.new`,
+    # renamed over the file once it is whole — a process killed mid-write
+    # leaves one behind, and it is half of something.
+    {
+      name = "*.new";
       reason = "draft";
     }
     # THE COMPOSITOR'S AND THE TERMINAL'S FRAGMENTS, made from `theme.json`,
@@ -116,6 +262,12 @@
       kept = true;
       reason = "preference";
     };
+    # The two lines (in per cent) at which an LLM account's mark turns to a
+    # warning and to danger: chosen once, the same on every machine.
+    "config/brain/agent-accounts/lines.json" = {
+      kept = true;
+      reason = "preference";
+    };
     # The reminders a person set, birthdays among them: theirs to bring back.
     "config/brain/reminders/reminders.json" = {
       kept = true;
@@ -160,6 +312,15 @@
       reason = "preference";
     };
     "config/keyboards.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    # The person's LLM accounts — a name, a kind, a folder, the default of
+    # each kind — and not what is IN those folders: a sign-in and its
+    # transcripts stay on the machine they were made on. On another machine
+    # the list comes back, the person signs in again, and the accounts' view
+    # offers the status line's wrap where it is not yet (`statusline::wrapped`).
+    "config/llm-accounts.json" = {
       kept = true;
       reason = "preference";
     };
@@ -246,9 +407,65 @@
       kept = false;
       reason = "machine";
     };
+    # The TLS group each host agreed with THIS machine (`ronoctua_http::groups`),
+    # for the security view's post-quantum section: what this machine heard,
+    # made again by its own next requests.
+    "state/tls-groups.json" = {
+      kept = false;
+      reason = "machine";
+    };
     "state/world-cache.json" = {
       kept = false;
       reason = "cache";
+    };
+    # THE STORES THAT WERE WRITTEN BY HAND until the lenient store
+    # (2026-10-05), and the files `write_atomically` puts under a root.
+    "config/brain.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/files-sidebar.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/language.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/locale.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/notifications.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/power.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/theme.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    # Ghostty's size and the compositor's screens and pointers, made from
+    # `toolkits.json`, `display.json` and `pointers.json` on each machine.
+    "config/ghostty-size.conf" = {
+      kept = false;
+      reason = "generated";
+    };
+    "config/scroll-display.conf" = {
+      kept = false;
+      reason = "generated";
+    };
+    "config/scroll-pointers.conf" = {
+      kept = false;
+      reason = "generated";
+    };
+    # The player's queue and where it was in it: this machine's playing.
+    "state/queue.rqueue" = {
+      kept = false;
+      reason = "machine";
     };
   };
 }

@@ -392,6 +392,21 @@ fi
 
 
 # -----------------------------------------------------------------------------
+# The default LLM accounts (`LEADER m a`)
+# -----------------------------------------------------------------------------
+# `ronoctua-llm` writes this file whenever the person picks a default account,
+# so `claude` and `codex` typed here open it: an `export CLAUDE_CONFIG_DIR=…`
+# or `CODEX_HOME=…` for a default that is not the agent's own folder, and an
+# `unset` otherwise — so a shell that inherited an older default (a terminal
+# multiplexer started before the change) follows the new one. Before
+# `~/.shellrc.local`, which may still override it.
+
+if [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/llm-default.env" ]; then
+    . "${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/llm-default.env"
+fi
+
+
+# -----------------------------------------------------------------------------
 # The machine's own config — LAST, so it can override anything above
 # -----------------------------------------------------------------------------
 # `~/.shellrc.local` holds what belongs to ONE machine: tokens, credentials,

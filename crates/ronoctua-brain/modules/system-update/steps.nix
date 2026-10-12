@@ -37,6 +37,13 @@
 #      any argument that contains `install`, every install verb it knows, every
 #      shell metacharacter and every way of spelling "run this through a shell"
 #      — so there is no argument left that could smuggle one in.
+#      WHAT IS DECLARED IS NOT AN INSTALL BY HAND (invariant 6 as the owner
+#      amended it, 2026-10-05): the update brings in what the distro or the
+#      person DECLARED, and nothing else — the rebuild builds it, and the
+#      one step that reconciles (`reconcile-declared`) brings the declared
+#      Android apps from the machine's copy and touches only its own ledger.
+#      No argument of it names a program: what it installs is the
+#      declaration's, read by the program, never this table's.
 #   3. A step that names a BARE BINARY — one the flake does not provide — is
 #      REFUSED unless it is off by default. That is not a convention: the
 #      generator will not build a table where such a step ships on, because a
@@ -65,8 +72,9 @@
 #               its `i18n/` carries both in every language), the line in
 #               `/etc/ronoctua/updates.conf` is `<id> on|off`, and the report
 #               the view reads is keyed by it.
-#   does        move-inputs | apply-configuration | upgrade-software |
-#               refresh-cache | reclaim-space
+#   does        gather | migrate | move-inputs | verify | apply-configuration |
+#               upgrade-software | refresh-cache | reclaim-space |
+#               reconcile-declared | publish
 #               What class of thing this step is, and it is load-bearing: there
 #               is exactly ONE `move-inputs` and exactly ONE
 #               `apply-configuration`, `move-inputs` comes before it, and every
@@ -74,6 +82,12 @@
 #               generator enforces all five. `upgrade-software` is the person's
 #               own programs (invariant 6's dated exception): it moves what is
 #               installed to a newer version and never adds one.
+#               And the 2026-10-05 laws: `gather` is the person's and comes
+#               before the root half, and nothing else of the person's does;
+#               `migrate` is root's and comes before `move-inputs`; `verify` is
+#               root's, between `move-inputs` and `apply-configuration`;
+#               `reconcile-declared` is the person's, after
+#               `apply-configuration`; `publish` is the person's and last.
 #   root        true  -> the system unit, as root, from a store path
 #               false -> the person's user unit, as them, with their PATH
 #   package +   the store path. `package` is the attribute in `nixpkgs`,
@@ -93,6 +107,15 @@
 #   run         the arguments, whole and fixed. Nothing is ever appended at run
 #               time; there is no shell; the set of commands this machine can
 #               run through here is finite and readable in this file.
+#   rehearse    with a program only, and optional: the arguments a REHEARSAL
+#               runs the same program with — the form of it that changes
+#               nothing (`apply --rehearse`, `verify --rehearse`). Every
+#               argument goes through the refusals `run`'s do. Without it a
+#               rehearsal prints the command and runs nothing, which is all it
+#               can honestly do for a program that has no such form.
+#   declines    with a program only, and optional: the refusals (`refused
+#               <word>`, the program's last line) that are NEWS and not a
+#               failure. Recorded `declined-<word>`, and the sequence goes on.
 #   needs       a LIST of preconditions, ALL of which must hold. A term is
 #               `{ <kind> = <value>; }` with exactly one kind:
 #                 always         nothing can make this step inapplicable
@@ -100,6 +123,16 @@
 #                 directory      this directory exists
 #                 writable-file  this file exists and can be written
 #                 network        NetworkManager says the machine is connected
+#                 file           this file exists
+#                 power          on mains, or the battery at this many per
+#                                cent or more, or the person's yes to this run
+#                                on battery — one floor for the whole table
+#                 free-space     { at; percent; cap-gib; }: that share of the
+#                                filesystem holding `at` is free, never more
+#                                than the cap; below it the store's garbage
+#                                is collected FIRST, then the step is
+#                                refused. Root only.
+#                 not-held       the machine's record names no hold
 #               An absolute path everywhere; `$HOME/`, `$XDG_DATA_HOME/`,
 #               `$XDG_CONFIG_HOME/`, `$XDG_STATE_HOME/` and `$XDG_CACHE_HOME/`
 #               are allowed as well, and only in a non-root step: root's `$HOME`
@@ -107,11 +140,207 @@
 #   on-failure  stop | carry-on
 #   enable      whether the distro ships it on. `/etc/ronoctua/updates.conf`,
 #               written from `ronoctua.update.steps`, overrules this per machine.
+#
+# THE MACHINE DIRECTORY is not written here: it has one name, in
+# `nix/machine.nix` (`machine-dir-has-one-name`), and every step that names it
+# — the lock it moves, the flake it rebuilds — reads it from there.
+let
+  machineDir = (import ../../../../nix/machine.nix).machineDir;
+
+  # THE DISTRO'S INPUT IN A MACHINE FLAKE, by the one place it is written:
+  # the template every machine's `flake.nix` comes from. One input there, or
+  # this refuses — the step that moves "the distro" must know which it is.
+  distroInput =
+    let
+      inputs = builtins.attrNames (import ../../../../templates/machine/flake.nix).inputs;
+    in
+    if builtins.length inputs == 1 then
+      builtins.head inputs
+    else
+      throw "templates/machine/flake.nix has ${toString (builtins.length inputs)} inputs; the update moves the one that is the distro";
+
+  # THE BATTERY FLOOR, in per cent: on battery below it, the steps that
+  # compile — the migration, the verification, the rebuild — and the one
+  # that moves the lock the rebuild builds from are skipped,
+  # unless the person said yes to THIS run (the doors ask with the no first;
+  # `ronoctua-update --execute --on-battery` from a terminal). A rebuild of
+  # this distro is twenty minutes of every core, which takes a third of a
+  # laptop's charge; forty leaves a machine that finishes it with room to
+  # spare. One number for the table (the generator refuses two): the doors
+  # ask below it, and two would be two questions.
+  batteryFloor = 40;
+
+  # THE ROOM A REBUILD WANTS, in the shape `assets/cache.nix` gives every size:
+  # a share of the disk under the store, capped. The NEARLY-FULL line, the
+  # one the brain marks the modeline at — below the store's floor, so Nix's
+  # own `min-free` has already collected what it could by then, and the
+  # precondition collects once more before refusing.
+  cache = import ../../../../assets/cache.nix;
+  roomForARebuild = {
+    at = "/nix/store";
+    percent = cache.diskWarnPercent;
+    cap-gib = cache.diskWarnCapGiB;
+  };
+
+  # WHERE THE MACHINE KEEPS THE PERSON'S DECLARATIONS (root's copy): the
+  # verification has nothing to try without it.
+  personDir = "${machineDir}/person";
+in
 {
   steps = [
+    # THE 2026-10-05 WAVE: the person's half that GATHERS before the root
+    # half (fetch, pins, stage), after its anchor.
+    # ── anchor: L19 ──
+
+    # =================================================================
+    # THE PERSON'S HALF, FIRST — GATHERING what the root half will read
+    # =================================================================
+    #
+    # The person declares programs on any of their machines, and the
+    # declarations travel in the plain part of their belongings
+    # (`plain/person/`). Before root moves anything, the person's half brings
+    # in what the OTHER machines declared, moves the pins forward and stages
+    # the result for root's applier — so the rebuild below builds what the
+    # person has declared everywhere, and not last week's. All three run as
+    # the person: the repository's access, the session's consent and the
+    # staging folder are theirs, and root has none of them.
+    #
+    # `carry-on` all three: a machine that cannot reach the repository, or
+    # whose pins do not move today, still updates with the declarations it
+    # already has.
+
+    # G1. THE PLAIN PART OF THE BELONGINGS, PULLED: no passphrase, the sealed
+    # part untouched, every conflict left as this machine has it (conflicts
+    # never block; the view says there are some and opens the belongings).
+    # A machine with no repository configured skips it, and says so.
+    {
+      id = "person-fetch";
+      does = "gather";
+      root = false;
+      package = "belongings";
+      program = "ronoctua-belongings";
+      run = [
+        "plain"
+        "pull"
+        "--json"
+      ];
+      needs = [
+        { file = "$XDG_CONFIG_HOME/ronoctua/belongings.json"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # G2. THE PINS, MOVED FORWARD: an AppImage that follows its releases, an
+    # Android app that follows F-Droid — each to the version and the digest
+    # it has now, written into the declaration. Without a declaration there
+    # is nothing to move.
+    {
+      id = "person-pins";
+      does = "gather";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "pins"
+        "refresh"
+      ];
+      needs = [
+        { file = "$XDG_STATE_HOME/ronoctua/person/software/declared.json"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # G2b. THE DECLARATIONS, SIGNED HERE: what G1 brought and G2 moved is
+    # the person's plain part as it is now, and root takes from a staging
+    # only what the person signed (`ronoctua-person apply`, against the key
+    # the machine pinned). With the identity the session keeps, the moved
+    # pins arrive signed; without it the step declines (`no-passphrase`) and
+    # root keeps its copy of the declaration until the person's next sync —
+    # nothing here ever asks. No network.
+    {
+      id = "person-sign";
+      does = "gather";
+      root = false;
+      package = "belongings";
+      program = "ronoctua-belongings";
+      run = [ "sign" ];
+      declines = [
+        "no-passphrase"
+        "empty"
+      ];
+      needs = [ { file = "$XDG_CONFIG_HOME/ronoctua/belongings.json"; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # G3. THE DECLARATIONS, STAGED FOR ROOT: the person's copy put where root's
+    # narrow applier (`ronoctua-person-apply.service`) takes it, validated and
+    # swapped into the machine directory whole — data, never Nix code. A
+    # rehearsal only checks that it would be taken (`--check`).
+    {
+      id = "person-stage";
+      does = "gather";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [
+        "person"
+        "stage"
+      ];
+      rehearse = [
+        "person"
+        "stage"
+        "--check"
+      ];
+      needs = [ { directory = "$XDG_STATE_HOME/ronoctua/person"; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
     # =================================================================
     # THE ROOT HALF
     # =================================================================
+    #
+    # It runs under `ronoctua-person hold` (`module.nix`): root's lock of the
+    # person's data, held from the migration to the end of the half and
+    # handed to every step as its standard input — so the declarations the
+    # verification tried are the ones the rebuild builds, and an apply the
+    # person starts meanwhile waits instead of slipping between the two.
+
+    # 0. A MACHINE STILL IN THE OLD LAYOUT BECOMES ITS OWN FLAKE.
+    #
+    # Before 2026-10-05 a machine carried a COPY of the distro in its machine
+    # directory; the template's flake has the distro as an input instead
+    # (`nix/machine.nix`). `ronoctua-machine migrate` builds the new layout
+    # beside the old one and swaps them only when the new one builds — a
+    # failure leaves the machine exactly as it was. The old layout is known
+    # by a file only it has (the distro's own `base.nix`), and a machine
+    # without it skips the step and says so.
+    #
+    # `stop`: every step after this one speaks the new layout, and running
+    # them against the old one would move a lock that is not the machine
+    # flake's. `nothing-to-migrate` is news and not a failure: the program
+    # looked at the folder and found the new layout already there.
+    {
+      id = "machine-migrate";
+      does = "migrate";
+      root = true;
+      package = "machine";
+      program = "ronoctua-machine";
+      run = [ "migrate" ];
+      declines = [ "nothing-to-migrate" ];
+      needs = [
+        { file = "${machineDir}/nix/modules/base.nix"; }
+        { power = batteryFloor; }
+        { free-space = roomForARebuild; }
+      ];
+      on-failure = "stop";
+      enable = true;
+    }
 
     # 1. THE ONLY STEP THAT MOVES THE SYSTEM FORWARD.
     #
@@ -124,14 +353,32 @@
     #
     # `carry-on` AND NOT `stop`, which is the less obvious of the two. Failing
     # here leaves the lock untouched and the machine exactly as it was — but the
-    # working tree of `/etc/nixos` may still have moved (somebody edited
-    # `host.nix`), and the running generation may already be older than what
-    # `/etc/nixos` describes. Applying that is still worth doing, so the sequence
+    # machine directory may still have moved (somebody edited `host.nix`), and
+    # the running generation may already be older than what the machine
+    # directory describes. Applying that is still worth doing, so the sequence
     # says the update failed and goes on to apply what is there.
     #
     # The `writable-file` precondition is what makes this safe on the ISO, where
-    # `/etc/nixos` is a read-only symlink into the store: the step is skipped and
+    # the machine directory is a read-only symlink into the store: the step is skipped and
     # says so, instead of failing with a permission error nobody expected.
+    #
+    # ONE INPUT, THE DISTRO's — `nix flake update <distro>`, never the whole
+    # lock. The machine flake's other inputs are the distro's own (copied
+    # from its lock, which `lib.machine` refuses to see changed), so moving
+    # the distro moves everything the release was tested with, and nothing
+    # it was not.
+    #
+    # AND NOT WHILE THE MACHINE IS HELD (`ronoctua-machine hold <rev>`): the
+    # record says which revision it stays on, and the step is skipped and
+    # says so. The rebuild after it still applies what the folder holds.
+    #
+    # AND ONLY WHEN THE REBUILD COULD BE TRIED: the rebuild's battery floor
+    # and its room on the store's disk are this step's too (the generator
+    # refuses a `move-inputs` without them). The machine directory describes
+    # the system that runs; a lock moved on a run whose rebuild is then
+    # skipped for the battery or the disk would name a distro nobody built,
+    # and the next apply — the software centre's, the rescue's — would build
+    # and switch to all of it, unverified, on that battery or that disk.
     {
       id = "flake-update";
       does = "move-inputs";
@@ -141,28 +388,78 @@
       run = [
         "flake"
         "update"
+        distroInput
         "--flake"
-        "/etc/nixos"
+        machineDir
       ];
       needs = [
-        { writable-file = "/etc/nixos/flake.lock"; }
+        { writable-file = "${machineDir}/flake.lock"; }
+        { not-held = true; }
+        { power = batteryFloor; }
+        { free-space = roomForARebuild; }
         { network = true; }
       ];
       on-failure = "carry-on";
       enable = true;
     }
 
-    # 2. AND IT IS THE REBUILD THAT ALREADY EXISTS.
+    # 1b. EVERY DECLARED PROGRAM, TRIED ON ITS OWN, before the rebuild.
     #
-    # `nix/modules/rescue.nix` declares `ronoctua-rescue-rebuild.service`, and it
-    # is the only `nixos-rebuild switch` in this repository. A second one here
-    # would be a second copy of `--flake /etc/nixos#<person>` — the attribute
-    # named after the person, which `rescue-flake-target-exists` exists to keep
-    # true. One copy, one check, one thing to get wrong.
+    # A declaration is the person's, made on any of their machines, and one
+    # entry that does not build — a package renamed upstream, an AppImage
+    # whose address now answers another file — must not take the whole
+    # rebuild down. `ronoctua-person verify` evaluates and builds each entry
+    # in a `nix` of its own, against the inputs the step above just moved,
+    # and writes what failed into the machine's `local/held.json`; the
+    # rebuild leaves those out and says why. Its rehearsal tries and writes
+    # nothing.
     #
-    # Started as root, so nothing is asked of anybody: polkit is only consulted
-    # when the caller is not root, which is why the person's half starts the
-    # system unit and the system unit starts this.
+    # It needs power for the reason the rebuild does: building an entry can
+    # compile. `carry-on`: a verification that could not run holds nothing,
+    # and the rebuild still builds the entries that were fine before.
+    {
+      id = "person-verify";
+      does = "verify";
+      root = true;
+      package = "person";
+      program = "ronoctua-person";
+      run = [ "verify" ];
+      rehearse = [
+        "verify"
+        "--rehearse"
+      ];
+      needs = [
+        { directory = personDir; }
+        { power = batteryFloor; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # 2. AND IT IS THE MACHINE'S OWN APPLY.
+    #
+    # `ronoctua-machine apply` is the one build-then-switch of this
+    # repository: the rescue console's rebuild runs it too, and the software
+    # centre's apply without moving the inputs. It BUILDS first and switches
+    # only what built — a failed build puts the lock back on the system that
+    # runs, so the machine directory always describes the running system —
+    # and after the switch it arms the boot trial: the next boot tries the
+    # new system once, and comes back to the last good one by itself if it
+    # does not start (`ronoctua-boot-bless.service`).
+    #
+    # A CHILD OF THIS HALF, and not a unit started from it: root's lock of
+    # the person's data reaches it on its standard input, held since the
+    # verification, so the declarations it builds are the ones that were
+    # tried. Its rehearsal measures on a copy what the update would download
+    # and build, and changes nothing.
+    #
+    # `did-not-boot` IS NEWS AND NOT A FAILURE: after a trial that did not
+    # start, the same system is refused until the distro moves on — there is
+    # nothing new to apply, and the rest of the update goes on.
+    #
+    # It needs the battery floor (twenty minutes of every core) and room on
+    # the store's disk, garbage collected first; short of either it is
+    # skipped and says which.
     #
     # `stop`, and the reason is concrete rather than tidy. A failed switch leaves
     # the store full of the new generation's half-built dependencies; the very
@@ -174,8 +471,19 @@
       id = "system-rebuild";
       does = "apply-configuration";
       root = true;
-      unit = "ronoctua-rescue-rebuild.service";
-      needs = [ { writable-file = "/etc/nixos/flake.lock"; } ];
+      package = "machine";
+      program = "ronoctua-machine";
+      run = [ "apply" ];
+      rehearse = [
+        "apply"
+        "--rehearse"
+      ];
+      declines = [ "did-not-boot" ];
+      needs = [
+        { writable-file = "${machineDir}/flake.lock"; }
+        { power = batteryFloor; }
+        { free-space = roomForARebuild; }
+      ];
       on-failure = "stop";
       enable = true;
     }
@@ -353,6 +661,33 @@
     # =================================================================
     # THE PERSON'S HALF — their PATH, their home, no privilege at all
     # =================================================================
+
+    # 8b. WHAT IS DECLARED, BROUGHT IN — AND NOTHING ELSE.
+    #
+    # The rebuild put the person's declared programs in their profile; what
+    # is left is what the system cannot do for them: the Android apps a
+    # declaration lists (installed from the store's apk into the person's
+    # Android), and the imperative copy a declared program now replaces (the
+    # same program in the Nix profile, an AppImage, a web app's launcher)
+    # taken out so the two do not shadow each other. `ronoctua-software
+    # reconcile` touches only its own ledger
+    # (`$XDG_STATE_HOME/ronoctua/software/declared-applied.json`): what it
+    # did not put there, it does not take away. It reads what the machine
+    # applied, so a machine with no report skips it and says so.
+    #
+    # FIRST of the person's half, so the upgrades after it move programs the
+    # reconciliation already left in their final place.
+    {
+      id = "person-reconcile";
+      does = "reconcile-declared";
+      root = false;
+      package = "software";
+      program = "ronoctua-software";
+      run = [ "reconcile" ];
+      needs = [ { file = "/etc/ronoctua/person-applied.json"; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
 
     # 9. THE FONT CACHE, AFTER the rebuild and not before.
     #
@@ -720,6 +1055,99 @@
       needs = [ { directory = "$XDG_CACHE_HOME/appimage-run"; } ];
       on-failure = "carry-on";
       enable = false;
+    }
+    # THE 2026-10-05 WAVE: the person half's last steps (reconcile,
+    # publish), and the machine directory's one name, after their anchors.
+    # ── anchor: L03 ──
+    # ── anchor: L19 ──
+
+    # =================================================================
+    # AND LAST, WHAT THIS MACHINE DID, PUBLISHED
+    # =================================================================
+    #
+    # The person's other machines learn from the plain part of the
+    # belongings what this one runs: its record (the last good system, the
+    # boot trial, a hold, how the last apply ended) and whatever its
+    # declarations became. Last, so what is pushed is what the run ended with.
+
+    # P1. THE MACHINE'S RECORD, copied into the person's plain part as
+    # `machines/<hostname>.json` — validated and written in its one
+    # canonical form, and left alone when nothing changed (so an update that
+    # changed nothing pushes nothing). Its rehearsal reads and compares the
+    # same way and writes nothing.
+    {
+      id = "person-record";
+      does = "publish";
+      root = false;
+      package = "person";
+      program = "ronoctua-person";
+      run = [ "record" ];
+      rehearse = [
+        "record"
+        "--rehearse"
+      ];
+      needs = [ { directory = "$XDG_STATE_HOME/ronoctua/person"; } ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # P2. THE PLAIN PART, PUSHED: no passphrase, the sealed part untouched; a
+    # machine that pushed in the meantime is fetched and merged first, and a
+    # clash is left as this machine has it (the next sync with the person
+    # decides). A machine with no repository skips it and says so.
+    {
+      id = "person-publish";
+      does = "publish";
+      root = false;
+      package = "belongings";
+      program = "ronoctua-belongings";
+      run = [
+        "plain"
+        "push"
+        "--json"
+      ];
+      needs = [
+        { file = "$XDG_CONFIG_HOME/ronoctua/belongings.json"; }
+        { network = true; }
+      ];
+      on-failure = "carry-on";
+      enable = true;
+    }
+
+    # P3. WHAT THIS MACHINE BUILT, PUSHED TO THE PERSON'S BINARY CACHE (the
+    # 2026-10-11 wave) — their own Cachix cache, never the distro's, which
+    # has none. Only where the person named one (the machine's file, which
+    # `nix/modules/binary-cache.nix` writes from their validated options),
+    # only after an update that SWITCHED the machine since the last push,
+    # only with their token (sealed, `0600`) and with every host it reaches
+    # let: the four are news, never a failure, and it never asks. A PUBLIC
+    # cache receives the distro's own outputs and nothing of the person's,
+    # never an unfree program; a private one the system's closure — and
+    # neither what `cache.nixos.org` already serves (`ronoctua_cachix::push`).
+    # Its rehearsal says what would go, and pushes nothing. The machine's
+    # file is asked by the program and not by a `file` precondition: the
+    # step's news says which of the four held it back, and a precondition
+    # would say only that a file is missing.
+    {
+      id = "binary-cache-push";
+      does = "publish";
+      root = false;
+      package = "binary-cache";
+      program = "ronoctua-cachix";
+      run = [ "push" ];
+      rehearse = [
+        "push"
+        "--rehearse"
+      ];
+      declines = [
+        "no-cache"
+        "no-token"
+        "not-let"
+        "nothing-new"
+      ];
+      needs = [ { network = true; } ];
+      on-failure = "carry-on";
+      enable = true;
     }
   ];
 }

@@ -561,6 +561,9 @@ const fn engine_name(e: ronoctua_protocol::Engine) -> &'static str {
         E::Scan => "scan",
         E::Container => "container",
         E::Belongings => "belongings",
+        E::Seal => "seal",
+        E::Incus => "incus",
+        E::Stick => "stick",
     }
 }
 
@@ -599,6 +602,10 @@ const fn errand_name(e: ronoctua_protocol::Errand) -> &'static str {
         E::ArchiveRemove => "archive-remove",
         E::ArchiveTest => "archive-test",
         E::ArchiveConvert => "archive-convert",
+        E::Seal => "seal",
+        E::Unseal => "unseal",
+        E::Incus => "incus",
+        E::StickWrite => "stick-write",
     }
 }
 

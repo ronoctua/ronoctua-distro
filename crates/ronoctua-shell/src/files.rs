@@ -2878,9 +2878,6 @@ pub enum Doing {
     /// Take the place out of these files — into a copy beside each when the
     /// flag says so, over each otherwise. Asked first, always.
     RemoveLocation(Vec<PathBuf>, bool),
-    /// A change only root may make, with the password the person typed when
-    /// the sudo door asked for it ([`ROOT_PASSWORD`]).
-    RootProved(Root, ronoctua_lookup::keys::Secret),
     /// Walk a directory and report how big it is.
     Measure(PathBuf),
     /// Check this file with VirusTotal, in the security centre's window —
@@ -2918,6 +2915,18 @@ pub enum Doing {
     /// — in the footer's region from the footer's door, in a window of its
     /// own from the window's.
     History(PathBuf),
+    /// Open the `/private` vault (`true`) or lock it (`false`) — the door's
+    /// business: its two leader commands (`private-open`, `private-lock`).
+    Vault(bool),
+    /// Open the installer stick's window on this drive (the disk border's
+    /// id) — the region is the manager's, so a window, from either door; the
+    /// window asks its own question, `no` first (`crate::stick`).
+    WriteInstaller(String),
+    /// Seal or open with age — the queue's (`crate::seal`).
+    Seal(crate::seal::SealDoing),
+    /// Read the header of this `.age` on a thread: what it says picks the
+    /// question that opens it (`crate::seal::sniffed`).
+    SealSniff(PathBuf),
 }
 
 /// A question the view needs answered before it can act.
@@ -2995,6 +3004,9 @@ pub enum Asking {
     /// this exists is that by then they are two screens away from the row they
     /// clicked. So it says the mode and it says on what.
     Confirm(Box<Doing>, String),
+    /// Encrypt: for whom (a list), or someone's key (typed, pasted) —
+    /// `crate::seal`.
+    Seal(crate::seal::SealAsked),
 }
 
 /// What a key or a click produced.
@@ -3123,6 +3135,7 @@ impl Asking {
             Self::Sidebar => texts.t(ronoctua_i18n::key::FILES_SIDEBAR_HIDDEN_ASK),
             // ALREADY A SENTENCE, built where the `Doing` was known.
             Self::Confirm(_, sentence) => sentence.clone(),
+            Self::Seal(asked) => asked.title(texts),
         }
     }
 }
@@ -3178,11 +3191,8 @@ pub enum Report {
     /// udisks said no, and this is WHICH no — plus its own words, for the one
     /// case that has nothing better to say.
     Refused(ronoctua_disks::Refusal, String),
-    /// The sudo door wants the person's password for what is left of this
-    /// change: the door that pressed asks it ([`ROOT_PASSWORD`]) and hands
-    /// the answer back as [`Doing::RootProved`].
-    Password(Root),
-    /// The sudo door refused, for this reason (`security-refusal-<id>`).
+    /// The sudo door refused, for this reason (`security-refusal-<id>`) —
+    /// the bar cancelled, the password wrong, the footer not there.
     Door(ronoctua_security::Why),
     /// A disk was plugged in, unplugged, mounted or unmounted — and this is the
     /// machine as it is now.
@@ -3232,6 +3242,9 @@ pub enum Report {
     /// THE GIT LINE'S READING, from the door's `git_line::Keeper` — the
     /// repository the folder on screen is in, read off the loop.
     Git(Box<crate::git_line::Line>),
+    /// A `.age`'s header was read, or the queue refused a seal — answered
+    /// by [`View::seal_reported`] in both doors.
+    Seal(Box<crate::seal::SealReport>),
 }
 
 /// What is on the clipboard, and whether it moves or copies.
@@ -3556,10 +3569,25 @@ pub struct View {
     /// What a password the door is asking for is FOR — see
     /// [`crate::files_archive::Wanting`].
     wanting: Option<crate::files_archive::Wanting>,
+    /// What a seal's question waits for (`crate::seal::Wanting`).
+    sealing: Option<crate::seal::Wanting>,
+    /// The seals and opens this view handed the queue: a refusal of one of
+    /// them is said here — a wrong passphrase asked again — and only here.
+    seal_sent: crate::seal::Sent,
     /// The archives this view sent jobs about, and the new archive's password
     /// each was sent with: a refusal for want of a password is answered with a
     /// question in the door that asked, and only there.
     sent: Vec<(PathBuf, Option<ronoctua_consent::keys::Secret>)>,
+    /// WHY THE FOLDER ON SCREEN WAS NOT READ, when it is in the `/private`
+    /// vault and the vault is not open (or did not answer): said where the
+    /// listing would be, never an empty folder that looks like lost files.
+    withheld: Option<ronoctua_files::listing::Withheld>,
+    /// The disks as they were last read, and the vault's status the vault's
+    /// row was built from — so a status that moved (the vault opened,
+    /// locked, suspended at sleep) draws the row anew without a bus round
+    /// trip ([`View::vault_moved`]).
+    rack: ronoctua_disks::Rack,
+    vault: Option<ronoctua_private::Status>,
 }
 
 /// An action's technical answer, as an [`Explanation`] with nothing to fill in.
@@ -3649,7 +3677,12 @@ impl View {
             inside: None,
             listing_asked: None,
             wanting: None,
+            sealing: None,
+            seal_sent: crate::seal::Sent::default(),
             sent: Vec::new(),
+            withheld: None,
+            rack: ronoctua_disks::Rack::default(),
+            vault: None,
         };
         view.reread();
         // PAST THE WAY OUT, the same landing `enter` makes: opening the
@@ -3778,12 +3811,26 @@ impl View {
         let was = self.focused().map(|e| e.name.clone());
         // INSIDE AN ARCHIVE the rows are its listing's, walked like a folder
         // (`crate::files_archive`); everywhere else, the directory's.
+        self.withheld = None;
         if let Some(rows) = self.archive_rows() {
             self.stamp = None;
             self.entries = rows;
         } else {
             self.stamp = listing::stamp(&self.where_);
-            self.entries = listing::read_dir_at(&self.where_, self.sort).unwrap_or_default();
+            self.entries = match listing::read_dir_at(&self.where_, self.sort) {
+                Ok(entries) => entries,
+                // A FOLDER OF THE /private VAULT, NOT READ: why is said where
+                // the rows would be (`withheld`), and the way out stays — a
+                // row built here, since the folder above may be the vault's
+                // too, and nothing in it is touched.
+                Err(e) => {
+                    self.withheld = ronoctua_files::listing::withheld(&e);
+                    self.withheld
+                        .and_then(|_| self.way_out_unread())
+                        .into_iter()
+                        .collect()
+                }
+            };
             // THE TRASH IS EVERY TRASH. A file thrown away on a stick went to the
             // stick's own bin (`$topdir/.Trash-$uid`), and looking for it in "the
             // trash" has to find it: every mounted volume's bin is gathered in,
@@ -3852,6 +3899,32 @@ impl View {
     #[must_use]
     pub fn stale(&self) -> bool {
         listing::stamp(&self.where_) != self.stamp
+    }
+
+    /// The way out of a folder that was not read, made without a `stat`:
+    /// the folder above may be the vault's too.
+    fn way_out_unread(&self) -> Option<Entry> {
+        self.where_.parent()?;
+        Some(Entry {
+            name: Entry::PARENT.to_owned(),
+            kind: Kind::Directory,
+            mode: 0o040_755,
+            links: 1,
+            uid: 0,
+            gid: 0,
+            bytes: 0,
+            modified: 0,
+            target: None,
+            aims_at: None,
+        })
+    }
+
+    /// Why the folder on screen was not read, when it was not: the vault's.
+    /// ONLY THE TESTS ASK: the drawing reads the field.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn withheld(&self) -> Option<ronoctua_files::listing::Withheld> {
+        self.withheld
     }
 
     /// Goes into a directory — or a folder inside the archive the view has
@@ -4821,6 +4894,14 @@ impl View {
                 None if row.removable => icon::DISK_REMOVABLE,
                 None => icon::DISK,
             },
+            // THE /private VAULT wears the encrypted disk's padlock, shut or
+            // open as it is.
+            Target::Private => match row.seal {
+                Some(ronoctua_files::sidebar::Seal::Unlocked) => icon::DEVICE_UNLOCKED,
+                _ => icon::DEVICE_LOCKED,
+            },
+            // A STICK'S HEADING: the stick itself, a blank one included.
+            Target::Drive(_) => icon::DISK_REMOVABLE,
         };
         // An unmounted device is DIM: it is a place one cannot walk into yet.
         // So is a QUIET one (udisks' `HintIgnore`: the ESP, a stick's EFI
@@ -4995,6 +5076,11 @@ impl View {
             // difference a person has to know before pressing the key, because
             // one of the two takes a moment and asks the system for something.
             (Target::Device(_), Some(false)) => ronoctua_i18n::key::FILES_SIDEBAR_MOUNT,
+            (Target::Private, Some(true)) => ronoctua_i18n::key::FILES_PRIVATE_OPEN,
+            (Target::Private, _) => ronoctua_i18n::key::FILES_PRIVATE_LOCKED,
+            // A STICK'S HEADING is the whole drive: pressing it opens what can
+            // be done with it — writing the installer among them.
+            (Target::Drive(_), _) => ronoctua_i18n::key::STICK_SIDEBAR_DRIVE,
             (Target::Application(_), _) => ronoctua_i18n::key::FILES_SIDEBAR_LAUNCH,
             _ => ronoctua_i18n::key::FILES_SIDEBAR_OPEN,
         };
@@ -6299,6 +6385,17 @@ impl View {
             }
             rows.push(plain(String::new(), ronoctua_tokens::color::TEXT_DIM));
         }
+        // A STICK'S HEADING the system runs from offers nothing — and says
+        // why, rather than opening on an empty list.
+        if let (Target::Drive(_), Some(why)) = (&row.target, &row.needed) {
+            rows.push(plain(
+                format!(
+                    "{:>16}  {why}",
+                    texts.t(ronoctua_i18n::key::SIDEBAR_FACT_NEEDED)
+                ),
+                ronoctua_tokens::color::TEXT_DIM,
+            ));
+        }
 
         let offered = ronoctua_files::sidebar_menu::for_row(&row);
         rows.extend(offered.iter().enumerate().map(|(n, a)| Row {
@@ -6505,7 +6602,12 @@ pub enum Errand {
 /// that draws freezes the keyboard, the painting and the compositor's events
 /// for as long as the work takes.
 #[must_use]
-pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: &Clip) -> Errand {
+pub fn carry_out(
+    doing: Doing,
+    sender: &calloop::channel::Sender<Report>,
+    clip: &Clip,
+    gate: &crate::sudo_bar::Gate,
+) -> Errand {
     match doing {
         // The four that need a process are the door's business.
         Doing::Open(_) | Doing::OpenWith(_, _) | Doing::Terminal(_) | Doing::RootTerminal(_) => {
@@ -6638,8 +6740,12 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         Doing::Format(_) => Errand::Done,
         // AND THE HISTORY: a view in the footer, a window from the window.
         Doing::History(_) => Errand::Done,
+        // AND THE INSTALLER STICK'S WINDOW, on the drive.
+        Doing::WriteInstaller(_) => Errand::Done,
         // AND THE SECURITY CENTRE'S WINDOW, with the file to check.
         Doing::VirusTotal(_) => Errand::Done,
+        // AND THE VAULT'S TWO COMMANDS.
+        Doing::Vault(_) => Errand::Done,
         Doing::Unmount(id, left) => {
             let sender = sender.clone();
             raise("unmount", move || {
@@ -6670,6 +6776,7 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             ronoctua_files::act::Verb::Chmod,
             format!("{mode:o}"),
             sender,
+            gate,
         ),
         Doing::Group(paths, gid) => kernel_or_root(
             paths,
@@ -6677,6 +6784,7 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
             ronoctua_files::act::Verb::Chgrp,
             gid.to_string(),
             sender,
+            gate,
         ),
         // THE ONE THAT NEEDS ROOT. Written into a directory this user owns and
         // handed to a unit that VALIDATES before acting — the same shape
@@ -6687,12 +6795,7 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
                 paths,
                 value: uid.to_string(),
             },
-            ronoctua_security::authority::Proof::Cached,
-            sender,
-        ),
-        Doing::RootProved(change, secret) => as_root(
-            change,
-            ronoctua_security::authority::Proof::Typed(secret),
+            gate.gesture(crate::sudo_bar::Asker::Files),
             sender,
         ),
         // UNBOUNDED, EVERY ONE OF THEM — and they no longer go to a thread of
@@ -6775,6 +6878,40 @@ pub fn carry_out(doing: Doing, sender: &calloop::channel::Sender<Report>, clip: 
         // `crate::files_archive`, which writes a password into the job's
         // `0600` file on the way.
         Doing::Archive(doing) => crate::files_archive::carry_out(doing, sender),
+        // A SEAL: the queue's, each passphrase written into its job's file
+        // on the way (`crate::seal::carry_out`).
+        // ON A THREAD: the names it picks are asked of the folder, and a
+        // folder in a vault that is suspended is not the loop's to wait on.
+        Doing::Seal(doing) => {
+            let sender = sender.clone();
+            let spawned = std::thread::Builder::new()
+                .name("seal-queue".into())
+                .spawn(move || {
+                    let _ = sender.send(Report::Said(crate::seal::carry_out(doing)));
+                });
+            if let Err(e) = spawned {
+                tracing::error!(error = %e, "could not start the seal's thread");
+            }
+            Errand::Done
+        }
+        // A `.AGE`'S HEADER, on a thread: a file on a stick or in a vault is
+        // not the loop's to wait on.
+        Doing::SealSniff(path) => {
+            let sender = sender.clone();
+            let spawned = std::thread::Builder::new()
+                .name("seal-sniff".into())
+                .spawn(move || {
+                    let kind = crate::seal::sniff_now(&path);
+                    let _ = sender.send(Report::Seal(Box::new(crate::seal::SealReport::Sniffed {
+                        path,
+                        kind,
+                    })));
+                });
+            if let Err(e) = spawned {
+                tracing::error!(error = %e, "could not start the seal's reading thread");
+            }
+            Errand::Done
+        }
         // THE WALK. It is in the queue for the same reason as the rest: it is
         // unbounded, and it was the one operation somebody watches the screen
         // during with nothing to watch. The answer comes back in the list —
@@ -6876,11 +7013,6 @@ fn refused(why: &str) -> Explanation {
     }
 }
 
-/// The question the sudo door's password is typed into when a change only
-/// root may make needs it — asked in the door that pressed, answered back as
-/// [`Doing::RootProved`].
-pub const ROOT_PASSWORD: &str = "files-root-password";
-
 /// A change only root may make, to these paths: the privileged unit's verb
 /// and its value (a uid, a gid, an octal mode).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6902,6 +7034,7 @@ fn kernel_or_root(
     verb: ronoctua_files::act::Verb,
     value: String,
     sender: &calloop::channel::Sender<Report>,
+    gate: &crate::sudo_bar::Gate,
 ) -> Errand {
     for (n, path) in paths.iter().enumerate() {
         match change(path) {
@@ -6913,7 +7046,7 @@ fn kernel_or_root(
                         paths: paths[n..].to_vec(),
                         value,
                     },
-                    ronoctua_security::authority::Proof::Cached,
+                    gate.gesture(crate::sudo_bar::Asker::Files),
                     sender,
                 );
             }
@@ -6947,18 +7080,20 @@ fn needs_root(e: &anyhow::Error) -> bool {
 /// unit's `auth_self_keep` rule could never ask anybody, so a change of owner
 /// was refused at once on every machine. The door tries `sudo -n` first (a
 /// window open, or sudo's own fresh timestamp) and, when that is refused,
-/// the view asks the password on ITS line ([`Report::Password`]) and comes
-/// back with it.
+/// asks in the footer's SUDO BAR — the password, a key or a finger — from
+/// whichever door pressed (`crate::sudo_bar`).
 ///
 /// # One request at a time, and the first refusal stops the rest
 ///
 /// The unit installs ONE request — that is what lets its name be fixed — so
-/// the set is one start per path, all with the same proof. Carrying on after
-/// one was refused would leave a set half changed with one message about one
-/// file, which is a state nobody can act on.
+/// the set is one start per path, all in ONE gesture: the password that
+/// answered the first answers the rest (`sudo_bar`'s kept password), and a
+/// key or a finger is asked again each time. Carrying on after one was
+/// refused would leave a set half changed with one message about one file,
+/// which is a state nobody can act on.
 fn as_root(
     change: Root,
-    proof: ronoctua_security::authority::Proof,
+    mut gesture: crate::sudo_bar::Gesture,
     sender: &calloop::channel::Sender<Report>,
 ) -> Errand {
     // AND THE PLACE THE REQUEST IS WRITTEN HAS TO EXIST — asked HERE, not
@@ -6978,7 +7113,6 @@ fn as_root(
     let sender = sender.clone();
     raise(change.verb.word(), move || {
         let staging = std::path::PathBuf::from(ronoctua_files::act::STAGING);
-        let mut left = change.clone();
         for path in change.paths {
             let staged = ronoctua_files::act::Staged {
                 verb: change.verb,
@@ -6990,23 +7124,14 @@ fn as_root(
                 let _ = sender.send(Report::Failed(e.to_string()));
                 return;
             }
-            match ronoctua_security::authority::run(
-                ronoctua_security::verb::RootVerb::FilesRoot,
-                proof.clone(),
+            // THE PATHS ALREADY CHANGED STAY CHANGED; the first refusal
+            // stops the rest, and is said in the door that pressed.
+            if let Err(why) = gesture.run(
+                ronoctua_security::verb::RootVerb::FilesRoot.into(),
+                &mut |_| {},
             ) {
-                Ok(_) => {
-                    left.paths.remove(0);
-                }
-                // THE PASSWORD, asked in the door that pressed, for what is
-                // LEFT of the set: the paths already changed stay changed.
-                Err(r) if r.why == ronoctua_security::Why::NeedsPassword => {
-                    let _ = sender.send(Report::Password(left));
-                    return;
-                }
-                Err(r) => {
-                    let _ = sender.send(Report::Door(r.why));
-                    return;
-                }
+                let _ = sender.send(Report::Door(why));
+                return;
             }
         }
         let _ = sender.send(Report::Done);
@@ -8253,6 +8378,13 @@ impl View {
                 ],
                 false,
             ),
+            // FOR WHOM: the three ways, "for you" saying whether it can.
+            Asking::Seal(crate::seal::SealAsked::Mode(_)) => {
+                (crate::seal::mode_choices(&self.texts), false)
+            }
+            // SOMEONE'S KEY IS TYPED — pasted, in truth: two thousand
+            // characters nobody types.
+            Asking::Seal(crate::seal::SealAsked::Recipient(_)) => (Vec::new(), true),
             // YES AND NO, and `no` FIRST.
             //
             // The cursor starts on the first row, so the first row is what a
@@ -8421,6 +8553,19 @@ impl View {
                 "overwrite" => Step::Do(Doing::RemoveLocation(paths, false)),
                 _ => Step::Changed,
             },
+            Asking::Seal(crate::seal::SealAsked::Mode(paths)) => {
+                match crate::seal::Mode::of_id(&chosen) {
+                    Some(mode) => self.seal_next(crate::seal::choose(mode, paths)),
+                    None => Step::Changed,
+                }
+            }
+            Asking::Seal(crate::seal::SealAsked::Recipient(paths)) => {
+                self.seal_next(crate::seal::answer(
+                    crate::seal::Wanting::Recipient(paths),
+                    crate::seal::RECIPIENT,
+                    &chosen,
+                ))
+            }
             // A rename is one syscall and answers now: the listing has to show
             // the new name before the hand leaves the key.
             Asking::Name(path) => {
@@ -9345,24 +9490,44 @@ impl View {
             // — the first one that is not the way out. With the entries side by
             // side there is no way out to skip: `..` is a thumbnail like any
             // other, and the first line of the grid is where the eye starts.
-            if self.is_empty()
-                && let Some(row) = rows.get_mut(
-                    above
-                        + if the_grid.is_some() {
-                            0
-                        } else {
-                            self.first_row()
-                        },
-                )
-            {
-                row.fields.push(Field {
-                    at: lead + GUTTER,
-                    text: texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE),
-                    color: ronoctua_tokens::color::TEXT_DIM,
-                    hit: Hit::Nothing,
-                    explain: None,
-                    ink: Ink::Grid,
-                });
+            //
+            // A FOLDER OF THE /private VAULT THAT WAS NOT READ says why there
+            // instead, wrapped over the rows below it and in the warning's
+            // colour: a refusal is a sentence, and an empty-looking folder
+            // would say the files are gone.
+            if self.is_empty() {
+                let first = above
+                    + if the_grid.is_some() {
+                        0
+                    } else {
+                        self.first_row()
+                    };
+                let (lines, color) = match self.withheld {
+                    Some(w) => (
+                        crate::chrome::note_lines(
+                            &texts.t(w.sentence()),
+                            listing_to.saturating_sub(lead + GUTTER).max(1),
+                        ),
+                        ronoctua_tokens::color::STATE_WARNING,
+                    ),
+                    None => (
+                        vec![texts.t(ronoctua_i18n::key::FILES_NOTHING_HERE)],
+                        ronoctua_tokens::color::TEXT_DIM,
+                    ),
+                };
+                for (k, line) in lines.into_iter().enumerate() {
+                    let Some(row) = rows.get_mut(first + k) else {
+                        break;
+                    };
+                    row.fields.push(Field {
+                        at: lead + GUTTER,
+                        text: line,
+                        color,
+                        hit: Hit::Nothing,
+                        explain: None,
+                        ink: Ink::Grid,
+                    });
+                }
             }
             out.push(Section {
                 pane: Pane::Listing,
@@ -9563,6 +9728,26 @@ impl View {
                 row,
                 hit: Hit::Name(row),
                 explain: f.and_then(|f| f.explain.clone()),
+            });
+        }
+        // A SIDEBAR ROW IS PRESSED ACROSS ITS WIDTH, as the band under the
+        // pointer lights it: the air after a short name (`Music`) answered
+        // nothing, so a click the row said it would take walked nowhere
+        // (photographed: the band on the row, the listing unmoved). The row's
+        // own field says which row it is; a field that does something else
+        // (the eject glyph) keeps its own target.
+        if matches!(sec.pane, Pane::Sidebar)
+            && f.is_none_or(|f| f.hit == Hit::Nothing)
+            && let Some(side) = sec
+                .content
+                .get(inside)
+                .and_then(|r| r.fields.iter().find(|f| matches!(f.hit, Hit::Sidebar(_))))
+        {
+            return Some(Target {
+                pane: sec.pane,
+                row,
+                hit: side.hit.clone(),
+                explain: side.explain.clone(),
             });
         }
         // AND A FACT THAT CHANGES THE FILE IS PRESSED ACROSS ITS ROW: the air
@@ -10299,6 +10484,17 @@ impl View {
             .filter(|r| matches!(r.target, Target::Device(_)) && r.mounted == Some(true))
             .filter(|r| r.needed.is_none())
             .filter_map(|r| r.at.clone())
+            // THE OPEN VAULT'S TRASH too — asked again here, at the moment its
+            // bin would be read, so a vault suspended since the row was drawn
+            // is never touched (`ronoctua_private::may_touch`).
+            .chain(
+                self.side
+                    .rows()
+                    .iter()
+                    .filter(|r| matches!(r.target, Target::Private) && r.mounted == Some(true))
+                    .filter_map(|r| r.at.clone())
+                    .filter(|at| ronoctua_private::may_touch(at)),
+            )
             .collect()
     }
 
@@ -10467,6 +10663,12 @@ impl View {
             "archive-add" => self.add_to_archive(focused),
             "archive-extract" => self.extract_members(),
             "archive-remove" => self.remove_members(),
+            // ENCRYPT ANYTHING (`crate::seal`): for whom, then what it asks;
+            // opening reads the header first, on a thread, and the header
+            // picks the question.
+            // ── anchor: L22 ──
+            "encrypt" => self.ask(Asking::Seal(crate::seal::SealAsked::Mode(paths))),
+            "decrypt" => Step::Do(Doing::SealSniff(focused)),
             "trash" => match self.bin_for(&paths) {
                 Some(bin) => Step::Do(Doing::Trash(bin.root, paths)),
                 // NO BIN, NO TRASH — and it says so rather than falling back to
@@ -11841,6 +12043,8 @@ impl View {
                     Step::Secret(crate::files_archive::UNLOCK)
                 }
                 Target::Device(id) => Step::Do(Doing::Mount(id.clone())),
+                // THE VAULT: its passphrase (or key) asked by the door.
+                Target::Private => Step::Do(Doing::Vault(true)),
                 _ => Step::Nothing,
             },
             "lock" => match &row.target {
@@ -11848,6 +12052,7 @@ impl View {
                     device: id.clone(),
                     name: self.name_of_side(&row),
                 }),
+                Target::Private => Step::Do(Doing::Vault(false)),
                 _ => Step::Nothing,
             },
             "unmount" => self.eject_focused(),
@@ -11866,6 +12071,12 @@ impl View {
             "unpin" => self.unpin_focused(),
             "format" => match &row.target {
                 Target::Device(id) => Step::Do(Doing::Format(id.clone())),
+                _ => Step::Nothing,
+            },
+            // THE INSTALLER ON THIS STICK: the stick's window, on this drive.
+            // ── anchor: L17 ──
+            "write-installer" => match &row.target {
+                Target::Drive(id) => Step::Do(Doing::WriteInstaller(id.clone())),
                 _ => Step::Nothing,
             },
             _ => Step::Nothing,
@@ -11892,7 +12103,10 @@ impl View {
                 key: ronoctua_i18n::key::FILES_NO_TRASH,
                 args: Vec::new(),
             }),
-            (Target::Device(_), None) => Step::Nothing,
+            (Target::Device(_) | Target::Drive(_), None) => Step::Nothing,
+            // A LOCKED VAULT is gone into by opening it: its passphrase, or
+            // its key, asked by the door.
+            (Target::Private, None) => Step::Do(Doing::Vault(true)),
         }
     }
 
@@ -11915,7 +12129,11 @@ impl View {
         let Some(row) = self.focused_side() else {
             return Step::Nothing;
         };
-        if matches!(row.target, Target::Device(_)) && row.mounted == Some(false) {
+        // A LOCKED VAULT too: its menu, with `m` that asks the passphrase.
+        // A STICK'S HEADING always: nothing to walk into, its menu is all.
+        if matches!(row.target, Target::Device(_) | Target::Private) && row.mounted == Some(false)
+            || matches!(row.target, Target::Drive(_))
+        {
             return self.open_menu();
         }
         self.walk_into(&row)
@@ -11950,6 +12168,9 @@ impl View {
             (Target::Device(id), Some(true)) => {
                 Step::Do(Doing::Unmount(id.clone(), self.trash_left(&row)))
             }
+            // THE OPEN VAULT is put away by locking it: its eject glyph and
+            // `C-e` do what its `l` does.
+            (Target::Private, Some(true)) => Step::Do(Doing::Vault(false)),
             // A row one cannot unmount: an unmounted device, a folder, the
             // trash. It says WHAT the row is rather than what the key wants.
             _ => Step::Say(self.side_explanation(&row, &self.texts)),
@@ -12121,6 +12342,16 @@ impl View {
     /// cursor is clamped: a stick unplugged while the cursor was on it would
     /// otherwise leave the cursor past the end of a list that just got shorter.
     pub fn racked(&mut self, rack: &ronoctua_disks::Rack) {
+        self.racked_with_vault(rack, crate::vault::status_for_sidebar());
+    }
+
+    /// [`Self::racked`], with the `/private` vault's status handed in — what
+    /// the camera plants instead of the status file.
+    pub fn racked_with_vault(
+        &mut self,
+        rack: &ronoctua_disks::Rack,
+        vault: Option<ronoctua_private::Status>,
+    ) {
         // EVERY volume that is a row, quiet ones included: a quiet row is
         // listed too — last in its block, in the quiet register — because
         // there is no key that hides it and nothing here filters it out.
@@ -12172,8 +12403,118 @@ impl View {
                     seal,
                 }
             })
+            .collect::<Vec<_>>();
+        // A HEADING FOR EVERY STICK, its volumes under it
+        // (`Self::with_headings`).
+        let rows = Self::with_headings(rack, &listed, rows);
+        // THE /private VAULT, open or locked, first among them
+        // (`crate::vault::sidebar_row`).
+        let rows = crate::vault::sidebar_row(&rack.volumes, vault)
+            .into_iter()
+            .chain(rows)
             .collect();
         self.devices_are(rows);
+        // KEPT, for the vault's status to move the row by itself.
+        self.rack.clone_from(rack);
+        self.vault = vault;
+    }
+
+    /// The vault's status file moved (the door's listing watch heard it:
+    /// `Notice::for_listing`): its row is drawn again from the disks as last
+    /// read — a suspension at sleep changes nothing udisks says — and a
+    /// folder of the vault on screen is read again (the door's re-read that
+    /// follows), now withheld or now readable. Nothing when it did not move.
+    pub fn vault_moved(&mut self) {
+        let now = crate::vault::status_for_sidebar();
+        if now == self.vault {
+            return;
+        }
+        let rack = std::mem::take(&mut self.rack);
+        self.racked_with_vault(&rack, now);
+    }
+
+    /// The device rows with a HEADING for every stick: a drive one can pull
+    /// out, or on USB, that holds anything — or nothing. The same drives the
+    /// installer stick lists (`ronoctua_stick::drives::is_a_stick`): a memory
+    /// card, and never the eMMC soldered beside it on the same bus.
+    ///
+    /// A BLANK STICK has no volume to be a row (no table, no filesystem), and
+    /// without its heading it would not be on the sidebar at all: "I plugged
+    /// it in and nothing happened" (`ronoctua_disks::worth_a_heading`). The
+    /// heading is the whole drive — where writing the installer is offered
+    /// (`sidebar_menu::Applies::Drive`) — and its volumes follow it.
+    fn with_headings(
+        rack: &ronoctua_disks::Rack,
+        listed: &[&ronoctua_disks::Volume],
+        rows: Vec<ronoctua_files::sidebar::Row>,
+    ) -> Vec<ronoctua_files::sidebar::Row> {
+        use ronoctua_files::sidebar::{Row, Section, Target};
+        let drive_of = |row: &Row| match &row.target {
+            Target::Device(at) => rack
+                .volumes
+                .iter()
+                .find(|v| v.at == *at)
+                .and_then(|v| ronoctua_disks::attached_to(v, &rack.volumes)),
+            _ => None,
+        };
+        let mut rows: Vec<(Row, bool)> = rows.into_iter().map(|r| (r, false)).collect();
+        let mut out: Vec<Row> = Vec::new();
+        for d in &rack.drives {
+            let mine: Vec<&ronoctua_disks::Volume> = listed
+                .iter()
+                .copied()
+                .filter(|v| ronoctua_disks::attached_to(v, &rack.volumes) == Some(d.at.as_str()))
+                .collect();
+            if !ronoctua_stick::drives::is_a_stick(d)
+                || !ronoctua_disks::worth_a_heading(d, &mine, &rack.volumes)
+            {
+                continue;
+            }
+            let whole = rack
+                .volumes
+                .iter()
+                .find(|v| v.drive.as_deref() == Some(d.at.as_str()) && v.whole());
+            // WHAT THE SYSTEM NEEDS ON IT, so the heading offers no write.
+            let needed = rack
+                .volumes
+                .iter()
+                .filter(|v| ronoctua_disks::attached_to(v, &rack.volumes) == Some(d.at.as_str()))
+                .find_map(|v| {
+                    ronoctua_disks::needed(v).map(|why| match why {
+                        ronoctua_disks::Needed::At(at) => at,
+                        ronoctua_disks::Needed::InFstab => "fstab".to_owned(),
+                        ronoctua_disks::Needed::Swap => "swap".to_owned(),
+                    })
+                });
+            let name = match d.name() {
+                n if !n.is_empty() => n,
+                _ => whole.map_or_else(String::new, |w| w.node.clone()),
+            };
+            out.push(Row {
+                // THE NODE, NEVER THE OBJECT PATH, which carries the drive's
+                // serial number (invariant 13).
+                id: format!("drive:{}", whole.map_or(name.as_str(), |w| w.node.as_str())),
+                target: Target::Drive(d.at.clone()),
+                label: Some(name),
+                section: Section::Devices,
+                mounted: None,
+                at: None,
+                quiet: false,
+                system: false,
+                needed,
+                removable: true,
+                built_in: true,
+                seal: None,
+            });
+            for (row, taken) in &mut rows {
+                if !*taken && drive_of(row) == Some(d.at.as_str()) {
+                    out.push(row.clone());
+                    *taken = true;
+                }
+            }
+        }
+        out.extend(rows.into_iter().filter(|(_, taken)| !taken).map(|(r, _)| r));
+        out
     }
 
     /// The sidebar's device rows, as the disk border read them.
@@ -13373,6 +13714,13 @@ impl View {
     /// line — the same call from both doors.
     pub fn secret_answered(&mut self, id: &str, text: &str) -> Step {
         use crate::files_archive::{self as fa, Wanting};
+        // A SEAL'S QUESTION: the same state both views drive.
+        if crate::seal::QUESTIONS.contains(&id) {
+            return match self.sealing.take() {
+                Some(wanting) => self.seal_next(crate::seal::answer(wanting, id, text)),
+                None => Step::Nothing,
+            };
+        }
         if text.is_empty() {
             self.wanting = None;
             return Step::Changed;
@@ -13430,7 +13778,7 @@ impl View {
 
     /// One of this view's secret questions was let go.
     pub fn secret_let_go(&mut self, id: &str) {
-        if crate::files_archive::QUESTIONS.contains(&id) {
+        if crate::files_archive::QUESTIONS.contains(&id) || crate::seal::QUESTIONS.contains(&id) {
             self.secrets_let_go();
         }
     }
@@ -13438,6 +13786,44 @@ impl View {
     /// Whatever secret question the view was waiting on, let go.
     pub fn secrets_let_go(&mut self) {
         self.wanting = None;
+        self.sealing = None;
+    }
+
+    /// What a seal's step is to this view: its question on the door's line,
+    /// its list, the queue, or a sentence.
+    fn seal_next(&mut self, next: crate::seal::Next) -> Step {
+        use crate::seal::{Next, Wanting};
+        match next {
+            Next::Nothing => Step::Changed,
+            Next::Ask {
+                wanting: Wanting::Recipient(paths),
+                ..
+            } => self.ask(Asking::Seal(crate::seal::SealAsked::Recipient(paths))),
+            Next::Ask { id, wanting, .. } => {
+                self.sealing = Some(wanting);
+                Step::Secret(id)
+            }
+            // EVERY JOB HANDED OVER, a seal as well as an open: what the
+            // queue refuses of it is this door's to say.
+            Next::Do(doing) => {
+                self.seal_sent.record(&doing);
+                Step::Do(Doing::Seal(doing))
+            }
+            Next::Say(e) => Step::Say(e),
+        }
+    }
+
+    /// What came back about a seal: a header read, or the end of a job —
+    /// a refusal said (or its passphrase asked again) only in the door that
+    /// sent it (`seal::job_ended`).
+    pub fn seal_reported(&mut self, report: crate::seal::SealReport) -> Step {
+        if let crate::seal::SealReport::Sniffed { path, kind } = report {
+            return self.seal_next(crate::seal::sniffed(path, kind));
+        }
+        match crate::seal::job_ended(&mut self.seal_sent, &report) {
+            Some(next) => self.seal_next(next),
+            None => Step::Nothing,
+        }
     }
 
     /// What an archive's thread, or the queue, came back with.
@@ -17837,6 +18223,7 @@ mod tests {
             Doing::Owner(vec![std::path::PathBuf::from("/tmp/anything")], 65534),
             &tx,
             &Clip::default(),
+            &crate::sudo_bar::Gate::shut(),
         );
         match errand {
             Errand::Say(e) => assert_eq!(e.key, ronoctua_i18n::key::FILES_NO_ROOT_HELPER),
@@ -18322,6 +18709,8 @@ mod tests {
         // A plain `.tar` too: every archive the archive crate reads is offered
         // the same rows, whatever the database calls its type.
         std::fs::write(root.join("two.tar"), b"").unwrap();
+        // AN AGE FILE, so the row that opens what is sealed is asked too.
+        std::fs::write(root.join("note.txt.age"), b"age-encryption.org/v1\n").unwrap();
         std::fs::create_dir(root.join("folder")).unwrap();
         // A FRESH VIEW PER ROW, and the reason is a defect this test found:
         // running `open` on a directory ENTERS it, so every row after that one
@@ -19455,6 +19844,37 @@ mod tests {
             v.menu_at(t.as_ref());
             assert!(!v.menu_open(), "line {line} of the chrome opened a menu");
         }
+    }
+
+    /// FAILS IF: the air after a short name on the sidebar answers nothing —
+    /// the band under the pointer lights the whole row, so a click there has
+    /// to take the row.
+    #[test]
+    fn a_sidebar_row_is_pressed_across_its_width() {
+        let dir = scratch("side-air");
+        let mut v = view_beside(&dir, 3);
+        v.reread();
+        let b = bundle();
+        let split = v.split(120);
+        let rows = v.drawn_at(&[], 0, 3, 120, &b);
+        let (line, end, hit) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(n, row)| {
+                let name = row
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.hit, Hit::Sidebar(_)))
+                    .max_by_key(|f| f.at)?;
+                let end = name.at + ronoctua_render::layout::width(&name.text);
+                (end + 2 < split).then(|| (n, end, name.hit.clone()))
+            })
+            .expect("a sidebar row with air after its name");
+        let air = v
+            .hit(120, 12, line, end + 1, &b)
+            .expect("the row's air answers");
+        assert_eq!(air.pane, Pane::Sidebar, "{air:?}");
+        assert_eq!(air.hit, hit, "{air:?}");
     }
 
     #[test]
@@ -25206,7 +25626,10 @@ mod tests {
             panic!("the date asked nothing to be done: {step:?}");
         };
         let (tx, _rx) = channel::channel::<Report>();
-        assert_eq!(carry_out(doing, &tx, &Clip::default()), Errand::Done);
+        assert_eq!(
+            carry_out(doing, &tx, &Clip::default(), &crate::sudo_bar::Gate::shut()),
+            Errand::Done
+        );
         assert_eq!(std::fs::metadata(&file).unwrap().mtime(), 981_173_106);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -25443,6 +25866,7 @@ mod tests {
                 Doing::Unmount("stick".to_owned(), left.clone()),
                 &tx,
                 &Clip::default(),
+                &crate::sudo_bar::Gate::shut(),
             ),
             Errand::Done
         );
@@ -25870,8 +26294,275 @@ mod tests {
                 ..Volume::default()
             });
         }
-        v.racked(&rack);
+        // HERMETIC: the vault's status handed in as none, never this
+        // machine's file.
+        v.racked_with_vault(&rack, None);
         (v, root)
+    }
+
+    /// FAILS IF: the `/private` vault's row stops opening through its door's
+    /// command, locking by `l` and by its eject glyph, wears a disk's glyph,
+    /// or what came out of it becomes a second row.
+    #[test]
+    fn the_vault_opens_and_locks_through_its_commands() {
+        use ronoctua_disks::{Holding, Rack, Volume};
+        use ronoctua_files::sidebar::Target;
+        use ronoctua_private::{State, Status};
+        let root = scratch("vault");
+        let mut v = view_at(&root);
+        let status = |state| {
+            Some(Status {
+                state,
+                ..Status::absent()
+            })
+        };
+        let menu = |id: &str| {
+            ronoctua_files::sidebar_menu::all_of()
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap()
+        };
+        let b = bundle();
+        v.racked_with_vault(&Rack::default(), status(State::Locked));
+        let row = v
+            .side
+            .device_rows()
+            .into_iter()
+            .next()
+            .expect("the vault is a row");
+        assert_eq!(row.target, Target::Private);
+        assert_eq!(
+            v.side_fields(0, &row, 30, &b)[0].text,
+            ronoctua_tokens::icon::DEVICE_LOCKED.to_string()
+        );
+        v.side_cursor = v.side.shown().iter().position(Option::is_some).unwrap_or(0);
+        v.pane = Pane::Sidebar;
+        assert_eq!(v.run_side(menu("mount")), Step::Do(Doing::Vault(true)));
+        assert_eq!(v.run_side(menu("open")), Step::Do(Doing::Vault(true)));
+        let mut rack = Rack::default();
+        rack.volumes.push(Volume {
+            node: "/dev/dm-9".to_owned(),
+            id_type: "btrfs".to_owned(),
+            mounted_at: vec![ronoctua_private::MOUNT_POINT.to_owned()],
+            holds: Holding {
+                filesystem: true,
+                ..Holding::default()
+            },
+            ..Volume::default()
+        });
+        v.racked_with_vault(&rack, status(State::Open));
+        assert_eq!(
+            v.side.device_rows().len(),
+            1,
+            "the vault's inside is a second row"
+        );
+        v.side_cursor = v.side.shown().iter().position(Option::is_some).unwrap_or(0);
+        v.pane = Pane::Sidebar;
+        assert_eq!(v.run_side(menu("lock")), Step::Do(Doing::Vault(false)));
+        v.pane = Pane::Sidebar;
+        assert_eq!(v.eject_focused(), Step::Do(Doing::Vault(false)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a folder of a vault that is not open — by its path or
+    /// through a link — is drawn as an empty folder instead of saying why,
+    /// or loses its way out.
+    #[test]
+    fn a_shut_vault_is_said_where_its_listing_would_be() {
+        use ronoctua_files::listing::Withheld;
+        // THIS MACHINE'S OWN VAULT OPEN: "shut" cannot be planted here (the
+        // build's sandbox has none, and runs it).
+        if ronoctua_private::open_now() {
+            return;
+        }
+        let root = scratch("vault-shut");
+        std::os::unix::fs::symlink(ronoctua_private::MOUNT_POINT, root.join("Private")).unwrap();
+        let b = bundle();
+        let said = b.t(Withheld::Shut.sentence());
+        let head: String = said
+            .split_whitespace()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ");
+        for at in [
+            PathBuf::from(ronoctua_private::MOUNT_POINT).join("notes"),
+            root.join("Private"),
+            root.join("Private/notes"),
+        ] {
+            let v = view_at(&at);
+            assert_eq!(v.withheld(), Some(Withheld::Shut), "{}", at.display());
+            assert_eq!(v.amount(), 1, "the way out stays");
+            assert!(v.is_empty());
+            let drawn = v
+                .sections(&[], 20, 120, &b)
+                .iter()
+                .flat_map(|s| s.content.iter())
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(drawn.contains(&head), "{}: {drawn}", at.display());
+            assert!(!drawn.contains(&b.t(ronoctua_i18n::key::FILES_NOTHING_HERE)));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: the vault's status moving (opened, locked, suspended at
+    /// sleep) leaves its row as it was until a disk moves.
+    #[test]
+    fn the_vaults_row_follows_its_status_file() {
+        use ronoctua_disks::Rack;
+        use ronoctua_private::{State, Status};
+        let root = scratch("vault-moved");
+        let mut v = view_at(&root);
+        let real = crate::vault::status_for_sidebar();
+        let planted = Some(Status {
+            state: if real.is_some_and(|s| s.state == State::Locked) {
+                State::SuspendedInUse
+            } else {
+                State::Locked
+            },
+            ..Status::absent()
+        });
+        v.racked_with_vault(&Rack::default(), planted);
+        assert_eq!(v.side.device_rows().len(), 1, "the planted vault's row");
+        // THE FILE SAYS OTHERWISE: the row is drawn from it.
+        v.vault_moved();
+        assert_eq!(v.vault, real);
+        assert_eq!(
+            v.side.device_rows().len(),
+            usize::from(crate::vault::sidebar_row(&[], real).is_some())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// THE QUESTION `blank-sticks-have-a-heading` ASKS: a BLANK stick — no
+    /// table, no signature, so no volume is a row — is on the sidebar as its
+    /// drive's heading, and `W` there opens the installer stick on THAT
+    /// drive; a stick with a volume gets the heading above it, and a
+    /// soldered disk gets none.
+    #[test]
+    fn blank_sticks_have_a_heading_where_the_installer_is_offered() {
+        use ronoctua_disks::{Bus, Drive, Holding, Rack, Volume};
+        use ronoctua_files::sidebar::Target;
+        let root = scratch("blank-stick");
+        let mut v = view_at(&root);
+        let mut rack = Rack::default();
+        rack.drives.push(Drive {
+            at: "/drive/internal".to_owned(),
+            model: "an internal disk".to_owned(),
+            bytes: 2_000_000_000_000,
+            bus: Bus::Internal,
+            ..Drive::default()
+        });
+        rack.volumes.push(Volume {
+            at: "/block/nvme0n1p2".to_owned(),
+            node: "/dev/nvme0n1p2".to_owned(),
+            id_type: "ext4".to_owned(),
+            mounted_at: vec!["/data".to_owned()],
+            drive: Some("/drive/internal".to_owned()),
+            holds: Holding {
+                filesystem: true,
+                partition: true,
+                ..Holding::default()
+            },
+            ..Volume::default()
+        });
+        for (n, node) in [("blank", "/dev/sdb"), ("used", "/dev/sdc")] {
+            rack.drives.push(Drive {
+                at: format!("/drive/{n}"),
+                vendor: "Vendor".to_owned(),
+                model: format!("Model {n}"),
+                bytes: 16_000_000_000,
+                bus: Bus::Usb,
+                removable: true,
+                ..Drive::default()
+            });
+            // THE WHOLE DISK'S BLOCK, which udisks publishes for a blank one
+            // too — with nothing on it, it is no row.
+            rack.volumes.push(Volume {
+                at: format!("/block/{n}"),
+                node: node.to_owned(),
+                bytes: 16_000_000_000,
+                drive: Some(format!("/drive/{n}")),
+                ..Volume::default()
+            });
+        }
+        // AN eMMC, soldered to the board: udisks says `sdio`, as for a card,
+        // and not removable. It is no stick, and gets no heading.
+        rack.drives.push(Drive {
+            at: "/drive/emmc".to_owned(),
+            model: "an eMMC".to_owned(),
+            bytes: 32_000_000_000,
+            bus: Bus::Sdio,
+            removable: false,
+            ..Drive::default()
+        });
+        rack.volumes.push(Volume {
+            at: "/block/mmcblk0".to_owned(),
+            node: "/dev/mmcblk0".to_owned(),
+            bytes: 32_000_000_000,
+            drive: Some("/drive/emmc".to_owned()),
+            ..Volume::default()
+        });
+        rack.volumes.push(Volume {
+            at: "/block/sdc1".to_owned(),
+            node: "/dev/sdc1".to_owned(),
+            label: "PHOTOS".to_owned(),
+            id_type: "vfat".to_owned(),
+            drive: Some("/drive/used".to_owned()),
+            holds: Holding {
+                filesystem: true,
+                partition: true,
+                ..Holding::default()
+            },
+            ..Volume::default()
+        });
+        // HERMETIC: the vault's status handed in as none, never this
+        // machine's file.
+        v.racked_with_vault(&rack, None);
+        let rows = v.side.device_rows();
+        let labels: Vec<(String, bool)> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.label.clone().unwrap_or_default(),
+                    matches!(r.target, Target::Drive(_)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Vendor Model blank".to_owned(), true),
+                ("Vendor Model used".to_owned(), true),
+                ("PHOTOS".to_owned(), false),
+                ("/dev/nvme0n1p2".to_owned(), false),
+            ],
+            "a heading per stick, its volume under it, none for a soldered disk or an eMMC"
+        );
+        assert!(
+            rows.iter().all(|r| !r.id.contains("/drive/")),
+            "an object path carries a serial number: {rows:?}"
+        );
+        // `W` ON THE BLANK STICK'S HEADING opens the stick's window on it.
+        v.pane = Pane::Sidebar;
+        v.side_cursor = v
+            .side
+            .shown()
+            .iter()
+            .position(|r| r.is_some_and(|r| r.label.as_deref() == Some("Vendor Model blank")))
+            .expect("the blank stick is on the sidebar");
+        let offered: Vec<&str> = ronoctua_files::sidebar_menu::for_row(&rows[0])
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        assert!(offered.contains(&"write-installer"), "{offered:?}");
+        let step = v.run_side(ronoctua_files::sidebar_menu::by_id("write-installer").unwrap());
+        assert!(
+            matches!(&step, Step::Do(Doing::WriteInstaller(id)) if id == "/drive/blank"),
+            "{step:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

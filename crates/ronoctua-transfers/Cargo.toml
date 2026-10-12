@@ -72,6 +72,25 @@ ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
 # podman that runs it (from the unit's environment, never baked in) and what
 # its lines mean. Serde and nothing else — no socket, no decoder.
 ronoctua-containers = { path = "../ronoctua-containers" }
+# THE 2026-10-05 WAVE'S THREE ENGINES carry their crates' own jobs, whole. The
+# PQ crate WITHOUT its features: the queue links the `Job` and the lines
+# `ronoctua-seal` prints, never `age` (`transfers-never-link-age`).
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false }
+ronoctua-stick = { path = "../ronoctua-stick" }
+# ── anchor: L13 ──
+# THE INCUS JOB'S WIRE: `ronoctua-incus` WITHOUT its features — the `Job`,
+# the lines `ronoctua-incus-job` prints and the variable that names it. The
+# daemon's socket, its WebSocket and the consent file are the child's work,
+# and this crate's source cannot name them. (The workspace build unifies
+# features, so the binary is compiled against the whole crate; what is not
+# called is not linked in.)
+ronoctua-incus = { path = "../ronoctua-incus", default-features = false }
+# ── anchor: L17 ──
+# THE PERSON'S CONSENT, read where the stick's download starts: a `Pass`
+# cannot cross the socket, so the engine mints one per host from the same
+# `consent.json` the door let them in (`stick::passes`).
+ronoctua-consent = { path = "../ronoctua-consent" }
+# ── anchor: L22 ──
 
 # `SIGTERM` UNWINDS THE COPY. A stop with a copy in flight waits for the
 # copy to remove what it wrote (`Shared::wind_down`); the handler is this

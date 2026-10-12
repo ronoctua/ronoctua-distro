@@ -88,11 +88,34 @@ pub enum Refusal {
     /// The host was not let in the person's `consent.json` (a refusal kept
     /// there, or the consent could not be written), and nothing was sent.
     NotLet,
+    /// A program that came from a file with no address: there is no
+    /// download a declaration could pin, so it cannot follow the person to
+    /// another machine.
+    NothingToPin,
+    /// This machine's applier refused the person's declaration (a cap, a
+    /// file it does not read): nothing of it changed here. The applier's own
+    /// words are the trouble.
+    DeclarationRefused,
+    /// The person's declaration file does not read here (a newer format, or
+    /// broken), and writing would replace it: it is left as it is.
+    DeclarationUnreadable,
+    /// The distro needs it: it cannot be kept uninstalled.
+    Essential,
+    /// The machine could not be rebuilt with the change; it runs as it was.
+    ApplyFailed,
+    /// This machine's name is not one a declaration can name (a hostname
+    /// with capitals or spaces).
+    MachineUnnamed,
+    /// It left the person's declaration, and the system this machine runs
+    /// still carries it: the next apply takes it out (the update held the
+    /// machine when it was removed, or another computer removed it). Why it
+    /// was not removed NOW, and an installed row's trouble until then.
+    LeavesAtNextApply,
 }
 
 impl Refusal {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 43] = [
         Self::UnfreeNeedsConsent,
         Self::UnverifiedNeedsConsent,
         Self::BigNeedsConsent,
@@ -129,6 +152,13 @@ impl Refusal {
         Self::WillNotParse,
         Self::WrongUser,
         Self::NotLet,
+        Self::NothingToPin,
+        Self::DeclarationRefused,
+        Self::DeclarationUnreadable,
+        Self::Essential,
+        Self::ApplyFailed,
+        Self::MachineUnnamed,
+        Self::LeavesAtNextApply,
     ];
 
     /// The stem of its text key (`software-refusal-<word>`).
@@ -171,6 +201,13 @@ impl Refusal {
             Self::WillNotParse => "will-not-parse",
             Self::WrongUser => "wrong-user",
             Self::NotLet => "not-let",
+            Self::NothingToPin => "nothing-to-pin",
+            Self::DeclarationRefused => "declaration-refused",
+            Self::DeclarationUnreadable => "declaration-unreadable",
+            Self::Essential => "essential",
+            Self::ApplyFailed => "apply-failed",
+            Self::MachineUnnamed => "machine-unnamed",
+            Self::LeavesAtNextApply => "leaves-at-next-apply",
         }
     }
 }

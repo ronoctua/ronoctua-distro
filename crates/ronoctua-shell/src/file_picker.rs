@@ -789,6 +789,16 @@ impl std::fmt::Debug for Watch {
     }
 }
 
+/// Why a folder was not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Refused {
+    /// The system's words, wrapped in ours (`file-picker-refused`).
+    Said(String),
+    /// A folder of the `/private` vault while it is not open, or not
+    /// answering — in our words alone.
+    Vault(ronoctua_files::listing::Withheld),
+}
+
 /// The picker.
 #[derive(Debug, Clone)]
 pub struct FilePicker {
@@ -798,7 +808,7 @@ pub struct FilePicker {
     at: PathBuf,
     entries: Vec<Entry>,
     /// Why the folder could not be read.
-    refused: Option<String>,
+    refused: Option<Refused>,
     /// Which filter of the ring.
     filter: usize,
     /// What was typed — the name, when saving.
@@ -936,15 +946,20 @@ impl FilePicker {
                     });
                 }
             }
+            // A FOLDER OF THE /private VAULT, not open: said in our words,
+            // never the journal's English (`listing::Withheld`).
             Err(e) => {
-                self.refused = Some(
-                    e.root_cause()
-                        .to_string()
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .to_owned(),
-                );
+                self.refused = Some(match ronoctua_files::listing::withheld(&e) {
+                    Some(w) => Refused::Vault(w),
+                    None => Refused::Said(
+                        e.root_cause()
+                            .to_string()
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                });
             }
         }
         self.glyphs();
@@ -1011,7 +1026,9 @@ impl FilePicker {
             return;
         }
         let (stirred, woken) = (self.watch.stirred.clone(), wake.clone());
-        match ronoctua_files::notice::Notice::watching(None, move || {
+        // `for_listing`: the /private vault's status too — a folder of the
+        // vault is read only while it is open.
+        match ronoctua_files::notice::Notice::for_listing(None, move || {
             stirred.store(true, std::sync::atomic::Ordering::SeqCst);
             woken.call();
             true
@@ -1442,8 +1459,13 @@ impl FilePicker {
             ronoctua_render::layout::elide_start(&self.shown(&self.at), room),
             tokens::color::TEXT_HEADING,
         )]));
-        if let Some(why) = &self.refused {
-            let said = texts.t_with(key::FILE_PICKER_REFUSED, &[("why", why.as_str())]);
+        if let Some(refused) = &self.refused {
+            let said = match refused {
+                Refused::Said(why) => {
+                    texts.t_with(key::FILE_PICKER_REFUSED, &[("why", why.as_str())])
+                }
+                Refused::Vault(w) => texts.t(w.sentence()),
+            };
             for line in crate::chrome::note_lines(&said, room) {
                 out.push(inert(vec![piece(left, line, tokens::color::STATE_WARNING)]));
             }

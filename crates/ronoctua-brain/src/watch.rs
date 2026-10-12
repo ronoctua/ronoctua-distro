@@ -12,6 +12,9 @@
 //! - **`Source::Path`** — inotify, through `ronoctua_files::notice` (the one
 //!   thread that already waits on the kernel for the file manager). See
 //!   "A path" below.
+//! - **`Source::Tree`** — a `Source::Path` whose inside is the whole tree
+//!   (`ronoctua_files::notice::Notice::on_dirs`): every folder under it,
+//!   the ones made later included. See "A tree" below.
 //! - **`Source::Lines`** — a long-lived child, by its store path, whose every
 //!   line is heard; restarted with a backoff when it ends.
 //! - **`Heard::Wake`** — the one clock, armed for the earliest moment a module
@@ -68,6 +71,15 @@
 //! again is watched again: the watch inside carries the directory's identity.
 //! The module is told after the watch is raised, so what it reads then plus
 //! what the watch hears after is everything.
+//!
+//! # A tree
+//!
+//! The same, with the inside being every folder under it, however deep: a
+//! folder made below it is held by the notice's own thread the moment the
+//! kernel says it was made, before the module is told — so a file written
+//! in a folder born after the start is heard (the belongings' plain part:
+//! `state/person/software/` is made by the first declaration, and every
+//! declaration after it is written inside).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead as _;
@@ -383,13 +395,15 @@ impl Watch {
             }
         }
 
-        // PATHS, through the kernel.
+        // PATHS AND TREES, through the kernel.
         let mut paths = BTreeMap::new();
         for (at, ear) in ears.iter().enumerate() {
-            let Source::Path(path) = &ear.kind else {
-                continue;
+            let (path, tree) = match &ear.kind {
+                Source::Path(path) => (path, false),
+                Source::Tree(path) => (path, true),
+                Source::Journal(_) | Source::Lines { .. } => continue,
             };
-            let (watch, why) = PathWatch::raise(path, &tx, at);
+            let (watch, why) = PathWatch::raise(path, tree, &tx, at);
             if let Some(why) = why {
                 let _ = tx.send(Msg::Down(at, why));
             }
@@ -443,22 +457,26 @@ impl Watch {
     }
 }
 
-/// The watches that make one `Source::Path` heard. See this module's header.
+/// The watches that make one `Source::Path` (or `Source::Tree`) heard. See
+/// this module's header.
 struct PathWatch {
     /// From the parent, narrowed to the path's name.
     parent: Option<Notice>,
     /// Inside it, while it is a directory — with the directory's identity
     /// (device, inode), so one deleted and made again is watched again.
     inside: Option<(Notice, (u64, u64))>,
+    /// Whether the inside is the whole tree under it (`Source::Tree`).
+    tree: bool,
 }
 
 impl PathWatch {
-    /// The watches for one path, and why it cannot be watched when it
-    /// cannot.
-    fn raise(path: &Path, tx: &Sender<Msg>, at: usize) -> (Self, Option<String>) {
+    /// The watches for one path — its whole tree when `tree` — and why it
+    /// cannot be watched when it cannot.
+    fn raise(path: &Path, tree: bool, tx: &Sender<Msg>, at: usize) -> (Self, Option<String>) {
         let mut watch = Self {
             parent: None,
             inside: None,
+            tree,
         };
         let mut why = None;
         match (path.parent(), path.file_name().and_then(|n| n.to_str())) {
@@ -498,8 +516,14 @@ impl PathWatch {
             (Some((_, was)), Some(id)) if *was == id => Ok(()),
             (_, Some(id)) => {
                 self.inside = None;
-                let inside =
-                    Notice::watching(Some(path), ring(tx, at)).map_err(|e| format!("{e:#}"))?;
+                let inside = if self.tree {
+                    // EVERY FOLDER BELOW, the ones made later held by the
+                    // notice's thread as their birth is read.
+                    Notice::on_dirs(&[], &[path.to_path_buf()], Pace::Coalesced, ring(tx, at))
+                } else {
+                    Notice::watching(Some(path), ring(tx, at))
+                }
+                .map_err(|e| format!("{e:#}"))?;
                 self.inside = Some((inside, id));
                 Ok(())
             }
@@ -1021,7 +1045,7 @@ impl Dispatcher {
                 // plus what the watch hears from here on, is everything.
                 self.rewatch(at);
                 if let Some(ear) = self.ears.get(at)
-                    && let Source::Path(path) = &ear.kind
+                    && let Source::Path(path) | Source::Tree(path) = &ear.kind
                     && self.on.contains(ear.module)
                 {
                     self.tell(
@@ -1073,7 +1097,8 @@ impl Dispatcher {
     /// Follows a path's directory from inside when it became one, and says
     /// whether it can be.
     fn rewatch(&mut self, at: usize) {
-        let Some(Source::Path(path)) = self.ears.get(at).map(|e| &e.kind) else {
+        let Some(Source::Path(path) | Source::Tree(path)) = self.ears.get(at).map(|e| &e.kind)
+        else {
             return;
         };
         let Some(watch) = self.paths.get_mut(&at) else {
@@ -1859,6 +1884,72 @@ mod tests {
                 .iter()
                 .any(|t| t.starts_with("lost")),
             "a path that is watched was said lost"
+        );
+        drop(watching);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tree_hears_inside_folders_made_after_the_start() {
+        // THE DEFECT THIS CATCHES: a module that listed the folders of a
+        // tree when it started never heard a file written in a folder made
+        // later — the belongings' plain part, whose `software/` folder the
+        // first declaration makes, and every later one writes inside.
+        let dir = scratch("tree");
+        let root = dir.join("person");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let core = a_core(vec![
+            scribe("scribe", vec![Source::Tree(root.clone())]).boxed(),
+        ]);
+        let watching = Watch::new(Arc::clone(&core))
+            .reading(None)
+            .start()
+            .expect("start");
+        let heard = || noted(&core.shared.snapshot().0, "scribe").len();
+        let heard_after = |before: usize, write: &dyn Fn()| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                write();
+                let _ = core
+                    .shared
+                    .wait_past(core.shared.version(), Duration::from_millis(300));
+                if heard() > before {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "never heard");
+            }
+        };
+        let quiet = || {
+            let mut was = heard();
+            loop {
+                std::thread::sleep(Duration::from_millis(1600));
+                let now = heard();
+                if now == was {
+                    return now;
+                }
+                was = now;
+            }
+        };
+        // TWO LEVELS MADE after the start, at once — heard at the root. Made
+        // again until heard: a birth before the watch was raised is missed.
+        let deep = root.join("software/icons");
+        heard_after(0, &|| {
+            let _ = std::fs::remove_dir_all(root.join("software"));
+            std::fs::create_dir_all(&deep).expect("mkdir -p");
+        });
+        // AND A FILE WRITTEN IN EACH, later: neither folder was there when
+        // the watch started.
+        for (at, name) in [(root.join("software"), "declared.json"), (deep, "a.png")] {
+            let settled = quiet();
+            heard_after(settled, &|| {
+                std::fs::write(at.join(name), "declared").expect("write inside");
+            });
+        }
+        let said = noted(&core.shared.snapshot().0, "scribe");
+        assert!(
+            said.iter()
+                .all(|t| t == &format!("path {}", root.display())),
+            "a tree is heard as its own path: {said:?}"
         );
         drop(watching);
         let _ = std::fs::remove_dir_all(&dir);

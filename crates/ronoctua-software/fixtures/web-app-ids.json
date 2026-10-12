@@ -1,0 +1,155 @@
+{
+  "about": "Chromium's window id of a web app, as `web::app_id` (Rust) and `nix/declared-apps/web.nix` (Nix) compute it. `agree`: both give `id`. `refused`: addresses the Nix side refuses because a browser rewrites (or rejects) them before naming the window.",
+  "agree": [
+    {
+      "url": "https://web.example.org/inbox",
+      "profile": "Profile 1",
+      "id": "chrome-web.example.org__inbox-Profile_1"
+    },
+    {
+      "url": "https://Example.COM",
+      "profile": "Default",
+      "id": "chrome-example.com__-Default"
+    },
+    {
+      "url": "https://example.com:8443/a/b?q=1#x",
+      "profile": "Default",
+      "id": "chrome-example.com__a_b-Default"
+    },
+    {
+      "url": "https://example.com:/x",
+      "profile": "Default",
+      "id": "chrome-example.com__x-Default"
+    },
+    {
+      "url": "http://127.0.0.1:8080/app/",
+      "profile": "Default",
+      "id": "chrome-127.0.0.1__app_-Default"
+    },
+    {
+      "url": "https://foo_bar.example.com/",
+      "profile": "Default",
+      "id": "chrome-foo_bar.example.com__-Default"
+    },
+    {
+      "url": "https://example.com./x",
+      "profile": "Default",
+      "id": "chrome-example.com.__x-Default"
+    },
+    {
+      "url": "https://xn--bcher-kva.de/",
+      "profile": "Default",
+      "id": "chrome-xn--bcher-kva.de__-Default"
+    },
+    {
+      "url": "https://example.com/a%20b/%2Fc",
+      "profile": "Default",
+      "id": "chrome-example.com__a%20b_%2Fc-Default"
+    },
+    {
+      "url": "https://example.com/%2e%2e%2f",
+      "profile": "Default",
+      "id": "chrome-example.com__%2e%2e%2f-Default"
+    },
+    {
+      "url": "https://example.com/~user/",
+      "profile": "Default",
+      "id": "chrome-example.com__~user_-Default"
+    },
+    {
+      "url": "https://example.com/a|b^c",
+      "profile": "Default",
+      "id": "chrome-example.com__a_b^c-Default"
+    },
+    {
+      "url": "https://example.com/p:q*r",
+      "profile": "Default",
+      "id": "chrome-example.com__p_q_r-Default"
+    },
+    {
+      "url": "https://example.com/x?a=\"b\"",
+      "profile": "Default",
+      "id": "chrome-example.com__x-Default"
+    },
+    {
+      "url": "https://a.example/",
+      "profile": "Odd.",
+      "id": "chrome-a.example__-Odd_"
+    },
+    {
+      "url": "https://a.example/",
+      "profile": "~Odd~",
+      "id": "chrome-a.example__-~Odd_"
+    }
+  ],
+  "refused": [
+    {
+      "url": "https://example.com/a/./b",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a/../b",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a/%2E%2e/b",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a/.%2e",
+      "profile": "Default"
+    },
+    {
+      "url": "https://bücher.de/",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/café",
+      "profile": "Default"
+    },
+    {
+      "url": "http://127.1/",
+      "profile": "Default"
+    },
+    {
+      "url": "http://0x7f.0.0.1/",
+      "profile": "Default"
+    },
+    {
+      "url": "http://1.2.3.4./",
+      "profile": "Default"
+    },
+    {
+      "url": "http://123/",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a\"b",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/{x}",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a\\b",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a<b>",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com/a`b",
+      "profile": "Default"
+    },
+    {
+      "url": "https://ex%41mple.com/",
+      "profile": "Default"
+    },
+    {
+      "url": "https://example.com:99999/",
+      "profile": "Default"
+    }
+  ]
+}

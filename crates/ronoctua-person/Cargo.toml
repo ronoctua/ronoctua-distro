@@ -1,0 +1,59 @@
+[package]
+name = "ronoctua-person"
+description = "The person's declared data: the programs they declared and declined, what the machine held or approved, the reports Nix writes back, the merge by id every list of it obeys — and root's applier, verifier and approver of it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE LIBRARY IS PURE ON PURPOSE. Serde and nothing else: the software
+# centre, the belongings' merge, the machine's life and the update all link
+# it to read the same files, and a library that ran programs or touched the
+# disk would carry that into every one of them.
+#
+# `apply` IS ROOT'S HALF, the binary beside it, and a DEFAULT feature so the
+# workspace build compiles the binary (a member's `[[bin]]` is built only
+# when something enables its required features). It adds `rustix`: the
+# binary opens every staged entry with `openat` + `O_NOFOLLOW` relative to
+# its folder and swaps the machine's copy with `renameat2(RENAME_EXCHANGE)`,
+# and the library gains ONE thing that touches the disk, root's lock
+# (`root::Lock`, a `flock` on a `0600` file of root's) — in the library so
+# the machine's rebuild (`ronoctua-machine`) takes the very same lock the
+# same way. `unsafe_code` is forbidden here, and these are the safe
+# spellings. A consumer that wants the data alone takes it off
+# (`default-features = false`).
+#
+# AND ONE PRIMITIVE: root holds a staging to the person's signature
+# (`ronoctua-pq`'s `sign` alone — ML-DSA-65 and SHA-256 from `aws-lc-rs`,
+# without `age`), so the binary opens the manifest with the pinned key and
+# hashes what it takes. The library hands the hash in as a function and
+# stays pure.
+[features]
+default = [ "apply" ]
+apply = [ "dep:rustix", "dep:ronoctua-xdg", "dep:ronoctua-pq" ]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# `system` for `uname`: the person's `record` names the machine's file in the
+# plain part after the machine (`machines/<hostname>.json`).
+rustix = { workspace = true, features = [ "fs", "process", "system" ], optional = true }
+# THE PERSON'S STATE ROOT, for `record` (the update's last steps): the one
+# crate that owns the XDG roots, zero dependencies of its own.
+ronoctua-xdg = { path = "../ronoctua-xdg", optional = true }
+# THE PERSON'S SIGNATURE, opened against root's pin (`apply`) and the key
+# pinned (`pin`): the one crate that holds the person's PQ keys.
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false, features = [ "sign" ], optional = true }
+
+# ROOT'S HALF, as its own binary, so `nix/rust.nix` can extract JUST this
+# (`person`): the units that run it as root must not carry the renderer, wgpu
+# and the wasm runtime the whole workspace would bring. `apply`, `verify`,
+# `approve`, `pin`, and the person's `request-approval` and `read`.
+[[bin]]
+name = "ronoctua-person"
+path = "src/bin/person/main.rs"
+required-features = [ "apply" ]
+
+[lints]
+workspace = true

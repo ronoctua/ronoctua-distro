@@ -635,11 +635,11 @@ VM numa máquina com menos de 25 GB livres — então não foram feitas:
 - **Os códigos de língua do OpenSubtitles e do SubDL** em `assets/tongues.nix` foram escritos das
   listas dos serviços e só conferidos na forma: as duas listas pedem a chave de uma conta.
 - **O Podnapisi** volta quando o domínio responder (`podnapisi::AWAKE`).
-- **`lookups-vm` e `directories-vm` foram escritos e ainda não rodaram** (uma CA descartável,
-  `networking.hosts` para um falso HTTPS de cada host). O `lookups-vm` não confere o `0600` de uma
-  chave: quem a grava é a porta, com o que a pessoa digita, e o teste a grava como a porta gravaria
-  (`lookup-keys-are-private` prende como o arquivo nasce). O `directories-vm` não abre um filme
-  inteiro do archive deixado (só a recusa sem a permissão) nem a TV além da recusa.
+- **O que o `lookups-vm` e o `directories-vm` não conferem** (os dois passam no `.#most`, com uma CA
+  descartável e `networking.hosts` para um falso HTTPS de cada host). O `lookups-vm` não confere o
+  `0600` de uma chave: quem a grava é a porta, com o que a pessoa digita, e o teste a grava como a
+  porta gravaria (`lookup-keys-are-private` prende como o arquivo nasce). O `directories-vm` não abre
+  um filme inteiro do archive deixado (só a recusa sem a permissão) nem a TV além da recusa.
 - **`ronoctua_lookup::keys::write_private_file`** mora no crate das buscas e guarda também as máquinas
   pareadas: é do `ronoctua-store`.
 - **Os diretórios (P9) não foram vistos com um daemon de verdade nem no rodapé.** As páginas (Rádios
@@ -746,11 +746,12 @@ antes de chegar ao lixo de verdade.
 - acabou quando: o alívio mede o espaço livre depois de cada coleta e repete até a meta ou até a
   coleta não liberar mais nada, com um teste que planta um caminho cuja conta engana
 
-### 4. O `--execute` chega ao passo 10 de 12 · médio
+### 4. O `--execute` do `installer-vm` não chega ao fim · médio
 
 `tests/installer-vm.nix` instala de verdade num disco virtual e **não é check** (decisão do dono,
 2026-10-05): check vermelho que todo mundo aprende a ignorar é pior do que lacuna assumida. A leva de
-2026-09-30 o levou do passo 5 ao 10 e consertou três defeitos que o modo ensaio não via: o `disko`
+2026-09-30 o levou do passo 5 ao 10 (de 12, na sequência de então; a de 2026-10-05 acrescentou os
+passos do repositório da pessoa) e consertou três defeitos que o modo ensaio não via: o `disko`
 pedia confirmação de novo num stdin que ninguém responde (agora `--yes-wipe-all-disks`), a cópia do
 flake falhava porque o `disko` não cria `/mnt/etc` (um passo `inst-step-target` antes dela), e o
 `executor::run` lia o stdout até o fim antes do stderr — o `nixos-install` enchia o cano do stderr e
@@ -1003,3 +1004,601 @@ pedida.
   `AGENTS.md`, um arquivo só e um check `one-session-lock`), e a tela tranca e destranca pela senha
   da conta numa VM
 
+
+## A leva de 2026-10-05
+
+O que cada pacote deixar por fazer entra aqui, depois da sua âncora; o que ele concluir sai da
+lista acima.
+
+<!-- anchor: L01 -->
+
+### O age do Rust ainda não fala `mlkem768x25519` · pequeno
+
+- **O X-Wing e a estrofe são nossos** (`crates/ronoctua-pq/src/{xwing,crypt}.rs`), porque o crate
+  `age` 0.12 do lock só traz o PQ marcado das chaves de hardware. Quando uma versão do `age` trouxer
+  o `mlkem768x25519`, o recipiente dela entra atrás da mesma API (`Identity`, `Recipient`) e a
+  composição local sai.
+- **Os checks novos foram provados fora do Nix.** Os scripts de `pq-xwing-vectors`,
+  `pq-age-interop` e `pq-identity-never-prints` (o texto avaliado de cada um) rodaram, limpos e
+  sabotados, contra os binários do `cargo`, com o `age` 1.3.1 do nixpkgs e com o pinado do
+  `pq-age-interop` (`.#checks.x86_64-linux.pq-age-interop.pinnedGoAge`, este sim construído no
+  Nix); nenhum dos três foi construído, porque pedem o workspace de `release`.
+- acabou quando: os três checks passam no `.#most`, e o `pq-age-interop` passa com o recipiente do
+  crate `age` no lugar do nosso
+
+<!-- anchor: L02 -->
+
+<!-- anchor: L03 -->
+
+### O flake da máquina e as declarações — o que a pista não provou · pequeno cada
+
+- **O `host-nix-golden-evaluates` não foi construído inteiro na pista**: a metade do build roda o
+  `ronoctua-install` do workspace do Nix, e compilar o workspace não cabe numa pista. As duas metades
+  foram provadas à parte (o ensaio do binário do `cargo` dá exatamente a fixture; o `toplevel` da
+  referência instancia). Acabou quando: o `.#most` o constrói.
+- **O AppImage declarado nunca foi construído com um AppImage de verdade**: a fixture tem pin falso
+  (só avalia). O `appimage-desktop.py` foi rodado à mão contra uma imagem plantada hostil (`Exec=`
+  de outro programa, `TryExec=`, chave estranha, `Terminal=` inválido, `.DirIcon` que é link para
+  `/etc/passwd`) e escreveu só o que devia. Falta ver um AppImage real virar entrada de lançador com
+  o ícone de dentro, e o embrulho abrir. Check barato oferecido: aquela imagem plantada, como check.
+- **A verificação segura o que o consumidor só pularia.** O `personEntries` de uma entrada que o
+  consumidor recusa com motivo (não livre sem consentimento num `minimal`, um atributo que o nixpkgs
+  não tem) falha na avaliação isolada, e a verificação a seguraria como `eval-failed`; o relatório
+  diria `held` em vez do motivo. Ela volta sozinha quando a entrada muda (impressão digital nova).
+  Acabou quando: o `raw` de cada construtor devolve um marcador inofensivo onde o `build` pularia a
+  entrada, ou a verificação (pacote do aplicador) só segura o que o consumidor não sabe pular.
+- **O `still-present` não foi exercitado**: o registro da distro estava vazio na pista. Acabou
+  quando: o registro tem entradas e um app recusado que outro caminho traz aparece na lista.
+
+<!-- anchor: L04 -->
+
+### O Emacs tem dois lançadores que ninguém pediu · pequeno
+
+`services.emacs.enable` põe o pacote no `systemPackages`, e com ele `emacs.desktop` e
+`emacsclient.desktop`; o lançador lista dois Emacsen, e um deles não usa o daemon. O comentário do
+`emacs.nix` afirmava o contrário até o registro de programas medir o `system.path`.
+
+- acabou quando: o dono decidir se os dois somem (um pacote do Emacs sem `share/applications` no
+  `services.emacs.package`) ou ficam, e o `distro-apps-are-registered` continuar verde
+
+### O apk do F-Droid é fixado pelo que chegou, não pelo índice assinado · pequeno
+
+O `nix run .#distro-pins` fixa o hash do apk que baixou por HTTPS da versão que o F-Droid sugere;
+não confere esse hash com o índice assinado do repositório (`entry.jar`). Hoje a tabela da distro
+não tem app Android.
+
+- acabou quando: o hash do apk é o que o índice assinado do F-Droid diz, e um apk diferente é
+  recusado
+
+### O web app da distro não diz a classe da janela · pequeno
+
+O lançador de um web app da distro não leva `StartupWMClass`, porque a conta do Chromium mora em
+`web::app_id` (`crates/ronoctua-software`) e uma segunda cópia em Nix derivaria. A janela abre, mas
+a modeline a nomeia como o Chrome. Hoje a tabela da distro não tem web app.
+
+- acabou quando: o lançador é escrito pela mesma função que escreve o da pessoa (um verbo da CLI
+  rodado no build), com a classe
+
+
+<!-- anchor: L05 -->
+
+### A vida da máquina (L05) — o que ficou por fazer · médio
+
+- **O teste de VM `boot-trial-falls-back` foi escrito e não rodou** (está em `tests/slow.nix`:
+  reinicia, então só o `.#gate` o roda): systemd-boot, EFI com variáveis persistentes, o alvo padrão
+  da distro sem sobrescrever; um ensaio que entra em pânico, a volta sozinha, o bless, a recusa
+  `did-not-boot`, e um ensaio cujo estágio 2 cai no modo de emergência e é reiniciado pelo prazo. Ele
+  decide o que o desenho deixou aberto: que o `LoaderEntryDefault` vence o `default` do `loader.conf`
+  no systemd-boot pinado, que o `LoaderEntrySelected` chega ao estágio 2 e que o prazo sobrevive ao
+  isolamento do `emergency.target`. (O `migration-keeps-the-machine` e o `rescue-vm` passaram no
+  `.#most`.)
+  - pronto quando: ele passa.
+- **O rollback do resgate desarma, e nenhuma VM o roda**: o `disarm` está provado nos testes do
+  crate e a fiação (o rollback chama o `disarm` entre o `--rollback` e o switch) no
+  `update-apply-rule-is-narrow`; o `rescue-vm` não aperta a linha do rollback.
+  - pronto quando: uma VM arma um ensaio, faz o rollback pelo resgate e sobe no sistema de volta.
+- **Tentar de novo o sistema que falhou**: o `apply` recusa para sempre o toplevel cujo ensaio falhou
+  (ou foi desfeito), até a distro andar. Uma falha de acaso (a luz caiu no boot do ensaio) não tem
+  como ser tentada de novo sem uma revisão nova.
+  - pronto quando: o dono decidir se existe um gesto para isso (e qual porta o oferece).
+- **Secure Boot (lanzaboote)**: as entradas são UKIs (`type2`), e não foi medido se o `bootctl list`
+  mostra o `init=` delas. Até lá uma máquina com lanzaboote cai em `no-trial: not-in-menu` e fica
+  sem ensaio, dito no registro.
+  - pronto quando: o `secureboot-vm` (ou um irmão) arma e consagra um ensaio.
+- **Dar `hold` por clique**: a vista da atualização já desenha o ensaio, o `no-trial`, a retenção e a
+  frase de cada recusa (L19); reter a máquina numa revisão ainda é só `sudo ronoctua-machine hold
+  <rev>` de um terminal. Pelas telas, pede um `RootVerb` novo na porta do sudo (sem argumento, lendo
+  um pedido preparado, como os outros) e a pergunta com o "não" primeiro.
+  - pronto quando: o dono decidir o gesto, e as duas portas o oferecerem com foto.
+
+<!-- anchor: L06 -->
+
+### Os dados da pessoa na máquina (L06) — o que ficou por fazer · médio
+
+- **A aprovação de um módulo não tem tela.** O verbo, a unidade e o hash existem e funcionam
+  (`ronoctua-person approve`, provado com o Nix de verdade contra o `nix/person-hash.nix`), mas
+  nenhuma vista mostra o `brain.awaiting-approval` do `person-applied.json` nem pergunta. Hoje só se
+  alcança de um terminal: `ronoctua-person request-approval <id> <hash>` e depois a porta do sudo
+  com `person-module-approve` (`sudo $RONOCTUA_SECURITY_ROOT person-module-approve`). A vista que
+  mostrar os módulos à espera prepara o pedido (`approve::Request`, `root::APPROVE`), passa por
+  `authority::run(RootVerb::PersonModuleApprove)`, desenha o "não" primeiro (o código alcança root)
+  e diz o resultado lendo `root::APPROVE_VERDICT` (`approve::Verdict`: o módulo, os dois hashes e o
+  `Denied`), porque a linha da porta só diz `refused failed`. Cada `Denied` precisa de uma frase nos
+  dois idiomas.
+  - pronto quando: as duas portas de uma vista mostram o módulo à espera com o hash e aprovam por
+    clique, com foto das duas.
+- **O `manifest.nix` de um módulo da pessoa é avaliado por root antes de qualquer aprovação**, se o
+  carregador o lê para saber marcas e prefixos (L03/L11). A avaliação não executa nada, mas pode ler
+  um arquivo que só root lê e pô-lo numa derivação. A aprovação cobre a pasta inteira; falta decidir
+  se um módulo não aprovado é avaliado de todo.
+  - pronto quando: o dono decidir, e um check prender a decisão.
+
+<!-- anchor: L07 -->
+
+### O store leniente — o que ficou
+
+- **Uma frase em cada vista que escreve com `parsed`** (som, câmera, estúdio, Syncthing, Tor, Atuin,
+  ClipCascade, teclado na tela, player…): a parte que não leu já aparece na lista dos pertences
+  ("Consertado na leitura", com "deixar" e "gravar o conserto", L21), mas a própria vista não diz
+  nada — como antes desta leva. Fica se o dono quiser a frase também ali.
+- **A vista dos ponteiros não tem porta de fotografia**: a frase da parte não lida (e a de antes,
+  `pointers-settings-failed`) é provada só pelo teste das linhas.
+- **A chave de deploy de OUTRA máquina** que já chegou a esta por um sync antigo não é reconhecida
+  aqui (esta compara com a própria chave); só sai do repositório quando a máquina dona a vê.
+- **Um link para o `/nix/store` que outra máquina empurrou antes desta regra** ainda é puxado por
+  uma máquina que não tem aquele caminho. A puxada (`engine/sealed.rs`) deveria recusar
+  materializar um link que `sift::into_the_store` reconhece — uma linha, que espera a puxada do
+  formato 2 (pedaços), que reescreve esse arquivo.
+- **Os seis checks novos** (`a-store-keeps-the-rest-of-a-broken-file`,
+  `a-newer-field-survives-an-older-write`, `an-untouched-repair-is-not-written`,
+  `belongings-drafts-are-never-kept`, `belongings-store-links-are-not-kept`,
+  `belongings-access-never-travels`) foram provados pelo `cargo test` e por sabotagem; no Nix eles
+  só rodam na bateria (`rust-tests` estreitado a um teste).
+- **O custo da leitura a mais por escrita** não foi medido num store grande (a fila do player, o
+  histórico das notificações continuam fora do `Store`).
+
+<!-- anchor: L08 -->
+
+### Pertences, formato 2 — o que o pacote do formato selado deixou · pequeno cada
+
+- **A compactação guarda sempre os dias da tabela** (`budget.keepDays`): a vista oferece compactar
+  (L21), mas não escolhe outro número; o `requests.json` aceita `Compact{keep_days}` e o
+  `Engine::compact` o lê, para quando houver uma porta que peça.
+- **`belongings-recover-without-the-distro` nunca rodou com o X-Wing de verdade.** Quando o pacote
+  o escreveu, o `ronoctua-pq` era o substituto X25519, que o `age` do Go não abre; o X-Wing entrou
+  depois (L01). O trecho do check (as duas execuções, a inteira e a com um pedaço cortado) rodou com
+  o `age` 1.3.1 do nixpkgs sobre um repositório da mesma forma com chaves clássicas, e o `script`
+  entregando a senha ao `age` foi provado dentro do sandbox do Nix; a execução é uma derivação
+  própria (`belongingsRecovered`).
+- **Os checks do formato 2 foram avaliados, não construídos.** Construir um pede a camada de
+  dependências do workspace inteira de novo (o `Cargo.lock` ganhou o `fastcdc`), sob a trava pesada
+  que as outras pistas esperam. A lista de testes, o filtro `--exact` com treze nomes e cada `grep` dos
+  checks foram conferidos com o mesmo `cargo test` na pista, e a parte que lê fonte do
+  `belongings-ask-with-a-pass` rodou fora do Nix, com sabotagem.
+- **O GitHub guarda o histórico compactado** até a coleta dele; tirar de lá as versões velhas pede um
+  pedido de limpeza ao suporte, que é da pessoa.
+- acabou quando: o `.#most` passa com os oito checks.
+
+<!-- anchor: L09 -->
+
+### Pertences: a parte em claro assinada — o que o pacote deixou · pequeno cada
+
+- **Editar um módulo do brain não pede a senha no gesto.** O módulo editado aqui espera "Assinar
+  agora" na página dos pertences (ou a próxima sincronização, ou a identidade da sessão); a central
+  de programas já pergunta a senha no gesto, e a atualização assina com a identidade da sessão. Um
+  editor não é uma porta nossa: o gancho seria a vigia das raízes em claro do `belongings-reminder`,
+  que hoje só manda o que pode mandar.
+- **Uma senha errada na pergunta da central de programas não é dita nela.** O `sign` recusa
+  (`wrong-passphrase`) dentro do trabalho da fila, o journal diz, e a mudança espera assinatura — a
+  página dos pertences mostra "esperando a sua senha para ser assinado"; a linha do trabalho na
+  central não diz por quê.
+- **Duas máquinas que assinam ao mesmo tempo podem dar o mesmo contador** a manifestos diferentes:
+  o contador só impede voltar para um MENOR, então um igual de outra máquina é aceito. O merge da
+  sincronização seguinte assina um acima dos dois; nada retrocede além do empate.
+- **A porta do rodapé não foi fotografada** nos estados novos (retido, esperando assinatura, sem
+  chave fixada, outra chave, a recusa de root, a fixação recusada, a pergunta da senha da central de
+  programas): é a mesma `View` e as mesmas linhas da janela, que foi, nos dois idiomas.
+- **Os checks novos não foram construídos no Nix** além do `person-apply-rule-is-narrow`: o
+  `belongingsSigned` compila os testes de quatro crates, e as partes que leem fonte rodaram fora do
+  Nix, com sabotagem (os testes nomeados rodaram no `cargo`).
+- acabou quando: o `.#most` passa com `belongings-tampered-plain-is-held`,
+  `belongings-plain-rollback-is-refused`, `person-apply-refuses-unsigned-tree`,
+  `brain-unsigned-module-never-compiled` e o `pq-identity-never-prints` estendido.
+
+### Pertences: parte em claro e merge — o que o pacote deixou · pequeno cada
+
+- **Um clone antigo não vê um repositório refeito vazio.** O `Repo::fetch` do `ronoctua-git` não
+  poda (`--prune`), então uma máquina que já tem o clone toma o `origin/main` velho pelo do
+  repositório novo e só o enche no próximo push que tiver o que mandar. A parte em claro não perde
+  nada nesse caso (a base continua a de antes e nada é apagado), e o caso do clone novo já não usa
+  base nenhuma; podar é da fronteira do git e da parte selada.
+- **A porta do rodapé não foi fotografada** com os conflitos mesclados: é a mesma `View` e as mesmas
+  linhas da janela, que foi.
+- acabou quando: o `.#most` passa com os oito checks (construídos uma vez na pista, verdes).
+
+<!-- anchor: L10 -->
+
+### Sudo, o lado root — o que ficou · pequeno
+
+O lado root e a barra do sudo (2026-10-11) estão prontos.
+
+- **O `security-vm` estendido não rodou**: os novos passos (as durações, a volta do timer no boot, o
+  dedo no terminal com a sentinela, a lista de chaves) foram escritos e esperam o `.#most`.
+- acabou quando: o `.#most` passa com o `security-vm`.
+
+<!-- anchor: L11 -->
+
+- **A máquina passa os módulos da pessoa ao brain.** O `withPersonModules` existe no flake (L11);
+  falta o `lib.machine` (L03, `nix/machine.nix`) usá-lo no lugar do `distroModules` cru:
+  `(withPersonModules { dir = dir + "/person/brain"; only = <ids incluídos>; }).machineModules
+  <ids aprovados>`. Os incluídos são os que o `approvals` já calcula (sem metade NixOS, ou com ela
+  aprovada pelo hash do `nix/person-hash.nix`, L06); os aprovados são os da metade NixOS. A metade
+  NixOS entra por ali — pela portaria do carregador —, nunca pelo `m.folder + "/module.nix"` cru, que
+  vale com o brain desligado e não recusa `imports` de fora nem `disabledModules`. O filtro de nome do
+  `approvals` (`my-[a-z0-9][a-z0-9-]{0,63}`) aceita ids que o carregador recusa (`my-2fa`): ou ele
+  usa a gramática do carregador, ou deixa a pasta passar e o carregador a recusa com frase. O
+  relatório (`person-applied.json`, L06) ganha as pastas de `.refused`, com a frase de cada uma —
+  hoje o `BrainReport` só tem `included` e `awaiting-approval`. E a verificação isolada da
+  atualização (L06/L19) avalia `brainModules.personProblemsOf.<id>` uma pasta por vez e tira do
+  `only` a que não avalia. Até lá, um módulo `my-…` viaja nos pertences e nenhuma máquina o compila.
+
+<!-- anchor: L12 -->
+
+### O `/private`, o que ficou
+
+- **Um arquivo do cofre, fora da listagem.** A listagem, o `stat` do vigia e o vigia passam pelo
+  guarda (`ronoctua_files::listing`); o que a porta faz com UM arquivo dele no laço — os fatos do
+  painel, um gesto sobre o arquivo focado — ainda não. Só alcança o instante entre o status dizer
+  "aberto" e o gancho do sono suspender: depois, o status ouvido tira a pasta da tela.
+- **Retomar pela chave.** Um cofre suspenso em uso só volta pela senha: o `luksResume` pela
+  chave FIDO2 precisa do plugin de token do systemd no caminho do `cryptsetup`, que o pacote não
+  declara. Abrir pela chave (o cofre fechado) funciona.
+- **Uma marca na modeline enquanto aberto** (o design a deixa opcional): o `security-watch`
+  poderia vigiar o `status.json`. Não foi feita.
+- **O teste de VM `private-vm`** foi escrito e avaliado, não rodado (as baterias são da fase
+  final). É ele que prova o `/private` montado visível fora da unidade (o `findmnt` depois do
+  `create`, com as unidades sem namespace de montagem) e o gancho do sono desmontando a montagem
+  de verdade. A chave FIDO2 não tem como ser testada lá.
+- **A exceção do inv. 6 para o `/private`** foi escrita no `AGENTS.md` a partir do plano aprovado
+  da leva; o dono confirma o texto.
+
+<!-- anchor: L13 -->
+### O Incus: o que a plataforma e o crate deixaram
+
+- **As respostas que o `incus-vm` grava em `fixtures/` ainda não substituíram as escritas à mão** em
+  `crates/ronoctua-incus/src/fixtures.rs`, salvo os eventos (o daemon manda o `source` e nenhum
+  `name`, e o crate lê o nome do caminho). Faltam as instâncias, o estado, os snapshots, as imagens,
+  os perfis, as redes, os pools, os volumes, os projetos e o `remote list`, e o `progress` das
+  operações, que o teste não captura.
+  - acabou quando: o `fixtures.rs` é o que o `incus-vm` capturou.
+- **O WebSocket dos eventos não foi visto contra o daemon**: a forma dos eventos é conferida no
+  `incus-vm` pelo `incus monitor` (o mesmo JSON), e o transporte (`/1.0/events`, o aperto de mão, o
+  fim pelo `Stopper`) contra um servidor de teste; o `Events` do crate não abre o daemon de verdade.
+  - acabou quando: um `instance-started` é lido pelo `Events` do crate num daemon (a vista do L23
+    fotografada numa VM, ou um teste que o faça).
+- **O disco de uma VM feita de uma imagem pode ficar com cópia na escrita, e isso não foi visto**: o
+  crate pede `initial.btrfs.compression=none` no disco raiz de toda VM, e um volume de bloco NOVO
+  feito assim é `+C` (o `incus-vm` confere). Mas uma VM feita de uma imagem num pool btrfs costuma
+  ser um snapshot do volume da imagem em cache (`images/<fingerprint>`), e um snapshot guarda as
+  flags do `root.img` que divide (medido): o pedido só chega lá se o daemon escreveu o volume da
+  imagem sem cópia na escrita. Ver isso exige criar uma VM, e a VM de teste não tem KVM aninhado.
+  Uma `+C` na pasta `virtual-machines/` (o desenho) não serve: a raiz de um subvolume não herda flag
+  nenhuma (medido). O caminho que não depende do daemon é um pool `dir` para as VMs numa pasta `+C`
+  (todo volume é pasta, e todo disco nasce dentro dela; medido), ao preço de snapshot e cópia
+  inteiros. E uma VM criada pelo CLI cru fica com cópia na escrita: o Incus não tem padrão por tipo
+  de instância num perfil.
+  - acabou quando: num `incus-vm` com KVM aninhado (ou numa máquina), uma VM lançada pelo crate a
+    partir de uma imagem importada tem `lsattr` C no `virtual-machines/<vm>/root.img` — ou, se não
+    tiver, as VMs foram para o pool `dir` `+C`, com essa prova.
+
+<!-- anchor: L14 -->
+
+### Contas de LLM: a contagem medida numa conta de verdade · pequeno
+
+O `ronoctua-llm` conta os tokens (`tokens::by_day_and_model`) e lê os limites do Codex a partir de
+linhas inventadas no formato que a documentação e as ferramentas públicas descrevem: o Claude Code
+com `message.id`/`requestId` repetidos e `<synthetic>`, o Codex com o total corrente do
+`token_count`, o `turn_context` e o `.jsonl.zst`. Nenhum transcript de pessoa foi lido para isso, e
+nada prova ainda que o Codex instalado escreve mesmo rollouts comprimidos ou o `resets_at` (o
+`resets_in_seconds` também é aceito).
+
+- acabou quando: numa conta real de cada agente, o total de um dia que o `ronoctua-llm refresh`
+  guardou bate com o que o `ccusage` (ou o `/usage` do agente) diz, ou a diferença está explicada no
+  `ARCHITECTURE.md`; e os limites do Codex lidos dos logs batem com os que ele mostra
+
+<!-- anchor: L15 -->
+
+### Os dois perfis medidos construídos, com o trabalho na distro · pequeno
+
+Os números novos (`minimal` ~11,8 GiB, `full` ~29) saem de uma conta: o fechamento do toolchain do
+devshell e dos agentes menos o fechamento dos pacotes de cada perfil que este store já tinha
+(`nix path-info -S`). Os sistemas inteiros não foram construídos nesta leva, e o driver gráfico, as
+unidades e o que o store não tinha ficaram fora da subtração — por isso a Mesa e o LLVM foram
+descontados à mão.
+
+- acabou quando: o `profile-minimal-closes` passou com o rust, o QEMU, o OVMF e os agentes na lista
+  do que o `minimal` guarda, e `nix path-info -rS` dos dois `toplevel` deu os números que o
+  `nix/modules/profile.nix`, o `docs/INSTALL.md`, o `docs/DEVELOPMENT.md` e o `AGENTS.md` dizem (ou
+  eles foram corrigidos)
+
+<!-- anchor: L16 -->
+
+### A primeira versão de verdade, e o que só ela mede · médio
+
+O `.#release` e os três apps em volta existem e foram provados com substitutos (um `gh`, um `nix` e
+um gate que só anotam que foram chamados, num repositório com `origin` local:
+`release-refuses-dirty-tree`; o empacotamento e a junção do ISO: `iso-parts-reassemble`; a adoção e o
+`.#apply-here`, até o switch: `machine-apps-stop-before-the-switch`). Nada disso tocou o GitHub. A
+distro não tem cache binário (decisão do dono, 2026-10-11): o ISO leva sempre a semente.
+
+- **O `.#fetch-iso` só baixou de um servidor local.** O `iso-parts-reassemble` serve uma versão como o
+  GitHub serve (a resposta da API, o redirecionamento para o host dos assets, faixas de bytes) e prova
+  a retomada e a parte errada baixada de novo; o GitHub de verdade não foi visto. A numeração das
+  partes, que o pendrive deixou em aberto, é de `00`.
+  - acabou quando: `nix run github:ronoctua/ronoctua-distro/release#fetch-iso` junta o ISO da
+    primeira versão, uma vez interrompido no meio.
+- **`.#adopt-machine` e `.#apply-here` nunca rodaram numa máquina.** Não há VM para eles: o primeiro
+  pede uma máquina do layout antigo (a do dono), o segundo uma máquina instalada e um checkout. O
+  `migrate` que o primeiro chama é o que o `migration-keeps-the-machine` (L05) prova.
+  - acabou quando: a máquina do dono foi adotada com `nix run .#adopt-machine` e um `.#apply-here`
+    voltou à `release` na atualização seguinte.
+- **A tag assinada (`--sign`) não tem leitor.** O pendrive confere o `SHA256SUMS` contra o TLS do
+  GitHub, não contra a assinatura.
+  - pronto quando: o dono decidir se o pendrive (ou o `.#fetch-iso`) deve conferir a tag, e com que
+    chave pública guardada onde.
+- **Não livre é o que a licença, o predicado e o nome sabem.** O `nix/release-unfree.nix` pergunta a
+  licença do pacote de topo daquele nome, o predicado da distro e, com o Android, o prefixo
+  `android` — o `uade`, que entra por um nixpkgs próprio, já era um caso, e é coberto pela licença.
+  Fica de fora o não livre sem nome de topo, fora do predicado e sem `android` no nome: um AppImage
+  ou app Android que a distro registrar (`assets/distro-apps.nix`, hoje sem nenhum) não tem
+  `meta.license` do nixpkgs, e se for proprietário tem de entrar no predicado de
+  `nix/modules/nixpkgs-config.nix`, senão o `.#release` o empurra para um cache público. O
+  `release-cache-holds-only-free-builds` lista as portas do repositório por onde um não livre entra.
+  - acabou quando: um check recusa entrada não livre da tabela da distro fora do predicado.
+
+### O cache binário da pessoa, provado só com substitutos · médio
+
+O cache é da pessoa (o Cachix dela): a página na vista da atualização, o envio depois de cada
+atualização que trocou a máquina, o netrc do root para um cache privado e a instalação que já o usa
+existem e foram provados por testes (`ronoctua-cachix`, `ronoctua-installer`, `ronoctua-belongings`
+`take`, os verbos do `ronoctua-security`) e pelos checks `binary-cache-declared-once`,
+`binary-cache-token-never-prints` e `release-cache-holds-only-free-builds`. Nenhum deles tocou o
+Cachix nem uma instalação.
+
+- **Nenhum envio chegou ao Cachix.** Os testes rodam com substitutos de `nix`, `nix-store` e `cachix`.
+  Falta um cache de verdade, público e privado, e uma atualização que troca a máquina: o relatório do
+  `cachix push` tem de bater com a contagem que o envio diz, e a consulta ao `cache.nixos.org`
+  (milhares de caminhos de um sistema, para um cache privado) tem de caber no tempo de um passo.
+  - acabou quando: os dois casos estão medidos aqui, com o tamanho e o tempo do primeiro envio.
+- **A instalação com cache nunca rodou.** O `nixos-install --option extra-substituters …` e o netrc do
+  instalador para um cache privado são provados pelo plano e pelo executor, não por uma instalação;
+  o `installer-vm` roda sem substituters, e não há VM que sirva um cache.
+  - acabou quando: uma instalação com um cache privado baixa dele (o log do `nixos-install` diz de
+    onde) e a máquina instalada tem o netrc do root `0600`.
+- **O veredito do netrc no rodapé não foi fotografado**: ele chega de uma thread depois do quadro que a
+  câmera tira. O caminho até o minibuffer é o de toda porta.
+- **A chave pública é conferida pela forma**, não contra o cachix.org: a tela não pergunta à rede.
+
+<!-- anchor: L17 -->
+
+### O pendrive do instalador: o que só uma máquina e uma versão de verdade provam · pequeno cada
+
+- **O formato da versão é contrato do L16 e não foi visto publicado**: a numeração das partes (de
+  `00`, como o `.#release` escreve), o `SHA256SUMS` com a linha da ISO inteira e o host do
+  redirecionamento do GitHub (`release-assets.githubusercontent.com` hoje; se mudar, o aria2 segue e
+  a linha de consentimento continua dizendo o antigo).
+- **O caminho inteiro numa máquina** — a vista, a senha, a fila, a gravação de uma ISO real e o boot
+  dela — não foi feito: pede um pendrive e o dono.
+- **A barra da fila recomeça a cada parte baixada**; a gravação e a releitura somam uma barra só.
+- **Dois "sim" no mesmo instante, um em cada porta**: entre a porta do sudo iniciar a unidade e a
+  fila aceitar o trabalho (milissegundos), o segundo vê uma unidade esperando sem trabalho armado e a
+  manda parar; o primeiro então falha dizendo que o gravador não roda. Fechar isso pede uma trava
+  entre as duas portas (um arquivo de preparo criado `create_new` antes da senha).
+
+<!-- anchor: L18 -->
+
+### Os programas declarados — o que a pista não provou · pequeno cada
+
+- **Numa máquina de verdade, nada do caminho foi feito**: declarar uma AppImage com o GitHub de
+  verdade (o pin pelos bytes daqui, o `nix store add` sob o nome do construtor), o pin de um apk do
+  F-Droid, o reconciliador com um Waydroid rodando, o rebuild de `ronoctua-update-apply.service`
+  depois de um "remover de vez" (a regra polkit do L05) e o `plain push` para um repositório.
+  - pronto quando: cada um foi visto numa máquina, e o que divergiu virou teste.
+- **"Manter em todos os seus computadores" é oferecido para o que veio de um arquivo**: o
+  `Installed` não diz de onde uma AppImage ou um apk veio, então a linha aparece e a ordem é recusada
+  na fila, com a frase (`NothingToPin`), sem escrever nada.
+  - pronto quando: o `Installed` leva a procedência e a linha diz o motivo antes do clique.
+- **Mudar só o ícone de um web app declarado aparece pela metade até a atualização**: o
+  reconciliador espera o build comparando nome, endereço e perfil (`reconcile::waits_for_build`), e
+  não o ícone. Um reconcile antes da atualização (o de outro "remover de vez" de web app, de uma
+  recusa) tira a entrada da pessoa, e o ícone velho do sistema volta até a atualização construir o
+  novo.
+  - pronto quando: a comparação inclui o ícone (o SHA-256 do arquivo de cada lado).
+- **A trava da declaração não é dos pertences**: a central relê o documento antes de gravar e refaz a
+  mudança sobre uma mescla que chegou, e os pertences não escrevem sobre um arquivo que mudou desde
+  a leitura (`land_plain`); sobra o instante entre a releitura e o `rename` de cada lado.
+  - pronto quando: o `plain pull` dos pertences toma o mesmo `declaration.lock` (o nome num lugar
+    só, que os dois crates leiam).
+- **A notificação de um "remover de vez" que a atualização segurou diz "removido"**: o fim do
+  trabalho não sabe que a mudança esperou (o `Outcome` não diz, e um `Ended` novo pede uma etiqueta
+  de notificação no `surface.rs` e no `assets/notifications.nix`). A lista diz a verdade — o programa
+  continua nela com "sai na próxima atualização deste computador" (`Refusal::LeavesAtNextApply`).
+  - pronto quando: o fim do trabalho leva que a mudança espera, e a notificação diz isso.
+- **Os programas da distro de fora do Nix (Flatpak, AppImage, web, Android do registro) não passaram
+  pela vista**: as tabelas do L04 estão vazias; o `Declarations::distro_of` acha um Flatpak e um app
+  Android pelo `.desktop` e pela fonte (a instalação é uma só), e uma AppImage ou um web app da
+  distro pela entrada do sistema, e nenhum foi desenhado.
+  - pronto quando: o registro tiver um, e a foto das duas portas o mostrar recusável.
+
+<!-- anchor: L19 -->
+
+### A atualização (L19) — o que ficou
+
+- **A câmera do rodapé não tem ponteiro**: o palco dela não anuncia `wl_seat`, então o realce da frase
+  da atualização que quebra em várias linhas (todas as linhas acendem, `update_window::one_control`)
+  é provado por teste e pela foto da janela, não por uma foto do rodapé.
+  - pronto quando: a câmera do rodapé aceitar `--hover`/`--click`.
+
+<!-- anchor: L20 -->
+
+### O instalador com o repositório da pessoa (L20) — o que a pista não provou · médio
+
+- **O `installer-vm` foi estendido e não rodou** (a leva não roda teste de VM nas pistas): um nó
+  `server` com um repositório git por SSH, um semeador que faz `init` de um repositório com um programa
+  declarado, e a instalação sem terminal com o endereço, o arquivo da chave e a senha. Ele continua
+  fora do `tests/checks.nix` (decisão do dono de 2026-10-05, item 4 acima), e o portão de rede no nó
+  depende de o NetworkManager tratar o link de teste como conectado, o que ninguém viu.
+  - acabou quando: o teste roda até o fim, o `person-applied.json` instalado nomeia o programa e a
+    máquina boota com o par `flake.nix`/`flake.lock` que a construiu, aceito por um `nix flake
+    metadata --no-update-lock-file --offline`.
+- **Uma máquina apontada fica na árvore em que foi instalada.** Instalada por uma versão de
+  desenvolvimento, por um pendrive à frente do release ou com o release sem responder, ela guarda o par
+  `flake.nix`/`flake.lock` que construiu o sistema (os dois concordam, e o `host.nix` segura a árvore
+  no store). A atualização faz `nix flake update`, que trava de novo o mesmo `path:` — e a máquina
+  nunca passa ao release sozinha. Falta à atualização (o `flake-update` do `system-update`, pacote L19)
+  pôr o `flake.nix` do template de volta antes de travar, quando o da máquina não é o do template.
+  - acabou quando: uma máquina apontada, numa atualização com o release no ar, termina com o
+    `flake.nix` do template, uma trava do release, e o `apply` da máquina a constrói.
+- **O caminho "apontado" nunca rodou numa instalação de verdade**: o flake de trabalho apontado para a
+  árvore do ISO por `path:`, travado, instalado sem rede para o GitHub e mantido assim no alvo. Os
+  testes provam a troca da string, a ordem dos passos e que nada escreve o `flake.nix` nem o
+  `flake.lock` depois da trava; quem prova o `nix flake lock`, o `disko` e o `nixos-install` sobre ele
+  é o `installer-vm`.
+- **Seguir um release que voltou** (`.#release --rollback-to`) é decisão do dono: o instalador só segue
+  um release mais novo que o pendrive, e uma volta pediria ser reconhecida como volta.
+- **O salto para o instalador do release** (`nix run <release>#install`) compila no ISO o workspace do
+  release para rodar o instalador novo: a distro não tem cache binário (decisão do dono, 2026-10-11).
+  Ninguém saltou de verdade ainda — não existe release publicado.
+- **O portão de rede numa máquina real**: o tempo de espera do link (30 s) e da medição (5 s) foram
+  escolhidos, não medidos, e a frase da pergunta nomeia os servidores que o `nix config show
+  substituters` responde no ISO.
+- **Os três checks antigos do instalador** (`installer-dryrun`, `installer-writes-belongings-into-the-home`,
+  `host-nix-golden-evaluates`) e o novo `installer-requires-network` rodam o `rust.workspace` do Nix,
+  que uma pista não constrói: foram provados com o binário do `cargo`, com sabotagem síncrona no
+  novo. Acabou quando: o `.#most` os constrói.
+- **As telas novas foram vistas como texto (`--show`) e como imagem** (o QR lido de volta pelo
+  `zbarimg`). O ponteiro foi provado pelo estado da TUI (os testes clicam onde `places` diz que cada
+  coisa está desenhada); ninguém clicou num terminal de verdade por SSH.
+
+
+<!-- anchor: L21 -->
+
+### Pertences: a lista do que vai para o repositório — o que o pacote deixou · pequeno cada
+
+- **O `belongings-list-is-the-walk` foi avaliado, não construído.** A metade de Rust é o
+  `rust-tests` estreitado a doze testes (`belongingsListing`), que recompila o workspace no Nix sob
+  a trava pesada; a mesma linha de `cargo test --exact` rodou na pista ("12 passed") e cada teste foi
+  sabotado. A metade que lê fonte rodou fora do Nix, com o prelúdio extraído do `checks.nix`, e
+  pegou as sabotagens (um leitor de `TREES` no `walk.rs`, um `NEVER` importado na shell, o `PLAIN`
+  reexportado de novo no `plain.rs`, a lista caminhando sozinha, e os apelidos dentro de chaves:
+  `kept::{self as k}`, `kept::{*}`, `kept::{Place, x::{TREES}}`, `crate::{kept as k}`).
+- **A vigia das pastas da lista tem teto** (64 pastas e 64 árvores, cada árvore com o teto da vigia,
+  `TREE_MOST`): uma casa acrescentada inteira com mais pastas do que isso tem a parte de baixo ouvida
+  só na próxima contagem que outra coisa dispare.
+- **Uma linha por arquivo, sem dobrar.** Uma pasta acrescentada com milhares de arquivos vira
+  milhares de linhas na lista (e a barra rola). Dobrar um grupo grande é decisão do dono.
+- **A câmera do rodapé ganhou `--wheel` e `--click`**, e as páginas de pergunta foram fotografadas
+  pelo caminho do ponteiro (roda até o alvo, clique duplo, a pergunta; clique duplo no "não", a lista
+  com o cursor à mostra). Nenhum teste da shell dirige o `Footer` para provar o seguir do cursor: a
+  prova é a foto.
+- acabou quando: o `.#most` passa com o `belongings-list-is-the-walk`.
+
+<!-- anchor: L22 -->
+
+### A barra do sudo (2026-10-11) — o que ficou · pequeno
+
+- **A barra nunca conversou com um sudo de verdade.** As fotos são de estados plantados no rodapé
+  (`photograph --door footer --sudo <estado>`), e a conversa — a volta da senha errada, a senha que
+  o gesto guarda, a janela que vai embora — só rodou nos testes, contra roteiros; a conversa da
+  porta (`authority::converse`) tem os testes dela, com dublês do sudo num terminal. Falta ver, numa
+  máquina, uma janela pedir root e a barra responder com a senha, com a chave e com o dedo, e o
+  rodapé morto dizer `NoFooter` na janela.
+  - acabou quando: os três jeitos de responder e o rodapé morto foram vistos na VM ou na máquina, e
+    um passo do `security-vm` (com o rodapé de pé) cobre a senha pela barra.
+- **O cadastro de uma chave nunca tocou uma chave.** O `pamu2fcfg` roda como a pessoa
+  (`u2f::Enrolment`), e a seção, as duas listas e o "parar" foram provados com credenciais de mentira.
+  - acabou quando: uma chave cadastrada pela tela responde ao sudo num terminal e na barra.
+- **Uma credencial com PIN (`+pin`) não sobe a barra.** O cadastro da tela é só de presença, mas uma
+  linha feita à mão com `pamu2fcfg -N` e o `origin` nosso faz o `pam_u2f` pedir o PIN por um prompt
+  dele, que não é sentinela da porta: a barra não aparece e o gesto espera até o prazo do próprio
+  sudo. A conversa já aceita "usar a senha" e cancelar antes de qualquer sentinela; falta a barra
+  subir no começo da conversa para oferecê-los.
+  - acabou quando: com uma linha `+pin` na lista do root, a barra oferece "usar a senha" e `Esc`, e
+    a senha passa.
+
+
+### Cifrar qualquer coisa e a seção pós-quântica (L22) — o que ficou · pequeno
+
+- **Os quatro checks novos foram provados fora do Nix.** `seal-never-overwrites`,
+  `seal-secrets-are-files`, `transfers-never-link-age` e `every-channel-says-its-quantum-status`
+  rodaram (o texto de cada um no `tests/checks.nix`, com os caminhos do store trocados pelos
+  binários do `cargo` de perfil `loop`), limpos e sabotados uma vez cada; nenhum foi construído,
+  porque pedem o workspace de `release`. As cópias dos fatos dos dois perfis que o
+  `every-channel-says-its-quantum-status` lê (a unidade do rodapé de `noctua` e de `minimal`) foram
+  avaliadas e construídas à parte.
+  - acabou quando: os quatro passam no `.#most`.
+- **Abrir um arquivo cifrado para você pede a senha dos pertences mesmo com a sessão destravada**
+  (L10 guarda a identidade no keyring do kernel). A identidade teria de chegar ao `ronoctua-seal`
+  sem tocar o disco nem o `argv` — por exemplo, o filho lendo a chave da sessão ele mesmo, pela
+  mesma descrição que o L10 usa.
+  - acabou quando: com a sessão destravada, o `U` sobre um arquivo "para você" abre sem perguntar,
+    e o check `belongings-identity-never-touches-disk` continua verde.
+
+<!-- anchor: L23 -->
+### A vista do Incus: o que a pista da vista deixou
+
+- **A vista nunca falou com um daemon de verdade.** As fotos são de uma cena (`photograph --door
+  incus --scene`, e o rodapé com `RONOCTUA_PHOTOGRAPH_INCUS_SCENE`) e os testes, de leituras montadas;
+  a travessia REST → `Readings` é a do crate, que o `incus-vm` confere. O console, o shell e a tela
+  nunca abriram um terminal de verdade: a foto diz o que a janela lançaria, e o rodapé de uma foto
+  não lança nada.
+  - acabou quando: uma cena `.#shot` (ou o `incus-vm`) abre `LEADER s x` sobre um daemon com uma
+    instância, e a foto mostra a lista, o detalhe e um evento (`instance-started`) mudando o estado
+    sem tecla nenhuma, o endereço chegando pelo relógio depois do DHCP, e um `systemctl restart
+    incus` dizendo acima da lista que os eventos pararam e voltando sozinho; e `C-o` abre o console
+    no nosso terminal. Os testes do feed só provam o handshake fora do laço contra um socket que não
+    responde, e a reabertura contra um socket que não existe.
+
+
+<!-- anchor: L24 -->
+
+### Contas de LLM: a marca e a vista vistas numa sessão de verdade · pequeno
+
+O módulo `agent-accounts` e a vista `m a` foram provados por testes (as duas vigias do módulo com
+inotify de verdade numa pasta temporária, a unidade só depois de uso, o relógio só até o próximo
+reinício) e fotografados nas duas portas sobre uma máquina posta numa pasta. Não foram vistos numa
+sessão: o cérebro iniciando o `ronoctua-llm-usage.service` depois de uma conversa real com o Claude
+Code, a marca mudando de cor quando a statusline grava os limites, o login de uma conta nova abrindo
+no terminal e a sessão do Codex encontrando o `CODEX_HOME` criado pela vista.
+
+- acabou quando: numa máquina com uma conta de cada agente, uma conversa no Claude Code muda a cor
+  da marca dele sem relógio nenhum, o journal do brain mostra a unidade iniciada uma vez depois do
+  uso (e não de novo antes de dez minutos), e "Acrescentar uma conta do Codex…" termina com o login
+  feito no terminal que abriu.
+- **As marcas na modeline em `.#shot`.** A foto do rodapé (`photograph --door footer --room <pasta>
+  --accounts-marks`) mostra as três marcas com dígito e a cor que o módulo dá aos arquivos da sala;
+  falta a cena de VM (F2) com elas vindas do brain de verdade, pelo socket.
+
+
+### As fotos da leva (F2) — o que ficou · pequeno cada
+
+Cada vista nova da leva foi fotografada nas duas portas e nos dois idiomas (lista no relatório da
+fase). O que a foto achou e não foi consertado nela:
+
+- **"Instalar só para você" não se fotografa.** A câmera da central de programas não tem catálogo
+  na sala (`Tools::default()`), então a busca não acha nada e a página de instalar não se abre.
+  Acaba quando a sala aceitar um índice plantado e a página aparecer nas duas portas.
+- **O Incus em três painéis, perto de 110 colunas, corta valores** (`500 processos, de um p…`,
+  `criada e ligada pela fi…`): o painel do detalhe fica com ~24 células de valor. Em 81 e em 150
+  colunas tudo cabe. Acaba quando o detalhe quebrar o valor como `chrome::aligned_pair` ou ganhar a
+  largura que a lista do meio não usa.
+- **Um caminho sem espaço quebra no meio do nome** (`…/software/history.jso` + `nl`, na lista dos
+  pertences): `layout::wrap` corta a palavra longa na célula. Acaba quando o corte preferir depois
+  de uma `/`.
+- **A lista de passos da janela da atualização rola sem barra** (a única barra é a da saída, por
+  decisão escrita no código); com os registros no topo, sobram sete passos visíveis em 30 linhas.
+- **A recusa embutida começa com maiúscula depois de dois-pontos** (`não foi lido: O login venceu:`,
+  nas contas LLM).
+- **No rodapé, a barra lateral do gerenciador não mostra o cabeçalho de pendrive**: ela lê o udisks
+  da máquina, e só a câmera da janela planta drives (`--blank`, `--luks`). O mesmo vale para os
+  registros da máquina na vista da atualização do rodapé, que pedem `machine-state/` plantado.

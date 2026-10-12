@@ -55,6 +55,11 @@
 let
   cfg = config.ronoctua.memory;
 
+  # THE MACHINE'S OWN FLAKE, by its one name (`machine-dir-has-one-name`).
+  # `or` because a test machine imports this module without the machine's
+  # options (`tests/oom-vm.nix`).
+  machineDir = config.ronoctua.machine.dir or (import ../machine.nix).machineDir;
+
   # THE TWO PROFILES, and the numbers live HERE and nowhere else.
   #
   # `LEADER s m` can loosen the policy for a session, and to do that it needs
@@ -77,7 +82,7 @@ let
 
   # WHAT WRITES THE PERMANENT OPTION.
   #
-  # `/etc/nixos/host.nix` belongs to root and the session does not. So the panel
+  # The machine's `host.nix` belongs to root and the session does not. So the panel
   # asks a oneshot to do it, and a NARROW polkit rule lets this user start those
   # two instances and nothing else — the same shape as `keyboard-restore`.
   #
@@ -89,7 +94,7 @@ let
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
       mode="$1"
-      file=/etc/nixos/host.nix
+      file=${machineDir}/host.nix
       case "$mode" in
         strict|tolerant) ;;
         *) echo "ERROR: unknown profile: $mode" >&2; exit 1 ;;

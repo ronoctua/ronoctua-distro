@@ -1526,4 +1526,12 @@
     previewLines = 12;
   };
 
+  # THE SECURITY KEYS (`crate::security`, the keys' section): how many cells
+  # of a key's handle each key is shown by — enough to tell two keys apart
+  # at a glance, never the whole credential, which is a line of base64 no
+  # person reads.
+  keys = {
+    handleCells = 12;
+  };
+
 }

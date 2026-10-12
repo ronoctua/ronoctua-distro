@@ -515,7 +515,18 @@ impl Core {
                 continue;
             }
             let Some(face) = faces.get(id) else { continue };
+            // A MARK IS SHOWN ONLY AS ITS MANIFEST DECLARES IT — by name, its
+            // instances, and whether it may rest (`Manifest::refusal_of`).
+            // Refused and said in the log, as an undeclared event is: drawn,
+            // it would be a segment the modeline has no rule for — a tenth
+            // account, or a mark at rest nobody approved.
+            let mut shown: Vec<&crate::module::Mark> = Vec::new();
             for mark in &face.marks {
+                if let Some(why) = manifest.refusal_of(mark, &shown) {
+                    tracing::warn!(module = id, mark = %mark.id.local(), why, "a mark its manifest does not let it show; not shown");
+                    continue;
+                }
+                shown.push(mark);
                 out.marks.push(Posted {
                     module: id.to_owned(),
                     what: mark.clone(),
@@ -1324,6 +1335,82 @@ mod tests {
             ["say", "forget"]
         );
         assert_eq!(row.actions[0].asks.as_deref(), Some("ask-noisy-say"));
+    }
+
+    /// FAILS IF: the mind carries a mark its module's manifest does not let
+    /// it show — a tenth instance, a quiet mark that was not declared to
+    /// rest, one mark twice — or drops one it does; and if the refused ones
+    /// take the good ones of the same face with them.
+    #[test]
+    fn the_mind_carries_only_the_marks_a_manifest_declares() {
+        static SEAT: MarkId = MarkId::declared("seat", "seats-seat", "seats-mark-seat", 9, true);
+        let fake = Fake::new(Manifest {
+            schedule: None,
+            marks: std::slice::from_ref(&SEAT),
+            ..manifest("seats")
+        })
+        .face(|_| Face {
+            marks: vec![
+                Mark {
+                    id: SEAT.numbered(1, Some("home".to_owned())),
+                    tone: Tone::Quiet,
+                    count: 0,
+                    act: None,
+                },
+                Mark {
+                    id: SEAT.numbered(10, None),
+                    tone: Tone::Danger,
+                    count: 0,
+                    act: None,
+                },
+                Mark {
+                    id: SEAT.numbered(1, None),
+                    tone: Tone::Warning,
+                    count: 0,
+                    act: None,
+                },
+                Mark {
+                    id: FULL.clone(),
+                    tone: Tone::Warning,
+                    count: 0,
+                    act: None,
+                },
+                Mark {
+                    id: SEAT.numbered(9, Some("work".to_owned())),
+                    tone: Tone::Danger,
+                    count: 0,
+                    act: None,
+                },
+            ],
+            ..Face::default()
+        });
+        let (core, _) = a_core(vec![fake.boxed()], 1000);
+        core.publish(1000, Pulse::default());
+        let (mind, _) = core.shared.snapshot();
+        let shown: Vec<String> = mind
+            .marks
+            .iter()
+            .map(|m| format!("{}/{}", m.module, m.what.id.local()))
+            .collect();
+        assert_eq!(shown, ["seats/seat.1", "seats/seat.9"]);
+        assert_eq!(mind.marks[0].what.id.label.as_deref(), Some("home"));
+        assert_eq!(mind.marks[1].what.tone, Tone::Danger);
+
+        // AND A QUIET MARK THAT DOES NOT REST is dropped where a loud one of
+        // the same declaration is shown.
+        let (noisy, _) = noisy();
+        let quiet = noisy.face(|_| Face {
+            marks: vec![Mark {
+                id: FULL.clone(),
+                tone: Tone::Quiet,
+                count: 0,
+                act: None,
+            }],
+            ..Face::default()
+        });
+        let (core, _) = a_core(vec![quiet.boxed()], 1000);
+        core.publish(1000, Pulse::default());
+        assert!(core.shared.snapshot().0.marks.is_empty());
     }
 
     #[test]

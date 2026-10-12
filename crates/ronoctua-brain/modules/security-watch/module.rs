@@ -18,7 +18,8 @@
 //!
 //! The table in the kernel is not the one asked for (the helper said so, or
 //! the firewall's units logged an error after its last apply); the person's
-//! firewall is switched off; sudo asks for no password until a time; the
+//! firewall is switched off; sudo asks for no password (until a time, or
+//! with no limit); the
 //! shields are up; connections were refused in the last quarter hour. The
 //! mark is the loudest of these ([`rules::Off`]), with that one's hint; the
 //! page lists all of them.
@@ -66,9 +67,10 @@ pub fn new(_birth: &Birth) -> impl Module + use<> {
 /// a folder of its own.
 #[derive(Debug, Clone)]
 struct Places {
-    /// `/run/ronoctua-security`: the table's status and the window's end.
+    /// `/run/ronoctua-security`: the table's status.
     run: PathBuf,
-    /// `/var/lib/ronoctua-security`: the person's settings.
+    /// `/var/lib/ronoctua-security`: the person's settings, and what
+    /// passwordless window is open (it survives a reboot).
     lib: PathBuf,
 }
 
@@ -90,8 +92,8 @@ impl Places {
             .join(file_name(ronoctua_security::firewall::STATUS))
     }
 
-    fn until(&self) -> PathBuf {
-        self.run.join(file_name(ronoctua_security::relax::UNTIL))
+    fn window(&self) -> PathBuf {
+        self.lib.join(file_name(ronoctua_security::relax::STATE))
     }
 
     fn settings(&self) -> PathBuf {
@@ -117,8 +119,10 @@ struct Files {
     status: Option<(Moment, bool)>,
     /// `firewall.json`: enabled, shields.
     settings: Option<(bool, bool)>,
-    /// The passwordless window's end.
+    /// The passwordless window's end, when it has one.
     until: Option<Moment>,
+    /// A passwordless window with no limit is open.
+    no_limit: bool,
     /// The networks up on a public profile that the person never placed:
     /// connection and interface.
     public: Vec<(String, String)>,
@@ -142,13 +146,14 @@ impl Files {
             .ok()
             .and_then(|b| ronoctua_security::firewall::Settings::of_bytes(&b).ok())
             .map(|s| (s.enabled, s.shields));
-        let until = std::fs::read_to_string(places.until())
+        let window = std::fs::read(places.window())
             .ok()
-            .and_then(|t| t.trim().parse().ok());
+            .and_then(|b| ronoctua_security::relax::Opened::of_bytes(&b));
         Self {
             status,
             settings,
-            until,
+            until: window.and_then(|w| w.until_unix_s),
+            no_limit: window.is_some_and(|w| w.until_unix_s.is_none()),
             public,
         }
     }
@@ -187,6 +192,7 @@ impl Kept {
             failed: failed_apply || failed_after,
             off: self.files.settings.is_some_and(|(enabled, _)| !enabled),
             sudo_until: self.files.until,
+            sudo_no_limit: self.files.no_limit,
             shields: self.files.settings.is_some_and(|(_, shields)| shields),
             recent_refused: rules::recent(&self.refused, now),
         }
@@ -655,11 +661,20 @@ mod tests {
         assert!(face(&m, 1000 + rules::RECENT_S).marks.is_empty());
 
         // THE WINDOW OPEN IS LOUDER, with its own hint.
-        std::fs::write(dir.0.join("run/sudo-until"), "5000\n").unwrap();
+        let window = |until: Option<i64>, span| ronoctua_security::relax::Opened {
+            format: ronoctua_security::relax::STATE_FORMAT,
+            until_unix_s: until,
+            span,
+        };
+        std::fs::write(
+            dir.0.join("lib/sudo-window"),
+            window(Some(5000), ronoctua_security::verb::RelaxSpan::Fifteen).to_bytes(),
+        )
+        .unwrap();
         m.heard(
             Heard::Path {
-                source: 3,
-                path: &dir.0.join("run"),
+                source: 4,
+                path: &dir.0.join("lib"),
             },
             &ctx,
         );
@@ -669,6 +684,33 @@ mod tests {
         assert_eq!(m.next_wake(1001), Some(1000 + rules::RECENT_S));
         assert_eq!(m.next_wake(1000 + rules::RECENT_S), Some(5000));
         assert!(face(&m, 5000).marks.is_empty(), "the window ended");
+
+        // WITH NO LIMIT it stays, and asks for no clock of its own.
+        std::fs::write(
+            dir.0.join("lib/sudo-window"),
+            window(None, ronoctua_security::verb::RelaxSpan::NoLimit).to_bytes(),
+        )
+        .unwrap();
+        m.heard(
+            Heard::Path {
+                source: 4,
+                path: &dir.0.join("lib"),
+            },
+            &ctx,
+        );
+        assert_eq!(
+            face(&m, 9_000_000).marks[0].id,
+            super::super::mark::SUDO_OPEN
+        );
+        assert_eq!(m.next_wake(9_000_000), None);
+        std::fs::remove_file(dir.0.join("lib/sudo-window")).unwrap();
+        m.heard(
+            Heard::Path {
+                source: 4,
+                path: &dir.0.join("lib"),
+            },
+            &ctx,
+        );
 
         // THE FIREWALL OFF, AND A FAILED APPLY, louder still.
         let settings = ronoctua_security::firewall::Settings {

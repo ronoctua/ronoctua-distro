@@ -35,3 +35,34 @@ cérebro nem vê o clique.
 O id de um módulo é a palavra que ninguém de fora da pasta pode dizer (o check selado), e
 "belongings" é o vocabulário inteiro da feature — o crate, a vista, a fila, os textos. O lembrete
 tem nome próprio, e o resto do sistema fala dos pertences sem falar dele.
+
+## A parte em claro vai sozinha
+
+As declarações da pessoa (`state/person`) e os módulos do brain dela (`config/brain-modules`) são a
+parte em claro dos pertences: viajam sem senha e sem identidade. Como não há o que perguntar, a
+máquina pode mandá-las sozinha. O lembrete vigia essas raízes como árvores (`Source::Tree`: toda
+pasta abaixo delas, as criadas depois que o cérebro subiu inclusive) e, depois de 30 s sem mudança,
+inicia a `ronoctua-belongings-plain.service` (`sync-plain`), declarada no `module.nix` deste módulo.
+Uma mudança no meio da espera recomeça a espera: a central de programas que grava a lista e depois
+os ícones vira um envio só.
+
+Árvore, e não a lista das pastas que existiam na partida, porque o inotify não é recursivo: numa
+máquina nova o `state/person` ainda não tem `software/`, a primeira declaração o cria (isso se
+ouve, na raiz) e todas as seguintes só reescrevem o `declared.json` lá dentro — que uma lista feita
+na partida não ouvia nunca. Um notebook que dorme em vez de sair ficava dias sem mandar as
+declarações.
+
+Iniciar a unidade não é mandar. Uma sincronização da pessoa que segura a trava dos pertences recusa
+o `sync-plain` (`Busy`), e um `sync-plain` que já roda só é juntado pelo systemd: em nenhum dos dois
+casos o que mudou depois da leitura sobe. Então o lembrete guarda a mudança até a pasta de estado
+dizer que uma execução terminou: se alguma pegou a trava depois do pedido (a trava ganha a hora de
+quem a pega), ela leu a parte em claro depois da mudança, e acabou — mandou, ou falhou, e aí a
+próxima mudança ou sincronização manda; repetir uma falha seria um laço. Se nenhuma pegou, o pedido
+foi recusado ou ficou para a execução que segurava a trava, e ele pede de novo na hora, no máximo três
+vezes por mudança. Uma mudança ouvida durante uma execução é uma mudança como outra: vai depois
+dela, passados os 30 s.
+
+Só manda quem tem para onde: uma máquina que já sincronizou com o repositório que está configurado
+(antes da primeira sincronização não há identidade, e o repositório pode nem existir). Nunca num
+ensaio: a cópia do `.#dev` não mexe no repositório de verdade. E nunca pergunta nada: o que bate dos
+dois lados fica como cada lado tem, para a próxima sincronização com a pessoa.
